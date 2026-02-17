@@ -1,0 +1,121 @@
+package queue
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hibiken/asynq"
+)
+
+type fakeEnqueuer struct{}
+
+func (f fakeEnqueuer) Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+	return &asynq.TaskInfo{ID: "fake", Type: task.Type()}, nil
+}
+
+func TestNewSyncDispatcher(t *testing.T) {
+	dispatcher := NewSyncDispatcher()
+	if dispatcher.Driver() != DriverSync {
+		t.Fatalf("expected sync driver, got %q", dispatcher.Driver())
+	}
+}
+
+func TestNewWorkerpoolDispatcher(t *testing.T) {
+	dispatcher := NewWorkerpoolDispatcher(WorkerpoolConfig{Workers: 2, Buffer: 4})
+	if dispatcher.Driver() != DriverWorkerpool {
+		t.Fatalf("expected workerpool driver, got %q", dispatcher.Driver())
+	}
+}
+
+func TestNewRedisDispatcher(t *testing.T) {
+	dispatcher := NewRedisDispatcher(nil)
+	if dispatcher.Driver() != DriverRedis {
+		t.Fatalf("expected redis driver, got %q", dispatcher.Driver())
+	}
+}
+
+func TestNewDispatcher_SelectsByConfig(t *testing.T) {
+	testCases := []struct {
+		name   string
+		cfg    Config
+		driver Driver
+	}{
+		{name: "sync", cfg: Config{Driver: DriverSync}, driver: DriverSync},
+		{name: "workerpool", cfg: Config{Driver: DriverWorkerpool}, driver: DriverWorkerpool},
+		{name: "redis", cfg: Config{Driver: DriverRedis}, driver: DriverRedis},
+		{
+			name: "database",
+			cfg: Config{
+				Driver: DriverDatabase,
+				Database: DatabaseConfig{
+					DriverName: "sqlite",
+					DSN:        t.TempDir() + "/queue.db",
+				},
+			},
+			driver: DriverDatabase,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dispatcher, err := NewDispatcher(tc.cfg, nil)
+			if err != nil {
+				t.Fatalf("new dispatcher failed: %v", err)
+			}
+			if dispatcher.Driver() != tc.driver {
+				t.Fatalf("expected %q driver, got %q", tc.driver, dispatcher.Driver())
+			}
+		})
+	}
+}
+
+func TestNewDispatcher_UnknownDriverFails(t *testing.T) {
+	dispatcher, err := NewDispatcher(Config{Driver: Driver("unknown")}, nil)
+	if err == nil {
+		t.Fatal("expected unknown driver error")
+	}
+	if dispatcher != nil {
+		t.Fatal("expected nil dispatcher")
+	}
+}
+
+func TestRedisDispatcher_EnqueueWithoutClientFails(t *testing.T) {
+	dispatcher := NewRedisDispatcher(nil)
+	err := dispatcher.Enqueue(context.Background(), Task{
+		Type:    "job:test",
+		Payload: []byte("{}"),
+	})
+	if err == nil {
+		t.Fatal("expected enqueue error for nil redis client")
+	}
+	if !strings.Contains(err.Error(), "client unavailable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRedisDispatcher_BackoffUnsupported(t *testing.T) {
+	dispatcher := NewRedisDispatcher(fakeEnqueuer{})
+	err := dispatcher.Enqueue(
+		context.Background(),
+		Task{Type: "job:test", Payload: []byte("{}")},
+		WithBackoff(time.Second),
+	)
+	if !errors.Is(err, ErrBackoffUnsupported) {
+		t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
+	}
+}
+
+func TestDispatcher_ShutdownNoopForSyncAndRedis(t *testing.T) {
+	syncDispatcher := NewSyncDispatcher()
+	if err := syncDispatcher.Shutdown(context.Background()); err != nil {
+		t.Fatalf("sync shutdown failed: %v", err)
+	}
+
+	redisDispatcher := NewRedisDispatcher(nil)
+	if err := redisDispatcher.Shutdown(context.Background()); err != nil {
+		t.Fatalf("redis shutdown failed: %v", err)
+	}
+}
