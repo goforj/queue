@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-73-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-81-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
@@ -61,7 +61,9 @@ import (
 func main() {
     dispatcher, _ := queue.NewDispatcher(queue.Config{
         Driver: queue.DriverWorkerpool,
-        Workerpool: queue.WorkerpoolConfig{Workers: 4, Buffer: 128, TaskTimeout: 30 * time.Second},
+        Workers: 4,
+        QueueCapacity: 128,
+        TaskTimeout: 30 * time.Second,
     })
 
     dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
@@ -86,12 +88,9 @@ func main() {
 Switch to Redis without changing job code:
 
 ```go
-redis := asynq.NewClient(asynq.RedisClientOpt{Addr: "127.0.0.1:6379"})
 dispatcher, _ := queue.NewDispatcher(queue.Config{
     Driver: queue.DriverRedis,
-    Redis: queue.RedisConfig{
-        Enqueuer: redis,
-    },
+    RedisAddr: "127.0.0.1:6379",
 })
 ```
 
@@ -100,11 +99,9 @@ Use SQL for durable local queues:
 ```go
 dispatcher, _ := queue.NewDispatcher(queue.Config{
     Driver: queue.DriverDatabase,
-    Database: queue.DatabaseConfig{
-        DriverName: "sqlite",
-        DSN:        "file:queue.db?_busy_timeout=5000",
-        Workers:    4,
-    },
+    DatabaseDriver: "sqlite",
+    DatabaseDSN: "file:queue.db?_busy_timeout=5000",
+    Workers: 4,
 })
 ```
 
@@ -138,7 +135,8 @@ The worker is in-process. Attach by registering handlers and starting the dispat
 ```go
 dispatcher, _ := queue.NewDispatcher(queue.Config{
     Driver: queue.DriverWorkerpool,
-    Workerpool: queue.WorkerpoolConfig{Workers: 4, Buffer: 128},
+    Workers: 4,
+    QueueCapacity: 128,
 })
 dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
     return sendEmail(ctx, task.Payload)
@@ -154,11 +152,9 @@ Same attachment model as workerpool, but jobs are durable in SQL.
 ```go
 dispatcher, _ := queue.NewDispatcher(queue.Config{
     Driver: queue.DriverDatabase,
-    Database: queue.DatabaseConfig{
-        DriverName: "sqlite",
-        DSN:        "file:queue.db?_busy_timeout=5000",
-        Workers:    4,
-    },
+    DatabaseDriver: "sqlite",
+    DatabaseDSN: "file:queue.db?_busy_timeout=5000",
+    Workers: 4,
 })
 dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
     return sendEmail(ctx, task.Payload)
@@ -174,10 +170,8 @@ Attach workers through `queue.Worker` so handlers stay on the queue abstraction.
 ```go
 worker, _ := queue.NewWorker(queue.Config{
     Driver: queue.DriverRedis,
-    Redis: queue.RedisConfig{
-        Conn: asynq.RedisClientOpt{Addr: "127.0.0.1:6379"},
-        WorkerServer: asynq.Config{Concurrency: 10},
-    },
+    RedisAddr: "127.0.0.1:6379",
+    Workers: 10,
 })
 worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
     return sendEmail(ctx, task.Payload)
@@ -195,6 +189,26 @@ defer worker.Shutdown()
 ## Driver selection via config
 
 `queue.Config` pairs the selected driver with driver-specific settings. The same application code can switch drivers by changing config or environment wiring; handler registration stays identical.
+
+### Config support matrix
+
+Legend: `✓` supported, `-` ignored, `o` optional.
+
+| Config field | Sync | Workerpool | Database | Redis | Notes |
+|:--|:--:|:--:|:--:|:--:|:--|
+| `Driver` | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| `Workers` | - | ✓ | ✓ | ✓ | Redis uses this for worker concurrency in `NewWorker`. |
+| `QueueCapacity` | - | ✓ | - | - | In-memory pending queue capacity for workerpool. |
+| `TaskTimeout` | - | ✓ | - | - | Workerpool default task timeout. |
+| `PollInterval` | - | - | ✓ | - | Job polling interval for database driver. |
+| `DefaultQueue` | - | - | ✓ | - | Default queue column value in database driver. |
+| `AutoMigrate` | - | - | ✓ | - | Creates/updates DB schema on start. |
+| `Database` | - | - | o | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
+| `DatabaseDriver` | - | - | ✓ | - | `sqlite`, `mysql`, or `pgx`. |
+| `DatabaseDSN` | - | - | ✓ | - | Connection string for database driver. |
+| `RedisAddr` | - | - | - | ✓ | Required for Redis dispatcher and worker. |
+| `RedisPassword` | - | - | - | o | Redis auth password. |
+| `RedisDB` | - | - | - | o | Redis logical DB index. |
 
 ## API reference
 
@@ -292,8 +306,9 @@ Shutdown drains delayed and active local workerpool tasks.
 
 ```go
 dispatcher, err := queue.NewDispatcher(queue.Config{
-	Driver:     queue.DriverWorkerpool,
-	Workerpool: queue.WorkerpoolConfig{Workers: 1, Buffer: 4},
+	Driver:        queue.DriverWorkerpool,
+	Workers:       1,
+	QueueCapacity: 4,
 })
 if err != nil {
 	return
@@ -308,8 +323,9 @@ Start initializes worker goroutines for workerpool mode.
 
 ```go
 dispatcher, err := queue.NewDispatcher(queue.Config{
-	Driver:     queue.DriverWorkerpool,
-	Workerpool: queue.WorkerpoolConfig{Workers: 1, Buffer: 4},
+	Driver:        queue.DriverWorkerpool,
+	Workers:       1,
+	QueueCapacity: 4,
 })
 if err != nil {
 	return

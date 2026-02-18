@@ -13,6 +13,7 @@ type contractFactory struct {
 	newDispatcher            func(t *testing.T) Dispatcher
 	requiresRegisteredHandle bool
 	assertMissingHandlerErr  bool
+	backoffUnsupported       bool
 	uniqueTTL                time.Duration
 	uniqueExpiryWait         time.Duration
 	beforeEach               func(t *testing.T)
@@ -72,6 +73,115 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		)
 		if err != nil {
 			t.Fatalf("delayed enqueue failed: %v", err)
+		}
+	})
+
+	t.Run("enqueue_with_queue", func(t *testing.T) {
+		d := factory.newDispatcher(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:queue", func(_ context.Context, _ Task) error { return nil })
+		}
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		err := d.Enqueue(
+			context.Background(),
+			Task{Type: "job:contract:queue", Payload: []byte("queue")},
+			WithQueue("contract"),
+		)
+		if err != nil {
+			t.Fatalf("enqueue with queue failed: %v", err)
+		}
+	})
+
+	t.Run("enqueue_with_timeout", func(t *testing.T) {
+		d := factory.newDispatcher(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		timeoutChecked := make(chan bool, 1)
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:timeout", func(ctx context.Context, _ Task) error {
+				_, ok := ctx.Deadline()
+				timeoutChecked <- ok
+				return nil
+			})
+		}
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		err := d.Enqueue(
+			context.Background(),
+			Task{Type: "job:contract:timeout", Payload: []byte("timeout")},
+			WithTimeout(80*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatalf("enqueue with timeout failed: %v", err)
+		}
+		if factory.requiresRegisteredHandle {
+			select {
+			case ok := <-timeoutChecked:
+				if !ok {
+					t.Fatal("expected handler context to include a deadline")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("timeout handler was not invoked")
+			}
+		}
+	})
+
+	t.Run("enqueue_with_max_retry", func(t *testing.T) {
+		d := factory.newDispatcher(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:maxretry", func(_ context.Context, _ Task) error { return nil })
+		}
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		err := d.Enqueue(
+			context.Background(),
+			Task{Type: "job:contract:maxretry", Payload: []byte("retry")},
+			WithMaxRetry(2),
+		)
+		if err != nil {
+			t.Fatalf("enqueue with max retry failed: %v", err)
+		}
+	})
+
+	t.Run("enqueue_with_backoff_behavior", func(t *testing.T) {
+		d := factory.newDispatcher(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:backoff", func(_ context.Context, _ Task) error { return nil })
+		}
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		err := d.Enqueue(
+			context.Background(),
+			Task{Type: "job:contract:backoff", Payload: []byte("backoff")},
+			WithBackoff(10*time.Millisecond),
+		)
+		if factory.backoffUnsupported {
+			if !errors.Is(err, ErrBackoffUnsupported) {
+				t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("enqueue with backoff failed: %v", err)
 		}
 	})
 
@@ -157,8 +267,9 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 			name: "workerpool",
 			newDispatcher: func(_ *testing.T) Dispatcher {
 				dispatcher, err := NewDispatcher(Config{
-					Driver:     DriverWorkerpool,
-					Workerpool: WorkerpoolConfig{Workers: 1, Buffer: 4},
+					Driver:        DriverWorkerpool,
+					Workers:       1,
+					QueueCapacity: 4,
 				})
 				if err != nil {
 					t.Fatalf("new workerpool dispatcher failed: %v", err)
@@ -172,13 +283,11 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 			name: "database-sqlite",
 			newDispatcher: func(t *testing.T) Dispatcher {
 				dispatcher, err := NewDispatcher(Config{
-					Driver: DriverDatabase,
-					Database: DatabaseConfig{
-						DriverName:   "sqlite",
-						DSN:          fmt.Sprintf("%s/contract-%d.db", t.TempDir(), time.Now().UnixNano()),
-						Workers:      1,
-						PollInterval: 10 * time.Millisecond,
-					},
+					Driver:         DriverDatabase,
+					DatabaseDriver: "sqlite",
+					DatabaseDSN:    fmt.Sprintf("%s/contract-%d.db", t.TempDir(), time.Now().UnixNano()),
+					Workers:        1,
+					PollInterval:   10 * time.Millisecond,
 				})
 				if err != nil {
 					t.Fatalf("new sqlite dispatcher failed: %v", err)

@@ -2,11 +2,10 @@ package queue
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"runtime"
 	"time"
-
-	"github.com/hibiken/asynq"
 )
 
 // Dispatcher is the queue abstraction exposed to callers.
@@ -30,9 +29,9 @@ type Dispatcher interface {
 // WorkerpoolConfig configures the in-memory workerpool dispatcher.
 // @group Config
 type WorkerpoolConfig struct {
-	Workers     int
-	Buffer      int
-	TaskTimeout time.Duration
+	Workers       int
+	QueueCapacity int
+	TaskTimeout   time.Duration
 }
 
 func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
@@ -42,8 +41,8 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 	if c.Workers <= 0 {
 		c.Workers = 1
 	}
-	if c.Buffer <= 0 {
-		c.Buffer = c.Workers
+	if c.QueueCapacity <= 0 {
+		c.QueueCapacity = c.Workers
 	}
 	return c
 }
@@ -51,36 +50,51 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 // Config configures dispatcher creation for NewDispatcher.
 // @group Config
 type Config struct {
-	Driver     Driver
-	Workerpool WorkerpoolConfig
-	Database   DatabaseConfig
-	Redis      RedisConfig
-}
+	Driver Driver
 
-// RedisConfig configures redis-backed enqueueing and worker consumption.
-// @group Config
-type RedisConfig struct {
-	Enqueuer     RedisEnqueuer
-	Conn         asynq.RedisConnOpt
-	WorkerServer asynq.Config
-}
+	Workers       int
+	QueueCapacity int
+	TaskTimeout   time.Duration
 
-// RedisEnqueuer is the minimal enqueue dependency used by the redis dispatcher.
-// @group Integration
-type RedisEnqueuer interface {
-	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+	PollInterval time.Duration
+	DefaultQueue string
+	AutoMigrate  bool
+
+	Database       *sql.DB
+	DatabaseDriver string
+	DatabaseDSN    string
+
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
 }
 
 func newSyncDispatcher() Dispatcher {
 	return newLocalDispatcherWithConfig(DriverSync, WorkerpoolConfig{})
 }
 
-func newWorkerpoolDispatcher(cfg WorkerpoolConfig) Dispatcher {
-	return newLocalDispatcherWithConfig(DriverWorkerpool, cfg.normalize())
+func (cfg Config) workerpoolConfig() WorkerpoolConfig {
+	return WorkerpoolConfig{
+		Workers:       cfg.Workers,
+		QueueCapacity: cfg.QueueCapacity,
+		TaskTimeout:   cfg.TaskTimeout,
+	}
 }
 
-func newConfiguredRedisDispatcher(client RedisEnqueuer) Dispatcher {
-	return newRedisDispatcher(client)
+func (cfg Config) databaseConfig() DatabaseConfig {
+	autoMigrate := cfg.AutoMigrate
+	if !autoMigrate {
+		autoMigrate = true
+	}
+	return DatabaseConfig{
+		DB:           cfg.Database,
+		DriverName:   cfg.DatabaseDriver,
+		DSN:          cfg.DatabaseDSN,
+		Workers:      cfg.Workers,
+		PollInterval: cfg.PollInterval,
+		DefaultQueue: cfg.DefaultQueue,
+		AutoMigrate:  autoMigrate,
+	}
 }
 
 // NewDispatcher creates a dispatcher based on Config.Driver.
@@ -101,14 +115,14 @@ func NewDispatcher(cfg Config) (Dispatcher, error) {
 	case DriverSync:
 		return newSyncDispatcher(), nil
 	case DriverWorkerpool:
-		return newWorkerpoolDispatcher(cfg.Workerpool), nil
+		return newLocalDispatcherWithConfig(DriverWorkerpool, cfg.workerpoolConfig().normalize()), nil
 	case DriverRedis:
-		if cfg.Redis.Enqueuer == nil {
-			return nil, fmt.Errorf("redis enqueuer is required")
+		if cfg.RedisAddr == "" {
+			return nil, fmt.Errorf("redis addr is required")
 		}
-		return newConfiguredRedisDispatcher(cfg.Redis.Enqueuer), nil
+		return newRedisDispatcher(newAsynqClient(cfg), true), nil
 	case DriverDatabase:
-		return newDatabaseDispatcher(cfg.Database)
+		return newDatabaseDispatcher(cfg.databaseConfig())
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}

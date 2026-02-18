@@ -2,6 +2,7 @@ package queue
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/hibiken/asynq"
 )
@@ -48,19 +49,32 @@ func NewWorker(cfg Config) (Worker, error) {
 	case DriverSync:
 		return &dispatcherWorkerAdapter{dispatcher: newSyncDispatcher()}, nil
 	case DriverWorkerpool:
-		return &dispatcherWorkerAdapter{dispatcher: newWorkerpoolDispatcher(cfg.Workerpool)}, nil
+		return &dispatcherWorkerAdapter{
+			dispatcher: newLocalDispatcherWithConfig(DriverWorkerpool, cfg.workerpoolConfig().normalize()),
+		}, nil
 	case DriverDatabase:
-		d, err := newDatabaseDispatcher(cfg.Database)
+		d, err := newDatabaseDispatcher(cfg.databaseConfig())
 		if err != nil {
 			return nil, err
 		}
 		return &dispatcherWorkerAdapter{dispatcher: d}, nil
 	case DriverRedis:
-		if cfg.Redis.Conn == nil {
-			return nil, fmt.Errorf("redis conn is required")
+		if cfg.RedisAddr == "" {
+			return nil, fmt.Errorf("redis addr is required")
+		}
+		concurrency := cfg.Workers
+		if concurrency <= 0 {
+			concurrency = runtime.NumCPU()
+		}
+		if concurrency <= 0 {
+			concurrency = 1
 		}
 		return newRedisWorker(
-			asynq.NewServer(cfg.Redis.Conn, cfg.Redis.WorkerServer),
+			asynq.NewServer(asynq.RedisClientOpt{
+				Addr:     cfg.RedisAddr,
+				Password: cfg.RedisPassword,
+				DB:       cfg.RedisDB,
+			}, asynq.Config{Concurrency: concurrency}),
 			asynq.NewServeMux(),
 		), nil
 	default:

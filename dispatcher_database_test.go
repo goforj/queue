@@ -13,13 +13,11 @@ func newSQLiteDispatcherForTest(t *testing.T) Dispatcher {
 	t.Helper()
 	dbPath := fmt.Sprintf("%s/queue-%d.db", t.TempDir(), time.Now().UnixNano())
 	dispatcher, err := NewDispatcher(Config{
-		Driver: DriverDatabase,
-		Database: DatabaseConfig{
-			DriverName:   "sqlite",
-			DSN:          dbPath,
-			Workers:      1,
-			PollInterval: 10 * time.Millisecond,
-		},
+		Driver:         DriverDatabase,
+		DatabaseDriver: "sqlite",
+		DatabaseDSN:    dbPath,
+		Workers:        1,
+		PollInterval:   10 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("new database dispatcher failed: %v", err)

@@ -92,8 +92,9 @@ func (d *localDispatcher) Register(taskType string, handler Handler) {
 // Example: local start
 //
 //	dispatcher, err := queue.NewDispatcher(queue.Config{
-//		Driver:     queue.DriverWorkerpool,
-//		Workerpool: queue.WorkerpoolConfig{Workers: 1, Buffer: 4},
+//		Driver:        queue.DriverWorkerpool,
+//		Workers:       1,
+//		QueueCapacity: 4,
 //	})
 //	if err != nil {
 //		return
@@ -113,8 +114,9 @@ func (d *localDispatcher) Start(_ context.Context) error {
 // Example: local shutdown
 //
 //	dispatcher, err := queue.NewDispatcher(queue.Config{
-//		Driver:     queue.DriverWorkerpool,
-//		Workerpool: queue.WorkerpoolConfig{Workers: 1, Buffer: 4},
+//		Driver:        queue.DriverWorkerpool,
+//		Workers:       1,
+//		QueueCapacity: 4,
 //	})
 //	if err != nil {
 //		return
@@ -258,7 +260,7 @@ func (d *localDispatcher) startMemoryWorkersLocked() {
 		return
 	}
 	workers := d.cfg.Workers
-	bufferSize := d.cfg.Buffer
+	bufferSize := d.cfg.QueueCapacity
 	d.workQueue = make(chan queuedTask, bufferSize)
 	workQueue := d.workQueue
 	for i := 0; i < workers; i++ {

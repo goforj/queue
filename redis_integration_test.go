@@ -134,12 +134,10 @@ func TestRedisIntegration_EnqueueSmoke(t *testing.T) {
 	if !integrationBackendEnabled("redis") {
 		t.Skip("redis integration backend not selected")
 	}
-	inspector, client := newRedisInspectorAndClient(t)
+	inspector := newRedisInspector(t)
 	dispatcher, err := NewDispatcher(Config{
-		Driver: DriverRedis,
-		Redis: RedisConfig{
-			Enqueuer: client,
-		},
+		Driver:    DriverRedis,
+		RedisAddr: integrationRedis.addr,
 	})
 	if err != nil {
 		t.Fatalf("new redis dispatcher failed: %v", err)
@@ -164,12 +162,10 @@ func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
 	if !integrationBackendEnabled("redis") {
 		t.Skip("redis integration backend not selected")
 	}
-	inspector, client := newRedisInspectorAndClient(t)
+	inspector := newRedisInspector(t)
 	dispatcher, err := NewDispatcher(Config{
-		Driver: DriverRedis,
-		Redis: RedisConfig{
-			Enqueuer: client,
-		},
+		Driver:    DriverRedis,
+		RedisAddr: integrationRedis.addr,
 	})
 	if err != nil {
 		t.Fatalf("new redis dispatcher failed: %v", err)
@@ -212,12 +208,10 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 	if !integrationBackendEnabled("redis") {
 		t.Skip("redis integration backend not selected")
 	}
-	_, client := newRedisInspectorAndClient(t)
+	_ = newRedisInspector(t)
 	dispatcher, err := NewDispatcher(Config{
-		Driver: DriverRedis,
-		Redis: RedisConfig{
-			Enqueuer: client,
-		},
+		Driver:    DriverRedis,
+		RedisAddr: integrationRedis.addr,
 	})
 	if err != nil {
 		t.Fatalf("new redis dispatcher failed: %v", err)
@@ -240,12 +234,10 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 	if !integrationBackendEnabled("redis") {
 		t.Skip("redis integration backend not selected")
 	}
-	_, client := newRedisInspectorAndClient(t)
+	_ = newRedisInspector(t)
 	dispatcher, err := NewDispatcher(Config{
-		Driver: DriverRedis,
-		Redis: RedisConfig{
-			Enqueuer: client,
-		},
+		Driver:    DriverRedis,
+		RedisAddr: integrationRedis.addr,
 	})
 	if err != nil {
 		t.Fatalf("new redis dispatcher failed: %v", err)
@@ -408,16 +400,14 @@ func waitForPostgresReady(addr string, timeout time.Duration) error {
 	return fmt.Errorf("postgres not ready: %w", lastErr)
 }
 
-func newRedisInspectorAndClient(t *testing.T) (*asynq.Inspector, *asynq.Client) {
+func newRedisInspector(t *testing.T) *asynq.Inspector {
 	t.Helper()
 	redisOpt := asynq.RedisClientOpt{Addr: integrationRedis.addr}
 	inspector := asynq.NewInspector(redisOpt)
-	client := asynq.NewClient(redisOpt)
 	t.Cleanup(func() {
-		_ = client.Close()
 		_ = inspector.Close()
 	})
-	return inspector, client
+	return inspector
 }
 
 func uniqueQueueName(prefix string) string {

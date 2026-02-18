@@ -13,8 +13,9 @@ func main() {
 
 	// Example: local start
 	dispatcher, err := queue.NewDispatcher(queue.Config{
-		Driver:     queue.DriverWorkerpool,
-		Workerpool: queue.WorkerpoolConfig{Workers: 1, Buffer: 4},
+		Driver:        queue.DriverWorkerpool,
+		Workers:       1,
+		QueueCapacity: 4,
 	})
 	if err != nil {
 		return

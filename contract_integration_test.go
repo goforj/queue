@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"testing"
 	"time"
-
-	"github.com/hibiken/asynq"
 )
 
 func TestDispatcherContract_Redis(t *testing.T) {
@@ -18,13 +16,9 @@ func TestDispatcherContract_Redis(t *testing.T) {
 	factory := contractFactory{
 		name: "redis",
 		newDispatcher: func(t *testing.T) Dispatcher {
-			client := asynq.NewClient(asynq.RedisClientOpt{Addr: integrationRedis.addr})
-			t.Cleanup(func() { _ = client.Close() })
 			dispatcher, err := NewDispatcher(Config{
-				Driver: DriverRedis,
-				Redis: RedisConfig{
-					Enqueuer: client,
-				},
+				Driver:    DriverRedis,
+				RedisAddr: integrationRedis.addr,
 			})
 			if err != nil {
 				t.Fatalf("new redis dispatcher failed: %v", err)
@@ -53,8 +47,11 @@ func TestDispatcherContract_DatabaseMySQL(t *testing.T) {
 		name: "database-mysql",
 		newDispatcher: func(_ *testing.T) Dispatcher {
 			dispatcher, err := NewDispatcher(Config{
-				Driver:   DriverDatabase,
-				Database: cfg,
+				Driver:         DriverDatabase,
+				DatabaseDriver: cfg.DriverName,
+				DatabaseDSN:    cfg.DSN,
+				Workers:        cfg.Workers,
+				PollInterval:   cfg.PollInterval,
 			})
 			if err != nil {
 				t.Fatalf("new mysql dispatcher failed: %v", err)
@@ -84,8 +81,11 @@ func TestDispatcherContract_DatabasePostgres(t *testing.T) {
 		name: "database-postgres",
 		newDispatcher: func(_ *testing.T) Dispatcher {
 			dispatcher, err := NewDispatcher(Config{
-				Driver:   DriverDatabase,
-				Database: cfg,
+				Driver:         DriverDatabase,
+				DatabaseDriver: cfg.DriverName,
+				DatabaseDSN:    cfg.DSN,
+				Workers:        cfg.Workers,
+				PollInterval:   cfg.PollInterval,
 			})
 			if err != nil {
 				t.Fatalf("new postgres dispatcher failed: %v", err)
@@ -115,8 +115,11 @@ func TestDispatcherContract_DatabaseSQLiteIntegration(t *testing.T) {
 				PollInterval: 10 * time.Millisecond,
 			}
 			dispatcher, err := NewDispatcher(Config{
-				Driver:   DriverDatabase,
-				Database: cfg,
+				Driver:         DriverDatabase,
+				DatabaseDriver: cfg.DriverName,
+				DatabaseDSN:    cfg.DSN,
+				Workers:        cfg.Workers,
+				PollInterval:   cfg.PollInterval,
 			})
 			if err != nil {
 				t.Fatalf("new sqlite dispatcher failed: %v", err)
