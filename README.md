@@ -240,26 +240,26 @@ These are intentionally separate so enqueue-side settings and worker execution s
 Legend: `✓` supported, `-` ignored, `o` optional.
 
 | Config field | Sync | Workerpool | Database | Redis | Notes |
-|:--|:--:|:--:|:--:|:--:|:--|
-| `Driver` | ✓ | ✓ | ✓ | ✓ | Selects backend. |
-| `DefaultQueue` | - | - | ✓ | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
-| `Database` | - | - | o | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
-| `DatabaseDriver` | - | - | ✓ | - | `sqlite`, `mysql`, or `pgx`. |
-| `DatabaseDSN` | - | - | ✓ | - | Connection string for database driver. |
-| `RedisAddr` | - | - | - | ✓ | Required for Redis queue enqueueing. |
-| `RedisPassword` | - | - | - | o | Redis auth password. |
-| `RedisDB` | - | - | - | o | Redis logical DB index. |
+|--:|:--:|:--:|:--:|:--:|:--|
+| **Driver** | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| **DefaultQueue** | - | - | ✓ | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
+| **Database** | - | - | o | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
+| **DatabaseDriver** | - | - | ✓ | - | `sqlite`, `mysql`, or `pgx`. |
+| **DatabaseDSN** | - | - | ✓ | - | Connection string for database driver. |
+| **RedisAddr** | - | - | - | ✓ | Required for Redis queue enqueueing. |
+| **RedisPassword** | - | - | - | o | Redis auth password. |
+| **RedisDB** | - | - | - | o | Redis logical DB index. |
 
 ### WorkerConfig support matrix
 
 Legend: `✓` supported, `-` ignored, `o` optional.
 
 | WorkerConfig field | Sync | Workerpool | Database | Redis | Notes |
-|:--|:--:|:--:|:--:|:--:|:--|
-| `Driver` | ✓ | ✓ | ✓ | ✓ | Selects backend. |
-| `Workers` | - | ✓ | ✓ | ✓ | Redis uses this for Asynq worker concurrency. |
-| `QueueCapacity` | - | ✓ | - | - | In-memory pending queue capacity for workerpool workers. |
-| `DefaultTaskTimeout` | - | ✓ | - | - | Workerpool default task timeout unless task overrides with `Timeout(...)`. |
+|--:|:--:|:--:|:--:|:--:|:--|
+| **Driver** | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| **Workers** | - | ✓ | ✓ | ✓ | Redis uses this for Asynq worker concurrency. |
+| **QueueCapacity** | - | ✓ | - | - | In-memory pending queue capacity for workerpool workers. |
+| **DefaultTaskTimeout** | - | ✓ | - | - | Workerpool default task timeout unless task overrides with `Timeout(...)`. |
 | `PollInterval` | - | - | ✓ | - | Job polling interval for database worker loop. |
 | `DefaultQueue` | - | - | ✓ | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
 | `AutoMigrate` | - | - | ✓ | - | Creates/updates DB schema on start. |
