@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -187,6 +188,31 @@ func (t Task) UniqueFor(ttl time.Duration) Task {
 //	_ = payload
 func (t Task) PayloadBytes() []byte {
 	return append([]byte(nil), t.payload...)
+}
+
+// Bind unmarshals task payload JSON into dst.
+// @group Task
+//
+// Example: bind payload
+//
+//	type EmailPayload struct {
+//		ID int `json:"id"`
+//	}
+//	task := queue.NewTask("emails:send").Payload(EmailPayload{ID: 1})
+//	var payload EmailPayload
+//	_ = task.Bind(&payload)
+func (t Task) Bind(dst any) error {
+	if dst == nil {
+		return fmt.Errorf("bind destination is required")
+	}
+	v := reflect.ValueOf(dst)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return fmt.Errorf("bind destination must be a non-nil pointer")
+	}
+	if err := json.Unmarshal(t.PayloadBytes(), dst); err != nil {
+		return fmt.Errorf("bind payload: %w", err)
+	}
+	return nil
 }
 
 func encodePayload(payload any) ([]byte, error) {

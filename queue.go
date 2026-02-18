@@ -82,10 +82,23 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //	if err != nil {
 //		return
 //	}
+//	type EmailPayload struct {
+//		ID int `json:"id"`
+//	}
 //	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//		var payload EmailPayload
+//		if err := task.Bind(&payload); err != nil {
+//			return err
+//		}
+//		_ = payload
 //		return nil
 //	})
-//	_ = q.Enqueue(context.Background(), queue.NewTask("emails:send").Payload([]byte(`{"id":1}`)))
+//	_ = q.Enqueue(
+//		context.Background(),
+//		queue.NewTask("emails:send").
+//			Payload(EmailPayload{ID: 1}).
+//			OnQueue("default"),
+//	)
 func New(cfg Config) (Queue, error) {
 	switch cfg.Driver {
 	case DriverSync:

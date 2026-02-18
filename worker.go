@@ -18,7 +18,15 @@ import (
 //	if err != nil {
 //		return
 //	}
+//	type EmailPayload struct {
+//		ID int `json:"id"`
+//	}
 //	worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//		var payload EmailPayload
+//		if err := task.Bind(&payload); err != nil {
+//			return err
+//		}
+//		_ = payload
 //		return nil
 //	})
 //	_ = worker.Start()
@@ -63,7 +71,15 @@ type WorkerConfig struct {
 //	if err != nil {
 //		return
 //	}
+//	type EmailPayload struct {
+//		ID int `json:"id"`
+//	}
 //	worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//		var payload EmailPayload
+//		if err := task.Bind(&payload); err != nil {
+//			return err
+//		}
+//		_ = payload
 //		return nil
 //	})
 //	_ = worker.Start()

@@ -252,6 +252,68 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 	}
 }
 
+func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
+	if !integrationBackendEnabled("redis") {
+		t.Skip("redis integration backend not selected")
+	}
+
+	type payload struct {
+		ID int `json:"id"`
+	}
+	received := make(chan payload, 1)
+
+	worker, err := NewWorker(WorkerConfig{
+		Driver:    DriverRedis,
+		RedisAddr: integrationRedis.addr,
+		Workers:   1,
+	})
+	if err != nil {
+		t.Fatalf("new redis worker failed: %v", err)
+	}
+	worker.Register("job:bind", func(_ context.Context, task Task) error {
+		var in payload
+		if err := task.Bind(&in); err != nil {
+			return err
+		}
+		received <- in
+		return nil
+	})
+
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- worker.Start()
+	}()
+	t.Cleanup(func() { _ = worker.Shutdown() })
+	time.Sleep(100 * time.Millisecond)
+
+	q, err := New(Config{
+		Driver:    DriverRedis,
+		RedisAddr: integrationRedis.addr,
+	})
+	if err != nil {
+		t.Fatalf("new redis queue failed: %v", err)
+	}
+	defer q.Shutdown(context.Background())
+
+	want := payload{ID: 99}
+	if err := q.Enqueue(context.Background(), NewTask("job:bind").Payload(want).OnQueue("default")); err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+
+	select {
+	case got := <-received:
+		if got != want {
+			t.Fatalf("bind payload mismatch: got %+v want %+v", got, want)
+		}
+	case err := <-startErr:
+		if err != nil {
+			t.Fatalf("redis worker start failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for redis worker bind payload")
+	}
+}
+
 func startRedisContainer(ctx context.Context) (testcontainers.Container, string, error) {
 	req := testcontainers.ContainerRequest{
 		Image:        "redis:7-alpine",

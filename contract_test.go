@@ -130,6 +130,45 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 	})
 
+	t.Run("handler_bind_payload", func(t *testing.T) {
+		if !factory.requiresRegisteredHandle {
+			t.Skip("driver does not register handlers on queue runtime")
+		}
+		d := factory.newQueue(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		type payload struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		}
+		seen := make(chan payload, 1)
+		d.Register("job:contract:bind", func(_ context.Context, task Task) error {
+			var in payload
+			if err := task.Bind(&in); err != nil {
+				return err
+			}
+			seen <- in
+			return nil
+		})
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		want := payload{ID: 42, Name: "bind"}
+		if err := d.Enqueue(context.Background(), NewTask("job:contract:bind").Payload(want).OnQueue("default")); err != nil {
+			t.Fatalf("enqueue bind task failed: %v", err)
+		}
+		select {
+		case got := <-seen:
+			if got != want {
+				t.Fatalf("bind payload mismatch: got %+v want %+v", got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("bind handler was not invoked")
+		}
+	})
+
 	t.Run("enqueue_with_max_retry", func(t *testing.T) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })

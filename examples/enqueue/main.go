@@ -17,7 +17,20 @@ func main() {
 	if err != nil {
 		return
 	}
-	q.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-	task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`)).Delay(10 * time.Millisecond)
+	type EmailPayload struct {
+		ID int `json:"id"`
+	}
+	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+		var payload EmailPayload
+		if err := task.Bind(&payload); err != nil {
+			return err
+		}
+		_ = payload
+		return nil
+	})
+	task := queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1}).
+		OnQueue("default").
+		Delay(10 * time.Millisecond)
 	_ = q.Enqueue(context.Background(), task)
 }
