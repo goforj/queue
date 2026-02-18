@@ -102,12 +102,12 @@ q, _ := queue.New(queue.Config{
 
 ## Task builder options
 
-- `OnQueue(name)` sets the queue name for the task.
-- `Timeout(d)` applies a per-task timeout.
-- `Retry(n)` sets max retries (attempts = 1 + n).
-- `Backoff(d)` waits between retries (Redis enqueue returns `ErrBackoffUnsupported`).
-- `Delay(d)` schedules future execution.
-- `UniqueFor(ttl)` deduplicates by `Type + Payload` for the TTL window.
+- `OnQueue(name)` sets the queue name for the task. Default: empty (for Redis/Database, enqueue requires an explicit queue; Sync/Workerpool run without queue routing semantics).
+- `Timeout(d)` applies a per-task timeout. Default: unset (no per-task timeout; Workerpool may still apply `WorkerConfig.DefaultTaskTimeout`).
+- `Retry(n)` sets max retries (attempts = 1 + n). Default: `0` retries.
+- `Backoff(d)` waits between retries (Redis enqueue returns `ErrBackoffUnsupported`). Default: unset (no backoff delay).
+- `Delay(d)` schedules future execution. Default: `0` (run immediately).
+- `UniqueFor(ttl)` deduplicates by `Type + Payload` for the TTL window. Default: disabled (`0`).
 
 ## How workers attach
 
@@ -136,6 +136,14 @@ q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 })
 _ = q.Start(context.Background())
 defer q.Shutdown(context.Background())
+
+task := queue.NewTask("emails:send").
+    Payload(map[string]any{"id": 456}).
+    OnQueue("default").
+    Retry(2).
+    Backoff(250 * time.Millisecond)
+
+_ = q.Enqueue(context.Background(), task)
 ```
 
 ### Database driver
@@ -153,6 +161,17 @@ q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 })
 _ = q.Start(context.Background())
 defer q.Shutdown(context.Background())
+
+task := queue.NewTask("emails:send").
+    Payload(map[string]any{"id": 789}).
+    OnQueue("critical").
+    Delay(300 * time.Millisecond).
+    Timeout(10 * time.Second).
+    Retry(4).
+    Backoff(500 * time.Millisecond).
+    UniqueFor(45 * time.Second)
+
+_ = q.Enqueue(context.Background(), task)
 ```
 
 ### Redis driver
