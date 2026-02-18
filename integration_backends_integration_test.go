@@ -776,7 +776,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return w
 			},
 			supportsBackoff: true,
-			supportsRestart: false,
+			supportsRestart: true,
 			supportsPoisonRetry: true,
 		},
 		{
@@ -831,7 +831,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return nil
 			},
 			supportsBackoff: true,
-			supportsRestart: true,
+			supportsRestart: false,
 			supportsPoisonRetry: true,
 		},
 		{
@@ -892,7 +892,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return w
 			},
 			supportsBackoff: true,
-			supportsRestart: true,
+			supportsRestart: false,
 			supportsPoisonRetry: true,
 		},
 		{
@@ -1125,6 +1125,8 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		if !fx.supportsRestart {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
+		requireStepNoErr(t, "restart_step_worker_start", w.Start())
+
 		restartType := "job:hardening:restart:" + fx.name
 		done := make(chan struct{}, 1)
 
@@ -1164,6 +1166,120 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		case <-time.After(12 * time.Second):
 			t.Fatalf("[restart_recovery_processing] task did not recover after worker restart")
 		}
+	})
+
+	t.Run("step_bind_invalid_json", func(t *testing.T) {
+		requireStepNoErr(t, "bind_step_worker_start", w.Start())
+
+		badType := "job:hardening:bind-bad:" + fx.name
+		emptyType := "job:hardening:bind-empty:" + fx.name
+		goodType := "job:hardening:bind-good:" + fx.name
+		var badBindErrs atomic.Int32
+		var emptyBindErrs atomic.Int32
+		goodDone := make(chan struct{}, 1)
+
+		w.Register(badType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				badBindErrs.Add(1)
+			}
+			return nil
+		})
+		w.Register(emptyType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				emptyBindErrs.Add(1)
+			}
+			return nil
+		})
+		w.Register(goodType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			select {
+			case goodDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		badTask := NewTask(badType).
+			Payload([]byte("not-json")).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			badTask = badTask.Timeout(taskTimeout)
+		}
+		requireStepNoErr(t, "bind_bad_enqueue", q.Enqueue(context.Background(), badTask))
+
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if badBindErrs.Load() >= 1 {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		requireStepTrue(t, "bind_bad_seen", badBindErrs.Load() == 1, "bind_errors=%d expected=1", badBindErrs.Load())
+
+		emptyTask := NewTask(emptyType).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			emptyTask = emptyTask.Timeout(taskTimeout)
+		}
+		requireStepNoErr(t, "bind_empty_enqueue", q.Enqueue(context.Background(), emptyTask))
+
+		deadline = time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if emptyBindErrs.Load() >= 1 {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		requireStepTrue(t, "bind_empty_seen", emptyBindErrs.Load() == 1, "bind_errors=%d expected=1", emptyBindErrs.Load())
+
+		goodTask := NewTask(goodType).
+			Payload(hardeningPayload{ID: 9200, Name: "bind-good"}).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			goodTask = goodTask.Timeout(taskTimeout)
+		}
+		requireStepNoErr(t, "bind_good_enqueue", q.Enqueue(context.Background(), goodTask))
+
+		select {
+		case <-goodDone:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("[bind_good_processing] valid payload task was not processed")
+		}
+	})
+
+	t.Run("step_unique_queue_scope", func(t *testing.T) {
+		uniqueType := "job:hardening:unique-scope:" + fx.name
+		payload := hardeningPayload{ID: 9300, Name: "unique-scope"}
+		primary := fx.queueName
+		secondary := fx.queueName + "_other"
+
+		first := NewTask(uniqueType).
+			Payload(payload).
+			OnQueue(primary).
+			UniqueFor(2 * time.Second)
+		secondSameQueue := NewTask(uniqueType).
+			Payload(payload).
+			OnQueue(primary).
+			UniqueFor(2 * time.Second)
+		otherQueue := NewTask(uniqueType).
+			Payload(payload).
+			OnQueue(secondary).
+			UniqueFor(2 * time.Second)
+		if fx.forceTimeout {
+			first = first.Timeout(taskTimeout)
+			secondSameQueue = secondSameQueue.Timeout(taskTimeout)
+			otherQueue = otherQueue.Timeout(taskTimeout)
+		}
+
+		requireStepNoErr(t, "unique_first_enqueue", q.Enqueue(context.Background(), first))
+		dupErr := q.Enqueue(context.Background(), secondSameQueue)
+		requireStepTrue(t, "unique_duplicate_rejected", errors.Is(dupErr, ErrDuplicate), "expected ErrDuplicate, got %v", dupErr)
+		requireStepNoErr(t, "unique_other_queue_enqueue", q.Enqueue(context.Background(), otherQueue))
 	})
 
 	t.Run("step_shutdown_idempotent", func(t *testing.T) {
