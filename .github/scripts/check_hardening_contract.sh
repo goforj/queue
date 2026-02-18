@@ -24,9 +24,19 @@ required_hardening_steps=(
   step_shutdown_idempotent
 )
 
+has_pattern() {
+  local pattern="$1"
+  local file="$2"
+  if command -v rg >/dev/null 2>&1; then
+    rg -q -- "${pattern}" "${file}"
+    return
+  fi
+  grep -Eq -- "${pattern}" "${file}"
+}
+
 echo "Checking required hardening steps exist in integration suite..."
 for step in "${required_hardening_steps[@]}"; do
-  if ! rg -q "t\\.Run\\(\"${step}\"" integration_backends_integration_test.go; then
+  if ! has_pattern "t\\.Run\\(\"${step}\"" integration_backends_integration_test.go; then
     echo "missing hardening step in integration_backends_integration_test.go: ${step}"
     exit 1
   fi
@@ -34,7 +44,7 @@ done
 
 echo "Checking hardening document lists required baseline steps..."
 for step in "${required_hardening_steps[@]}"; do
-  if ! rg -q -- "- \`${step}\`" hardening.md; then
+  if ! has_pattern "- \`${step}\`" hardening.md; then
     echo "missing hardening step in hardening.md: ${step}"
     exit 1
   fi
@@ -43,30 +53,30 @@ done
 echo "Checking backend coverage in integration contract suites..."
 backend_pattern() {
   local backend="$1"
-  printf 'integrationBackendEnabled\("%s"\)|backend:\s*"%s"|name:\s*"%s"' "${backend}" "${backend}" "${backend}"
+  printf 'integrationBackendEnabled\("%s"\)|backend:[[:space:]]*"%s"|name:[[:space:]]*"%s"' "${backend}" "${backend}" "${backend}"
 }
 
 for backend in "${required_backends[@]}"; do
-  if ! rg -q "$(backend_pattern "${backend}")" contract_integration_test.go; then
+  if ! has_pattern "$(backend_pattern "${backend}")" contract_integration_test.go; then
     echo "missing backend ${backend} in contract_integration_test.go"
     exit 1
   fi
-  if ! rg -q "$(backend_pattern "${backend}")" worker_contract_integration_test.go; then
+  if ! has_pattern "$(backend_pattern "${backend}")" worker_contract_integration_test.go; then
     echo "missing backend ${backend} in worker_contract_integration_test.go"
     exit 1
   fi
-  if ! rg -q "$(backend_pattern "${backend}")" observability_integration_test.go; then
+  if ! has_pattern "$(backend_pattern "${backend}")" observability_integration_test.go; then
     echo "missing backend ${backend} in observability_integration_test.go"
     exit 1
   fi
 done
 
 echo "Checking required observability integration contract tests exist..."
-if ! rg -q "func TestObservabilityIntegration_AllBackends\\(" observability_integration_test.go; then
+if ! has_pattern "func TestObservabilityIntegration_AllBackends\\(" observability_integration_test.go; then
   echo "missing TestObservabilityIntegration_AllBackends"
   exit 1
 fi
-if ! rg -q "func TestObservabilityIntegration_PauseResumeSupport_AllBackends\\(" observability_integration_test.go; then
+if ! has_pattern "func TestObservabilityIntegration_PauseResumeSupport_AllBackends\\(" observability_integration_test.go; then
   echo "missing TestObservabilityIntegration_PauseResumeSupport_AllBackends"
   exit 1
 fi
