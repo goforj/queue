@@ -302,6 +302,11 @@ func (d *localDispatcher) runWithRetry(ctx context.Context, task Task, parsed en
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if parsed.timeout != nil && *parsed.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *parsed.timeout)
+		defer cancel()
+	}
 	attempts := 1
 	if parsed.maxRetry != nil && *parsed.maxRetry > 0 {
 		attempts += *parsed.maxRetry

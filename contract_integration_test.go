@@ -27,6 +27,7 @@ func TestDispatcherContract_Redis(t *testing.T) {
 		},
 		requiresRegisteredHandle: false,
 		assertMissingHandlerErr:  false,
+		backoffUnsupported:       true,
 		uniqueTTL:                time.Second,
 		uniqueExpiryWait:         1200 * time.Millisecond,
 	}

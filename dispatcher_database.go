@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -210,7 +211,11 @@ func (d *databaseDispatcher) Enqueue(ctx context.Context, task Task, opts ...Opt
 
 	var timeoutSeconds any
 	if parsed.timeout != nil {
-		timeoutSeconds = int64(parsed.timeout.Seconds())
+		seconds := int64(math.Ceil(parsed.timeout.Seconds()))
+		if seconds < 1 {
+			seconds = 1
+		}
+		timeoutSeconds = seconds
 	}
 
 	query := d.rebind(
