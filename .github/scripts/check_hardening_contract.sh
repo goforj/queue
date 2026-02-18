@@ -47,8 +47,8 @@ done
 
 echo "Checking hardening document lists required baseline steps..."
 for step in "${required_hardening_steps[@]}"; do
-  if ! has_pattern "- \`${step}\`" "${repo_root}/hardening.md"; then
-    echo "missing hardening step in hardening.md: ${step}"
+  if ! has_pattern "- \`${step}\`" "${repo_root}/docs/hardening.md"; then
+    echo "missing hardening step in docs/hardening.md: ${step}"
     exit 1
   fi
 done

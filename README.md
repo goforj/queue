@@ -265,7 +265,7 @@ Legend: `✓` supported, `-` unsupported/fallback.
 | `EventQueuePaused` | Queue consumption was paused. |
 | `EventQueueResumed` | Queue consumption was resumed. |
 
-For full field-level semantics and guarantees, see [`events.md`](events.md).
+For full field-level semantics and guarantees, see [`docs/events.md`](docs/events.md).
 
 ## How workers attach
 
