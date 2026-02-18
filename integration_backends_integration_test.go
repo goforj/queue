@@ -963,71 +963,96 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 	total := int32(40)
 	var seen atomic.Int32
 	var expected atomic.Int32
-	w.Register(taskType, func(_ context.Context, task Task) error {
-		var payload hardeningPayload
-		if err := task.Bind(&payload); err != nil {
-			return err
-		}
-		seen.Add(1)
-		return nil
+
+	t.Run("step_register_handler", func(t *testing.T) {
+		w.Register(taskType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			seen.Add(1)
+			return nil
+		})
 	})
 
-	if err := w.Start(); err != nil {
-		t.Fatalf("worker start failed: %v", err)
-	}
-	if err := w.Start(); err != nil {
-		t.Fatalf("worker second start failed: %v", err)
-	}
+	t.Run("step_start_idempotent", func(t *testing.T) {
+		requireStepNoErr(t, "worker_start", w.Start())
+		requireStepNoErr(t, "worker_start_idempotent", w.Start())
+	})
 
-	var wg sync.WaitGroup
-	for i := 0; i < int(total); i++ {
-		i := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			task := NewTask(taskType).
-				Payload(hardeningPayload{ID: i, Name: fx.name}).
-				OnQueue(fx.queueName)
-			if i%3 == 0 {
-				task = task.Delay(50 * time.Millisecond)
-			}
-			if i%4 == 0 {
-				task = task.Timeout(250 * time.Millisecond)
-			}
-			if fx.forceTimeout && i%4 != 0 {
-				task = task.Timeout(250 * time.Millisecond)
-			}
-			if fx.supportsBackoff && i%5 == 0 {
-				task = task.Retry(1).Backoff(20 * time.Millisecond)
-			}
-			if err := q.Enqueue(context.Background(), task); err != nil {
-				t.Errorf("enqueue %d failed: %v", i, err)
-				return
-			}
-			expected.Add(1)
-		}()
-	}
-	wg.Wait()
-	want := expected.Load()
-	if want == 0 {
-		t.Fatal("all enqueue operations failed")
-	}
-
-	deadline := time.Now().Add(25 * time.Second)
-	for time.Now().Before(deadline) {
-		if seen.Load() == want {
-			break
+	t.Run("step_enqueue_burst", func(t *testing.T) {
+		var wg sync.WaitGroup
+		errCh := make(chan error, total)
+		for i := 0; i < int(total); i++ {
+			i := i
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				task := NewTask(taskType).
+					Payload(hardeningPayload{ID: i, Name: fx.name}).
+					OnQueue(fx.queueName)
+				if i%3 == 0 {
+					task = task.Delay(50 * time.Millisecond)
+				}
+				if i%4 == 0 {
+					task = task.Timeout(250 * time.Millisecond)
+				}
+				if fx.forceTimeout && i%4 != 0 {
+					task = task.Timeout(250 * time.Millisecond)
+				}
+				if fx.supportsBackoff && i%5 == 0 {
+					task = task.Retry(1).Backoff(20 * time.Millisecond)
+				}
+				if err := q.Enqueue(context.Background(), task); err != nil {
+					errCh <- fmt.Errorf("enqueue %d failed: %w", i, err)
+					return
+				}
+				expected.Add(1)
+			}()
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := seen.Load(); got != want {
-		t.Fatalf("hardening timeout: processed=%d expected=%d", got, want)
-	}
+		wg.Wait()
+		close(errCh)
 
-	if err := w.Shutdown(); err != nil {
-		t.Fatalf("worker shutdown failed: %v", err)
+		var failures int
+		var first error
+		for err := range errCh {
+			failures++
+			if first == nil {
+				first = err
+			}
+		}
+		requireStepTrue(t, "enqueue_has_success", expected.Load() > 0, "all enqueue operations failed")
+		requireStepTrue(t, "enqueue_all_success", failures == 0, "failures=%d first=%v", failures, first)
+	})
+
+	t.Run("step_wait_all_processed", func(t *testing.T) {
+		want := expected.Load()
+		deadline := time.Now().Add(25 * time.Second)
+		for time.Now().Before(deadline) {
+			if seen.Load() == want {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		requireStepTrue(t, "all_processed", seen.Load() == want, "processed=%d expected=%d", seen.Load(), want)
+	})
+
+	t.Run("step_shutdown_idempotent", func(t *testing.T) {
+		requireStepNoErr(t, "worker_shutdown", w.Shutdown())
+		requireStepNoErr(t, "worker_shutdown_idempotent", w.Shutdown())
+	})
+}
+
+func requireStepNoErr(t *testing.T, step string, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("[%s] %v", step, err)
 	}
-	if err := w.Shutdown(); err != nil {
-		t.Fatalf("worker second shutdown failed: %v", err)
+}
+
+func requireStepTrue(t *testing.T, step string, ok bool, format string, args ...any) {
+	t.Helper()
+	if !ok {
+		t.Fatalf("[%s] "+format, append([]any{step}, args...)...)
 	}
 }
