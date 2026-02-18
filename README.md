@@ -383,11 +383,43 @@ _ = task
 
 ### <a id="payload"></a>Payload
 
-Payload sets raw task payload bytes.
+Payload sets task payload from common value types.
+
+_Example: payload bytes_
 
 ```go
-task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
-_ = task
+taskBytes := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+_ = taskBytes
+```
+
+_Example: payload struct_
+
+```go
+type Meta struct {
+	Nested bool `json:"nested"`
+}
+type EmailPayload struct {
+	ID   int    `json:"id"`
+	To   string `json:"to"`
+	Meta Meta   `json:"meta"`
+}
+taskStruct := queue.NewTask("emails:send").Payload(EmailPayload{
+	ID:   1,
+	To:   "user@example.com",
+	Meta: Meta{Nested: true},
+})
+_ = taskStruct
+```
+
+_Example: payload map_
+
+```go
+taskMap := queue.NewTask("emails:send").Payload(map[string]any{
+	"id":  1,
+	"to":  "user@example.com",
+	"meta": map[string]any{"nested": true},
+})
+_ = taskMap
 ```
 
 ### <a id="payloadbytes"></a>PayloadBytes

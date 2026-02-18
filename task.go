@@ -45,15 +45,46 @@ func NewTask(taskType string) Task {
 	return Task{Type: taskType}
 }
 
-// Payload sets raw task payload bytes.
+// Payload sets task payload from common value types.
 // @group Task
 //
 // Example: payload bytes
 //
-//	task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
-//	_ = task
-func (t Task) Payload(payload []byte) Task {
-	t.payload = append([]byte(nil), payload...)
+//	taskBytes := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+//	_ = taskBytes
+//
+// Example: payload struct
+//
+//	type Meta struct {
+//		Nested bool `json:"nested"`
+//	}
+//	type EmailPayload struct {
+//		ID   int    `json:"id"`
+//		To   string `json:"to"`
+//		Meta Meta   `json:"meta"`
+//	}
+//	taskStruct := queue.NewTask("emails:send").Payload(EmailPayload{
+//		ID:   1,
+//		To:   "user@example.com",
+//		Meta: Meta{Nested: true},
+//	})
+//	_ = taskStruct
+//
+// Example: payload map
+//
+//	taskMap := queue.NewTask("emails:send").Payload(map[string]any{
+//		"id":  1,
+//		"to":  "user@example.com",
+//		"meta": map[string]any{"nested": true},
+//	})
+//	_ = taskMap
+func (t Task) Payload(payload any) Task {
+	encoded, err := encodePayload(payload)
+	if err != nil {
+		t.buildErr = err
+		return t
+	}
+	t.payload = encoded
 	return t
 }
 
@@ -65,9 +96,9 @@ func (t Task) Payload(payload []byte) Task {
 //	task := queue.NewTask("emails:send").PayloadJSON(map[string]int{"id": 1})
 //	_ = task
 func (t Task) PayloadJSON(v any) Task {
-	payload, err := json.Marshal(v)
+	payload, err := encodePayload(v)
 	if err != nil {
-		t.buildErr = fmt.Errorf("marshal payload json: %w", err)
+		t.buildErr = err
 		return t
 	}
 	t.payload = payload
@@ -156,6 +187,32 @@ func (t Task) UniqueFor(ttl time.Duration) Task {
 //	_ = payload
 func (t Task) PayloadBytes() []byte {
 	return append([]byte(nil), t.payload...)
+}
+
+func encodePayload(payload any) ([]byte, error) {
+	if payload == nil {
+		return nil, nil
+	}
+	switch v := payload.(type) {
+	case []byte:
+		return append([]byte(nil), v...), nil
+	case string:
+		return []byte(v), nil
+	case json.RawMessage:
+		return append([]byte(nil), v...), nil
+	}
+	if marshaler, ok := payload.(interface{ MarshalJSON() ([]byte, error) }); ok {
+		encoded, err := marshaler.MarshalJSON()
+		if err != nil {
+			return nil, fmt.Errorf("marshal payload json: %w", err)
+		}
+		return encoded, nil
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal payload json: %w", err)
+	}
+	return encoded, nil
 }
 
 func (t Task) validate() error {
