@@ -57,7 +57,10 @@ func newLocalDispatcherWithConfig(driver Driver, cfg WorkerpoolConfig) *localDis
 //
 // Example: local driver
 //
-//	dispatcher := queue.NewSyncDispatcher()
+//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+//	if err != nil {
+//		return
+//	}
 //	fmt.Println(dispatcher.Driver())
 //	// Output: sync
 func (d *localDispatcher) Driver() Driver {
@@ -69,7 +72,10 @@ func (d *localDispatcher) Driver() Driver {
 //
 // Example: local register
 //
-//	dispatcher := queue.NewSyncDispatcher()
+//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+//	if err != nil {
+//		return
+//	}
 //	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
 func (d *localDispatcher) Register(taskType string, handler Handler) {
 	if taskType == "" || handler == nil {
@@ -85,7 +91,13 @@ func (d *localDispatcher) Register(taskType string, handler Handler) {
 //
 // Example: local start
 //
-//	dispatcher := queue.NewWorkerpoolDispatcher(queue.WorkerpoolConfig{Workers: 1, Buffer: 4})
+//	dispatcher, err := queue.NewDispatcher(queue.Config{
+//		Driver:     queue.DriverWorkerpool,
+//		Workerpool: queue.WorkerpoolConfig{Workers: 1, Buffer: 4},
+//	})
+//	if err != nil {
+//		return
+//	}
 //	_ = dispatcher.Start(context.Background())
 func (d *localDispatcher) Start(_ context.Context) error {
 	if d.driver != DriverWorkerpool {
@@ -100,7 +112,13 @@ func (d *localDispatcher) Start(_ context.Context) error {
 //
 // Example: local shutdown
 //
-//	dispatcher := queue.NewWorkerpoolDispatcher(queue.WorkerpoolConfig{Workers: 1, Buffer: 4})
+//	dispatcher, err := queue.NewDispatcher(queue.Config{
+//		Driver:     queue.DriverWorkerpool,
+//		Workerpool: queue.WorkerpoolConfig{Workers: 1, Buffer: 4},
+//	})
+//	if err != nil {
+//		return
+//	}
 //	_ = dispatcher.Start(context.Background())
 //	_ = dispatcher.Shutdown(context.Background())
 func (d *localDispatcher) Shutdown(ctx context.Context) error {
@@ -135,7 +153,10 @@ func (d *localDispatcher) Shutdown(ctx context.Context) error {
 //
 // Example: local enqueue
 //
-//	dispatcher := queue.NewSyncDispatcher()
+//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+//	if err != nil {
+//		return
+//	}
 //	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
 //	_ = dispatcher.Enqueue(context.Background(), queue.Task{Type: "emails:send"}, queue.WithDelay(10*time.Millisecond))
 func (d *localDispatcher) Enqueue(ctx context.Context, task Task, opts ...Option) error {

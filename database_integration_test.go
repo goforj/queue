@@ -14,7 +14,10 @@ import (
 
 func newDatabaseDispatcherIntegration(t *testing.T, cfg DatabaseConfig) Dispatcher {
 	t.Helper()
-	dispatcher, err := NewDatabaseDispatcher(cfg)
+	dispatcher, err := NewDispatcher(Config{
+		Driver:   DriverDatabase,
+		Database: cfg,
+	})
 	if err != nil {
 		t.Fatalf("new database dispatcher failed: %v", err)
 	}

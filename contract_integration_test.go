@@ -20,7 +20,16 @@ func TestDispatcherContract_Redis(t *testing.T) {
 		newDispatcher: func(t *testing.T) Dispatcher {
 			client := asynq.NewClient(asynq.RedisClientOpt{Addr: integrationRedis.addr})
 			t.Cleanup(func() { _ = client.Close() })
-			return NewRedisDispatcher(client)
+			dispatcher, err := NewDispatcher(Config{
+				Driver: DriverRedis,
+				Redis: RedisConfig{
+					Enqueuer: client,
+				},
+			})
+			if err != nil {
+				t.Fatalf("new redis dispatcher failed: %v", err)
+			}
+			return dispatcher
 		},
 		requiresRegisteredHandle: false,
 		assertMissingHandlerErr:  false,
@@ -43,7 +52,10 @@ func TestDispatcherContract_DatabaseMySQL(t *testing.T) {
 	factory := contractFactory{
 		name: "database-mysql",
 		newDispatcher: func(_ *testing.T) Dispatcher {
-			dispatcher, err := NewDatabaseDispatcher(cfg)
+			dispatcher, err := NewDispatcher(Config{
+				Driver:   DriverDatabase,
+				Database: cfg,
+			})
 			if err != nil {
 				t.Fatalf("new mysql dispatcher failed: %v", err)
 			}
@@ -71,7 +83,10 @@ func TestDispatcherContract_DatabasePostgres(t *testing.T) {
 	factory := contractFactory{
 		name: "database-postgres",
 		newDispatcher: func(_ *testing.T) Dispatcher {
-			dispatcher, err := NewDatabaseDispatcher(cfg)
+			dispatcher, err := NewDispatcher(Config{
+				Driver:   DriverDatabase,
+				Database: cfg,
+			})
 			if err != nil {
 				t.Fatalf("new postgres dispatcher failed: %v", err)
 			}
@@ -99,7 +114,10 @@ func TestDispatcherContract_DatabaseSQLiteIntegration(t *testing.T) {
 				Workers:      1,
 				PollInterval: 10 * time.Millisecond,
 			}
-			dispatcher, err := NewDatabaseDispatcher(cfg)
+			dispatcher, err := NewDispatcher(Config{
+				Driver:   DriverDatabase,
+				Database: cfg,
+			})
 			if err != nil {
 				t.Fatalf("new sqlite dispatcher failed: %v", err)
 			}

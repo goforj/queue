@@ -54,6 +54,15 @@ type Config struct {
 	Driver     Driver
 	Workerpool WorkerpoolConfig
 	Database   DatabaseConfig
+	Redis      RedisConfig
+}
+
+// RedisConfig configures redis-backed enqueueing and worker consumption.
+// @group Config
+type RedisConfig struct {
+	Enqueuer     RedisEnqueuer
+	Conn         asynq.RedisConnOpt
+	WorkerServer asynq.Config
 }
 
 // RedisEnqueuer is the minimal enqueue dependency used by the redis dispatcher.
@@ -62,43 +71,15 @@ type RedisEnqueuer interface {
 	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
-// NewSyncDispatcher creates a synchronous in-process dispatcher.
-// @group Constructors
-//
-// Example: new sync dispatcher
-//
-//	dispatcher := queue.NewSyncDispatcher()
-//	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-//		return nil
-//	})
-//	_ = dispatcher.Enqueue(context.Background(), queue.Task{Type: "emails:send"})
-func NewSyncDispatcher() Dispatcher {
+func newSyncDispatcher() Dispatcher {
 	return newLocalDispatcherWithConfig(DriverSync, WorkerpoolConfig{})
 }
 
-// NewWorkerpoolDispatcher creates an in-memory asynchronous workerpool dispatcher.
-// @group Constructors
-//
-// Example: new workerpool dispatcher
-//
-//	dispatcher := queue.NewWorkerpoolDispatcher(queue.WorkerpoolConfig{Workers: 2, Buffer: 16})
-//	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-//		return nil
-//	})
-//	_ = dispatcher.Start(context.Background())
-//	_ = dispatcher.Shutdown(context.Background())
-func NewWorkerpoolDispatcher(cfg WorkerpoolConfig) Dispatcher {
+func newWorkerpoolDispatcher(cfg WorkerpoolConfig) Dispatcher {
 	return newLocalDispatcherWithConfig(DriverWorkerpool, cfg.normalize())
 }
 
-// NewRedisDispatcher creates a redis-backed dispatcher using an asynq-compatible enqueuer.
-// @group Constructors
-//
-// Example: new redis dispatcher
-//
-//	dispatcher := queue.NewRedisDispatcher(nil)
-//	fmt.Println(dispatcher.Driver())
-func NewRedisDispatcher(client RedisEnqueuer) Dispatcher {
+func newConfiguredRedisDispatcher(client RedisEnqueuer) Dispatcher {
 	return newRedisDispatcher(client)
 }
 
@@ -107,7 +88,7 @@ func NewRedisDispatcher(client RedisEnqueuer) Dispatcher {
 //
 // Example: new dispatcher from config
 //
-//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync}, nil)
+//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -115,16 +96,19 @@ func NewRedisDispatcher(client RedisEnqueuer) Dispatcher {
 //		return nil
 //	})
 //	_ = dispatcher.Enqueue(context.Background(), queue.Task{Type: "emails:send"})
-func NewDispatcher(cfg Config, client RedisEnqueuer) (Dispatcher, error) {
+func NewDispatcher(cfg Config) (Dispatcher, error) {
 	switch cfg.Driver {
 	case DriverSync:
-		return NewSyncDispatcher(), nil
+		return newSyncDispatcher(), nil
 	case DriverWorkerpool:
-		return NewWorkerpoolDispatcher(cfg.Workerpool), nil
+		return newWorkerpoolDispatcher(cfg.Workerpool), nil
 	case DriverRedis:
-		return NewRedisDispatcher(client), nil
+		if cfg.Redis.Enqueuer == nil {
+			return nil, fmt.Errorf("redis enqueuer is required")
+		}
+		return newConfiguredRedisDispatcher(cfg.Redis.Enqueuer), nil
 	case DriverDatabase:
-		return NewDatabaseDispatcher(cfg.Database)
+		return newDatabaseDispatcher(cfg.Database)
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}

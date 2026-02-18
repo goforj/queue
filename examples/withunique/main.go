@@ -13,9 +13,12 @@ func main() {
 	// WithUnique deduplicates by task type and payload for a TTL window.
 
 	// Example: with unique
-	dispatcher := queue.NewSyncDispatcher()
+	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+	if err != nil {
+		return
+	}
 	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
 	ctx := context.Background()
-	err := dispatcher.Enqueue(ctx, queue.Task{Type: "emails:send", Payload: []byte(`{"id":1}`)}, queue.WithUnique(30*time.Second))
+	err = dispatcher.Enqueue(ctx, queue.Task{Type: "emails:send", Payload: []byte(`{"id":1}`)}, queue.WithUnique(30*time.Second))
 	_ = err
 }

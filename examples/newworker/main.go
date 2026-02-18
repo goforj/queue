@@ -9,10 +9,15 @@ import (
 )
 
 func main() {
-	// NewWorkerpoolWorker creates an in-process asynchronous workerpool worker.
+	// NewWorker creates a worker based on Config.Driver.
 
-	// Example: new workerpool worker
-	worker := queue.NewWorkerpoolWorker(queue.WorkerpoolConfig{Workers: 2, Buffer: 16})
+	// Example: new sync worker
+	worker, err := queue.NewWorker(queue.Config{
+		Driver: queue.DriverSync,
+	})
+	if err != nil {
+		return
+	}
 	worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 		return nil
 	})

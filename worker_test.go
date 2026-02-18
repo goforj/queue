@@ -31,18 +31,64 @@ func (s *fakeAsynqServer) Stop() {
 }
 
 func TestNewWorkerAdapters(t *testing.T) {
-	if NewSyncWorker().Driver() != DriverSync {
+	sw, err := NewWorker(Config{Driver: DriverSync})
+	if err != nil {
+		t.Fatalf("new sync worker failed: %v", err)
+	}
+	if sw.Driver() != DriverSync {
 		t.Fatal("expected sync worker driver")
 	}
-	if NewWorkerpoolWorker(WorkerpoolConfig{Workers: 1, Buffer: 2}).Driver() != DriverWorkerpool {
+	wp, err := NewWorker(Config{
+		Driver:     DriverWorkerpool,
+		Workerpool: WorkerpoolConfig{Workers: 1, Buffer: 2},
+	})
+	if err != nil {
+		t.Fatalf("new workerpool worker failed: %v", err)
+	}
+	if wp.Driver() != DriverWorkerpool {
 		t.Fatal("expected workerpool worker driver")
 	}
-	dw, err := NewDatabaseWorker(DatabaseConfig{DriverName: "sqlite", DSN: t.TempDir() + "/worker.db"})
+	dw, err := NewWorker(Config{
+		Driver:   DriverDatabase,
+		Database: DatabaseConfig{DriverName: "sqlite", DSN: t.TempDir() + "/worker.db"},
+	})
 	if err != nil {
 		t.Fatalf("new database worker failed: %v", err)
 	}
 	if dw.Driver() != DriverDatabase {
 		t.Fatal("expected database worker driver")
+	}
+	rw, err := NewWorker(Config{
+		Driver: DriverRedis,
+		Redis: RedisConfig{
+			Conn: asynq.RedisClientOpt{Addr: "127.0.0.1:6379"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new redis worker failed: %v", err)
+	}
+	if rw.Driver() != DriverRedis {
+		t.Fatal("expected redis worker driver")
+	}
+}
+
+func TestNewWorker_UnknownDriverFails(t *testing.T) {
+	worker, err := NewWorker(Config{Driver: Driver("unknown")})
+	if err == nil {
+		t.Fatal("expected unknown driver error")
+	}
+	if worker != nil {
+		t.Fatal("expected nil worker")
+	}
+}
+
+func TestNewWorker_RedisRequiresConn(t *testing.T) {
+	worker, err := NewWorker(Config{Driver: DriverRedis})
+	if err == nil {
+		t.Fatal("expected redis conn error")
+	}
+	if worker != nil {
+		t.Fatal("expected nil worker")
 	}
 }
 

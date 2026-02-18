@@ -12,7 +12,7 @@ func main() {
 	// NewDispatcher creates a dispatcher based on Config.Driver.
 
 	// Example: new dispatcher from config
-	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync}, nil)
+	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

@@ -1,13 +1,20 @@
 package queue
 
-import "github.com/hibiken/asynq"
+import (
+	"fmt"
+
+	"github.com/hibiken/asynq"
+)
 
 // Worker processes queued tasks using registered handlers.
 // @group Worker
 //
 // Example: worker lifecycle
 //
-//	worker := queue.NewSyncWorker()
+//	worker, err := queue.NewWorker(queue.Config{Driver: queue.DriverSync})
+//	if err != nil {
+//		return
+//	}
 //	worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 //		return nil
 //	})
@@ -20,45 +27,13 @@ type Worker interface {
 	Shutdown() error
 }
 
-// NewSyncWorker creates a synchronous in-process worker.
+// NewWorker creates a worker based on Config.Driver.
 // @group Constructors
 //
 // Example: new sync worker
 //
-//	worker := queue.NewSyncWorker()
-//	worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-//		return nil
-//	})
-//	_ = worker.Start()
-//	_ = worker.Shutdown()
-func NewSyncWorker() Worker {
-	return &dispatcherWorkerAdapter{dispatcher: NewSyncDispatcher()}
-}
-
-// NewWorkerpoolWorker creates an in-process asynchronous workerpool worker.
-// @group Constructors
-//
-// Example: new workerpool worker
-//
-//	worker := queue.NewWorkerpoolWorker(queue.WorkerpoolConfig{Workers: 2, Buffer: 16})
-//	worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-//		return nil
-//	})
-//	_ = worker.Start()
-//	_ = worker.Shutdown()
-func NewWorkerpoolWorker(cfg WorkerpoolConfig) Worker {
-	return &dispatcherWorkerAdapter{dispatcher: NewWorkerpoolDispatcher(cfg)}
-}
-
-// NewDatabaseWorker creates a durable SQL-backed worker.
-// @group Constructors
-//
-// Example: new database worker
-//
-//	worker, err := queue.NewDatabaseWorker(queue.DatabaseConfig{
-//		DriverName: "sqlite",
-//		DSN:        "file:queue-worker.db?_busy_timeout=5000",
-//		Workers:    1,
+//	worker, err := queue.NewWorker(queue.Config{
+//		Driver: queue.DriverSync,
 //	})
 //	if err != nil {
 //		return
@@ -68,22 +43,29 @@ func NewWorkerpoolWorker(cfg WorkerpoolConfig) Worker {
 //	})
 //	_ = worker.Start()
 //	_ = worker.Shutdown()
-func NewDatabaseWorker(cfg DatabaseConfig) (Worker, error) {
-	d, err := NewDatabaseDispatcher(cfg)
-	if err != nil {
-		return nil, err
+func NewWorker(cfg Config) (Worker, error) {
+	switch cfg.Driver {
+	case DriverSync:
+		return &dispatcherWorkerAdapter{dispatcher: newSyncDispatcher()}, nil
+	case DriverWorkerpool:
+		return &dispatcherWorkerAdapter{dispatcher: newWorkerpoolDispatcher(cfg.Workerpool)}, nil
+	case DriverDatabase:
+		d, err := newDatabaseDispatcher(cfg.Database)
+		if err != nil {
+			return nil, err
+		}
+		return &dispatcherWorkerAdapter{dispatcher: d}, nil
+	case DriverRedis:
+		if cfg.Redis.Conn == nil {
+			return nil, fmt.Errorf("redis conn is required")
+		}
+		return newRedisWorker(
+			asynq.NewServer(cfg.Redis.Conn, cfg.Redis.WorkerServer),
+			asynq.NewServeMux(),
+		), nil
+	default:
+		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}
-	return &dispatcherWorkerAdapter{dispatcher: d}, nil
-}
-
-// NewRedisWorker creates a Redis-backed worker without exposing asynq handler types.
-// @group Constructors
-//
-// Example: new redis worker constructor
-//
-//	_ = queue.NewRedisWorker
-func NewRedisWorker(redis asynq.RedisConnOpt, cfg asynq.Config) Worker {
-	return newRedisWorker(asynq.NewServer(redis, cfg), asynq.NewServeMux())
 }
 
 type dispatcherWorkerAdapter struct {

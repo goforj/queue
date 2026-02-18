@@ -144,7 +144,11 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		{
 			name: "sync",
 			newDispatcher: func(_ *testing.T) Dispatcher {
-				return NewSyncDispatcher()
+				dispatcher, err := NewDispatcher(Config{Driver: DriverSync})
+				if err != nil {
+					t.Fatalf("new sync dispatcher failed: %v", err)
+				}
+				return dispatcher
 			},
 			requiresRegisteredHandle: true,
 			assertMissingHandlerErr:  true,
@@ -152,7 +156,14 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		{
 			name: "workerpool",
 			newDispatcher: func(_ *testing.T) Dispatcher {
-				return NewWorkerpoolDispatcher(WorkerpoolConfig{Workers: 1, Buffer: 4})
+				dispatcher, err := NewDispatcher(Config{
+					Driver:     DriverWorkerpool,
+					Workerpool: WorkerpoolConfig{Workers: 1, Buffer: 4},
+				})
+				if err != nil {
+					t.Fatalf("new workerpool dispatcher failed: %v", err)
+				}
+				return dispatcher
 			},
 			requiresRegisteredHandle: true,
 			assertMissingHandlerErr:  true,
@@ -160,11 +171,14 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		{
 			name: "database-sqlite",
 			newDispatcher: func(t *testing.T) Dispatcher {
-				dispatcher, err := NewDatabaseDispatcher(DatabaseConfig{
-					DriverName:   "sqlite",
-					DSN:          fmt.Sprintf("%s/contract-%d.db", t.TempDir(), time.Now().UnixNano()),
-					Workers:      1,
-					PollInterval: 10 * time.Millisecond,
+				dispatcher, err := NewDispatcher(Config{
+					Driver: DriverDatabase,
+					Database: DatabaseConfig{
+						DriverName:   "sqlite",
+						DSN:          fmt.Sprintf("%s/contract-%d.db", t.TempDir(), time.Now().UnixNano()),
+						Workers:      1,
+						PollInterval: 10 * time.Millisecond,
+					},
 				})
 				if err != nil {
 					t.Fatalf("new sqlite dispatcher failed: %v", err)

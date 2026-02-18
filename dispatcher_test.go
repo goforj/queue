@@ -17,21 +17,36 @@ func (f fakeEnqueuer) Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.Ta
 }
 
 func TestNewSyncDispatcher(t *testing.T) {
-	dispatcher := NewSyncDispatcher()
+	dispatcher, err := NewDispatcher(Config{Driver: DriverSync})
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
 	if dispatcher.Driver() != DriverSync {
 		t.Fatalf("expected sync driver, got %q", dispatcher.Driver())
 	}
 }
 
 func TestNewWorkerpoolDispatcher(t *testing.T) {
-	dispatcher := NewWorkerpoolDispatcher(WorkerpoolConfig{Workers: 2, Buffer: 4})
+	dispatcher, err := NewDispatcher(Config{
+		Driver:     DriverWorkerpool,
+		Workerpool: WorkerpoolConfig{Workers: 2, Buffer: 4},
+	})
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
 	if dispatcher.Driver() != DriverWorkerpool {
 		t.Fatalf("expected workerpool driver, got %q", dispatcher.Driver())
 	}
 }
 
 func TestNewRedisDispatcher(t *testing.T) {
-	dispatcher := NewRedisDispatcher(nil)
+	dispatcher, err := NewDispatcher(Config{
+		Driver: DriverRedis,
+		Redis:  RedisConfig{Enqueuer: fakeEnqueuer{}},
+	})
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
 	if dispatcher.Driver() != DriverRedis {
 		t.Fatalf("expected redis driver, got %q", dispatcher.Driver())
 	}
@@ -61,7 +76,10 @@ func TestNewDispatcher_SelectsByConfig(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			dispatcher, err := NewDispatcher(tc.cfg, nil)
+			if tc.cfg.Driver == DriverRedis {
+				tc.cfg.Redis.Enqueuer = fakeEnqueuer{}
+			}
+			dispatcher, err := NewDispatcher(tc.cfg)
 			if err != nil {
 				t.Fatalf("new dispatcher failed: %v", err)
 			}
@@ -73,7 +91,7 @@ func TestNewDispatcher_SelectsByConfig(t *testing.T) {
 }
 
 func TestNewDispatcher_UnknownDriverFails(t *testing.T) {
-	dispatcher, err := NewDispatcher(Config{Driver: Driver("unknown")}, nil)
+	dispatcher, err := NewDispatcher(Config{Driver: Driver("unknown")})
 	if err == nil {
 		t.Fatal("expected unknown driver error")
 	}
@@ -83,22 +101,27 @@ func TestNewDispatcher_UnknownDriverFails(t *testing.T) {
 }
 
 func TestRedisDispatcher_EnqueueWithoutClientFails(t *testing.T) {
-	dispatcher := NewRedisDispatcher(nil)
-	err := dispatcher.Enqueue(context.Background(), Task{
-		Type:    "job:test",
-		Payload: []byte("{}"),
-	})
+	dispatcher, err := NewDispatcher(Config{Driver: DriverRedis})
 	if err == nil {
-		t.Fatal("expected enqueue error for nil redis client")
+		t.Fatal("expected constructor error for missing redis enqueuer")
 	}
-	if !strings.Contains(err.Error(), "client unavailable") {
+	if dispatcher != nil {
+		t.Fatal("expected nil dispatcher")
+	}
+	if !strings.Contains(err.Error(), "redis enqueuer is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestRedisDispatcher_BackoffUnsupported(t *testing.T) {
-	dispatcher := NewRedisDispatcher(fakeEnqueuer{})
-	err := dispatcher.Enqueue(
+	dispatcher, err := NewDispatcher(Config{
+		Driver: DriverRedis,
+		Redis:  RedisConfig{Enqueuer: fakeEnqueuer{}},
+	})
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
+	err = dispatcher.Enqueue(
 		context.Background(),
 		Task{Type: "job:test", Payload: []byte("{}")},
 		WithBackoff(time.Second),
@@ -109,12 +132,21 @@ func TestRedisDispatcher_BackoffUnsupported(t *testing.T) {
 }
 
 func TestDispatcher_ShutdownNoopForSyncAndRedis(t *testing.T) {
-	syncDispatcher := NewSyncDispatcher()
+	syncDispatcher, err := NewDispatcher(Config{Driver: DriverSync})
+	if err != nil {
+		t.Fatalf("sync constructor failed: %v", err)
+	}
 	if err := syncDispatcher.Shutdown(context.Background()); err != nil {
 		t.Fatalf("sync shutdown failed: %v", err)
 	}
 
-	redisDispatcher := NewRedisDispatcher(nil)
+	redisDispatcher, err := NewDispatcher(Config{
+		Driver: DriverRedis,
+		Redis:  RedisConfig{Enqueuer: fakeEnqueuer{}},
+	})
+	if err != nil {
+		t.Fatalf("redis constructor failed: %v", err)
+	}
 	if err := redisDispatcher.Shutdown(context.Background()); err != nil {
 		t.Fatalf("redis shutdown failed: %v", err)
 	}

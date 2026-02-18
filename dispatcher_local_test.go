@@ -284,7 +284,7 @@ func TestLocalDispatcher_SyncRetriesWithBackoff(t *testing.T) {
 }
 
 func TestLocalDispatcher_WorkerpoolRetriesWithBackoff(t *testing.T) {
-	d := NewWorkerpoolDispatcher(WorkerpoolConfig{Workers: 1, Buffer: 4}).(*localDispatcher)
+	d := newWorkerpoolDispatcher(WorkerpoolConfig{Workers: 1, Buffer: 4}).(*localDispatcher)
 	triggered := make(chan struct{}, 1)
 	var calls atomic.Int64
 	d.Register("job:retry-workerpool", func(_ context.Context, _ Task) error {
