@@ -66,6 +66,8 @@ type WorkerConfig struct {
 	SQSEndpoint  string
 	SQSAccessKey string
 	SQSSecretKey string
+
+	RabbitMQURL string
 }
 
 // NewWorker creates a worker based on WorkerConfig.Driver.
@@ -152,6 +154,11 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 			cfg.SQSRegion = "us-east-1"
 		}
 		return newSQSWorker(cfg), nil
+	case DriverRabbitMQ:
+		if cfg.RabbitMQURL == "" {
+			return nil, fmt.Errorf("rabbitmq url is required")
+		}
+		return newRabbitMQWorker(cfg), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}

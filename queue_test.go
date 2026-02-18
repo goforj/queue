@@ -88,6 +88,19 @@ func TestNewSQSQueue(t *testing.T) {
 	}
 }
 
+func TestNewRabbitMQQueue(t *testing.T) {
+	q, err := New(Config{
+		Driver:      DriverRabbitMQ,
+		RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/",
+	})
+	if err != nil {
+		t.Fatalf("new q failed: %v", err)
+	}
+	if queueDriver(q) != DriverRabbitMQ {
+		t.Fatalf("expected rabbitmq driver, got %q", queueDriver(q))
+	}
+}
+
 func TestNew_SelectsByConfig(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -99,6 +112,7 @@ func TestNew_SelectsByConfig(t *testing.T) {
 		{name: "redis", cfg: Config{Driver: DriverRedis, RedisAddr: "127.0.0.1:6379"}, driver: DriverRedis},
 		{name: "nats", cfg: Config{Driver: DriverNATS, NATSURL: "nats://127.0.0.1:4222"}, driver: DriverNATS},
 		{name: "sqs", cfg: Config{Driver: DriverSQS, SQSRegion: "us-east-1"}, driver: DriverSQS},
+		{name: "rabbitmq", cfg: Config{Driver: DriverRabbitMQ, RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/"}, driver: DriverRabbitMQ},
 		{
 			name: "database",
 			cfg: Config{
@@ -155,6 +169,19 @@ func TestNATSQueue_EnqueueWithoutURLFails(t *testing.T) {
 		t.Fatal("expected nil q")
 	}
 	if !strings.Contains(err.Error(), "nats url is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRabbitMQQueue_EnqueueWithoutURLFails(t *testing.T) {
+	q, err := New(Config{Driver: DriverRabbitMQ})
+	if err == nil {
+		t.Fatal("expected constructor error for missing rabbitmq url")
+	}
+	if q != nil {
+		t.Fatal("expected nil q")
+	}
+	if !strings.Contains(err.Error(), "rabbitmq url is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

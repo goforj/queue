@@ -179,3 +179,26 @@ func TestQueueContract_SQS(t *testing.T) {
 	}
 	runQueueContractSuite(t, factory)
 }
+
+func TestQueueContract_RabbitMQ(t *testing.T) {
+	if !integrationBackendEnabled("rabbitmq") {
+		t.Skip("rabbitmq integration backend not selected")
+	}
+	factory := contractFactory{
+		name: "rabbitmq",
+		newQueue: func(_ *testing.T) Queue {
+			q, err := New(Config{
+				Driver:      DriverRabbitMQ,
+				RabbitMQURL: integrationRabbitMQ.url,
+			})
+			if err != nil {
+				t.Fatalf("new rabbitmq q failed: %v", err)
+			}
+			return q
+		},
+		requiresRegisteredHandle: false,
+		requiresQueueName:        true,
+		assertMissingHandlerErr:  false,
+	}
+	runQueueContractSuite(t, factory)
+}

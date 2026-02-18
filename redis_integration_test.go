@@ -46,6 +46,11 @@ var integrationSQS struct {
 	secretKey string
 }
 
+var integrationRabbitMQ struct {
+	container testcontainers.Container
+	url       string
+}
+
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 	backends := selectedIntegrationBackends()
@@ -54,6 +59,7 @@ func TestMain(m *testing.M) {
 	needsPostgres := backends["postgres"]
 	needsNATS := backends["nats"]
 	needsSQS := backends["sqs"]
+	needsRabbitMQ := backends["rabbitmq"]
 
 	if needsRedis {
 		redisContainer, redisAddr, err := startRedisContainer(ctx)
@@ -136,6 +142,30 @@ func TestMain(m *testing.M) {
 		integrationSQS.accessKey = "test"
 		integrationSQS.secretKey = "test"
 	}
+	if needsRabbitMQ {
+		rabbitMQContainer, rabbitMQURL, err := startRabbitMQContainer(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to start rabbitmq integration container: %v\n", err)
+			if integrationSQS.container != nil {
+				_ = integrationSQS.container.Terminate(ctx)
+			}
+			if integrationNATS.container != nil {
+				_ = integrationNATS.container.Terminate(ctx)
+			}
+			if integrationPostgres.container != nil {
+				_ = integrationPostgres.container.Terminate(ctx)
+			}
+			if integrationMySQL.container != nil {
+				_ = integrationMySQL.container.Terminate(ctx)
+			}
+			if integrationRedis.container != nil {
+				_ = integrationRedis.container.Terminate(ctx)
+			}
+			os.Exit(1)
+		}
+		integrationRabbitMQ.container = rabbitMQContainer
+		integrationRabbitMQ.url = rabbitMQURL
+	}
 
 	exitCode := m.Run()
 
@@ -166,6 +196,11 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "failed to terminate sqs integration container: %v\n", err)
 		}
 	}
+	if integrationRabbitMQ.container != nil {
+		if err := integrationRabbitMQ.container.Terminate(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to terminate rabbitmq integration container: %v\n", err)
+		}
+	}
 
 	os.Exit(exitCode)
 }
@@ -178,6 +213,7 @@ func selectedIntegrationBackends() map[string]bool {
 		"sqlite":   true,
 		"nats":     true,
 		"sqs":      true,
+		"rabbitmq": true,
 	}
 	value := strings.TrimSpace(strings.ToLower(os.Getenv("INTEGRATION_BACKEND")))
 	if value == "" || value == "all" {
@@ -543,6 +579,32 @@ func startSQSContainer(ctx context.Context) (testcontainers.Container, string, e
 		return nil, "", err
 	}
 	return container, "http://" + net.JoinHostPort(host, port.Port()), nil
+}
+
+func startRabbitMQContainer(ctx context.Context) (testcontainers.Container, string, error) {
+	req := testcontainers.ContainerRequest{
+		Image:        "rabbitmq:3-alpine",
+		ExposedPorts: []string{"5672/tcp"},
+		WaitingFor:   wait.ForListeningPort("5672/tcp").WithStartupTimeout(60 * time.Second),
+	}
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	host, err := container.Host(ctx)
+	if err != nil {
+		_ = container.Terminate(ctx)
+		return nil, "", err
+	}
+	port, err := container.MappedPort(ctx, "5672/tcp")
+	if err != nil {
+		_ = container.Terminate(ctx)
+		return nil, "", err
+	}
+	return container, "amqp://guest:guest@" + net.JoinHostPort(host, port.Port()) + "/", nil
 }
 
 func waitForMySQLReady(addr string, timeout time.Duration) error {

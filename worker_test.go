@@ -90,6 +90,16 @@ func TestNewWorkerAdapters(t *testing.T) {
 	if swq.Driver() != DriverSQS {
 		t.Fatal("expected sqs worker driver")
 	}
+	rmqw, err := NewWorker(WorkerConfig{
+		Driver:      DriverRabbitMQ,
+		RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/",
+	})
+	if err != nil {
+		t.Fatalf("new rabbitmq worker failed: %v", err)
+	}
+	if rmqw.Driver() != DriverRabbitMQ {
+		t.Fatal("expected rabbitmq worker driver")
+	}
 }
 
 func TestNewWorker_UnknownDriverFails(t *testing.T) {
@@ -116,6 +126,16 @@ func TestNewWorker_NATSRequiresURL(t *testing.T) {
 	worker, err := NewWorker(WorkerConfig{Driver: DriverNATS})
 	if err == nil {
 		t.Fatal("expected nats url error")
+	}
+	if worker != nil {
+		t.Fatal("expected nil worker")
+	}
+}
+
+func TestNewWorker_RabbitMQRequiresURL(t *testing.T) {
+	worker, err := NewWorker(WorkerConfig{Driver: DriverRabbitMQ})
+	if err == nil {
+		t.Fatal("expected rabbitmq url error")
 	}
 	if worker != nil {
 		t.Fatal("expected nil worker")

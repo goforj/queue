@@ -188,3 +188,34 @@ func TestWorkerContract_SQSIntegration(t *testing.T) {
 	}
 	runWorkerContractSuite(t, factory)
 }
+
+func TestWorkerContract_RabbitMQIntegration(t *testing.T) {
+	if !integrationBackendEnabled("rabbitmq") {
+		t.Skip("rabbitmq integration backend not selected")
+	}
+	factory := workerContractFactory{
+		name: "rabbitmq",
+		setup: func(t *testing.T) (Worker, func(task Task) error) {
+			worker, err := NewWorker(WorkerConfig{
+				Driver:       DriverRabbitMQ,
+				RabbitMQURL:  integrationRabbitMQ.url,
+				DefaultQueue: "default",
+			})
+			if err != nil {
+				t.Fatalf("new rabbitmq worker failed: %v", err)
+			}
+			producer, err := New(Config{
+				Driver:      DriverRabbitMQ,
+				RabbitMQURL: integrationRabbitMQ.url,
+			})
+			if err != nil {
+				t.Fatalf("new rabbitmq queue failed: %v", err)
+			}
+			t.Cleanup(func() { _ = producer.Shutdown(context.Background()) })
+			return worker, func(task Task) error {
+				return producer.Enqueue(context.Background(), task)
+			}
+		},
+	}
+	runWorkerContractSuite(t, factory)
+}

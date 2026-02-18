@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    queue gives your services one queue API with Redis, SQL, NATS, SQS, and in-process drivers.
+    queue gives your services one queue API with Redis, SQL, NATS, SQS, RabbitMQ, and in-process drivers.
 </p>
 
 <p align="center">
@@ -14,13 +14,13 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-129-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-133-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
 ## What queue is
 
-queue is a backend-agnostic job queue runtime. Your application code depends on `queue.Queue` and fluent `queue.Task` values. The driver decides whether work runs via Redis/Asynq, a SQL table, NATS, SQS, an in-process worker pool, or synchronously in the caller.
+queue is a backend-agnostic job queue runtime. Your application code depends on `queue.Queue` and fluent `queue.Task` values. The driver decides whether work runs via Redis/Asynq, a SQL table, NATS, SQS, RabbitMQ, an in-process worker pool, or synchronously in the caller.
 
 ## Drivers
 
@@ -40,6 +40,10 @@ queue is a backend-agnostic job queue runtime. Your application code depends on 
 ### SQS
 - Publishes tasks to AWS SQS queues (or localstack for local integration).
 - Use `queue.Worker` to poll and process handlers.
+
+### RabbitMQ
+- Publishes tasks to RabbitMQ queues.
+- Use `queue.Worker` to consume and process handlers.
 
 ### Workerpool (in-process async)
 - Runs tasks on background goroutines with a bounded channel.
@@ -143,7 +147,7 @@ q, _ := queue.New(queue.Config{
 
 | Method | Default | Behavior |
 |--:|:--|:--|
-| **OnQueue(name)** | Empty | Sets target queue name. For Redis/Database/NATS/SQS, enqueue requires an explicit queue. Sync/Workerpool do not use queue routing semantics. |
+| **OnQueue(name)** | Empty | Sets target queue name. For Redis/Database/NATS/SQS/RabbitMQ, enqueue requires an explicit queue. Sync/Workerpool do not use queue routing semantics. |
 | **Timeout(d)** | Unset | Applies per-task timeout. Workerpool may still apply `WorkerConfig.DefaultTaskTimeout` when task timeout is not set. |
 | **Retry(n)** | `0` | Sets max retries (attempts = `1 + n`). |
 | **Backoff(d)** | Unset | Wait duration between retries. Redis enqueue returns `ErrBackoffUnsupported`. |
@@ -267,6 +271,23 @@ _ = worker.Start()
 defer worker.Shutdown()
 ```
 
+### RabbitMQ driver
+
+Attach workers through `queue.Worker` and publish with `queue.Queue`.
+
+```go
+worker, _ := queue.NewWorker(queue.WorkerConfig{
+    Driver: queue.DriverRabbitMQ,
+    RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/",
+    DefaultQueue: "default",
+})
+worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = worker.Start()
+defer worker.Shutdown()
+```
+
 ## Running workers and shutdown
 
 - Workerpool: call `Start` once; `Shutdown` drains in-flight and delayed tasks with context timeouts respected.
@@ -274,6 +295,7 @@ defer worker.Shutdown()
 - Redis: call `worker.Start()` to begin consuming and `worker.Shutdown()` for graceful stop.
 - NATS: call `worker.Start()` to subscribe and `worker.Shutdown()` to drain/close.
 - SQS: call `worker.Start()` to poll queues and `worker.Shutdown()` for graceful stop.
+- RabbitMQ: call `worker.Start()` to consume queues and `worker.Shutdown()` for graceful stop.
 
 ## Driver selection via config
 
@@ -284,9 +306,9 @@ These are intentionally separate so enqueue-side settings and worker execution s
 
 Legend: `✓` supported, `-` ignored, `o` optional.
 
-| Config field | Sync | Workerpool | Database | Redis | NATS | SQS | Notes |
-|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
-| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| Config field | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ | Notes |
+|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
+| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
 | **DefaultQueue** | - | - | ✓ | - | - | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
 | **Database** | - | - | o | - | - | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
 | **DatabaseDriver** | - | - | ✓ | - | - | - | `sqlite`, `mysql`, or `pgx`. |
@@ -298,15 +320,16 @@ Legend: `✓` supported, `-` ignored, `o` optional.
 | **SQSRegion** | - | - | - | - | - | o | AWS region (defaults to `us-east-1`). |
 | **SQSEndpoint** | - | - | - | - | - | o | Override endpoint (localstack/testing). |
 | **SQSAccessKey** | - | - | - | - | - | o | Static access key (optional). |
-| **SQSSecretKey** | - | - | - | - | - | o | Static secret key (optional). |
+| **SQSSecretKey** | - | - | - | - | - | o | - | Static secret key (optional). |
+| **RabbitMQURL** | - | - | - | - | - | - | ✓ | Required for RabbitMQ queue enqueueing. |
 
 ### WorkerConfig support matrix
 
 Legend: `✓` supported, `-` ignored, `o` optional.
 
-| WorkerConfig field | Sync | Workerpool | Database | Redis | NATS | SQS | Notes |
-|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
-| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| WorkerConfig field | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ | Notes |
+|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
+| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
 | **Workers** | - | ✓ | ✓ | ✓ | - | - | Redis uses this for Asynq worker concurrency. |
 | **QueueCapacity** | - | ✓ | - | - | - | - | In-memory pending queue capacity for workerpool workers. |
 | **DefaultTaskTimeout** | - | ✓ | - | - | - | - | Workerpool default task timeout unless task overrides with `Timeout(...)`. |
@@ -323,7 +346,8 @@ Legend: `✓` supported, `-` ignored, `o` optional.
 | **SQSRegion** | - | - | - | - | - | o | AWS region (defaults to `us-east-1`). |
 | **SQSEndpoint** | - | - | - | - | - | o | Override endpoint (localstack/testing). |
 | **SQSAccessKey** | - | - | - | - | - | o | Static access key (optional). |
-| **SQSSecretKey** | - | - | - | - | - | o | Static secret key (optional). |
+| **SQSSecretKey** | - | - | - | - | - | o | - | Static secret key (optional). |
+| **RabbitMQURL** | - | - | - | - | - | - | ✓ | Required for RabbitMQ worker startup. |
 
 ## API reference
 

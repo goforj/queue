@@ -5,7 +5,7 @@ package queue
 //
 // Example: driver values
 //
-//	fmt.Println(queue.DriverSync, queue.DriverWorkerpool, queue.DriverRedis, queue.DriverDatabase, queue.DriverNATS, queue.DriverSQS)
+//	fmt.Println(queue.DriverSync, queue.DriverWorkerpool, queue.DriverRedis, queue.DriverDatabase, queue.DriverNATS, queue.DriverSQS, queue.DriverRabbitMQ)
 type Driver string
 
 const (
@@ -21,4 +21,6 @@ const (
 	DriverNATS Driver = "nats"
 	// DriverSQS selects the AWS SQS backend.
 	DriverSQS Driver = "sqs"
+	// DriverRabbitMQ selects the RabbitMQ backend.
+	DriverRabbitMQ Driver = "rabbitmq"
 )
