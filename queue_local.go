@@ -15,6 +15,7 @@ type localQueue struct {
 	queueMu      sync.RWMutex
 	handlers     map[string]Handler
 	unique       map[string]time.Time
+	pausedQueues map[string]bool
 	workQueue    chan queuedTask
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
@@ -47,6 +48,7 @@ func newLocalQueueWithConfig(driver Driver, cfg WorkerpoolConfig) *localQueue {
 		cfg:        cfg.normalize(),
 		handlers:   make(map[string]Handler),
 		unique:     make(map[string]time.Time),
+		pausedQueues: make(map[string]bool),
 		shutdownCh: make(chan struct{}),
 	}
 	return q
@@ -219,6 +221,9 @@ func (d *localQueue) Enqueue(ctx context.Context, task Task) error {
 }
 
 func (d *localQueue) enqueueNow(ctx context.Context, task Task, parsed taskOptions) error {
+	if d.isPaused(parsed.queueName) {
+		return ErrQueuePaused
+	}
 	if _, ok := d.lookup(task.Type); !ok {
 		return fmt.Errorf("no handler registered for task type %q", task.Type)
 	}
@@ -336,8 +341,15 @@ func (d *localQueue) runWithRetry(ctx context.Context, task Task, parsed taskOpt
 		attempts += *parsed.maxRetry
 	}
 	var lastErr error
+	taskForRun := task
+	if parsed.maxRetry != nil {
+		taskForRun = taskForRun.Retry(*parsed.maxRetry)
+	}
+	if parsed.queueName != "" {
+		taskForRun = taskForRun.OnQueue(parsed.queueName)
+	}
 	for attempt := 1; attempt <= attempts; attempt++ {
-		lastErr = d.run(ctx, task)
+		lastErr = d.run(ctx, taskForRun.withAttempt(attempt-1))
 		if lastErr == nil {
 			return nil
 		}
@@ -363,6 +375,54 @@ func (d *localQueue) lookup(taskType string) (Handler, bool) {
 	handler, ok := d.handlers[taskType]
 	d.mu.RUnlock()
 	return handler, ok
+}
+
+func (d *localQueue) Pause(_ context.Context, queueName string) error {
+	d.mu.Lock()
+	d.pausedQueues[normalizeQueueName(queueName)] = true
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *localQueue) Resume(_ context.Context, queueName string) error {
+	d.mu.Lock()
+	delete(d.pausedQueues, normalizeQueueName(queueName))
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *localQueue) isPaused(queueName string) bool {
+	d.mu.RLock()
+	paused := d.pausedQueues[normalizeQueueName(queueName)]
+	d.mu.RUnlock()
+	return paused
+}
+
+func (d *localQueue) Stats(_ context.Context) (StatsSnapshot, error) {
+	queueName := "default"
+	d.queueMu.RLock()
+	queued := int64(0)
+	if d.workQueue != nil {
+		queued = int64(len(d.workQueue))
+	}
+	d.queueMu.RUnlock()
+	d.mu.RLock()
+	paused := d.pausedQueues[queueName]
+	d.mu.RUnlock()
+	counters := QueueCounters{
+		Pending:   queued + d.delayed.Load(),
+		Active:    d.started.Load() - d.finished.Load(),
+		Processed: d.finished.Load(),
+		Paused:    boolToInt64(paused),
+	}
+	return StatsSnapshot{
+		ByQueue: map[string]QueueCounters{
+			queueName: counters,
+		},
+		ThroughputByQueue: map[string]QueueThroughput{
+			queueName: {},
+		},
+	}, nil
 }
 
 func (d *localQueue) claimUnique(task Task, queueName string, ttl time.Duration) bool {

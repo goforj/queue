@@ -245,6 +245,47 @@ func (d *databaseQueue) Enqueue(ctx context.Context, task Task) error {
 	return err
 }
 
+func (d *databaseQueue) Stats(ctx context.Context) (StatsSnapshot, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	query := d.rebind(`SELECT queue_name, state, COUNT(*) FROM queue_jobs GROUP BY queue_name, state`)
+	rows, err := d.db.QueryContext(ctx, query)
+	if err != nil {
+		return StatsSnapshot{}, err
+	}
+	defer rows.Close()
+
+	byQueue := make(map[string]QueueCounters)
+	for rows.Next() {
+		var queueName string
+		var state string
+		var count int64
+		if scanErr := rows.Scan(&queueName, &state, &count); scanErr != nil {
+			return StatsSnapshot{}, scanErr
+		}
+		counters := byQueue[queueName]
+		switch state {
+		case "pending":
+			counters.Pending += count
+		case "processing":
+			counters.Active += count
+		case "dead":
+			counters.Archived += count
+			counters.Failed += count
+		}
+		byQueue[queueName] = counters
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return StatsSnapshot{}, rowsErr
+	}
+	throughput := make(map[string]QueueThroughput, len(byQueue))
+	for queueName := range byQueue {
+		throughput[queueName] = QueueThroughput{}
+	}
+	return StatsSnapshot{ByQueue: byQueue, ThroughputByQueue: throughput}, nil
+}
+
 func (d *databaseQueue) lookup(taskType string) (Handler, bool) {
 	d.mu.RLock()
 	handler, ok := d.handlers[taskType]
@@ -292,7 +333,14 @@ func (d *databaseQueue) processJob(job *dbJob) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(job.timeoutSeconds.Int64)*time.Second)
 		defer cancel()
 	}
-	err := handler(ctx, NewTask(job.taskType).Payload(job.payload))
+	err := handler(
+		ctx,
+		NewTask(job.taskType).
+			Payload(job.payload).
+			OnQueue(job.queueName).
+			Retry(job.maxRetry).
+			withAttempt(job.attempt),
+	)
 	if err == nil {
 		_ = d.markDone(context.Background(), job)
 		return

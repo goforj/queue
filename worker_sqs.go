@@ -164,7 +164,14 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 		runCtx, cancel = context.WithTimeout(runCtx, time.Duration(incoming.TimeoutMillis)*time.Millisecond)
 		defer cancel()
 	}
-	err := handler(runCtx, NewTask(incoming.Type).Payload(incoming.Payload))
+	err := handler(
+		runCtx,
+		NewTask(incoming.Type).
+			Payload(incoming.Payload).
+			OnQueue(incoming.Queue).
+			Retry(incoming.MaxRetry).
+			withAttempt(incoming.Attempt),
+	)
 	if err == nil {
 		w.delete(ctx, message)
 		return

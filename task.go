@@ -30,6 +30,7 @@ type taskOptions struct {
 	queueName string
 	timeout   *time.Duration
 	maxRetry  *int
+	attempt   int
 	backoff   *time.Duration
 	delay     time.Duration
 	uniqueTTL time.Duration
@@ -277,6 +278,11 @@ func (t Task) withBuildErr(err error) Task {
 	return t
 }
 
+func (t Task) withAttempt(attempt int) Task {
+	t.options.attempt = attempt
+	return t
+}
+
 // Handler processes a task.
 // @group Task
 //
@@ -297,3 +303,6 @@ var ErrWorkerpoolQueueNotInitialized = errors.New("workerpool queue not initiali
 
 // ErrBackoffUnsupported indicates requested backoff is unsupported by a driver.
 var ErrBackoffUnsupported = errors.New("backoff option is not supported by this driver")
+
+// ErrQueuePaused indicates enqueue was rejected because queue is paused.
+var ErrQueuePaused = errors.New("queue is paused")

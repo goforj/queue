@@ -3,7 +3,9 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,34 +47,13 @@ func (q *rabbitMQQueue) Driver() Driver {
 func (q *rabbitMQQueue) Start(_ context.Context) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.conn != nil && q.ch != nil {
-		return nil
-	}
-	conn, err := amqp.Dial(q.url)
-	if err != nil {
-		return err
-	}
-	ch, err := conn.Channel()
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
-	q.conn = conn
-	q.ch = ch
-	return nil
+	return q.ensureConnectedLocked()
 }
 
 func (q *rabbitMQQueue) Shutdown(_ context.Context) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.ch != nil {
-		_ = q.ch.Close()
-		q.ch = nil
-	}
-	if q.conn != nil {
-		_ = q.conn.Close()
-		q.conn = nil
-	}
+	q.closeLocked()
 	return nil
 }
 
@@ -90,9 +71,6 @@ func (q *rabbitMQQueue) Enqueue(ctx context.Context, task Task) error {
 	parsed := task.enqueueOptions()
 	if parsed.queueName == "" {
 		return fmt.Errorf("task queue is required")
-	}
-	if err := q.Start(ctx); err != nil {
-		return err
 	}
 	if parsed.uniqueTTL > 0 && !q.claimUnique(task, parsed.queueName, parsed.uniqueTTL) {
 		return ErrDuplicate
@@ -122,18 +100,21 @@ func (q *rabbitMQQueue) Enqueue(ctx context.Context, task Task) error {
 	}
 
 	q.mu.Lock()
-	ch := q.ch
-	q.mu.Unlock()
-	if ch == nil {
-		return fmt.Errorf("rabbitmq channel unavailable")
-	}
-	if _, err := ch.QueueDeclare(parsed.queueName, true, false, false, false, nil); err != nil {
+	defer q.mu.Unlock()
+	if err := q.ensureConnectedLocked(); err != nil {
 		return err
 	}
-	return ch.PublishWithContext(ctx, "", parsed.queueName, false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        body,
-	})
+	if err := q.enqueueLocked(ctx, parsed.queueName, body); err != nil {
+		if !isRabbitConnectionClosed(err) {
+			return err
+		}
+		q.closeLocked()
+		if reconnectErr := q.ensureConnectedLocked(); reconnectErr != nil {
+			return reconnectErr
+		}
+		return q.enqueueLocked(ctx, parsed.queueName, body)
+	}
+	return nil
 }
 
 func (q *rabbitMQQueue) claimUnique(task Task, queueName string, ttl time.Duration) bool {
@@ -152,4 +133,59 @@ func (q *rabbitMQQueue) claimUnique(task Task, queueName string, ttl time.Durati
 	}
 	q.unique[key] = now.Add(ttl)
 	return true
+}
+
+func (q *rabbitMQQueue) ensureConnectedLocked() error {
+	if q.conn != nil && !q.conn.IsClosed() && q.ch != nil && !q.ch.IsClosed() {
+		return nil
+	}
+	q.closeLocked()
+	conn, err := amqp.Dial(q.url)
+	if err != nil {
+		return err
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	q.conn = conn
+	q.ch = ch
+	return nil
+}
+
+func (q *rabbitMQQueue) closeLocked() {
+	if q.ch != nil {
+		_ = q.ch.Close()
+		q.ch = nil
+	}
+	if q.conn != nil {
+		_ = q.conn.Close()
+		q.conn = nil
+	}
+}
+
+func (q *rabbitMQQueue) enqueueLocked(ctx context.Context, queueName string, body []byte) error {
+	if q.ch == nil || q.ch.IsClosed() {
+		return amqp.ErrClosed
+	}
+	if _, err := q.ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
+		return err
+	}
+	return q.ch.PublishWithContext(ctx, "", queueName, false, false, amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         body,
+		DeliveryMode: amqp.Persistent,
+	})
+}
+
+func isRabbitConnectionClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, amqp.ErrClosed) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "channel/connection is not open")
 }

@@ -15,8 +15,16 @@ type redisEnqueueClient interface {
 	Close() error
 }
 
+type redisInspector interface {
+	Queues() ([]string, error)
+	GetQueueInfo(queue string) (*asynq.QueueInfo, error)
+	PauseQueue(queue string) error
+	UnpauseQueue(queue string) error
+}
+
 type redisQueue struct {
-	client redisEnqueueClient
+	client    redisEnqueueClient
+	inspector redisInspector
 
 	ownsClient bool
 	closeOnce  sync.Once
@@ -24,12 +32,20 @@ type redisQueue struct {
 
 const redisDefaultTaskTimeout = 30 * time.Second
 
-func newRedisQueue(client redisEnqueueClient, ownsClient bool) Queue {
-	return &redisQueue{client: client, ownsClient: ownsClient}
+func newRedisQueue(client redisEnqueueClient, inspector redisInspector, ownsClient bool) Queue {
+	return &redisQueue{client: client, inspector: inspector, ownsClient: ownsClient}
 }
 
 func newAsynqClient(cfg Config) redisEnqueueClient {
 	return asynq.NewClient(asynq.RedisClientOpt{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
+}
+
+func newAsynqInspector(cfg Config) redisInspector {
+	return asynq.NewInspector(asynq.RedisClientOpt{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,
 		DB:       cfg.RedisDB,
@@ -92,4 +108,60 @@ func (d *redisQueue) Enqueue(_ context.Context, task Task) error {
 		return ErrDuplicate
 	}
 	return err
+}
+
+func (d *redisQueue) Pause(_ context.Context, queueName string) error {
+	if d.inspector == nil {
+		return ErrPauseUnsupported
+	}
+	return d.inspector.PauseQueue(normalizeQueueName(queueName))
+}
+
+func (d *redisQueue) Resume(_ context.Context, queueName string) error {
+	if d.inspector == nil {
+		return ErrPauseUnsupported
+	}
+	return d.inspector.UnpauseQueue(normalizeQueueName(queueName))
+}
+
+func (d *redisQueue) Stats(_ context.Context) (StatsSnapshot, error) {
+	if d.inspector == nil {
+		return StatsSnapshot{}, fmt.Errorf("redis inspector is unavailable")
+	}
+	names, err := d.inspector.Queues()
+	if err != nil {
+		return StatsSnapshot{}, err
+	}
+	byQueue := make(map[string]QueueCounters, len(names))
+	throughput := make(map[string]QueueThroughput, len(names))
+	for _, name := range names {
+		info, infoErr := d.inspector.GetQueueInfo(name)
+		if infoErr != nil {
+			return StatsSnapshot{}, infoErr
+		}
+		byQueue[name] = QueueCounters{
+			Pending:   int64(info.Pending),
+			Active:    int64(info.Active),
+			Scheduled: int64(info.Scheduled),
+			Retry:     int64(info.Retry),
+			Archived:  int64(info.Archived),
+			Processed: int64(info.Processed),
+			Failed:    int64(info.Failed),
+			Paused:    boolToInt64(info.Paused),
+			AvgWait:   info.Latency,
+		}
+		throughput[name] = QueueThroughput{
+			Hour: ThroughputWindow{Processed: int64(info.Processed), Failed: int64(info.Failed)},
+			Day:  ThroughputWindow{Processed: int64(info.Processed), Failed: int64(info.Failed)},
+			Week: ThroughputWindow{Processed: int64(info.Processed), Failed: int64(info.Failed)},
+		}
+	}
+	return StatsSnapshot{ByQueue: byQueue, ThroughputByQueue: throughput}, nil
+}
+
+func boolToInt64(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
 }

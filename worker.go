@@ -42,7 +42,8 @@ type Worker interface {
 // WorkerConfig configures worker creation for NewWorker.
 // @group Config
 type WorkerConfig struct {
-	Driver Driver
+	Driver   Driver
+	Observer Observer
 
 	Workers            int
 	QueueCapacity      int
@@ -95,24 +96,27 @@ type WorkerConfig struct {
 //	_ = worker.Start()
 //	_ = worker.Shutdown()
 func NewWorker(cfg WorkerConfig) (Worker, error) {
+	var worker Worker
+	var err error
 	switch cfg.Driver {
 	case DriverSync:
-		return &queueWorkerAdapter{q: newSyncQueue(), driver: DriverSync}, nil
+		worker = &queueWorkerAdapter{q: newSyncQueue(), driver: DriverSync}
 	case DriverWorkerpool:
-		return &queueWorkerAdapter{
+		worker = &queueWorkerAdapter{
 			q: newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{
 				Workers:            cfg.Workers,
 				QueueCapacity:      cfg.QueueCapacity,
 				DefaultTaskTimeout: cfg.DefaultTaskTimeout,
 			}.normalize()),
 			driver: DriverWorkerpool,
-		}, nil
+		}
 	case DriverDatabase:
 		autoMigrate := cfg.AutoMigrate
 		if !autoMigrate {
 			autoMigrate = true
 		}
-		d, err := newDatabaseQueue(DatabaseConfig{
+		var d Queue
+		d, err = newDatabaseQueue(DatabaseConfig{
 			DB:           cfg.Database,
 			DriverName:   cfg.DatabaseDriver,
 			DSN:          cfg.DatabaseDSN,
@@ -124,7 +128,7 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &queueWorkerAdapter{q: d, driver: DriverDatabase}, nil
+		worker = &queueWorkerAdapter{q: d, driver: DriverDatabase}
 	case DriverRedis:
 		if cfg.RedisAddr == "" {
 			return nil, fmt.Errorf("redis addr is required")
@@ -136,32 +140,33 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 		if concurrency <= 0 {
 			concurrency = 1
 		}
-		return newRedisWorker(
+		worker = newRedisWorker(
 			asynq.NewServer(asynq.RedisClientOpt{
 				Addr:     cfg.RedisAddr,
 				Password: cfg.RedisPassword,
 				DB:       cfg.RedisDB,
 			}, asynq.Config{Concurrency: concurrency}),
 			asynq.NewServeMux(),
-		), nil
+		)
 	case DriverNATS:
 		if cfg.NATSURL == "" {
 			return nil, fmt.Errorf("nats url is required")
 		}
-		return newNATSWorker(cfg.NATSURL), nil
+		worker = newNATSWorker(cfg.NATSURL)
 	case DriverSQS:
 		if cfg.SQSRegion == "" {
 			cfg.SQSRegion = "us-east-1"
 		}
-		return newSQSWorker(cfg), nil
+		worker = newSQSWorker(cfg)
 	case DriverRabbitMQ:
 		if cfg.RabbitMQURL == "" {
 			return nil, fmt.Errorf("rabbitmq url is required")
 		}
-		return newRabbitMQWorker(cfg), nil
+		worker = newRabbitMQWorker(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}
+	return newObservedWorker(worker, cfg.Observer), nil
 }
 
 type queueWorkerAdapter struct {

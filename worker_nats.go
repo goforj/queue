@@ -101,7 +101,14 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(incoming.TimeoutMillis)*time.Millisecond)
 		defer cancel()
 	}
-	err := handler(ctx, NewTask(incoming.Type).Payload(incoming.Payload))
+	err := handler(
+		ctx,
+		NewTask(incoming.Type).
+			Payload(incoming.Payload).
+			OnQueue(incoming.Queue).
+			Retry(incoming.MaxRetry).
+			withAttempt(incoming.Attempt),
+	)
 	if err == nil {
 		return
 	}

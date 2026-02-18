@@ -47,7 +47,8 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 // Config configures queue runtime creation for New.
 // @group Config
 type Config struct {
-	Driver Driver
+	Driver   Driver
+	Observer Observer
 
 	DefaultQueue string
 
@@ -109,34 +110,40 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //			OnQueue("default"),
 //	)
 func New(cfg Config) (Queue, error) {
+	var q Queue
+	var err error
 	switch cfg.Driver {
 	case DriverSync:
-		return newSyncQueue(), nil
+		q = newSyncQueue()
 	case DriverWorkerpool:
-		return newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{}), nil
+		q = newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{})
 	case DriverRedis:
 		if cfg.RedisAddr == "" {
 			return nil, fmt.Errorf("redis addr is required")
 		}
-		return newRedisQueue(newAsynqClient(cfg), true), nil
+		q = newRedisQueue(newAsynqClient(cfg), newAsynqInspector(cfg), true)
 	case DriverDatabase:
-		return newDatabaseQueue(cfg.databaseConfig())
+		q, err = newDatabaseQueue(cfg.databaseConfig())
 	case DriverNATS:
 		if cfg.NATSURL == "" {
 			return nil, fmt.Errorf("nats url is required")
 		}
-		return newNATSQueue(cfg.NATSURL), nil
+		q = newNATSQueue(cfg.NATSURL)
 	case DriverSQS:
 		if cfg.SQSRegion == "" {
 			cfg.SQSRegion = "us-east-1"
 		}
-		return newSQSQueue(cfg), nil
+		q = newSQSQueue(cfg)
 	case DriverRabbitMQ:
 		if cfg.RabbitMQURL == "" {
 			return nil, fmt.Errorf("rabbitmq url is required")
 		}
-		return newRabbitMQQueue(cfg.RabbitMQURL), nil
+		q = newRabbitMQQueue(cfg.RabbitMQURL)
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return newObservedQueue(q, cfg.Observer), nil
 }

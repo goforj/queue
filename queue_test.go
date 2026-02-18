@@ -187,7 +187,7 @@ func TestRabbitMQQueue_EnqueueWithoutURLFails(t *testing.T) {
 }
 
 func TestRedisQueue_BackoffUnsupported(t *testing.T) {
-	q := newRedisQueue(fakeEnqueuer{}, false)
+	q := newRedisQueue(fakeEnqueuer{}, nil, false)
 	err := q.Enqueue(context.Background(), NewTask("job:test").Payload([]byte("{}")).OnQueue("default").Backoff(time.Second))
 	if !errors.Is(err, ErrBackoffUnsupported) {
 		t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
