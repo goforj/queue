@@ -4,6 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -138,8 +145,16 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	t.Run("enqueue_with_max_retry", func(t *testing.T) {
 		d := factory.newDispatcher(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		var calls atomic.Int32
+		done := make(chan struct{}, 1)
 		if factory.requiresRegisteredHandle {
-			d.Register("job:contract:maxretry", func(_ context.Context, _ Task) error { return nil })
+			d.Register("job:contract:maxretry", func(_ context.Context, _ Task) error {
+				if calls.Add(1) < 3 {
+					return errors.New("transient")
+				}
+				done <- struct{}{}
+				return nil
+			})
 		}
 		if err := d.Start(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
@@ -155,13 +170,32 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if err != nil {
 			t.Fatalf("enqueue with max retry failed: %v", err)
 		}
+		if factory.requiresRegisteredHandle {
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("max-retry handler was not invoked")
+			}
+			if got := calls.Load(); got != 3 {
+				t.Fatalf("expected 3 attempts, got %d", got)
+			}
+		}
 	})
 
 	t.Run("enqueue_with_backoff_behavior", func(t *testing.T) {
 		d := factory.newDispatcher(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		start := time.Now()
+		done := make(chan time.Duration, 1)
+		var calls atomic.Int32
 		if factory.requiresRegisteredHandle {
-			d.Register("job:contract:backoff", func(_ context.Context, _ Task) error { return nil })
+			d.Register("job:contract:backoff", func(_ context.Context, _ Task) error {
+				if calls.Add(1) < 2 {
+					return errors.New("retry-me")
+				}
+				done <- time.Since(start)
+				return nil
+			})
 		}
 		if err := d.Start(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
@@ -172,6 +206,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		err := d.Enqueue(
 			context.Background(),
 			Task{Type: "job:contract:backoff", Payload: []byte("backoff")},
+			WithMaxRetry(1),
 			WithBackoff(10*time.Millisecond),
 		)
 		if factory.backoffUnsupported {
@@ -182,6 +217,19 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		}
 		if err != nil {
 			t.Fatalf("enqueue with backoff failed: %v", err)
+		}
+		if factory.requiresRegisteredHandle {
+			select {
+			case elapsed := <-done:
+				if elapsed < 8*time.Millisecond {
+					t.Fatalf("expected retry backoff delay, got %s", elapsed)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("backoff retry handler was not invoked")
+			}
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("expected 2 attempts, got %d", got)
+			}
 		}
 	})
 
@@ -247,6 +295,63 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 			t.Fatalf("unexpected missing handler error: %v", err)
 		}
 	})
+}
+
+func TestOptionContractCoverage_AllDriversAccountedFor(t *testing.T) {
+	declared := declaredDriversFromSource(t)
+	accounted := map[Driver]string{
+		DriverSync:       "local contract suite",
+		DriverWorkerpool: "local contract suite",
+		DriverDatabase:   "local/integration database contract suites",
+		DriverRedis:      "integration redis contract suite",
+	}
+	for _, d := range declared {
+		if _, ok := accounted[d]; !ok {
+			t.Fatalf("driver %q is not mapped to an option contract suite; update option coverage tests", d)
+		}
+	}
+}
+
+func declaredDriversFromSource(t *testing.T) []Driver {
+	t.Helper()
+	file := filepath.Join(".", "driver.go")
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatalf("parse driver.go failed: %v", err)
+	}
+	var out []Driver
+	for _, decl := range node.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if !strings.HasPrefix(name.Name, "Driver") || name.Name == "Driver" {
+					continue
+				}
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok {
+					continue
+				}
+				val := strings.Trim(lit.Value, `"`)
+				if val == "" {
+					continue
+				}
+				out = append(out, Driver(val))
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
