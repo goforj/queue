@@ -88,3 +88,45 @@ func TestDatabaseQueue_RetryWithBackoff(t *testing.T) {
 		t.Fatalf("expected 3 attempts, got %d", calls.Load())
 	}
 }
+
+func TestDatabaseQueue_QueueAndWorkerInteropSQLite(t *testing.T) {
+	dsn := fmt.Sprintf("%s/interop-%d.db", t.TempDir(), time.Now().UnixNano())
+	worker, err := NewWorker(WorkerConfig{
+		Driver:         DriverDatabase,
+		DatabaseDriver: "sqlite",
+		DatabaseDSN:    dsn,
+		Workers:        1,
+		PollInterval:   10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new sqlite worker failed: %v", err)
+	}
+	defer worker.Shutdown()
+
+	producer, err := New(Config{
+		Driver:         DriverDatabase,
+		DatabaseDriver: "sqlite",
+		DatabaseDSN:    dsn,
+	})
+	if err != nil {
+		t.Fatalf("new sqlite queue failed: %v", err)
+	}
+	defer producer.Shutdown(context.Background())
+
+	done := make(chan struct{}, 1)
+	worker.Register("job:db-interop", func(_ context.Context, _ Task) error {
+		done <- struct{}{}
+		return nil
+	})
+	if err := worker.Start(); err != nil {
+		t.Fatalf("worker start failed: %v", err)
+	}
+	if err := producer.Enqueue(context.Background(), NewTask("job:db-interop").OnQueue("default")); err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected interop task to be processed")
+	}
+}

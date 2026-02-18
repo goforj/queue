@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-96-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-123-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 

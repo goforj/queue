@@ -126,6 +126,9 @@ func (t Task) OnQueue(name string) Task {
 //	task := queue.NewTask("emails:send").Timeout(10 * time.Second)
 //	_ = task
 func (t Task) Timeout(timeout time.Duration) Task {
+	if timeout < 0 {
+		return t.withBuildErr(fmt.Errorf("timeout must be >= 0"))
+	}
 	t.options.timeout = &timeout
 	return t
 }
@@ -138,6 +141,9 @@ func (t Task) Timeout(timeout time.Duration) Task {
 //	task := queue.NewTask("emails:send").Retry(4)
 //	_ = task
 func (t Task) Retry(maxRetry int) Task {
+	if maxRetry < 0 {
+		return t.withBuildErr(fmt.Errorf("retry must be >= 0"))
+	}
 	t.options.maxRetry = &maxRetry
 	return t
 }
@@ -150,6 +156,9 @@ func (t Task) Retry(maxRetry int) Task {
 //	task := queue.NewTask("emails:send").Backoff(500 * time.Millisecond)
 //	_ = task
 func (t Task) Backoff(backoff time.Duration) Task {
+	if backoff < 0 {
+		return t.withBuildErr(fmt.Errorf("backoff must be >= 0"))
+	}
 	t.options.backoff = &backoff
 	return t
 }
@@ -162,6 +171,9 @@ func (t Task) Backoff(backoff time.Duration) Task {
 //	task := queue.NewTask("emails:send").Delay(300 * time.Millisecond)
 //	_ = task
 func (t Task) Delay(delay time.Duration) Task {
+	if delay < 0 {
+		return t.withBuildErr(fmt.Errorf("delay must be >= 0"))
+	}
 	t.options.delay = delay
 	return t
 }
@@ -174,6 +186,9 @@ func (t Task) Delay(delay time.Duration) Task {
 //	task := queue.NewTask("emails:send").UniqueFor(45 * time.Second)
 //	_ = task
 func (t Task) UniqueFor(ttl time.Duration) Task {
+	if ttl < 0 {
+		return t.withBuildErr(fmt.Errorf("unique ttl must be >= 0"))
+	}
 	t.options.uniqueTTL = ttl
 	return t
 }
@@ -253,6 +268,13 @@ func (t Task) validate() error {
 
 func (t Task) enqueueOptions() taskOptions {
 	return t.options
+}
+
+func (t Task) withBuildErr(err error) Task {
+	if t.buildErr == nil {
+		t.buildErr = err
+	}
+	return t
 }
 
 // Handler processes a task.

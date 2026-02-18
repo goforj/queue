@@ -125,6 +125,9 @@ func (d *databaseQueue) Register(taskType string, handler Handler) {
 }
 
 func (d *databaseQueue) Start(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if d.started.Load() {
 		return nil
 	}
@@ -146,6 +149,9 @@ func (d *databaseQueue) Start(ctx context.Context) error {
 }
 
 func (d *databaseQueue) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	d.shutdownOnce.Do(func() {
 		d.shuttingDown.Store(true)
 		close(d.shutdownCh)
@@ -160,16 +166,16 @@ func (d *databaseQueue) Shutdown(ctx context.Context) error {
 }
 
 func (d *databaseQueue) Enqueue(ctx context.Context, task Task) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if d.shuttingDown.Load() {
 		return ErrQueuerShuttingDown
 	}
 	if err := task.validate(); err != nil {
 		return err
 	}
-	if _, ok := d.lookup(task.Type); !ok {
-		return fmt.Errorf("no handler registered for task type %q", task.Type)
-	}
-	if !d.started.Load() {
+	if !d.started.Load() && d.hasHandlers() {
 		if err := d.Start(context.Background()); err != nil {
 			return err
 		}
@@ -191,7 +197,7 @@ func (d *databaseQueue) Enqueue(ctx context.Context, task Task) error {
 	}
 
 	if parsed.uniqueTTL > 0 {
-		ok, err := d.acquireUnique(ctx, task, now.Add(parsed.uniqueTTL))
+		ok, err := d.acquireUnique(ctx, task, queueName, now.Add(parsed.uniqueTTL))
 		if err != nil {
 			return err
 		}
@@ -244,6 +250,12 @@ func (d *databaseQueue) lookup(taskType string) (Handler, bool) {
 	handler, ok := d.handlers[taskType]
 	d.mu.RUnlock()
 	return handler, ok
+}
+
+func (d *databaseQueue) hasHandlers() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return len(d.handlers) > 0
 }
 
 func (d *databaseQueue) workerLoop() {
@@ -386,10 +398,10 @@ WHERE id=?`)
 	return err
 }
 
-func (d *databaseQueue) acquireUnique(ctx context.Context, task Task, expiresAt time.Time) (bool, error) {
+func (d *databaseQueue) acquireUnique(ctx context.Context, task Task, queueName string, expiresAt time.Time) (bool, error) {
 	now := time.Now().UnixMilli()
 	expiresAtMillis := expiresAt.UnixMilli()
-	key := uniqueTaskKey(task)
+	key := uniqueTaskKey(task, queueName)
 	insert := d.rebind(`INSERT INTO queue_unique_locks(lock_key, expires_at) VALUES(?, ?)`)
 	_, err := d.db.ExecContext(ctx, insert, key, expiresAtMillis)
 	if err == nil {
@@ -408,8 +420,8 @@ func (d *databaseQueue) acquireUnique(ctx context.Context, task Task, expiresAt 
 	return rows == 1, nil
 }
 
-func uniqueTaskKey(task Task) string {
-	hash := sha256.Sum256(append([]byte(task.Type+":"), task.PayloadBytes()...))
+func uniqueTaskKey(task Task, queueName string) string {
+	hash := sha256.Sum256(append([]byte(queueName+":"+task.Type+":"), task.PayloadBytes()...))
 	return hex.EncodeToString(hash[:])
 }
 

@@ -194,7 +194,7 @@ func (d *localQueue) Enqueue(ctx context.Context, task Task) error {
 	}
 	parsed := task.enqueueOptions()
 	if parsed.uniqueTTL > 0 {
-		if !d.claimUnique(task, parsed.uniqueTTL) {
+		if !d.claimUnique(task, parsed.queueName, parsed.uniqueTTL) {
 			return ErrDuplicate
 		}
 	}
@@ -365,9 +365,9 @@ func (d *localQueue) lookup(taskType string) (Handler, bool) {
 	return handler, ok
 }
 
-func (d *localQueue) claimUnique(task Task, ttl time.Duration) bool {
+func (d *localQueue) claimUnique(task Task, queueName string, ttl time.Duration) bool {
 	now := time.Now()
-	key := task.Type + ":" + string(task.PayloadBytes())
+	key := queueName + ":" + task.Type + ":" + string(task.PayloadBytes())
 
 	d.mu.Lock()
 	defer d.mu.Unlock()

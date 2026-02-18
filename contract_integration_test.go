@@ -26,6 +26,7 @@ func TestQueueContract_Redis(t *testing.T) {
 			return q
 		},
 		requiresRegisteredHandle: false,
+		requiresQueueName:        true,
 		assertMissingHandlerErr:  false,
 		backoffUnsupported:       true,
 		uniqueTTL:                time.Second,
@@ -58,7 +59,8 @@ func TestQueueContract_DatabaseMySQL(t *testing.T) {
 			return q
 		},
 		requiresRegisteredHandle: true,
-		assertMissingHandlerErr:  true,
+		requiresQueueName:        true,
+		assertMissingHandlerErr:  false,
 		beforeEach: func(t *testing.T) {
 			resetQueueTables(t, cfg)
 		},
@@ -90,7 +92,8 @@ func TestQueueContract_DatabasePostgres(t *testing.T) {
 			return q
 		},
 		requiresRegisteredHandle: true,
-		assertMissingHandlerErr:  true,
+		requiresQueueName:        true,
+		assertMissingHandlerErr:  false,
 		beforeEach: func(t *testing.T) {
 			resetQueueTables(t, cfg)
 		},
@@ -122,7 +125,8 @@ func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 			return q
 		},
 		requiresRegisteredHandle: true,
-		assertMissingHandlerErr:  true,
+		requiresQueueName:        true,
+		assertMissingHandlerErr:  false,
 	}
 	runQueueContractSuite(t, factory)
 }

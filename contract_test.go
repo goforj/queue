@@ -19,6 +19,7 @@ type contractFactory struct {
 	name                     string
 	newQueue                 func(t *testing.T) Queue
 	requiresRegisteredHandle bool
+	requiresQueueName        bool
 	assertMissingHandlerErr  bool
 	backoffUnsupported       bool
 	uniqueTTL                time.Duration
@@ -97,6 +98,54 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 	})
 
+	t.Run("enqueue_without_queue_behavior", func(t *testing.T) {
+		d := factory.newQueue(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:noqueue", func(_ context.Context, _ Task) error { return nil })
+		}
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		err := d.Enqueue(context.Background(), NewTask("job:contract:noqueue").Payload([]byte("no-queue")))
+		if factory.requiresQueueName {
+			if err == nil {
+				t.Fatal("expected missing queue error")
+			}
+			if !strings.Contains(err.Error(), "task queue is required") {
+				t.Fatalf("expected missing queue error, got %v", err)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("unexpected enqueue without queue error: %v", err)
+		}
+	})
+
+	t.Run("enqueue_with_nil_context", func(t *testing.T) {
+		d := factory.newQueue(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:nilctx", func(_ context.Context, _ Task) error { return nil })
+		}
+		if err := d.Start(nil); err != nil {
+			t.Fatalf("start with nil context failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		err := d.Enqueue(nil, NewTask("job:contract:nilctx").Payload([]byte("ok")).OnQueue("default"))
+		if err != nil {
+			t.Fatalf("enqueue with nil context failed: %v", err)
+		}
+		if err := d.Shutdown(nil); err != nil {
+			t.Fatalf("shutdown with nil context failed: %v", err)
+		}
+	})
+
 	t.Run("enqueue_with_timeout", func(t *testing.T) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
@@ -127,6 +176,56 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("timeout handler was not invoked")
 			}
+		}
+	})
+
+	t.Run("enqueue_with_invalid_payload_fails", func(t *testing.T) {
+		d := factory.newQueue(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:invalid-payload", func(_ context.Context, _ Task) error { return nil })
+		}
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		task := NewTask("job:contract:invalid-payload").Payload(func() {})
+		err := d.Enqueue(context.Background(), task.OnQueue("default"))
+		if err == nil {
+			t.Fatal("expected payload build error")
+		}
+		if !strings.Contains(err.Error(), "marshal payload json") {
+			t.Fatalf("expected marshal payload json error, got %v", err)
+		}
+	})
+
+	t.Run("invalid_fluent_option_values", func(t *testing.T) {
+		d := factory.newQueue(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:invalid-values", func(_ context.Context, _ Task) error { return nil })
+		}
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		task := NewTask("job:contract:invalid-values").
+			OnQueue("default").
+			Timeout(-1 * time.Second).
+			Retry(-1).
+			Backoff(-1 * time.Second).
+			Delay(-1 * time.Second).
+			UniqueFor(-1 * time.Second)
+		err := d.Enqueue(context.Background(), task)
+		if err == nil {
+			t.Fatal("expected invalid option value error")
+		}
+		if !strings.Contains(err.Error(), "must be >= 0") {
+			t.Fatalf("expected invalid option value error, got %v", err)
 		}
 	})
 
@@ -288,6 +387,34 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 	})
 
+	t.Run("unique_is_scoped_by_queue", func(t *testing.T) {
+		d := factory.newQueue(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.requiresRegisteredHandle {
+			d.Register("job:contract:unique-scope", func(_ context.Context, _ Task) error { return nil })
+		}
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("start failed: %v", err)
+		}
+		if factory.beforeEach != nil {
+			factory.beforeEach(t)
+		}
+		taskType := "job:contract:unique-scope"
+		payload := []byte("same")
+		ttl := factory.uniqueTTL
+		if ttl <= 0 {
+			ttl = 400 * time.Millisecond
+		}
+		first := NewTask(taskType).Payload(payload).OnQueue("queue-a").UniqueFor(ttl)
+		if err := d.Enqueue(context.Background(), first); err != nil {
+			t.Fatalf("first enqueue failed: %v", err)
+		}
+		second := NewTask(taskType).Payload(payload).OnQueue("queue-b").UniqueFor(ttl)
+		if err := d.Enqueue(context.Background(), second); err != nil {
+			t.Fatalf("expected unique lock to be queue scoped, got %v", err)
+		}
+	})
+
 	t.Run("missing_task_type", func(t *testing.T) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
@@ -385,6 +512,7 @@ func TestQueueContract_LocalAndSQLite(t *testing.T) {
 				return q
 			},
 			requiresRegisteredHandle: true,
+			requiresQueueName:        false,
 			assertMissingHandlerErr:  true,
 		},
 		{
@@ -399,6 +527,7 @@ func TestQueueContract_LocalAndSQLite(t *testing.T) {
 				return q
 			},
 			requiresRegisteredHandle: true,
+			requiresQueueName:        false,
 			assertMissingHandlerErr:  true,
 		},
 		{
@@ -415,7 +544,8 @@ func TestQueueContract_LocalAndSQLite(t *testing.T) {
 				return q
 			},
 			requiresRegisteredHandle: true,
-			assertMissingHandlerErr:  true,
+			requiresQueueName:        true,
+			assertMissingHandlerErr:  false,
 		},
 	}
 

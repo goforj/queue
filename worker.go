@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"runtime"
@@ -153,9 +154,9 @@ func (w *queueWorkerAdapter) Register(taskType string, handler Handler) {
 }
 
 func (w *queueWorkerAdapter) Start() error {
-	return w.q.Start(nil)
+	return w.q.Start(context.Background())
 }
 
 func (w *queueWorkerAdapter) Shutdown() error {
-	return w.q.Shutdown(nil)
+	return w.q.Shutdown(context.Background())
 }
