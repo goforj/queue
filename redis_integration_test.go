@@ -33,12 +33,18 @@ var integrationPostgres struct {
 	addr      string
 }
 
+var integrationNATS struct {
+	container testcontainers.Container
+	url       string
+}
+
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 	backends := selectedIntegrationBackends()
 	needsRedis := backends["redis"]
 	needsMySQL := backends["mysql"]
 	needsPostgres := backends["postgres"]
+	needsNATS := backends["nats"]
 
 	if needsRedis {
 		redisContainer, redisAddr, err := startRedisContainer(ctx)
@@ -79,6 +85,25 @@ func TestMain(m *testing.M) {
 		integrationPostgres.addr = postgresAddr
 	}
 
+	if needsNATS {
+		natsContainer, natsURL, err := startNATSContainer(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to start nats integration container: %v\n", err)
+			if integrationPostgres.container != nil {
+				_ = integrationPostgres.container.Terminate(ctx)
+			}
+			if integrationMySQL.container != nil {
+				_ = integrationMySQL.container.Terminate(ctx)
+			}
+			if integrationRedis.container != nil {
+				_ = integrationRedis.container.Terminate(ctx)
+			}
+			os.Exit(1)
+		}
+		integrationNATS.container = natsContainer
+		integrationNATS.url = natsURL
+	}
+
 	exitCode := m.Run()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -98,6 +123,11 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "failed to terminate redis integration container: %v\n", err)
 		}
 	}
+	if integrationNATS.container != nil {
+		if err := integrationNATS.container.Terminate(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to terminate nats integration container: %v\n", err)
+		}
+	}
 
 	os.Exit(exitCode)
 }
@@ -108,6 +138,7 @@ func selectedIntegrationBackends() map[string]bool {
 		"mysql":    true,
 		"postgres": true,
 		"sqlite":   true,
+		"nats":     true,
 	}
 	value := strings.TrimSpace(strings.ToLower(os.Getenv("INTEGRATION_BACKEND")))
 	if value == "" || value == "all" {
@@ -417,6 +448,32 @@ func startPostgresContainer(ctx context.Context) (testcontainers.Container, stri
 		return nil, "", err
 	}
 	return container, addr, nil
+}
+
+func startNATSContainer(ctx context.Context) (testcontainers.Container, string, error) {
+	req := testcontainers.ContainerRequest{
+		Image:        "nats:2-alpine",
+		ExposedPorts: []string{"4222/tcp"},
+		WaitingFor:   wait.ForListeningPort("4222/tcp").WithStartupTimeout(30 * time.Second),
+	}
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	host, err := container.Host(ctx)
+	if err != nil {
+		_ = container.Terminate(ctx)
+		return nil, "", err
+	}
+	port, err := container.MappedPort(ctx, "4222/tcp")
+	if err != nil {
+		_ = container.Terminate(ctx)
+		return nil, "", err
+	}
+	return container, "nats://" + net.JoinHostPort(host, port.Port()), nil
 }
 
 func waitForMySQLReady(addr string, timeout time.Duration) error {

@@ -62,6 +62,19 @@ func TestNewRedisQueue(t *testing.T) {
 	}
 }
 
+func TestNewNATSQueue(t *testing.T) {
+	q, err := New(Config{
+		Driver:  DriverNATS,
+		NATSURL: "nats://127.0.0.1:4222",
+	})
+	if err != nil {
+		t.Fatalf("new q failed: %v", err)
+	}
+	if queueDriver(q) != DriverNATS {
+		t.Fatalf("expected nats driver, got %q", queueDriver(q))
+	}
+}
+
 func TestNew_SelectsByConfig(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -71,6 +84,7 @@ func TestNew_SelectsByConfig(t *testing.T) {
 		{name: "sync", cfg: Config{Driver: DriverSync}, driver: DriverSync},
 		{name: "workerpool", cfg: Config{Driver: DriverWorkerpool}, driver: DriverWorkerpool},
 		{name: "redis", cfg: Config{Driver: DriverRedis, RedisAddr: "127.0.0.1:6379"}, driver: DriverRedis},
+		{name: "nats", cfg: Config{Driver: DriverNATS, NATSURL: "nats://127.0.0.1:4222"}, driver: DriverNATS},
 		{
 			name: "database",
 			cfg: Config{
@@ -114,6 +128,19 @@ func TestRedisQueue_EnqueueWithoutClientFails(t *testing.T) {
 		t.Fatal("expected nil q")
 	}
 	if !strings.Contains(err.Error(), "redis addr is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNATSQueue_EnqueueWithoutURLFails(t *testing.T) {
+	q, err := New(Config{Driver: DriverNATS})
+	if err == nil {
+		t.Fatal("expected constructor error for missing nats url")
+	}
+	if q != nil {
+		t.Fatal("expected nil q")
+	}
+	if !strings.Contains(err.Error(), "nats url is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

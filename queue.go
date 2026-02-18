@@ -58,6 +58,8 @@ type Config struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
+
+	NATSURL string
 }
 
 func newSyncQueue() Queue {
@@ -112,6 +114,11 @@ func New(cfg Config) (Queue, error) {
 		return newRedisQueue(newAsynqClient(cfg), true), nil
 	case DriverDatabase:
 		return newDatabaseQueue(cfg.databaseConfig())
+	case DriverNATS:
+		if cfg.NATSURL == "" {
+			return nil, fmt.Errorf("nats url is required")
+		}
+		return newNATSQueue(cfg.NATSURL), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}

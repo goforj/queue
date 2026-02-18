@@ -130,3 +130,26 @@ func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 	}
 	runQueueContractSuite(t, factory)
 }
+
+func TestQueueContract_NATS(t *testing.T) {
+	if !integrationBackendEnabled("nats") {
+		t.Skip("nats integration backend not selected")
+	}
+	factory := contractFactory{
+		name: "nats",
+		newQueue: func(_ *testing.T) Queue {
+			q, err := New(Config{
+				Driver:  DriverNATS,
+				NATSURL: integrationNATS.url,
+			})
+			if err != nil {
+				t.Fatalf("new nats q failed: %v", err)
+			}
+			return q
+		},
+		requiresRegisteredHandle: false,
+		requiresQueueName:        true,
+		assertMissingHandlerErr:  false,
+	}
+	runQueueContractSuite(t, factory)
+}

@@ -5,7 +5,7 @@ package queue
 //
 // Example: driver values
 //
-//	fmt.Println(queue.DriverSync, queue.DriverWorkerpool, queue.DriverRedis, queue.DriverDatabase)
+//	fmt.Println(queue.DriverSync, queue.DriverWorkerpool, queue.DriverRedis, queue.DriverDatabase, queue.DriverNATS)
 type Driver string
 
 const (
@@ -17,4 +17,6 @@ const (
 	DriverSync Driver = "sync"
 	// DriverWorkerpool runs handlers on an in-memory workerpool.
 	DriverWorkerpool Driver = "workerpool"
+	// DriverNATS selects the NATS backend.
+	DriverNATS Driver = "nats"
 )

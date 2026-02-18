@@ -122,3 +122,33 @@ func TestWorkerContract_DatabaseIntegration(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkerContract_NATSIntegration(t *testing.T) {
+	if !integrationBackendEnabled("nats") {
+		t.Skip("nats integration backend not selected")
+	}
+	factory := workerContractFactory{
+		name: "nats",
+		setup: func(t *testing.T) (Worker, func(task Task) error) {
+			worker, err := NewWorker(WorkerConfig{
+				Driver:  DriverNATS,
+				NATSURL: integrationNATS.url,
+			})
+			if err != nil {
+				t.Fatalf("new nats worker failed: %v", err)
+			}
+			producer, err := New(Config{
+				Driver:  DriverNATS,
+				NATSURL: integrationNATS.url,
+			})
+			if err != nil {
+				t.Fatalf("new nats queue failed: %v", err)
+			}
+			t.Cleanup(func() { _ = producer.Shutdown(context.Background()) })
+			return worker, func(task Task) error {
+				return producer.Enqueue(context.Background(), task)
+			}
+		},
+	}
+	runWorkerContractSuite(t, factory)
+}

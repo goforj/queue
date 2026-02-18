@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    queue gives your services one queue API with Redis, SQL, and in-process drivers.
+    queue gives your services one queue API with Redis, SQL, NATS, and in-process drivers.
 </p>
 
 <p align="center">
@@ -14,13 +14,13 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-123-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-127-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
 ## What queue is
 
-queue is a backend-agnostic job queue runtime. Your application code depends on `queue.Queue` and fluent `queue.Task` values. The driver decides whether work runs via Redis/Asynq, a SQL table, an in-process worker pool, or synchronously in the caller.
+queue is a backend-agnostic job queue runtime. Your application code depends on `queue.Queue` and fluent `queue.Task` values. The driver decides whether work runs via Redis/Asynq, a SQL table, NATS, an in-process worker pool, or synchronously in the caller.
 
 ## Drivers
 
@@ -32,6 +32,10 @@ queue is a backend-agnostic job queue runtime. Your application code depends on 
 - Persists jobs in a lightweight `queue_jobs` table and polls for work.
 - Auto-migrates schema by default in worker/database execution paths.
 - Supports retries, per-task timeouts, backoff, delays, and uniqueness.
+
+### NATS
+- Publishes tasks over NATS subjects with queue-based routing.
+- Use `queue.Worker` to consume and run handlers.
 
 ### Workerpool (in-process async)
 - Runs tasks on background goroutines with a bounded channel.
@@ -135,7 +139,7 @@ q, _ := queue.New(queue.Config{
 
 | Method | Default | Behavior |
 |--:|:--|:--|
-| **OnQueue(name)** | Empty | Sets target queue name. For Redis/Database, enqueue requires an explicit queue. Sync/Workerpool do not use queue routing semantics. |
+| **OnQueue(name)** | Empty | Sets target queue name. For Redis/Database/NATS, enqueue requires an explicit queue. Sync/Workerpool do not use queue routing semantics. |
 | **Timeout(d)** | Unset | Applies per-task timeout. Workerpool may still apply `WorkerConfig.DefaultTaskTimeout` when task timeout is not set. |
 | **Retry(n)** | `0` | Sets max retries (attempts = `1 + n`). |
 | **Backoff(d)** | Unset | Wait duration between retries. Redis enqueue returns `ErrBackoffUnsupported`. |
@@ -224,11 +228,28 @@ _ = worker.Start()
 defer worker.Shutdown()
 ```
 
+### NATS driver
+
+Attach workers through `queue.Worker` and publish with `queue.Queue`.
+
+```go
+worker, _ := queue.NewWorker(queue.WorkerConfig{
+    Driver: queue.DriverNATS,
+    NATSURL: "nats://127.0.0.1:4222",
+})
+worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = worker.Start()
+defer worker.Shutdown()
+```
+
 ## Running workers and shutdown
 
 - Workerpool: call `Start` once; `Shutdown` drains in-flight and delayed tasks with context timeouts respected.
 - Database: `Start` spins worker goroutines; `Enqueue` will auto-start if needed. `Shutdown` waits for workers and closes owned DB handles.
 - Redis: call `worker.Start()` to begin consuming and `worker.Shutdown()` for graceful stop.
+- NATS: call `worker.Start()` to subscribe and `worker.Shutdown()` to drain/close.
 
 ## Driver selection via config
 
@@ -239,36 +260,38 @@ These are intentionally separate so enqueue-side settings and worker execution s
 
 Legend: `✓` supported, `-` ignored, `o` optional.
 
-| Config field | Sync | Workerpool | Database | Redis | Notes |
-|--:|:--:|:--:|:--:|:--:|:--|
-| **Driver** | ✓ | ✓ | ✓ | ✓ | Selects backend. |
-| **DefaultQueue** | - | - | ✓ | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
-| **Database** | - | - | o | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
-| **DatabaseDriver** | - | - | ✓ | - | `sqlite`, `mysql`, or `pgx`. |
-| **DatabaseDSN** | - | - | ✓ | - | Connection string for database driver. |
-| **RedisAddr** | - | - | - | ✓ | Required for Redis queue enqueueing. |
-| **RedisPassword** | - | - | - | o | Redis auth password. |
-| **RedisDB** | - | - | - | o | Redis logical DB index. |
+| Config field | Sync | Workerpool | Database | Redis | NATS | Notes |
+|--:|:--:|:--:|:--:|:--:|:--:|:--|
+| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| **DefaultQueue** | - | - | ✓ | - | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
+| **Database** | - | - | o | - | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
+| **DatabaseDriver** | - | - | ✓ | - | - | `sqlite`, `mysql`, or `pgx`. |
+| **DatabaseDSN** | - | - | ✓ | - | - | Connection string for database driver. |
+| **RedisAddr** | - | - | - | ✓ | - | Required for Redis queue enqueueing. |
+| **RedisPassword** | - | - | - | o | - | Redis auth password. |
+| **RedisDB** | - | - | - | o | - | Redis logical DB index. |
+| **NATSURL** | - | - | - | - | ✓ | Required for NATS queue enqueueing. |
 
 ### WorkerConfig support matrix
 
 Legend: `✓` supported, `-` ignored, `o` optional.
 
-| WorkerConfig field | Sync | Workerpool | Database | Redis | Notes |
-|--:|:--:|:--:|:--:|:--:|:--|
-| **Driver** | ✓ | ✓ | ✓ | ✓ | Selects backend. |
-| **Workers** | - | ✓ | ✓ | ✓ | Redis uses this for Asynq worker concurrency. |
-| **QueueCapacity** | - | ✓ | - | - | In-memory pending queue capacity for workerpool workers. |
-| **DefaultTaskTimeout** | - | ✓ | - | - | Workerpool default task timeout unless task overrides with `Timeout(...)`. |
-| `PollInterval` | - | - | ✓ | - | Job polling interval for database worker loop. |
-| `DefaultQueue` | - | - | ✓ | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
-| `AutoMigrate` | - | - | ✓ | - | Creates/updates DB schema on start. |
-| `Database` | - | - | o | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
-| `DatabaseDriver` | - | - | ✓ | - | `sqlite`, `mysql`, or `pgx`. |
-| `DatabaseDSN` | - | - | ✓ | - | Connection string for database worker. |
-| `RedisAddr` | - | - | - | ✓ | Required for Redis worker startup. |
-| `RedisPassword` | - | - | - | o | Redis auth password. |
-| `RedisDB` | - | - | - | o | Redis logical DB index. |
+| WorkerConfig field | Sync | Workerpool | Database | Redis | NATS | Notes |
+|--:|:--:|:--:|:--:|:--:|:--:|:--|
+| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| **Workers** | - | ✓ | ✓ | ✓ | - | Redis uses this for Asynq worker concurrency. |
+| **QueueCapacity** | - | ✓ | - | - | - | In-memory pending queue capacity for workerpool workers. |
+| **DefaultTaskTimeout** | - | ✓ | - | - | - | Workerpool default task timeout unless task overrides with `Timeout(...)`. |
+| **PollInterval** | - | - | ✓ | - | - | Job polling interval for database worker loop. |
+| **DefaultQueue** | - | - | ✓ | - | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
+| **AutoMigrate** | - | - | ✓ | - | - | Creates/updates DB schema on start. |
+| **Database** | - | - | o | - | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
+| **DatabaseDriver** | - | - | ✓ | - | - | `sqlite`, `mysql`, or `pgx`. |
+| **DatabaseDSN** | - | - | ✓ | - | - | Connection string for database worker. |
+| **RedisAddr** | - | - | - | ✓ | - | Required for Redis worker startup. |
+| **RedisPassword** | - | - | - | o | - | Redis auth password. |
+| **RedisDB** | - | - | - | o | - | Redis logical DB index. |
+| **NATSURL** | - | - | - | - | ✓ | Required for NATS worker startup. |
 
 ## API reference
 

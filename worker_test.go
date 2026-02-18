@@ -70,6 +70,16 @@ func TestNewWorkerAdapters(t *testing.T) {
 	if rw.Driver() != DriverRedis {
 		t.Fatal("expected redis worker driver")
 	}
+	nw, err := NewWorker(WorkerConfig{
+		Driver:  DriverNATS,
+		NATSURL: "nats://127.0.0.1:4222",
+	})
+	if err != nil {
+		t.Fatalf("new nats worker failed: %v", err)
+	}
+	if nw.Driver() != DriverNATS {
+		t.Fatal("expected nats worker driver")
+	}
 }
 
 func TestNewWorker_UnknownDriverFails(t *testing.T) {
@@ -86,6 +96,16 @@ func TestNewWorker_RedisRequiresConn(t *testing.T) {
 	worker, err := NewWorker(WorkerConfig{Driver: DriverRedis})
 	if err == nil {
 		t.Fatal("expected redis addr error")
+	}
+	if worker != nil {
+		t.Fatal("expected nil worker")
+	}
+}
+
+func TestNewWorker_NATSRequiresURL(t *testing.T) {
+	worker, err := NewWorker(WorkerConfig{Driver: DriverNATS})
+	if err == nil {
+		t.Fatal("expected nats url error")
 	}
 	if worker != nil {
 		t.Fatal("expected nil worker")

@@ -59,6 +59,8 @@ type WorkerConfig struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
+
+	NATSURL string
 }
 
 // NewWorker creates a worker based on WorkerConfig.Driver.
@@ -135,6 +137,11 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 			}, asynq.Config{Concurrency: concurrency}),
 			asynq.NewServeMux(),
 		), nil
+	case DriverNATS:
+		if cfg.NATSURL == "" {
+			return nil, fmt.Errorf("nats url is required")
+		}
+		return newNATSWorker(cfg.NATSURL), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}
