@@ -705,10 +705,12 @@ type hardeningFixture struct {
 	newQueue  func(t *testing.T) Queue
 	newWorker func(t *testing.T) Worker
 
-	supportsBackoff bool
-	forceTimeout    bool
-	supportsRestart bool
-	supportsPoisonRetry bool
+	supportsBackoff              bool
+	forceTimeout                 bool
+	supportsRestart              bool
+	supportsPoisonRetry          bool
+	supportsEnqueueCtxCancel     bool
+	supportsDeterministicNoDupes bool
 }
 
 type hardeningPayload struct {
@@ -746,6 +748,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			forceTimeout:    true,
 			supportsRestart: true,
 			supportsPoisonRetry: false,
+			supportsEnqueueCtxCancel: false,
+			supportsDeterministicNoDupes: true,
 		},
 		{
 			name:      "mysql",
@@ -778,6 +782,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			supportsBackoff: true,
 			supportsRestart: true,
 			supportsPoisonRetry: true,
+			supportsEnqueueCtxCancel: true,
+			supportsDeterministicNoDupes: true,
 		},
 		{
 			name:      "postgres",
@@ -810,6 +816,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			supportsBackoff: true,
 			supportsRestart: true,
 			supportsPoisonRetry: true,
+			supportsEnqueueCtxCancel: true,
+			supportsDeterministicNoDupes: true,
 		},
 		{
 			name:      "sqlite",
@@ -833,6 +841,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			supportsBackoff: true,
 			supportsRestart: false,
 			supportsPoisonRetry: true,
+			supportsEnqueueCtxCancel: true,
+			supportsDeterministicNoDupes: true,
 		},
 		{
 			name:      "nats",
@@ -860,6 +870,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			supportsBackoff: true,
 			supportsRestart: false,
 			supportsPoisonRetry: true,
+			supportsEnqueueCtxCancel: false,
+			supportsDeterministicNoDupes: false,
 		},
 		{
 			name:      "sqs",
@@ -894,6 +906,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			supportsBackoff: true,
 			supportsRestart: false,
 			supportsPoisonRetry: true,
+			supportsEnqueueCtxCancel: true,
+			supportsDeterministicNoDupes: true,
 		},
 		{
 			name:      "rabbitmq",
@@ -922,6 +936,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			supportsBackoff: true,
 			supportsRestart: true,
 			supportsPoisonRetry: true,
+			supportsEnqueueCtxCancel: false,
+			supportsDeterministicNoDupes: true,
 		},
 	}
 
@@ -963,6 +979,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				fx.supportsBackoff = true
 				fx.supportsRestart = true
 				fx.supportsPoisonRetry = true
+				fx.supportsEnqueueCtxCancel = true
+				fx.supportsDeterministicNoDupes = true
 			}
 
 			runIntegrationHardeningSuite(t, fx)
@@ -1280,6 +1298,211 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		dupErr := q.Enqueue(context.Background(), secondSameQueue)
 		requireStepTrue(t, "unique_duplicate_rejected", errors.Is(dupErr, ErrDuplicate), "expected ErrDuplicate, got %v", dupErr)
 		requireStepNoErr(t, "unique_other_queue_enqueue", q.Enqueue(context.Background(), otherQueue))
+	})
+
+	t.Run("step_enqueue_context_cancellation", func(t *testing.T) {
+		requireStepNoErr(t, "enqueue_ctx_worker_start", w.Start())
+
+		cancelType := "job:hardening:ctx-cancel:" + fx.name
+		goodType := "job:hardening:ctx-good:" + fx.name
+		var cancelSeen atomic.Int32
+		goodDone := make(chan struct{}, 1)
+
+		w.Register(cancelType, func(_ context.Context, _ Task) error {
+			cancelSeen.Add(1)
+			return nil
+		})
+		w.Register(goodType, func(_ context.Context, _ Task) error {
+			select {
+			case goodDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		cancelCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		cancelTask := NewTask(cancelType).
+			Payload(hardeningPayload{ID: 9400, Name: "ctx-cancel"}).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			cancelTask = cancelTask.Timeout(taskTimeout)
+		}
+		err := q.Enqueue(cancelCtx, cancelTask)
+		if fx.supportsEnqueueCtxCancel {
+			requireStepTrue(
+				t,
+				"enqueue_ctx_cancel_err",
+				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
+				"expected context cancellation error, got %v",
+				err,
+			)
+			time.Sleep(250 * time.Millisecond)
+			requireStepTrue(t, "enqueue_ctx_cancel_not_processed", cancelSeen.Load() == 0, "unexpected processed count=%d", cancelSeen.Load())
+		}
+
+		goodTask := NewTask(goodType).
+			Payload(hardeningPayload{ID: 9401, Name: "ctx-good"}).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			goodTask = goodTask.Timeout(taskTimeout)
+		}
+		requireStepNoErr(t, "enqueue_ctx_good_enqueue", q.Enqueue(context.Background(), goodTask))
+		select {
+		case <-goodDone:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("[enqueue_ctx_good_processed] follow-up task was not processed")
+		}
+	})
+
+	t.Run("step_shutdown_during_delay_retry", func(t *testing.T) {
+		if !fx.supportsRestart {
+			t.Skip("backend does not provide deterministic restart durability in this runtime")
+		}
+		requireStepNoErr(t, "shutdown_delay_worker_start", w.Start())
+
+		delayedType := "job:hardening:shutdown-delay:" + fx.name
+		retryType := "job:hardening:shutdown-retry:" + fx.name
+		delayedDone := make(chan struct{}, 1)
+		retryDone := make(chan struct{}, 1)
+		var retryCalls atomic.Int32
+
+		w.Register(delayedType, func(_ context.Context, _ Task) error {
+			select {
+			case delayedDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		w.Register(retryType, func(_ context.Context, _ Task) error {
+			if retryCalls.Add(1) == 1 {
+				return errors.New("retry once")
+			}
+			select {
+			case retryDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		delayedTask := NewTask(delayedType).
+			Payload(hardeningPayload{ID: 9500, Name: "shutdown-delay"}).
+			OnQueue(fx.queueName).
+			Delay(1200 * time.Millisecond)
+		var retryTask Task
+		retryEnabled := fx.supportsBackoff
+		if retryEnabled {
+			retryTask = NewTask(retryType).
+				Payload(hardeningPayload{ID: 9501, Name: "shutdown-retry"}).
+				OnQueue(fx.queueName).
+				Delay(900 * time.Millisecond).
+				Retry(1)
+			retryTask = retryTask.Backoff(300 * time.Millisecond)
+		}
+		if fx.forceTimeout {
+			delayedTask = delayedTask.Timeout(taskTimeout)
+			if retryEnabled {
+				retryTask = retryTask.Timeout(taskTimeout)
+			}
+		}
+		requireStepNoErr(t, "shutdown_delay_enqueue", q.Enqueue(context.Background(), delayedTask))
+		if retryEnabled {
+			requireStepNoErr(t, "shutdown_retry_enqueue", q.Enqueue(context.Background(), retryTask))
+		}
+
+		requireStepNoErr(t, "shutdown_during_delay", w.Shutdown())
+
+		w = fx.newWorker(t)
+		w.Register(delayedType, func(_ context.Context, _ Task) error {
+			select {
+			case delayedDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		w.Register(retryType, func(_ context.Context, _ Task) error {
+			if retryCalls.Add(1) == 1 {
+				return errors.New("retry once")
+			}
+			select {
+			case retryDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		requireStepNoErr(t, "shutdown_delay_restart_worker", w.Start())
+
+		select {
+		case <-delayedDone:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("[shutdown_delay_processed] delayed task did not process after restart")
+		}
+		if retryEnabled {
+			select {
+			case <-retryDone:
+			case <-time.After(15 * time.Second):
+				t.Fatalf("[shutdown_retry_processed] retry task did not process after restart")
+			}
+		}
+	})
+
+	t.Run("step_multi_worker_contention", func(t *testing.T) {
+		if !fx.supportsDeterministicNoDupes {
+			t.Skip("backend does not provide deterministic no-duplication guarantees for this scenario")
+		}
+		requireStepNoErr(t, "multi_worker_primary_start", w.Start())
+
+		worker2 := fx.newWorker(t)
+		t.Cleanup(func() { _ = worker2.Shutdown() })
+
+		taskType := "job:hardening:multi-worker:" + fx.name
+		var mu sync.Mutex
+		seenByID := make(map[int]int)
+		var processed atomic.Int32
+		const totalTasks = 30
+
+		handler := func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			mu.Lock()
+			seenByID[payload.ID]++
+			mu.Unlock()
+			processed.Add(1)
+			return nil
+		}
+		w.Register(taskType, handler)
+		worker2.Register(taskType, handler)
+		requireStepNoErr(t, "multi_worker_secondary_start", worker2.Start())
+
+		for i := 0; i < totalTasks; i++ {
+			task := NewTask(taskType).
+				Payload(hardeningPayload{ID: i, Name: "multi-worker"}).
+				OnQueue(fx.queueName)
+			if fx.forceTimeout {
+				task = task.Timeout(taskTimeout)
+			}
+			requireStepNoErr(t, "multi_worker_enqueue", q.Enqueue(context.Background(), task))
+		}
+
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if processed.Load() >= totalTasks {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		requireStepTrue(t, "multi_worker_processed_all", processed.Load() >= totalTasks, "processed=%d expected>=%d", processed.Load(), totalTasks)
+
+		time.Sleep(300 * time.Millisecond)
+		mu.Lock()
+		defer mu.Unlock()
+		for i := 0; i < totalTasks; i++ {
+			if seenByID[i] != 1 {
+				t.Fatalf("[multi_worker_no_duplicate_success] task_id=%d count=%d expected=1", i, seenByID[i])
+			}
+		}
 	})
 
 	t.Run("step_shutdown_idempotent", func(t *testing.T) {
