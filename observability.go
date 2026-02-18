@@ -68,6 +68,29 @@ type Observer interface {
 type ObserverFunc func(event Event)
 
 // Observe calls the wrapped function.
+// @group Observability
+//
+// Example: observer func logging hook
+//
+//	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+//	observer := queue.ObserverFunc(func(event queue.Event) {
+//		logger.Info("queue event",
+//			"kind", event.Kind,
+//			"driver", event.Driver,
+//			"queue", event.Queue,
+//			"task_type", event.TaskType,
+//			"attempt", event.Attempt,
+//			"max_retry", event.MaxRetry,
+//			"duration", event.Duration,
+//			"err", event.Err,
+//		)
+//	})
+//	observer.Observe(queue.Event{
+//		Kind:     queue.EventProcessSucceeded,
+//		Driver:   queue.DriverSync,
+//		Queue:    "default",
+//		TaskType: "emails:send",
+//	})
 func (f ObserverFunc) Observe(event Event) {
 	f(event)
 }
@@ -101,7 +124,7 @@ func MultiObserver(observers ...Observer) Observer {
 
 func (m *multiObserver) Observe(event Event) {
 	for _, observer := range m.observers {
-		observer.Observe(event)
+		safeObserve(observer, event)
 	}
 }
 
@@ -683,7 +706,7 @@ func (q *observedQueue) Pause(ctx context.Context, queueName string) error {
 	if err := controller.Pause(ctx, queueName); err != nil {
 		return err
 	}
-	q.observer.Observe(Event{
+	safeObserve(q.observer, Event{
 		Kind:   EventQueuePaused,
 		Driver: q.driver,
 		Queue:  normalizeQueueName(queueName),
@@ -700,7 +723,7 @@ func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
 	if err := controller.Resume(ctx, queueName); err != nil {
 		return err
 	}
-	q.observer.Observe(Event{
+	safeObserve(q.observer, Event{
 		Kind:   EventQueueResumed,
 		Driver: q.driver,
 		Queue:  normalizeQueueName(queueName),
@@ -724,19 +747,19 @@ func (q *observedQueue) Enqueue(ctx context.Context, task Task) error {
 	switch {
 	case err == nil:
 		base.Kind = EventEnqueueAccepted
-		q.observer.Observe(base)
+		safeObserve(q.observer, base)
 	case errors.Is(err, ErrDuplicate):
 		base.Kind = EventEnqueueDuplicate
 		base.Err = err
-		q.observer.Observe(base)
+		safeObserve(q.observer, base)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		base.Kind = EventEnqueueCanceled
 		base.Err = err
-		q.observer.Observe(base)
+		safeObserve(q.observer, base)
 	default:
 		base.Kind = EventEnqueueRejected
 		base.Err = err
-		q.observer.Observe(base)
+		safeObserve(q.observer, base)
 	}
 	return err
 }
@@ -809,7 +832,7 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, tas
 			Time:      start,
 		}
 		base.Kind = EventProcessStarted
-		observer.Observe(base)
+		safeObserve(observer, base)
 
 		err := handler(ctx, task)
 		finish := base
@@ -818,25 +841,35 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, tas
 		finish.Err = err
 		if err == nil {
 			finish.Kind = EventProcessSucceeded
-			observer.Observe(finish)
+			safeObserve(observer, finish)
 			return nil
 		}
 
 		finish.Kind = EventProcessFailed
-		observer.Observe(finish)
+		safeObserve(observer, finish)
 		if finish.Attempt < finish.MaxRetry {
 			retry := finish
 			retry.Kind = EventProcessRetried
 			retry.Err = nil
-			observer.Observe(retry)
+			safeObserve(observer, retry)
 		} else {
 			archive := finish
 			archive.Kind = EventProcessArchived
 			archive.Err = nil
-			observer.Observe(archive)
+			safeObserve(observer, archive)
 		}
 		return err
 	}
+}
+
+func safeObserve(observer Observer, event Event) {
+	if observer == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+	observer.Observe(event)
 }
 
 func detectQueueDriver(q Queue) Driver {

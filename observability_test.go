@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -104,5 +105,60 @@ func TestStatsSnapshot_Getters(t *testing.T) {
 	names := snapshot.Queues()
 	if len(names) != 1 || names[0] != "default" {
 		t.Fatalf("expected queue names [default], got %v", names)
+	}
+}
+
+func TestObserverPanic_DoesNotBreakEnqueue(t *testing.T) {
+	q, err := New(Config{
+		Driver: DriverSync,
+		Observer: ObserverFunc(func(Event) {
+			panic("observer panic")
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new queue failed: %v", err)
+	}
+	q.Register("job:panic:enqueue", func(_ context.Context, _ Task) error { return nil })
+	if err := q.Enqueue(context.Background(), NewTask("job:panic:enqueue").OnQueue("default")); err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+}
+
+func TestObserverPanic_DoesNotBreakHandlerExecution(t *testing.T) {
+	var called atomic.Int64
+	q, err := New(Config{
+		Driver: DriverSync,
+		Observer: ObserverFunc(func(Event) {
+			panic("observer panic")
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new queue failed: %v", err)
+	}
+	q.Register("job:panic:handler", func(_ context.Context, _ Task) error {
+		called.Add(1)
+		return nil
+	})
+	if err := q.Enqueue(context.Background(), NewTask("job:panic:handler").OnQueue("default")); err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+	if called.Load() != 1 {
+		t.Fatalf("expected handler to run once, got %d", called.Load())
+	}
+}
+
+func TestMultiObserverPanic_DoesNotBlockOtherObservers(t *testing.T) {
+	var received atomic.Int64
+	observer := MultiObserver(
+		ObserverFunc(func(Event) {
+			panic("observer panic")
+		}),
+		ObserverFunc(func(Event) {
+			received.Add(1)
+		}),
+	)
+	observer.Observe(Event{Kind: EventEnqueueAccepted, Queue: "default"})
+	if received.Load() != 1 {
+		t.Fatalf("expected second observer to receive event, got %d", received.Load())
 	}
 }
