@@ -9,15 +9,15 @@ import (
 )
 
 func main() {
-	// NewQueue creates a queuer based on QueueConfig.Driver.
+	// NewQueue creates a queue based on QueueConfig.Driver.
 
-	// Example: new queuer from config
-	queuer, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+	// Example: new queue from config
+	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}
-	queuer.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 		return nil
 	})
-	_ = queuer.Dispatch("emails:send", []byte(`{"id":1}`))
+	_ = q.Enqueue(context.Background(), queue.NewTask("emails:send").Payload([]byte(`{"id":1}`)))
 }

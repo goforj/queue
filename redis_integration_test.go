@@ -146,7 +146,7 @@ func TestRedisIntegration_EnqueueSmoke(t *testing.T) {
 	queueName := uniqueQueueName("redis-smoke")
 	taskType := "job:smoke"
 	payload := []byte("hello")
-	if err := dispatcher.Dispatch(taskType, payload, WithQueue(queueName)); err != nil {
+	if err := dispatch(dispatcher, taskType, payload, WithQueue(queueName)); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
 	maxRetry := 4
 	start := time.Now()
 
-	err = dispatcher.Dispatch(
+	err = dispatch(dispatcher,
 		"job:options",
 		[]byte("opts"),
 		WithQueue(queueName),
@@ -221,12 +221,12 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 	queueName := uniqueQueueName("redis-unique")
 	taskType := "job:unique"
 	payload := []byte("same")
-	opts := []Option{WithQueue(queueName), WithUnique(5 * time.Second)}
+	opts := []enqueueOption{WithQueue(queueName), WithUnique(5 * time.Second)}
 
-	if err := dispatcher.Dispatch(taskType, payload, opts...); err != nil {
+	if err := dispatch(dispatcher, taskType, payload, opts...); err != nil {
 		t.Fatalf("first enqueue failed: %v", err)
 	}
-	err = dispatcher.Dispatch(taskType, payload, opts...)
+	err = dispatch(dispatcher, taskType, payload, opts...)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
@@ -245,7 +245,7 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 		t.Fatalf("new redis dispatcher failed: %v", err)
 	}
 
-	err = dispatcher.Dispatch(
+	err = dispatch(dispatcher,
 		"job:backoff-unsupported",
 		[]byte("x"),
 		WithBackoff(1*time.Second),

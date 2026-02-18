@@ -44,7 +44,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := d.Dispatch("job:db:basic", []byte("hello")); err != nil {
+		if err := dispatch(d, "job:db:basic", []byte("hello")); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {
@@ -68,7 +68,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 		resetQueueTables(t, cfg)
 		start := time.Now()
 		delay := 300 * time.Millisecond
-		if err := d.Dispatch("job:db:delay", nil, WithDelay(delay)); err != nil {
+		if err := dispatch(d, "job:db:delay", nil, WithDelay(delay)); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {
@@ -91,11 +91,11 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 		resetQueueTables(t, cfg)
 		taskType := "job:db:unique"
 		payload := []byte("same")
-		err := d.Dispatch(taskType, payload, WithUnique(500*time.Millisecond))
+		err := dispatch(d, taskType, payload, WithUnique(500*time.Millisecond))
 		if err != nil {
 			t.Fatalf("first enqueue failed: %v", err)
 		}
-		err = d.Dispatch(taskType, payload, WithUnique(500*time.Millisecond))
+		err = dispatch(d, taskType, payload, WithUnique(500*time.Millisecond))
 		if !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
@@ -116,7 +116,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := d.Dispatch("job:db:retry", nil, WithMaxRetry(2), WithBackoff(50*time.Millisecond)); err != nil {
+		if err := dispatch(d, "job:db:retry", nil, WithMaxRetry(2), WithBackoff(50*time.Millisecond)); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {

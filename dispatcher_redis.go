@@ -54,22 +54,19 @@ func (d *redisDispatcher) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (d *redisDispatcher) Dispatch(taskType string, payload []byte, opts ...Option) error {
-	return d.DispatchCtx(context.Background(), taskType, payload, opts...)
-}
-
-func (d *redisDispatcher) DispatchCtx(_ context.Context, taskType string, payload []byte, opts ...Option) error {
+func (d *redisDispatcher) Enqueue(_ context.Context, task Task) error {
 	if d.client == nil {
 		return fmt.Errorf("queue client unavailable for redis driver")
 	}
-	if taskType == "" {
-		return fmt.Errorf("task type is required")
+	if err := task.validate(); err != nil {
+		return err
 	}
-	parsed := resolveOptions(opts...)
+	parsed := task.enqueueOptions()
+	if parsed.queueName == "" {
+		return fmt.Errorf("task queue is required")
+	}
 	asynqOpts := make([]asynq.Option, 0, 5)
-	if parsed.queueName != "" {
-		asynqOpts = append(asynqOpts, asynq.Queue(parsed.queueName))
-	}
+	asynqOpts = append(asynqOpts, asynq.Queue(parsed.queueName))
 	if parsed.timeout != nil {
 		asynqOpts = append(asynqOpts, asynq.Timeout(*parsed.timeout))
 	}
@@ -85,7 +82,7 @@ func (d *redisDispatcher) DispatchCtx(_ context.Context, taskType string, payloa
 	if parsed.uniqueTTL > 0 {
 		asynqOpts = append(asynqOpts, asynq.Unique(parsed.uniqueTTL))
 	}
-	_, err := d.client.Enqueue(asynq.NewTask(taskType, payload), asynqOpts...)
+	_, err := d.client.Enqueue(asynq.NewTask(task.Type, task.PayloadBytes()), asynqOpts...)
 	if errors.Is(err, asynq.ErrDuplicateTask) {
 		return ErrDuplicate
 	}

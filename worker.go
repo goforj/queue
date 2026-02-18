@@ -71,7 +71,7 @@ type WorkerConfig struct {
 func NewWorker(cfg WorkerConfig) (Worker, error) {
 	switch cfg.Driver {
 	case DriverSync:
-		return &dispatcherWorkerAdapter{dispatcher: newSyncQueue()}, nil
+		return &dispatcherWorkerAdapter{dispatcher: newSyncQueue(), driver: DriverSync}, nil
 	case DriverWorkerpool:
 		return &dispatcherWorkerAdapter{
 			dispatcher: newLocalDispatcherWithConfig(DriverWorkerpool, WorkerpoolConfig{
@@ -79,6 +79,7 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 				QueueCapacity:      cfg.QueueCapacity,
 				DefaultTaskTimeout: cfg.DefaultTaskTimeout,
 			}.normalize()),
+			driver: DriverWorkerpool,
 		}, nil
 	case DriverDatabase:
 		autoMigrate := cfg.AutoMigrate
@@ -97,7 +98,7 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &dispatcherWorkerAdapter{dispatcher: d}, nil
+		return &dispatcherWorkerAdapter{dispatcher: d, driver: DriverDatabase}, nil
 	case DriverRedis:
 		if cfg.RedisAddr == "" {
 			return nil, fmt.Errorf("redis addr is required")
@@ -124,10 +125,11 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 
 type dispatcherWorkerAdapter struct {
 	dispatcher Queue
+	driver     Driver
 }
 
 func (w *dispatcherWorkerAdapter) Driver() Driver {
-	return w.dispatcher.Driver()
+	return w.driver
 }
 
 func (w *dispatcherWorkerAdapter) Register(taskType string, handler Handler) {

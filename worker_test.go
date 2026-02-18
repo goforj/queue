@@ -128,8 +128,8 @@ func TestRedisWorker_RegisterRoutesPayload(t *testing.T) {
 		if task.Type != "job:test" {
 			t.Fatalf("unexpected type: %s", task.Type)
 		}
-		if string(task.Payload) != "hello" {
-			t.Fatalf("unexpected payload: %s", string(task.Payload))
+		if string(task.PayloadBytes()) != "hello" {
+			t.Fatalf("unexpected payload: %s", string(task.PayloadBytes()))
 		}
 		return nil
 	})

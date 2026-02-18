@@ -34,7 +34,7 @@ const workerEnqueueKey workerContextKey = "queue.worker.enqueue.allowed"
 type queuedTask struct {
 	ctx  context.Context
 	task Task
-	opts enqueueOptions
+	opts taskOptions
 }
 
 func newLocalDispatcher(driver Driver) *localDispatcher {
@@ -57,11 +57,15 @@ func newLocalDispatcherWithConfig(driver Driver, cfg WorkerpoolConfig) *localDis
 //
 // Example: local driver
 //
-//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+//	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
-//	fmt.Println(dispatcher.Driver())
+//	driverAware, ok := q.(interface{ Driver() queue.Driver })
+//	if !ok {
+//		return
+//	}
+//	fmt.Println(driverAware.Driver())
 //	// Output: sync
 func (d *localDispatcher) Driver() Driver {
 	return d.driver
@@ -146,30 +150,26 @@ func (d *localDispatcher) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// Dispatch schedules or executes a task using the local driver.
+// Enqueue schedules or executes a task using the local driver.
 // @group Queue
 //
-// Example: local dispatch
+// Example: local enqueue
 //
-//	queuer, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+//	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
-//	queuer.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-//	_ = queuer.Dispatch("emails:send", []byte(`{"id":1}`), queue.WithDelay(10*time.Millisecond))
-func (d *localDispatcher) Dispatch(taskType string, payload []byte, opts ...Option) error {
-	return d.DispatchCtx(context.Background(), taskType, payload, opts...)
-}
-
-func (d *localDispatcher) DispatchCtx(ctx context.Context, taskType string, payload []byte, opts ...Option) error {
+//	q.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
+//	task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`)).Delay(10 * time.Millisecond)
+//	_ = q.Enqueue(context.Background(), task)
+func (d *localDispatcher) Enqueue(ctx context.Context, task Task) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
-	task := Task{Type: taskType, Payload: payload}
-	parsed := resolveOptions(opts...)
-	if task.Type == "" {
-		return fmt.Errorf("task type is required")
+	if err := task.validate(); err != nil {
+		return err
 	}
+	parsed := task.enqueueOptions()
 	if parsed.uniqueTTL > 0 {
 		if !d.claimUnique(task, parsed.uniqueTTL) {
 			return ErrDuplicate
@@ -195,7 +195,7 @@ func (d *localDispatcher) DispatchCtx(ctx context.Context, taskType string, payl
 	return nil
 }
 
-func (d *localDispatcher) enqueueNow(ctx context.Context, task Task, parsed enqueueOptions) error {
+func (d *localDispatcher) enqueueNow(ctx context.Context, task Task, parsed taskOptions) error {
 	if _, ok := d.lookup(task.Type); !ok {
 		return fmt.Errorf("no handler registered for task type %q", task.Type)
 	}
@@ -205,7 +205,7 @@ func (d *localDispatcher) enqueueNow(ctx context.Context, task Task, parsed enqu
 	return d.runWithRetry(ctx, task, parsed)
 }
 
-func (d *localDispatcher) enqueueAsync(ctx context.Context, task Task, parsed enqueueOptions) error {
+func (d *localDispatcher) enqueueAsync(ctx context.Context, task Task, parsed taskOptions) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
@@ -299,7 +299,7 @@ func (d *localDispatcher) run(ctx context.Context, task Task) error {
 	return handler(ctx, task)
 }
 
-func (d *localDispatcher) runWithRetry(ctx context.Context, task Task, parsed enqueueOptions) error {
+func (d *localDispatcher) runWithRetry(ctx context.Context, task Task, parsed taskOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -344,7 +344,7 @@ func (d *localDispatcher) lookup(taskType string) (Handler, bool) {
 
 func (d *localDispatcher) claimUnique(task Task, ttl time.Duration) bool {
 	now := time.Now()
-	key := task.Type + ":" + string(task.Payload)
+	key := task.Type + ":" + string(task.PayloadBytes())
 
 	d.mu.Lock()
 	defer d.mu.Unlock()

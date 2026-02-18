@@ -34,7 +34,7 @@ func (w *redisWorker) Register(taskType string, handler Handler) {
 		return
 	}
 	w.mux.HandleFunc(taskType, func(ctx context.Context, task *asynq.Task) error {
-		return handler(ctx, Task{Type: task.Type(), Payload: task.Payload()})
+		return handler(ctx, NewTask(task.Type()).Payload(task.Payload()))
 	})
 }
 

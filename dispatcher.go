@@ -10,17 +10,11 @@ import (
 
 // Queue is the queue abstraction exposed to callers.
 type Queue interface {
-	// Driver returns the active backend driver.
-	Driver() Driver
-
 	// Start initializes background resources for drivers that need them.
 	Start(ctx context.Context) error
 
-	// Dispatch submits a task for execution with optional dispatch options.
-	Dispatch(taskType string, payload []byte, opts ...Option) error
-
-	// DispatchCtx submits a task with an explicit context for cancellation and deadlines.
-	DispatchCtx(ctx context.Context, taskType string, payload []byte, opts ...Option) error
+	// Enqueue submits a task for execution.
+	Enqueue(ctx context.Context, task Task) error
 
 	// Register associates a handler with a task type.
 	Register(taskType string, handler Handler)
@@ -79,19 +73,19 @@ func (cfg QueueConfig) databaseConfig() DatabaseConfig {
 	}
 }
 
-// NewQueue creates a queuer based on QueueConfig.Driver.
+// NewQueue creates a queue based on QueueConfig.Driver.
 // @group Constructors
 //
-// Example: new queuer from config
+// Example: new queue from config
 //
-//	queuer, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+//	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
-//	queuer.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 //		return nil
 //	})
-//	_ = queuer.Dispatch("emails:send", []byte(`{"id":1}`))
+//	_ = q.Enqueue(context.Background(), queue.NewTask("emails:send").Payload([]byte(`{"id":1}`)))
 func NewQueue(cfg QueueConfig) (Queue, error) {
 	switch cfg.Driver {
 	case DriverSync:

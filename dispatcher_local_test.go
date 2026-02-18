@@ -23,13 +23,13 @@ func TestLocalDispatcher_EnqueueRunsRegisteredHandler(t *testing.T) {
 		if task.Type != "job:test" {
 			t.Fatalf("expected task type job:test, got %q", task.Type)
 		}
-		if string(task.Payload) != "hello" {
-			t.Fatalf("expected payload hello, got %q", string(task.Payload))
+		if string(task.PayloadBytes()) != "hello" {
+			t.Fatalf("expected payload hello, got %q", string(task.PayloadBytes()))
 		}
 		return nil
 	})
 
-	err := d.Dispatch("job:test", []byte("hello"))
+	err := dispatch(d, "job:test", []byte("hello"))
 	if err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestLocalDispatcher_EnqueueDelayed(t *testing.T) {
 		return nil
 	})
 
-	err := d.Dispatch("job:delay", nil, WithDelay(25*time.Millisecond))
+	err := dispatch(d, "job:delay", nil, WithDelay(25*time.Millisecond))
 	if err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestLocalDispatcher_EnqueueDelayed(t *testing.T) {
 
 func TestLocalDispatcher_EnqueueMissingHandlerFails(t *testing.T) {
 	d := newLocalDispatcher(DriverSync)
-	err := d.Dispatch("missing", nil)
+	err := dispatch(d, "missing", nil)
 	if err == nil {
 		t.Fatal("expected error for missing handler")
 	}
@@ -68,7 +68,7 @@ func TestLocalDispatcher_EnqueueMissingHandlerFails(t *testing.T) {
 
 func TestLocalDispatcher_EnqueueMissingTypeFails(t *testing.T) {
 	d := newLocalDispatcher(DriverSync)
-	err := d.Dispatch("", nil)
+	err := dispatch(d, "", nil)
 	if err == nil {
 		t.Fatal("expected missing task type error")
 	}
@@ -84,12 +84,12 @@ func TestLocalDispatcher_EnqueueWithUnique(t *testing.T) {
 
 	taskType := "job:unique"
 	payload := []byte("payload")
-	err := d.Dispatch(taskType, payload, WithUnique(120*time.Millisecond))
+	err := dispatch(d, taskType, payload, WithUnique(120*time.Millisecond))
 	if err != nil {
 		t.Fatalf("first enqueue failed: %v", err)
 	}
 
-	err = d.Dispatch(taskType, payload, WithUnique(120*time.Millisecond))
+	err = dispatch(d, taskType, payload, WithUnique(120*time.Millisecond))
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
@@ -98,7 +98,7 @@ func TestLocalDispatcher_EnqueueWithUnique(t *testing.T) {
 	}
 
 	time.Sleep(150 * time.Millisecond)
-	err = d.Dispatch(taskType, payload, WithUnique(120*time.Millisecond))
+	err = dispatch(d, taskType, payload, WithUnique(120*time.Millisecond))
 	if err != nil {
 		t.Fatalf("expected enqueue after ttl expiry to succeed, got %v", err)
 	}
@@ -118,7 +118,7 @@ func TestLocalDispatcher_WorkerpoolEnqueueRunsOnWorkers(t *testing.T) {
 		return nil
 	})
 
-	if err := d.Dispatch("job:workerpool", nil); err != nil {
+	if err := dispatch(d, "job:workerpool", nil); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestLocalDispatcher_WorkerpoolEnqueueRunsOnWorkers(t *testing.T) {
 
 func TestLocalDispatcher_WorkerpoolEnqueueMissingHandlerFails(t *testing.T) {
 	d := newLocalDispatcher(DriverWorkerpool)
-	err := d.Dispatch("job:missing", nil)
+	err := dispatch(d, "job:missing", nil)
 	if err == nil {
 		t.Fatal("expected missing handler error")
 	}
@@ -149,7 +149,7 @@ func TestLocalDispatcher_WorkerpoolShutdownWaitsForRunningJobs(t *testing.T) {
 		return nil
 	})
 
-	if err := d.Dispatch("job:slow", nil); err != nil {
+	if err := dispatch(d, "job:slow", nil); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
@@ -189,7 +189,7 @@ func TestLocalDispatcher_WorkerpoolShutdownRejectsNewEnqueue(t *testing.T) {
 	}
 
 	d.Register("job:after-shutdown", func(_ context.Context, _ Task) error { return nil })
-	err := d.Dispatch("job:after-shutdown", nil)
+	err := dispatch(d, "job:after-shutdown", nil)
 	if err == nil {
 		t.Fatal("expected enqueue to fail after shutdown")
 	}
@@ -210,7 +210,7 @@ func TestLocalDispatcher_WorkerpoolSelfHealsQueueWhenNil(t *testing.T) {
 	d.workQueue = nil
 	d.queueMu.Unlock()
 
-	if err := d.Dispatch("job:heal-queue", nil); err != nil {
+	if err := dispatch(d, "job:heal-queue", nil); err != nil {
 		t.Fatalf("enqueue failed after queue reset: %v", err)
 	}
 
@@ -236,10 +236,10 @@ func TestLocalDispatcher_WorkerpoolRecoversWorkerAfterPanic(t *testing.T) {
 		return nil
 	})
 
-	if err := d.Dispatch("job:panic-then-ok", nil); err != nil {
+	if err := dispatch(d, "job:panic-then-ok", nil); err != nil {
 		t.Fatalf("first enqueue failed: %v", err)
 	}
-	if err := d.Dispatch("job:panic-then-ok", nil); err != nil {
+	if err := dispatch(d, "job:panic-then-ok", nil); err != nil {
 		t.Fatalf("second enqueue failed: %v", err)
 	}
 
@@ -262,7 +262,7 @@ func TestLocalDispatcher_SyncRetriesWithBackoff(t *testing.T) {
 		return nil
 	})
 
-	err := d.Dispatch(
+	err := dispatch(d,
 		"job:retry-sync",
 		nil,
 		WithMaxRetry(3),
@@ -293,7 +293,7 @@ func TestLocalDispatcher_WorkerpoolRetriesWithBackoff(t *testing.T) {
 		return nil
 	})
 
-	if err := d.Dispatch(
+	if err := dispatch(d,
 		"job:retry-workerpool",
 		nil,
 		WithMaxRetry(2),

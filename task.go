@@ -2,19 +2,174 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 )
 
-// Task is the backend-agnostic queue payload envelope.
+// Task is a pure queue payload value plus enqueue metadata.
 // @group Task
 //
 // Example: task
 //
-//	task := queue.Task{Type: "emails:send", Payload: []byte(`{"to":"user@example.com"}`)}
+//	task := queue.NewTask("emails:send").
+//		PayloadJSON(map[string]string{"to": "user@example.com"}).
+//		OnQueue("critical")
 //	_ = task
 type Task struct {
-	Type    string
-	Payload []byte
+	Type string
+
+	payload  []byte
+	options  taskOptions
+	buildErr error
+}
+
+type taskOptions struct {
+	queueName string
+	timeout   *time.Duration
+	maxRetry  *int
+	backoff   *time.Duration
+	delay     time.Duration
+	uniqueTTL time.Duration
+}
+
+// NewTask creates a task value with a required task type.
+// @group Task
+//
+// Example: new task
+//
+//	task := queue.NewTask("emails:send")
+//	_ = task
+func NewTask(taskType string) Task {
+	return Task{Type: taskType}
+}
+
+// Payload sets raw task payload bytes.
+// @group Task
+//
+// Example: payload bytes
+//
+//	task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+//	_ = task
+func (t Task) Payload(payload []byte) Task {
+	t.payload = append([]byte(nil), payload...)
+	return t
+}
+
+// PayloadJSON marshals payload as JSON.
+// @group Task
+//
+// Example: payload json
+//
+//	task := queue.NewTask("emails:send").PayloadJSON(map[string]int{"id": 1})
+//	_ = task
+func (t Task) PayloadJSON(v any) Task {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		t.buildErr = fmt.Errorf("marshal payload json: %w", err)
+		return t
+	}
+	t.payload = payload
+	return t
+}
+
+// OnQueue sets the target queue name.
+// @group Task
+//
+// Example: on queue
+//
+//	task := queue.NewTask("emails:send").OnQueue("critical")
+//	_ = task
+func (t Task) OnQueue(name string) Task {
+	t.options.queueName = name
+	return t
+}
+
+// Timeout sets per-task execution timeout.
+// @group Task
+//
+// Example: timeout
+//
+//	task := queue.NewTask("emails:send").Timeout(10 * time.Second)
+//	_ = task
+func (t Task) Timeout(timeout time.Duration) Task {
+	t.options.timeout = &timeout
+	return t
+}
+
+// Retry sets max retry attempts.
+// @group Task
+//
+// Example: retry
+//
+//	task := queue.NewTask("emails:send").Retry(4)
+//	_ = task
+func (t Task) Retry(maxRetry int) Task {
+	t.options.maxRetry = &maxRetry
+	return t
+}
+
+// Backoff sets delay between retries.
+// @group Task
+//
+// Example: backoff
+//
+//	task := queue.NewTask("emails:send").Backoff(500 * time.Millisecond)
+//	_ = task
+func (t Task) Backoff(backoff time.Duration) Task {
+	t.options.backoff = &backoff
+	return t
+}
+
+// Delay defers execution by duration.
+// @group Task
+//
+// Example: delay
+//
+//	task := queue.NewTask("emails:send").Delay(300 * time.Millisecond)
+//	_ = task
+func (t Task) Delay(delay time.Duration) Task {
+	t.options.delay = delay
+	return t
+}
+
+// UniqueFor enables uniqueness dedupe within the given TTL.
+// @group Task
+//
+// Example: unique for
+//
+//	task := queue.NewTask("emails:send").UniqueFor(45 * time.Second)
+//	_ = task
+func (t Task) UniqueFor(ttl time.Duration) Task {
+	t.options.uniqueTTL = ttl
+	return t
+}
+
+// PayloadBytes returns a copy of task payload bytes.
+// @group Task
+//
+// Example: payload bytes read
+//
+//	task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+//	payload := task.PayloadBytes()
+//	_ = payload
+func (t Task) PayloadBytes() []byte {
+	return append([]byte(nil), t.payload...)
+}
+
+func (t Task) validate() error {
+	if t.buildErr != nil {
+		return t.buildErr
+	}
+	if t.Type == "" {
+		return fmt.Errorf("task type is required")
+	}
+	return nil
+}
+
+func (t Task) enqueueOptions() taskOptions {
+	return t.options
 }
 
 // Handler processes a task.
@@ -29,8 +184,8 @@ type Handler func(ctx context.Context, task Task) error
 // ErrDuplicate indicates a duplicate unique task enqueue.
 var ErrDuplicate = errors.New("duplicate task")
 
-// ErrQueuerShuttingDown indicates dispatch was rejected during shutdown.
-var ErrQueuerShuttingDown = errors.New("queuer is shutting down")
+// ErrQueuerShuttingDown indicates enqueue was rejected during shutdown.
+var ErrQueuerShuttingDown = errors.New("queue is shutting down")
 
 // ErrWorkerpoolQueueNotInitialized indicates workerpool queue is unavailable.
 var ErrWorkerpoolQueueNotInitialized = errors.New("workerpool queue not initialized")

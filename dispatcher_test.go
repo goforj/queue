@@ -20,13 +20,20 @@ func (f fakeEnqueuer) Close() error {
 	return nil
 }
 
+func queueDriver(q Queue) Driver {
+	if driverAware, ok := q.(interface{ Driver() Driver }); ok {
+		return driverAware.Driver()
+	}
+	return Driver("")
+}
+
 func TestNewSyncDispatcher(t *testing.T) {
 	dispatcher, err := NewQueue(QueueConfig{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
-	if dispatcher.Driver() != DriverSync {
-		t.Fatalf("expected sync driver, got %q", dispatcher.Driver())
+	if queueDriver(dispatcher) != DriverSync {
+		t.Fatalf("expected sync driver, got %q", queueDriver(dispatcher))
 	}
 }
 
@@ -37,8 +44,8 @@ func TestNewWorkerpoolDispatcher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
-	if dispatcher.Driver() != DriverWorkerpool {
-		t.Fatalf("expected workerpool driver, got %q", dispatcher.Driver())
+	if queueDriver(dispatcher) != DriverWorkerpool {
+		t.Fatalf("expected workerpool driver, got %q", queueDriver(dispatcher))
 	}
 }
 
@@ -50,8 +57,8 @@ func TestNewRedisDispatcher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
-	if dispatcher.Driver() != DriverRedis {
-		t.Fatalf("expected redis driver, got %q", dispatcher.Driver())
+	if queueDriver(dispatcher) != DriverRedis {
+		t.Fatalf("expected redis driver, got %q", queueDriver(dispatcher))
 	}
 }
 
@@ -81,8 +88,8 @@ func TestNewDispatcher_SelectsByConfig(t *testing.T) {
 			if err != nil {
 				t.Fatalf("new dispatcher failed: %v", err)
 			}
-			if dispatcher.Driver() != tc.driver {
-				t.Fatalf("expected %q driver, got %q", tc.driver, dispatcher.Driver())
+			if queueDriver(dispatcher) != tc.driver {
+				t.Fatalf("expected %q driver, got %q", tc.driver, queueDriver(dispatcher))
 			}
 		})
 	}
@@ -113,7 +120,7 @@ func TestRedisDispatcher_EnqueueWithoutClientFails(t *testing.T) {
 
 func TestRedisDispatcher_BackoffUnsupported(t *testing.T) {
 	dispatcher := newRedisDispatcher(fakeEnqueuer{}, false)
-	err := dispatcher.Dispatch(
+	err := dispatch(dispatcher,
 		"job:test",
 		[]byte("{}"),
 		WithBackoff(time.Second),

@@ -159,17 +159,12 @@ func (d *databaseDispatcher) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *databaseDispatcher) Dispatch(taskType string, payload []byte, opts ...Option) error {
-	return d.DispatchCtx(context.Background(), taskType, payload, opts...)
-}
-
-func (d *databaseDispatcher) DispatchCtx(ctx context.Context, taskType string, payload []byte, opts ...Option) error {
+func (d *databaseDispatcher) Enqueue(ctx context.Context, task Task) error {
 	if d.shuttingDown.Load() {
 		return ErrQueuerShuttingDown
 	}
-	task := Task{Type: taskType, Payload: payload}
-	if task.Type == "" {
-		return fmt.Errorf("task type is required")
+	if err := task.validate(); err != nil {
+		return err
 	}
 	if _, ok := d.lookup(task.Type); !ok {
 		return fmt.Errorf("no handler registered for task type %q", task.Type)
@@ -179,14 +174,14 @@ func (d *databaseDispatcher) DispatchCtx(ctx context.Context, taskType string, p
 			return err
 		}
 	}
-	parsed := resolveOptions(opts...)
-	payloadBytes := task.Payload
+	parsed := task.enqueueOptions()
+	payloadBytes := task.PayloadBytes()
 	if payloadBytes == nil {
 		payloadBytes = []byte{}
 	}
 	queueName := parsed.queueName
 	if queueName == "" {
-		queueName = d.cfg.DefaultQueue
+		return fmt.Errorf("task queue is required")
 	}
 
 	now := time.Now()
@@ -285,7 +280,7 @@ func (d *databaseDispatcher) processJob(job *dbJob) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(job.timeoutSeconds.Int64)*time.Second)
 		defer cancel()
 	}
-	err := handler(ctx, Task{Type: job.taskType, Payload: job.payload})
+	err := handler(ctx, NewTask(job.taskType).Payload(job.payload))
 	if err == nil {
 		_ = d.markDone(context.Background(), job)
 		return
@@ -414,7 +409,7 @@ func (d *databaseDispatcher) acquireUnique(ctx context.Context, task Task, expir
 }
 
 func uniqueTaskKey(task Task) string {
-	hash := sha256.Sum256(append([]byte(task.Type+":"), task.Payload...))
+	hash := sha256.Sum256(append([]byte(task.Type+":"), task.PayloadBytes()...))
 	return hex.EncodeToString(hash[:])
 }
 
