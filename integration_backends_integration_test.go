@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/go-connections/nat"
 	"github.com/hibiken/asynq"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -711,6 +712,9 @@ type hardeningFixture struct {
 	supportsPoisonRetry          bool
 	supportsEnqueueCtxCancel     bool
 	supportsDeterministicNoDupes bool
+	supportsOrderingContract     bool
+	supportsBrokerFault          bool
+	supportsShutdownDelayRetry   bool
 }
 
 type hardeningPayload struct {
@@ -744,12 +748,15 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				}
 				return w
 			},
-			supportsBackoff: false,
-			forceTimeout:    true,
-			supportsRestart: true,
-			supportsPoisonRetry: false,
-			supportsEnqueueCtxCancel: false,
+			supportsBackoff:              false,
+			forceTimeout:                 true,
+			supportsRestart:              true,
+			supportsPoisonRetry:          false,
+			supportsEnqueueCtxCancel:     false,
 			supportsDeterministicNoDupes: true,
+			supportsOrderingContract:     true,
+			supportsBrokerFault:          true,
+			supportsShutdownDelayRetry:   true,
 		},
 		{
 			name:      "mysql",
@@ -779,11 +786,14 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				}
 				return w
 			},
-			supportsBackoff: true,
-			supportsRestart: true,
-			supportsPoisonRetry: true,
-			supportsEnqueueCtxCancel: true,
+			supportsBackoff:              true,
+			supportsRestart:              true,
+			supportsPoisonRetry:          true,
+			supportsEnqueueCtxCancel:     true,
 			supportsDeterministicNoDupes: true,
+			supportsOrderingContract:     true,
+			supportsBrokerFault:          false,
+			supportsShutdownDelayRetry:   true,
 		},
 		{
 			name:      "postgres",
@@ -813,11 +823,14 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				}
 				return w
 			},
-			supportsBackoff: true,
-			supportsRestart: true,
-			supportsPoisonRetry: true,
-			supportsEnqueueCtxCancel: true,
+			supportsBackoff:              true,
+			supportsRestart:              true,
+			supportsPoisonRetry:          true,
+			supportsEnqueueCtxCancel:     true,
 			supportsDeterministicNoDupes: true,
+			supportsOrderingContract:     true,
+			supportsBrokerFault:          false,
+			supportsShutdownDelayRetry:   true,
 		},
 		{
 			name:      "sqlite",
@@ -838,11 +851,14 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				t.Fatal("sqlite worker fixture must be created from test-local DSN")
 				return nil
 			},
-			supportsBackoff: true,
-			supportsRestart: false,
-			supportsPoisonRetry: true,
-			supportsEnqueueCtxCancel: true,
+			supportsBackoff:              true,
+			supportsRestart:              false,
+			supportsPoisonRetry:          true,
+			supportsEnqueueCtxCancel:     true,
 			supportsDeterministicNoDupes: true,
+			supportsOrderingContract:     false,
+			supportsBrokerFault:          false,
+			supportsShutdownDelayRetry:   true,
 		},
 		{
 			name:      "nats",
@@ -867,11 +883,14 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				}
 				return w
 			},
-			supportsBackoff: true,
-			supportsRestart: false,
-			supportsPoisonRetry: true,
-			supportsEnqueueCtxCancel: false,
+			supportsBackoff:              true,
+			supportsRestart:              false,
+			supportsPoisonRetry:          true,
+			supportsEnqueueCtxCancel:     false,
 			supportsDeterministicNoDupes: false,
+			supportsOrderingContract:     false,
+			supportsBrokerFault:          false,
+			supportsShutdownDelayRetry:   false,
 		},
 		{
 			name:      "sqs",
@@ -903,11 +922,14 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				}
 				return w
 			},
-			supportsBackoff: true,
-			supportsRestart: false,
-			supportsPoisonRetry: true,
-			supportsEnqueueCtxCancel: true,
+			supportsBackoff:              true,
+			supportsRestart:              false,
+			supportsPoisonRetry:          true,
+			supportsEnqueueCtxCancel:     true,
 			supportsDeterministicNoDupes: true,
+			supportsOrderingContract:     false,
+			supportsBrokerFault:          false,
+			supportsShutdownDelayRetry:   false,
 		},
 		{
 			name:      "rabbitmq",
@@ -933,11 +955,14 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				}
 				return w
 			},
-			supportsBackoff: true,
-			supportsRestart: true,
-			supportsPoisonRetry: true,
-			supportsEnqueueCtxCancel: false,
+			supportsBackoff:              true,
+			supportsRestart:              true,
+			supportsPoisonRetry:          true,
+			supportsEnqueueCtxCancel:     false,
 			supportsDeterministicNoDupes: true,
+			supportsOrderingContract:     false,
+			supportsBrokerFault:          false,
+			supportsShutdownDelayRetry:   false,
 		},
 	}
 
@@ -981,6 +1006,9 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				fx.supportsPoisonRetry = true
 				fx.supportsEnqueueCtxCancel = true
 				fx.supportsDeterministicNoDupes = true
+				fx.supportsOrderingContract = true
+				fx.supportsBrokerFault = false
+				fx.supportsShutdownDelayRetry = true
 			}
 
 			runIntegrationHardeningSuite(t, fx)
@@ -1356,7 +1384,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 	})
 
 	t.Run("step_shutdown_during_delay_retry", func(t *testing.T) {
-		if !fx.supportsRestart {
+		if !fx.supportsRestart || !fx.supportsShutdownDelayRetry {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
 		requireStepNoErr(t, "shutdown_delay_worker_start", w.Start())
@@ -1505,6 +1533,266 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
+	t.Run("step_duplicate_delivery_idempotency", func(t *testing.T) {
+		requireStepNoErr(t, "idempotency_worker_start", w.Start())
+
+		taskType := "job:hardening:idempotency:" + fx.name
+		var attempts atomic.Int32
+		var committed atomic.Int32
+		done := make(chan struct{}, 1)
+		var mu sync.Mutex
+		seen := make(map[int]struct{})
+
+		w.Register(taskType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			attempt := attempts.Add(1)
+
+			mu.Lock()
+			if _, ok := seen[payload.ID]; !ok {
+				seen[payload.ID] = struct{}{}
+				committed.Add(1)
+			}
+			mu.Unlock()
+
+			if attempt == 1 {
+				return errors.New("forced duplicate delivery")
+			}
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		task := NewTask(taskType).
+			Payload(hardeningPayload{ID: 9600, Name: "idempotency"}).
+			OnQueue(fx.queueName).
+			Retry(2)
+		if fx.supportsBackoff {
+			task = task.Backoff(200 * time.Millisecond)
+		}
+		if fx.forceTimeout {
+			task = task.Timeout(taskTimeout)
+		}
+		requireStepNoErr(t, "idempotency_enqueue", q.Enqueue(context.Background(), task))
+
+		select {
+		case <-done:
+		case <-time.After(45 * time.Second):
+			t.Fatalf("[idempotency_done] task did not complete after forced retry")
+		}
+		requireStepTrue(t, "idempotency_attempts", attempts.Load() >= 2, "attempts=%d expected>=2", attempts.Load())
+		requireStepTrue(t, "idempotency_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
+	})
+
+	t.Run("step_enqueue_during_broker_fault", func(t *testing.T) {
+		if !fx.supportsBrokerFault {
+			t.Skip("backend does not support deterministic broker fault injection in this suite")
+		}
+
+		requireStepNoErr(t, "fault_worker_shutdown", w.Shutdown())
+		requireStepNoErr(t, "fault_queue_shutdown", q.Shutdown(context.Background()))
+
+		qFault := fx.newQueue(t)
+		defer func() { _ = qFault.Shutdown(context.Background()) }()
+		stopTimeout := 10 * time.Second
+		requireStepNoErr(t, "fault_stop_broker", integrationRedis.container.Stop(context.Background(), &stopTimeout))
+
+		badCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		task := NewTask("job:hardening:fault-enqueue:" + fx.name).
+			Payload(hardeningPayload{ID: 9700, Name: "fault-enqueue"}).
+			OnQueue(fx.queueName).
+			Retry(1)
+		if fx.forceTimeout {
+			task = task.Timeout(taskTimeout)
+		}
+		err := qFault.Enqueue(badCtx, task)
+		requireStepTrue(t, "fault_enqueue_err", err != nil, "expected enqueue error while broker is down")
+
+		requireStepNoErr(t, "fault_start_broker", integrationRedis.container.Start(context.Background()))
+		requireStepNoErr(t, "fault_refresh_addr", refreshRedisAddr(context.Background()))
+		requireStepNoErr(t, "fault_wait_broker", waitForTCP(integrationRedis.addr, 10*time.Second))
+	})
+
+	t.Run("step_consume_after_broker_recovery", func(t *testing.T) {
+		if !fx.supportsBrokerFault {
+			t.Skip("backend does not support deterministic broker fault injection in this suite")
+		}
+
+		requireStepNoErr(t, "recover_shutdown_worker", w.Shutdown())
+		requireStepNoErr(t, "recover_shutdown_queue", q.Shutdown(context.Background()))
+
+		q = fx.newQueue(t)
+		w = fx.newWorker(t)
+
+		taskType := "job:hardening:fault-recovery:" + fx.name
+		done := make(chan struct{}, 1)
+		w.Register(taskType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		requireStepNoErr(t, "recover_worker_start", w.Start())
+
+		task := NewTask(taskType).
+			Payload(hardeningPayload{ID: 9701, Name: "fault-recovery"}).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			task = task.Timeout(taskTimeout)
+		}
+		requireStepNoErr(t, "recover_enqueue", q.Enqueue(context.Background(), task))
+		select {
+		case <-done:
+		case <-time.After(12 * time.Second):
+			t.Fatalf("[recover_processed] task was not processed after broker recovery")
+		}
+	})
+
+	t.Run("step_ordering_contract", func(t *testing.T) {
+		if !fx.supportsOrderingContract {
+			t.Skip("backend does not expose strict ordering guarantees in this suite")
+		}
+		requireStepNoErr(t, "ordering_shutdown_previous_worker", w.Shutdown())
+		w = newOrderingWorker(t, fx)
+		requireStepNoErr(t, "ordering_worker_start", w.Start())
+
+		taskType := "job:hardening:ordering:" + fx.name
+		const count = 20
+		orderCh := make(chan int, count)
+		w.Register(taskType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			orderCh <- payload.ID
+			return nil
+		})
+
+		for i := 0; i < count; i++ {
+			task := NewTask(taskType).
+				Payload(hardeningPayload{ID: i, Name: "ordering"}).
+				OnQueue(fx.queueName)
+			if fx.forceTimeout {
+				task = task.Timeout(taskTimeout)
+			}
+			requireStepNoErr(t, "ordering_enqueue", q.Enqueue(context.Background(), task))
+		}
+
+		got := make([]int, 0, count)
+		deadline := time.After(15 * time.Second)
+		for len(got) < count {
+			select {
+			case id := <-orderCh:
+				got = append(got, id)
+			case <-deadline:
+				t.Fatalf("[ordering_collect] got=%d expected=%d", len(got), count)
+			}
+		}
+		for i := 0; i < count; i++ {
+			if got[i] != i {
+				t.Fatalf("[ordering_fifo] index=%d got=%d expected=%d", i, got[i], i)
+			}
+		}
+	})
+
+	t.Run("step_backpressure_saturation", func(t *testing.T) {
+		requireStepNoErr(t, "backpressure_worker_start", w.Start())
+
+		taskType := "job:hardening:backpressure:" + fx.name
+		var processed atomic.Int32
+		w.Register(taskType, func(_ context.Context, _ Task) error {
+			time.Sleep(40 * time.Millisecond)
+			processed.Add(1)
+			return nil
+		})
+
+		const total = 80
+		for i := 0; i < total; i++ {
+			task := NewTask(taskType).
+				Payload(hardeningPayload{ID: i, Name: "backpressure"}).
+				OnQueue(fx.queueName)
+			if fx.forceTimeout {
+				task = task.Timeout(taskTimeout)
+			}
+			requireStepNoErr(t, "backpressure_enqueue", q.Enqueue(context.Background(), task))
+		}
+
+		probeType := "job:hardening:backpressure-probe:" + fx.name
+		probeDone := make(chan struct{}, 1)
+		w.Register(probeType, func(_ context.Context, _ Task) error {
+			select {
+			case probeDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		probe := NewTask(probeType).
+			Payload(hardeningPayload{ID: 9800, Name: "probe"}).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			probe = probe.Timeout(taskTimeout)
+		}
+		requireStepNoErr(t, "backpressure_probe_enqueue", q.Enqueue(context.Background(), probe))
+
+		select {
+		case <-probeDone:
+		case <-time.After(20 * time.Second):
+			t.Fatalf("[backpressure_probe_processed] probe task was not processed under saturation")
+		}
+		requireStepTrue(t, "backpressure_progress", processed.Load() > 0, "processed=%d expected>0", processed.Load())
+	})
+
+	t.Run("step_payload_large", func(t *testing.T) {
+		requireStepNoErr(t, "payload_large_worker_start", w.Start())
+
+		taskType := "job:hardening:payload-large:" + fx.name
+		done := make(chan struct{}, 1)
+		expectedLen := 128 * 1024
+		w.Register(taskType, func(_ context.Context, task Task) error {
+			var payload struct {
+				ID   int    `json:"id"`
+				Data string `json:"data"`
+			}
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			if len(payload.Data) != expectedLen {
+				return fmt.Errorf("unexpected payload length: got %d expected %d", len(payload.Data), expectedLen)
+			}
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		task := NewTask(taskType).
+			Payload(struct {
+				ID   int    `json:"id"`
+				Data string `json:"data"`
+			}{ID: 9900, Data: strings.Repeat("x", expectedLen)}).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			task = task.Timeout(taskTimeout)
+		}
+		requireStepNoErr(t, "payload_large_enqueue", q.Enqueue(context.Background(), task))
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("[payload_large_processed] large payload task was not processed")
+		}
+	})
+
 	t.Run("step_shutdown_idempotent", func(t *testing.T) {
 		requireStepNoErr(t, "worker_shutdown", w.Shutdown())
 		requireStepNoErr(t, "worker_shutdown_idempotent", w.Shutdown())
@@ -1522,5 +1810,78 @@ func requireStepTrue(t *testing.T, step string, ok bool, format string, args ...
 	t.Helper()
 	if !ok {
 		t.Fatalf("[%s] "+format, append([]any{step}, args...)...)
+	}
+}
+
+func waitForTCP(addr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for tcp endpoint %s", addr)
+}
+
+func refreshRedisAddr(ctx context.Context) error {
+	if integrationRedis.container == nil {
+		return fmt.Errorf("redis integration container is not initialized")
+	}
+	host, err := integrationRedis.container.Host(ctx)
+	if err != nil {
+		return err
+	}
+	port, err := integrationRedis.container.MappedPort(ctx, nat.Port("6379/tcp"))
+	if err != nil {
+		return err
+	}
+	integrationRedis.addr = net.JoinHostPort(host, port.Port())
+	return nil
+}
+
+func newOrderingWorker(t *testing.T, fx hardeningFixture) Worker {
+	t.Helper()
+	switch fx.name {
+	case "redis":
+		w, err := NewWorker(WorkerConfig{
+			Driver:    DriverRedis,
+			RedisAddr: integrationRedis.addr,
+			Workers:   1,
+		})
+		if err != nil {
+			t.Fatalf("new ordering redis worker failed: %v", err)
+		}
+		return w
+	case "mysql":
+		w, err := NewWorker(WorkerConfig{
+			Driver:         DriverDatabase,
+			DatabaseDriver: "mysql",
+			DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
+			Workers:        1,
+			PollInterval:   10 * time.Millisecond,
+			DefaultQueue:   "hardening_mysql",
+		})
+		if err != nil {
+			t.Fatalf("new ordering mysql worker failed: %v", err)
+		}
+		return w
+	case "postgres":
+		w, err := NewWorker(WorkerConfig{
+			Driver:         DriverDatabase,
+			DatabaseDriver: "pgx",
+			DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
+			Workers:        1,
+			PollInterval:   10 * time.Millisecond,
+			DefaultQueue:   "hardening_postgres",
+		})
+		if err != nil {
+			t.Fatalf("new ordering postgres worker failed: %v", err)
+		}
+		return w
+	default:
+		return fx.newWorker(t)
 	}
 }
