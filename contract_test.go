@@ -451,6 +451,7 @@ func TestOptionContractCoverage_AllDriversAccountedFor(t *testing.T) {
 		DriverDatabase:   "local/integration database contract suites",
 		DriverRedis:      "integration redis contract suite",
 		DriverNATS:       "integration nats contract suite",
+		DriverSQS:        "integration sqs contract suite",
 	}
 	for _, d := range declared {
 		if _, ok := accounted[d]; !ok {

@@ -152,3 +152,39 @@ func TestWorkerContract_NATSIntegration(t *testing.T) {
 	}
 	runWorkerContractSuite(t, factory)
 }
+
+func TestWorkerContract_SQSIntegration(t *testing.T) {
+	if !integrationBackendEnabled("sqs") {
+		t.Skip("sqs integration backend not selected")
+	}
+	factory := workerContractFactory{
+		name: "sqs",
+		setup: func(t *testing.T) (Worker, func(task Task) error) {
+			worker, err := NewWorker(WorkerConfig{
+				Driver:       DriverSQS,
+				SQSEndpoint:  integrationSQS.endpoint,
+				SQSRegion:    integrationSQS.region,
+				SQSAccessKey: integrationSQS.accessKey,
+				SQSSecretKey: integrationSQS.secretKey,
+			})
+			if err != nil {
+				t.Fatalf("new sqs worker failed: %v", err)
+			}
+			producer, err := New(Config{
+				Driver:       DriverSQS,
+				SQSEndpoint:  integrationSQS.endpoint,
+				SQSRegion:    integrationSQS.region,
+				SQSAccessKey: integrationSQS.accessKey,
+				SQSSecretKey: integrationSQS.secretKey,
+			})
+			if err != nil {
+				t.Fatalf("new sqs queue failed: %v", err)
+			}
+			t.Cleanup(func() { _ = producer.Shutdown(context.Background()) })
+			return worker, func(task Task) error {
+				return producer.Enqueue(context.Background(), task)
+			}
+		},
+	}
+	runWorkerContractSuite(t, factory)
+}

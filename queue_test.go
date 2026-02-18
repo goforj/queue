@@ -75,6 +75,19 @@ func TestNewNATSQueue(t *testing.T) {
 	}
 }
 
+func TestNewSQSQueue(t *testing.T) {
+	q, err := New(Config{
+		Driver:    DriverSQS,
+		SQSRegion: "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("new q failed: %v", err)
+	}
+	if queueDriver(q) != DriverSQS {
+		t.Fatalf("expected sqs driver, got %q", queueDriver(q))
+	}
+}
+
 func TestNew_SelectsByConfig(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -85,6 +98,7 @@ func TestNew_SelectsByConfig(t *testing.T) {
 		{name: "workerpool", cfg: Config{Driver: DriverWorkerpool}, driver: DriverWorkerpool},
 		{name: "redis", cfg: Config{Driver: DriverRedis, RedisAddr: "127.0.0.1:6379"}, driver: DriverRedis},
 		{name: "nats", cfg: Config{Driver: DriverNATS, NATSURL: "nats://127.0.0.1:4222"}, driver: DriverNATS},
+		{name: "sqs", cfg: Config{Driver: DriverSQS, SQSRegion: "us-east-1"}, driver: DriverSQS},
 		{
 			name: "database",
 			cfg: Config{

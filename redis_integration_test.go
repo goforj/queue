@@ -38,6 +38,14 @@ var integrationNATS struct {
 	url       string
 }
 
+var integrationSQS struct {
+	container testcontainers.Container
+	endpoint  string
+	region    string
+	accessKey string
+	secretKey string
+}
+
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 	backends := selectedIntegrationBackends()
@@ -45,6 +53,7 @@ func TestMain(m *testing.M) {
 	needsMySQL := backends["mysql"]
 	needsPostgres := backends["postgres"]
 	needsNATS := backends["nats"]
+	needsSQS := backends["sqs"]
 
 	if needsRedis {
 		redisContainer, redisAddr, err := startRedisContainer(ctx)
@@ -103,6 +112,30 @@ func TestMain(m *testing.M) {
 		integrationNATS.container = natsContainer
 		integrationNATS.url = natsURL
 	}
+	if needsSQS {
+		sqsContainer, sqsEndpoint, err := startSQSContainer(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to start sqs integration container: %v\n", err)
+			if integrationNATS.container != nil {
+				_ = integrationNATS.container.Terminate(ctx)
+			}
+			if integrationPostgres.container != nil {
+				_ = integrationPostgres.container.Terminate(ctx)
+			}
+			if integrationMySQL.container != nil {
+				_ = integrationMySQL.container.Terminate(ctx)
+			}
+			if integrationRedis.container != nil {
+				_ = integrationRedis.container.Terminate(ctx)
+			}
+			os.Exit(1)
+		}
+		integrationSQS.container = sqsContainer
+		integrationSQS.endpoint = sqsEndpoint
+		integrationSQS.region = "us-east-1"
+		integrationSQS.accessKey = "test"
+		integrationSQS.secretKey = "test"
+	}
 
 	exitCode := m.Run()
 
@@ -128,6 +161,11 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "failed to terminate nats integration container: %v\n", err)
 		}
 	}
+	if integrationSQS.container != nil {
+		if err := integrationSQS.container.Terminate(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to terminate sqs integration container: %v\n", err)
+		}
+	}
 
 	os.Exit(exitCode)
 }
@@ -139,6 +177,7 @@ func selectedIntegrationBackends() map[string]bool {
 		"postgres": true,
 		"sqlite":   true,
 		"nats":     true,
+		"sqs":      true,
 	}
 	value := strings.TrimSpace(strings.ToLower(os.Getenv("INTEGRATION_BACKEND")))
 	if value == "" || value == "all" {
@@ -474,6 +513,36 @@ func startNATSContainer(ctx context.Context) (testcontainers.Container, string, 
 		return nil, "", err
 	}
 	return container, "nats://" + net.JoinHostPort(host, port.Port()), nil
+}
+
+func startSQSContainer(ctx context.Context) (testcontainers.Container, string, error) {
+	req := testcontainers.ContainerRequest{
+		Image:        "localstack/localstack:3.8",
+		ExposedPorts: []string{"4566/tcp"},
+		Env: map[string]string{
+			"SERVICES":           "sqs",
+			"AWS_DEFAULT_REGION": "us-east-1",
+		},
+		WaitingFor: wait.ForListeningPort("4566/tcp").WithStartupTimeout(60 * time.Second),
+	}
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	host, err := container.Host(ctx)
+	if err != nil {
+		_ = container.Terminate(ctx)
+		return nil, "", err
+	}
+	port, err := container.MappedPort(ctx, "4566/tcp")
+	if err != nil {
+		_ = container.Terminate(ctx)
+		return nil, "", err
+	}
+	return container, "http://" + net.JoinHostPort(host, port.Port()), nil
 }
 
 func waitForMySQLReady(addr string, timeout time.Duration) error {

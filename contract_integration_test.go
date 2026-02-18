@@ -153,3 +153,29 @@ func TestQueueContract_NATS(t *testing.T) {
 	}
 	runQueueContractSuite(t, factory)
 }
+
+func TestQueueContract_SQS(t *testing.T) {
+	if !integrationBackendEnabled("sqs") {
+		t.Skip("sqs integration backend not selected")
+	}
+	factory := contractFactory{
+		name: "sqs",
+		newQueue: func(_ *testing.T) Queue {
+			q, err := New(Config{
+				Driver:       DriverSQS,
+				SQSEndpoint:  integrationSQS.endpoint,
+				SQSRegion:    integrationSQS.region,
+				SQSAccessKey: integrationSQS.accessKey,
+				SQSSecretKey: integrationSQS.secretKey,
+			})
+			if err != nil {
+				t.Fatalf("new sqs q failed: %v", err)
+			}
+			return q
+		},
+		requiresRegisteredHandle: false,
+		requiresQueueName:        true,
+		assertMissingHandlerErr:  false,
+	}
+	runQueueContractSuite(t, factory)
+}

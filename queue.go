@@ -60,6 +60,11 @@ type Config struct {
 	RedisDB       int
 
 	NATSURL string
+
+	SQSRegion    string
+	SQSEndpoint  string
+	SQSAccessKey string
+	SQSSecretKey string
 }
 
 func newSyncQueue() Queue {
@@ -119,6 +124,11 @@ func New(cfg Config) (Queue, error) {
 			return nil, fmt.Errorf("nats url is required")
 		}
 		return newNATSQueue(cfg.NATSURL), nil
+	case DriverSQS:
+		if cfg.SQSRegion == "" {
+			cfg.SQSRegion = "us-east-1"
+		}
+		return newSQSQueue(cfg), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}

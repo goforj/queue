@@ -80,6 +80,16 @@ func TestNewWorkerAdapters(t *testing.T) {
 	if nw.Driver() != DriverNATS {
 		t.Fatal("expected nats worker driver")
 	}
+	swq, err := NewWorker(WorkerConfig{
+		Driver:    DriverSQS,
+		SQSRegion: "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("new sqs worker failed: %v", err)
+	}
+	if swq.Driver() != DriverSQS {
+		t.Fatal("expected sqs worker driver")
+	}
 }
 
 func TestNewWorker_UnknownDriverFails(t *testing.T) {

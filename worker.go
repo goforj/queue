@@ -61,6 +61,11 @@ type WorkerConfig struct {
 	RedisDB       int
 
 	NATSURL string
+
+	SQSRegion    string
+	SQSEndpoint  string
+	SQSAccessKey string
+	SQSSecretKey string
 }
 
 // NewWorker creates a worker based on WorkerConfig.Driver.
@@ -142,6 +147,11 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 			return nil, fmt.Errorf("nats url is required")
 		}
 		return newNATSWorker(cfg.NATSURL), nil
+	case DriverSQS:
+		if cfg.SQSRegion == "" {
+			cfg.SQSRegion = "us-east-1"
+		}
+		return newSQSWorker(cfg), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}
