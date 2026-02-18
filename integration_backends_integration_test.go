@@ -10,6 +10,8 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -695,4 +697,337 @@ func waitForScheduledTask(t *testing.T, inspector *asynq.Inspector, queueName st
 	}
 	t.Fatalf("scheduled task not found for queue %q within %s", queueName, timeout)
 	return nil
+}
+
+type hardeningFixture struct {
+	name      string
+	queueName string
+	newQueue  func(t *testing.T) Queue
+	newWorker func(t *testing.T) Worker
+
+	supportsBackoff bool
+	forceTimeout    bool
+}
+
+type hardeningPayload struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+func TestIntegrationHardening_AllBackends(t *testing.T) {
+	fixtures := []hardeningFixture{
+		{
+			name:      "redis",
+			queueName: "default",
+			newQueue: func(t *testing.T) Queue {
+				q, err := New(Config{
+					Driver:    DriverRedis,
+					RedisAddr: integrationRedis.addr,
+				})
+				if err != nil {
+					t.Fatalf("new redis queue failed: %v", err)
+				}
+				return q
+			},
+			newWorker: func(t *testing.T) Worker {
+				w, err := NewWorker(WorkerConfig{
+					Driver:    DriverRedis,
+					RedisAddr: integrationRedis.addr,
+					Workers:   4,
+				})
+				if err != nil {
+					t.Fatalf("new redis worker failed: %v", err)
+				}
+				return w
+			},
+			supportsBackoff: false,
+			forceTimeout:    true,
+		},
+		{
+			name:      "mysql",
+			queueName: "hardening_mysql",
+			newQueue: func(t *testing.T) Queue {
+				q, err := New(Config{
+					Driver:         DriverDatabase,
+					DatabaseDriver: "mysql",
+					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
+				})
+				if err != nil {
+					t.Fatalf("new mysql queue failed: %v", err)
+				}
+				return q
+			},
+			newWorker: func(t *testing.T) Worker {
+				w, err := NewWorker(WorkerConfig{
+					Driver:         DriverDatabase,
+					DatabaseDriver: "mysql",
+					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
+					Workers:        4,
+					PollInterval:   10 * time.Millisecond,
+					DefaultQueue:   "hardening_mysql",
+				})
+				if err != nil {
+					t.Fatalf("new mysql worker failed: %v", err)
+				}
+				return w
+			},
+			supportsBackoff: true,
+		},
+		{
+			name:      "postgres",
+			queueName: "hardening_postgres",
+			newQueue: func(t *testing.T) Queue {
+				q, err := New(Config{
+					Driver:         DriverDatabase,
+					DatabaseDriver: "pgx",
+					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
+				})
+				if err != nil {
+					t.Fatalf("new postgres queue failed: %v", err)
+				}
+				return q
+			},
+			newWorker: func(t *testing.T) Worker {
+				w, err := NewWorker(WorkerConfig{
+					Driver:         DriverDatabase,
+					DatabaseDriver: "pgx",
+					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
+					Workers:        4,
+					PollInterval:   10 * time.Millisecond,
+					DefaultQueue:   "hardening_postgres",
+				})
+				if err != nil {
+					t.Fatalf("new postgres worker failed: %v", err)
+				}
+				return w
+			},
+			supportsBackoff: true,
+		},
+		{
+			name:      "sqlite",
+			queueName: "hardening_sqlite",
+			newQueue: func(t *testing.T) Queue {
+				q, err := New(Config{
+					Driver:         DriverDatabase,
+					DatabaseDriver: "sqlite",
+					DatabaseDSN:    fmt.Sprintf("%s/hardening-%d.db", t.TempDir(), time.Now().UnixNano()),
+				})
+				if err != nil {
+					t.Fatalf("new sqlite queue failed: %v", err)
+				}
+				return q
+			},
+			newWorker: func(t *testing.T) Worker {
+				// Use the same DSN for queue+worker in the test body.
+				t.Fatal("sqlite worker fixture must be created from test-local DSN")
+				return nil
+			},
+			supportsBackoff: true,
+		},
+		{
+			name:      "nats",
+			queueName: "hardening_nats",
+			newQueue: func(t *testing.T) Queue {
+				q, err := New(Config{
+					Driver:  DriverNATS,
+					NATSURL: integrationNATS.url,
+				})
+				if err != nil {
+					t.Fatalf("new nats queue failed: %v", err)
+				}
+				return q
+			},
+			newWorker: func(t *testing.T) Worker {
+				w, err := NewWorker(WorkerConfig{
+					Driver:  DriverNATS,
+					NATSURL: integrationNATS.url,
+				})
+				if err != nil {
+					t.Fatalf("new nats worker failed: %v", err)
+				}
+				return w
+			},
+			supportsBackoff: true,
+		},
+		{
+			name:      "sqs",
+			queueName: "hardening_sqs",
+			newQueue: func(t *testing.T) Queue {
+				q, err := New(Config{
+					Driver:       DriverSQS,
+					SQSEndpoint:  integrationSQS.endpoint,
+					SQSRegion:    integrationSQS.region,
+					SQSAccessKey: integrationSQS.accessKey,
+					SQSSecretKey: integrationSQS.secretKey,
+				})
+				if err != nil {
+					t.Fatalf("new sqs queue failed: %v", err)
+				}
+				return q
+			},
+			newWorker: func(t *testing.T) Worker {
+				w, err := NewWorker(WorkerConfig{
+					Driver:       DriverSQS,
+					SQSEndpoint:  integrationSQS.endpoint,
+					SQSRegion:    integrationSQS.region,
+					SQSAccessKey: integrationSQS.accessKey,
+					SQSSecretKey: integrationSQS.secretKey,
+					DefaultQueue: "hardening_sqs",
+				})
+				if err != nil {
+					t.Fatalf("new sqs worker failed: %v", err)
+				}
+				return w
+			},
+			supportsBackoff: true,
+		},
+		{
+			name:      "rabbitmq",
+			queueName: "hardening_rabbitmq",
+			newQueue: func(t *testing.T) Queue {
+				q, err := New(Config{
+					Driver:      DriverRabbitMQ,
+					RabbitMQURL: integrationRabbitMQ.url,
+				})
+				if err != nil {
+					t.Fatalf("new rabbitmq queue failed: %v", err)
+				}
+				return q
+			},
+			newWorker: func(t *testing.T) Worker {
+				w, err := NewWorker(WorkerConfig{
+					Driver:       DriverRabbitMQ,
+					RabbitMQURL:  integrationRabbitMQ.url,
+					DefaultQueue: "hardening_rabbitmq",
+				})
+				if err != nil {
+					t.Fatalf("new rabbitmq worker failed: %v", err)
+				}
+				return w
+			},
+			supportsBackoff: true,
+		},
+	}
+
+	for _, fx := range fixtures {
+		fx := fx
+		t.Run(fx.name, func(t *testing.T) {
+			if !integrationBackendEnabled(fx.name) {
+				t.Skipf("%s integration backend not selected", fx.name)
+			}
+
+			// SQLite needs a shared DSN between producer and worker; build it inline.
+			if fx.name == "sqlite" {
+				dsn := fmt.Sprintf("%s/hardening-%d.db", t.TempDir(), time.Now().UnixNano())
+				fx.newQueue = func(t *testing.T) Queue {
+					q, err := New(Config{
+						Driver:         DriverDatabase,
+						DatabaseDriver: "sqlite",
+						DatabaseDSN:    dsn,
+					})
+					if err != nil {
+						t.Fatalf("new sqlite queue failed: %v", err)
+					}
+					return q
+				}
+				fx.newWorker = func(t *testing.T) Worker {
+					w, err := NewWorker(WorkerConfig{
+						Driver:         DriverDatabase,
+						DatabaseDriver: "sqlite",
+						DatabaseDSN:    dsn,
+						Workers:        4,
+						PollInterval:   10 * time.Millisecond,
+						DefaultQueue:   "hardening_sqlite",
+					})
+					if err != nil {
+						t.Fatalf("new sqlite worker failed: %v", err)
+					}
+					return w
+				}
+				fx.supportsBackoff = true
+			}
+
+			runIntegrationHardeningSuite(t, fx)
+		})
+	}
+}
+
+func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
+	t.Helper()
+	q := fx.newQueue(t)
+	w := fx.newWorker(t)
+	t.Cleanup(func() { _ = q.Shutdown(context.Background()) })
+	t.Cleanup(func() { _ = w.Shutdown() })
+
+	taskType := "job:hardening:" + fx.name
+	total := int32(40)
+	var seen atomic.Int32
+	var expected atomic.Int32
+	w.Register(taskType, func(_ context.Context, task Task) error {
+		var payload hardeningPayload
+		if err := task.Bind(&payload); err != nil {
+			return err
+		}
+		seen.Add(1)
+		return nil
+	})
+
+	if err := w.Start(); err != nil {
+		t.Fatalf("worker start failed: %v", err)
+	}
+	if err := w.Start(); err != nil {
+		t.Fatalf("worker second start failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < int(total); i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			task := NewTask(taskType).
+				Payload(hardeningPayload{ID: i, Name: fx.name}).
+				OnQueue(fx.queueName)
+			if i%3 == 0 {
+				task = task.Delay(50 * time.Millisecond)
+			}
+			if i%4 == 0 {
+				task = task.Timeout(250 * time.Millisecond)
+			}
+			if fx.forceTimeout && i%4 != 0 {
+				task = task.Timeout(250 * time.Millisecond)
+			}
+			if fx.supportsBackoff && i%5 == 0 {
+				task = task.Retry(1).Backoff(20 * time.Millisecond)
+			}
+			if err := q.Enqueue(context.Background(), task); err != nil {
+				t.Errorf("enqueue %d failed: %v", i, err)
+				return
+			}
+			expected.Add(1)
+		}()
+	}
+	wg.Wait()
+	want := expected.Load()
+	if want == 0 {
+		t.Fatal("all enqueue operations failed")
+	}
+
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		if seen.Load() == want {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := seen.Load(); got != want {
+		t.Fatalf("hardening timeout: processed=%d expected=%d", got, want)
+	}
+
+	if err := w.Shutdown(); err != nil {
+		t.Fatalf("worker shutdown failed: %v", err)
+	}
+	if err := w.Shutdown(); err != nil {
+		t.Fatalf("worker second shutdown failed: %v", err)
+	}
 }
