@@ -306,39 +306,39 @@ These are intentionally separate so enqueue-side settings and worker execution s
 
 Legend: `✓` supported, `-` ignored, `o` optional.
 
-| Field group | `Config` | `WorkerConfig` | Notes |
-|--:|:--:|:--:|:--|
-| **Core** | `Driver` | `Driver` | Backend selector. |
-| **Workerpool** | - | `Workers`, `QueueCapacity`, `DefaultTaskTimeout` | In-process async worker tuning. |
-| **Database** | `DefaultQueue`, `Database`, `DatabaseDriver`, `DatabaseDSN` | `DefaultQueue`, `PollInterval`, `AutoMigrate`, `Database`, `DatabaseDriver`, `DatabaseDSN`, `Workers` | SQL queue runtime/worker options. |
-| **Redis** | `RedisAddr`, `RedisPassword`, `RedisDB` | `RedisAddr`, `RedisPassword`, `RedisDB`, `Workers` | Asynq queue/worker options. |
-| **NATS** | `NATSURL` | `NATSURL` | NATS connection URL. |
-| **SQS** | `SQSRegion`, `SQSEndpoint`, `SQSAccessKey`, `SQSSecretKey` | `SQSRegion`, `SQSEndpoint`, `SQSAccessKey`, `SQSSecretKey`, `DefaultQueue` | AWS/localstack connection + queue name. |
-| **RabbitMQ** | `RabbitMQURL` | `RabbitMQURL`, `DefaultQueue` | AMQP URL + consumer queue name. |
+| Field group | Config | WorkerConfig | Notes |
+|:--|:--|:--|:--|
+| Core | Driver | Driver | Backend selector. |
+| Workerpool | - | Workers, QueueCapacity, DefaultTaskTimeout | In-process async worker tuning. |
+| Database | DefaultQueue, Database, DatabaseDriver, DatabaseDSN | DefaultQueue, PollInterval, AutoMigrate, Database, DatabaseDriver, DatabaseDSN, Workers | SQL queue runtime/worker options. |
+| Redis | RedisAddr, RedisPassword, RedisDB | RedisAddr, RedisPassword, RedisDB, Workers | Asynq queue/worker options. |
+| NATS | NATSURL | NATSURL | NATS connection URL. |
+| SQS | SQSRegion, SQSEndpoint, SQSAccessKey, SQSSecretKey | SQSRegion, SQSEndpoint, SQSAccessKey, SQSSecretKey, DefaultQueue | AWS/localstack connection + queue name. |
+| RabbitMQ | RabbitMQURL | RabbitMQURL, DefaultQueue | AMQP URL + consumer queue name. |
 
 ### Config by backend
 
-| Backend | `Config` fields |
-|--:|:--|
-| **Sync** | `Driver` |
-| **Workerpool** | `Driver` |
-| **Database** | `Driver`, `DefaultQueue`, `Database`, `DatabaseDriver`, `DatabaseDSN` |
-| **Redis** | `Driver`, `RedisAddr`, `RedisPassword`, `RedisDB` |
-| **NATS** | `Driver`, `NATSURL` |
-| **SQS** | `Driver`, `SQSRegion`, `SQSEndpoint`, `SQSAccessKey`, `SQSSecretKey` |
-| **RabbitMQ** | `Driver`, `RabbitMQURL` |
+| Backend | Config fields |
+|:--|:--|
+| Sync | Driver |
+| Workerpool | Driver |
+| Database | Driver, DefaultQueue, Database, DatabaseDriver, DatabaseDSN |
+| Redis | Driver, RedisAddr, RedisPassword, RedisDB |
+| NATS | Driver, NATSURL |
+| SQS | Driver, SQSRegion, SQSEndpoint, SQSAccessKey, SQSSecretKey |
+| RabbitMQ | Driver, RabbitMQURL |
 
 ### WorkerConfig by backend
 
-| Backend | `WorkerConfig` fields |
-|--:|:--|
-| **Sync** | `Driver` |
-| **Workerpool** | `Driver`, `Workers`, `QueueCapacity`, `DefaultTaskTimeout` |
-| **Database** | `Driver`, `Workers`, `PollInterval`, `DefaultQueue`, `AutoMigrate`, `Database`, `DatabaseDriver`, `DatabaseDSN` |
-| **Redis** | `Driver`, `Workers`, `RedisAddr`, `RedisPassword`, `RedisDB` |
-| **NATS** | `Driver`, `NATSURL` |
-| **SQS** | `Driver`, `DefaultQueue`, `SQSRegion`, `SQSEndpoint`, `SQSAccessKey`, `SQSSecretKey` |
-| **RabbitMQ** | `Driver`, `DefaultQueue`, `RabbitMQURL` |
+| Backend | WorkerConfig fields |
+|:--|:--|
+| Sync | Driver |
+| Workerpool | Driver, Workers, QueueCapacity, DefaultTaskTimeout |
+| Database | Driver, Workers, PollInterval, DefaultQueue, AutoMigrate, Database, DatabaseDriver, DatabaseDSN |
+| Redis | Driver, Workers, RedisAddr, RedisPassword, RedisDB |
+| NATS | Driver, NATSURL |
+| SQS | Driver, DefaultQueue, SQSRegion, SQSEndpoint, SQSAccessKey, SQSSecretKey |
+| RabbitMQ | Driver, DefaultQueue, RabbitMQURL |
 
 ## API reference
 
