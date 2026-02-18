@@ -7,6 +7,24 @@ on:
     branches: [ main ]
 
 jobs:
+  integration-matrix-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure integration matrix covers all required backends
+        run: |
+          set -euo pipefail
+          matrix_line="$(awk '/backend: \[/{print; exit}' .github/workflows/test.yml)"
+          test -n "$matrix_line"
+          for backend in redis mysql postgres sqlite; do
+            if ! echo "$matrix_line" | grep -Eq "(^|[^a-z])${backend}([^a-z]|$)"; then
+              echo "missing required integration backend in matrix: ${backend}"
+              exit 1
+            fi
+          done
+
   unit:
     runs-on: ubuntu-latest
 
@@ -51,6 +69,7 @@ jobs:
         run: go test -race ./...
 
   integration:
+    needs: integration-matrix-guard
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
