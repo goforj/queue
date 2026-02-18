@@ -7,6 +7,15 @@ on:
     branches: [ main ]
 
 jobs:
+  hardening-contract-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify hardening contract coverage
+        run: .github/scripts/check_hardening_contract.sh
+
   integration-matrix-guard:
     runs-on: ubuntu-latest
     steps:
@@ -69,7 +78,7 @@ jobs:
         run: go test -race ./...
 
   integration:
-    needs: integration-matrix-guard
+    needs: [integration-matrix-guard, hardening-contract-guard]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -94,7 +103,7 @@ jobs:
         run: go test -tags integration ./...
 
   integration-hardening:
-    needs: integration-matrix-guard
+    needs: [integration-matrix-guard, hardening-contract-guard]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

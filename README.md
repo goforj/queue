@@ -410,6 +410,62 @@ defer worker.Shutdown()
 - SQS: call `worker.Start()` to poll queues and `worker.Shutdown()` for graceful stop.
 - RabbitMQ: call `worker.Start()` to consume queues and `worker.Shutdown()` for graceful stop.
 
+## Reliability guarantees
+
+This project targets production-grade reliability with explicit, tested guarantees.
+
+Guaranteed across all supported drivers:
+
+- Queue/worker lifecycle idempotency (`Start`, `Shutdown`).
+- Task dispatch and handler registration through a single API.
+- Retry/timeout/delay/unique option behavior enforced by contract tests.
+- End-to-end integration coverage using backend containers.
+- Observability hooks (`Observer`) with per-attempt events and queue/task metadata.
+
+Driver capability differences (explicit):
+
+- Native stats snapshots: Sync, Workerpool, Database, Redis.
+- Pause/resume controls: Sync, Workerpool, Redis.
+- Collector-based observability works across all drivers.
+- Ordering, restart durability, and broker-fault behavior are validated per backend capability in hardening suites.
+
+Non-goals (honest boundary):
+
+- Exactly-once processing guarantees.
+- Identical broker semantics across every backend.
+- Infinite soak coverage in per-PR CI (extended soak/chaos run in scheduled workflows).
+
+## Trust matrix
+
+Legend: `✓` covered, `o` conditional capability coverage, `-` not applicable.
+
+| Reliability area | Depth | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ |
+|:--|:--|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| Core queue contract (`Enqueue`, handler dispatch, lifecycle) | Unit + integration contract suites | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Worker contract (`Register`, `Start`, `Shutdown`, handler execution) | Unit + integration contract suites | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Task option behavior (`OnQueue`, `Delay`, `Timeout`, `Retry`, `Backoff`, `UniqueFor`) | Contract + backend integration mapping checks | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Payload bind/JSON decode (`Task.Bind`) | Unit + hardening invalid/empty/valid payload steps | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Retry/poison handling | Hardening step (`step_poison_message_max_retry`) | o | o | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Queue-scoped uniqueness | Contract + hardening step (`step_unique_queue_scope`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Enqueue context cancellation | Hardening step (`step_enqueue_context_cancellation`) | o | o | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Shutdown during delayed/retry work | Hardening step (`step_shutdown_during_delay_retry`) | o | o | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Multi-worker contention/idempotency pressure | Hardening steps (`step_multi_worker_contention`, `step_duplicate_delivery_idempotency`) | o | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Broker fault/recovery | Hardening steps (`step_enqueue_during_broker_fault`, `step_consume_after_broker_recovery`) | - | - | - | ✓ | - | - | - |
+| Ordering contract checks | Hardening step (`step_ordering_contract`) | o | o | o | o | o | o | o |
+| Large payload handling | Hardening step (`step_payload_large`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Mixed option fuzz stability | Hardening step (`step_config_option_fuzz`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Long-run soak stability | Scheduled soak workflow (`RUN_SOAK=1`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Observability event contract | Integration suite (`TestObservabilityIntegration_AllBackends`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Pause/resume support contract | Integration suite (`TestObservabilityIntegration_PauseResumeSupport_AllBackends`) | ✓ | ✓ | o | ✓ | o | o | o |
+| Native snapshot stats contract | Integration + runtime capability checks | ✓ | ✓ | ✓ | ✓ | o | o | o |
+
+Depth notes:
+
+- Unit: local deterministic behavior and API shape.
+- Integration contract: backend container validation for each selected driver.
+- Hardening: named fault/race/load scenarios in `TestIntegrationHardening_AllBackends`.
+- Soak/chaos: scheduled workflows that run extended and failure-injection subsets.
+
 ## Driver selection via config
 
 Use `queue.Config` with `New` and `queue.WorkerConfig` with `NewWorker`.  

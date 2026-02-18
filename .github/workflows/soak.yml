@@ -1,4 +1,4 @@
-name: Soak Test
+name: Reliability Soak/Chaos
 
 on:
   schedule:
@@ -30,3 +30,27 @@ jobs:
           RUN_SOAK: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
         run: go test -tags integration ./... -run '^TestIntegrationHardening_AllBackends$'
+
+  integration-chaos:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Run integration chaos hardening subset
+        env:
+          RUN_INTEGRATION: "1"
+          INTEGRATION_BACKEND: ${{ matrix.backend }}
+        run: go test -tags integration ./... -run "TestIntegrationHardening_AllBackends/.*/step_(enqueue_during_broker_fault|consume_after_broker_recovery|shutdown_during_delay_retry|multi_worker_contention)$"
