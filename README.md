@@ -278,7 +278,12 @@ q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
 q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
     return sendEmail(ctx, task.PayloadBytes())
 })
-_ = q.Enqueue(context.Background(), queue.NewTask("emails:send").Payload([]byte("hello")).OnQueue("default"))
+_ = q.Enqueue(
+    context.Background(),
+    queue.NewTask("emails:send").
+        Payload([]byte("hello")).
+        OnQueue("default"),
+)
 ```
 
 ### Workerpool driver
