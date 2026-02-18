@@ -12,7 +12,7 @@ func main() {
 	// Shutdown drains delayed and active local workerpool tasks.
 
 	// Example: local shutdown
-	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+	dispatcher, err := queue.NewQueue(queue.QueueConfig{
 		Driver: queue.DriverWorkerpool,
 	})
 	if err != nil {

@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-func newDatabaseDispatcherIntegration(t *testing.T, cfg DatabaseConfig) Dispatcher {
+func newDatabaseDispatcherIntegration(t *testing.T, cfg DatabaseConfig) Queue {
 	t.Helper()
-	dispatcher, err := NewDispatcher(DispatcherConfig{
+	dispatcher, err := NewQueue(QueueConfig{
 		Driver:         DriverDatabase,
 		Database:       cfg.DB,
 		DatabaseDriver: cfg.DriverName,
@@ -44,7 +44,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := d.Enqueue(context.Background(), Task{Type: "job:db:basic", Payload: []byte("hello")}); err != nil {
+		if err := d.Dispatch("job:db:basic", []byte("hello")); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {
@@ -68,7 +68,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 		resetQueueTables(t, cfg)
 		start := time.Now()
 		delay := 300 * time.Millisecond
-		if err := d.Enqueue(context.Background(), Task{Type: "job:db:delay"}, WithDelay(delay)); err != nil {
+		if err := d.Dispatch("job:db:delay", nil, WithDelay(delay)); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {
@@ -89,12 +89,13 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		task := Task{Type: "job:db:unique", Payload: []byte("same")}
-		err := d.Enqueue(context.Background(), task, WithUnique(500*time.Millisecond))
+		taskType := "job:db:unique"
+		payload := []byte("same")
+		err := d.Dispatch(taskType, payload, WithUnique(500*time.Millisecond))
 		if err != nil {
 			t.Fatalf("first enqueue failed: %v", err)
 		}
-		err = d.Enqueue(context.Background(), task, WithUnique(500*time.Millisecond))
+		err = d.Dispatch(taskType, payload, WithUnique(500*time.Millisecond))
 		if !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
@@ -115,7 +116,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := d.Enqueue(context.Background(), Task{Type: "job:db:retry"}, WithMaxRetry(2), WithBackoff(50*time.Millisecond)); err != nil {
+		if err := d.Dispatch("job:db:retry", nil, WithMaxRetry(2), WithBackoff(50*time.Millisecond)); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {

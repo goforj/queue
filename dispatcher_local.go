@@ -53,11 +53,11 @@ func newLocalDispatcherWithConfig(driver Driver, cfg WorkerpoolConfig) *localDis
 }
 
 // Driver returns the local dispatcher's driver mode.
-// @group Dispatcher
+// @group Queue
 //
 // Example: local driver
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -68,11 +68,11 @@ func (d *localDispatcher) Driver() Driver {
 }
 
 // Register adds a task handler to the local dispatcher.
-// @group Dispatcher
+// @group Queue
 //
 // Example: local register
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -87,11 +87,11 @@ func (d *localDispatcher) Register(taskType string, handler Handler) {
 }
 
 // Start initializes worker goroutines for workerpool mode.
-// @group Dispatcher
+// @group Queue
 //
 // Example: local start
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{
 //		Driver: queue.DriverWorkerpool,
 //	})
 //	if err != nil {
@@ -107,11 +107,11 @@ func (d *localDispatcher) Start(_ context.Context) error {
 }
 
 // Shutdown drains delayed and active local workerpool tasks.
-// @group Dispatcher
+// @group Queue
 //
 // Example: local shutdown
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{
 //		Driver: queue.DriverWorkerpool,
 //	})
 //	if err != nil {
@@ -146,21 +146,26 @@ func (d *localDispatcher) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// Enqueue schedules or executes a task using the local driver.
-// @group Dispatcher
+// Dispatch schedules or executes a task using the local driver.
+// @group Queue
 //
-// Example: local enqueue
+// Example: local dispatch
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	queuer, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
-//	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-//	_ = dispatcher.Enqueue(context.Background(), queue.Task{Type: "emails:send"}, queue.WithDelay(10*time.Millisecond))
-func (d *localDispatcher) Enqueue(ctx context.Context, task Task, opts ...Option) error {
+//	queuer.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
+//	_ = queuer.Dispatch("emails:send", []byte(`{"id":1}`), queue.WithDelay(10*time.Millisecond))
+func (d *localDispatcher) Dispatch(taskType string, payload []byte, opts ...Option) error {
+	return d.DispatchCtx(context.Background(), taskType, payload, opts...)
+}
+
+func (d *localDispatcher) DispatchCtx(ctx context.Context, taskType string, payload []byte, opts ...Option) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
-		return ErrDispatcherShuttingDown
+		return ErrQueuerShuttingDown
 	}
+	task := Task{Type: taskType, Payload: payload}
 	parsed := resolveOptions(opts...)
 	if task.Type == "" {
 		return fmt.Errorf("task type is required")
@@ -202,7 +207,7 @@ func (d *localDispatcher) enqueueNow(ctx context.Context, task Task, parsed enqu
 
 func (d *localDispatcher) enqueueAsync(ctx context.Context, task Task, parsed enqueueOptions) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
-		return ErrDispatcherShuttingDown
+		return ErrQueuerShuttingDown
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -229,7 +234,7 @@ func (d *localDispatcher) workerQueueForEnqueue() (chan queuedTask, error) {
 	}
 
 	// Self-heal: if the in-memory worker queue is unexpectedly nil while the
-	// dispatcher is active, rebuild workers so enqueue can continue.
+	// queuer is active, rebuild workers so dispatch can continue.
 	d.queueMu.Lock()
 	defer d.queueMu.Unlock()
 	if d.workQueue != nil {

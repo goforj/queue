@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+	dispatcher, err := queue.NewQueue(queue.QueueConfig{
 		Driver:         queue.DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    "file:queue.db?_busy_timeout=5000",
@@ -29,9 +29,9 @@ func main() {
 	_ = dispatcher.Start(ctx)
 	defer dispatcher.Shutdown(ctx)
 
-	_ = dispatcher.Enqueue(
-		ctx,
-		queue.Task{Type: "emails:send", Payload: []byte(`{"id":789}`)},
+	_ = dispatcher.Dispatch(
+		"emails:send",
+		[]byte(`{"id":789}`),
 		queue.WithQueue("critical"),
 		queue.WithTimeout(10*time.Second),
 		queue.WithMaxRetry(4),

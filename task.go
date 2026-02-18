@@ -29,8 +29,8 @@ type Handler func(ctx context.Context, task Task) error
 // ErrDuplicate indicates a duplicate unique task enqueue.
 var ErrDuplicate = errors.New("duplicate task")
 
-// ErrDispatcherShuttingDown indicates enqueue was rejected during shutdown.
-var ErrDispatcherShuttingDown = errors.New("dispatcher is shutting down")
+// ErrQueuerShuttingDown indicates dispatch was rejected during shutdown.
+var ErrQueuerShuttingDown = errors.New("queuer is shutting down")
 
 // ErrWorkerpoolQueueNotInitialized indicates workerpool queue is unavailable.
 var ErrWorkerpoolQueueNotInitialized = errors.New("workerpool queue not initialized")

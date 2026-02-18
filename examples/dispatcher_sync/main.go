@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}
@@ -20,10 +20,9 @@ func main() {
 		return nil
 	})
 
-	ctx := context.Background()
-	_ = dispatcher.Enqueue(
-		ctx,
-		queue.Task{Type: "emails:send", Payload: []byte(`{"id":123}`)},
+	_ = dispatcher.Dispatch(
+		"emails:send",
+		[]byte(`{"id":123}`),
 		queue.WithQueue("critical"),
 		queue.WithTimeout(20*time.Second),
 		queue.WithMaxRetry(3),

@@ -79,7 +79,7 @@ type dbJob struct {
 	attempt        int
 }
 
-func newDatabaseDispatcher(cfg DatabaseConfig) (Dispatcher, error) {
+func newDatabaseDispatcher(cfg DatabaseConfig) (Queue, error) {
 	cfg = cfg.normalize()
 	if cfg.DB == nil {
 		if cfg.DriverName == "" {
@@ -159,10 +159,15 @@ func (d *databaseDispatcher) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *databaseDispatcher) Enqueue(ctx context.Context, task Task, opts ...Option) error {
+func (d *databaseDispatcher) Dispatch(taskType string, payload []byte, opts ...Option) error {
+	return d.DispatchCtx(context.Background(), taskType, payload, opts...)
+}
+
+func (d *databaseDispatcher) DispatchCtx(ctx context.Context, taskType string, payload []byte, opts ...Option) error {
 	if d.shuttingDown.Load() {
-		return ErrDispatcherShuttingDown
+		return ErrQueuerShuttingDown
 	}
+	task := Task{Type: taskType, Payload: payload}
 	if task.Type == "" {
 		return fmt.Errorf("task type is required")
 	}
@@ -175,9 +180,9 @@ func (d *databaseDispatcher) Enqueue(ctx context.Context, task Task, opts ...Opt
 		}
 	}
 	parsed := resolveOptions(opts...)
-	payload := task.Payload
-	if payload == nil {
-		payload = []byte{}
+	payloadBytes := task.Payload
+	if payloadBytes == nil {
+		payloadBytes = []byte{}
 	}
 	queueName := parsed.queueName
 	if queueName == "" {
@@ -228,7 +233,7 @@ func (d *databaseDispatcher) Enqueue(ctx context.Context, task Task, opts ...Opt
 		query,
 		queueName,
 		task.Type,
-		payload,
+		payloadBytes,
 		timeoutSeconds,
 		maxRetry,
 		backoffMillis,

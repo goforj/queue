@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+	dispatcher, err := queue.NewQueue(queue.QueueConfig{
 		Driver: queue.DriverWorkerpool,
 	})
 	if err != nil {
@@ -26,9 +26,9 @@ func main() {
 	_ = dispatcher.Start(ctx)
 	defer dispatcher.Shutdown(ctx)
 
-	_ = dispatcher.Enqueue(
-		ctx,
-		queue.Task{Type: "emails:send", Payload: []byte(`{"id":456}`)},
+	_ = dispatcher.Dispatch(
+		"emails:send",
+		[]byte(`{"id":456}`),
 		queue.WithQueue("default"),
 		queue.WithTimeout(15*time.Second),
 		queue.WithMaxRetry(5),

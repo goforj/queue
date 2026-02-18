@@ -15,8 +15,8 @@ func TestDispatcherContract_Redis(t *testing.T) {
 
 	factory := contractFactory{
 		name: "redis",
-		newDispatcher: func(t *testing.T) Dispatcher {
-			dispatcher, err := NewDispatcher(DispatcherConfig{
+		newDispatcher: func(t *testing.T) Queue {
+			dispatcher, err := NewQueue(QueueConfig{
 				Driver:    DriverRedis,
 				RedisAddr: integrationRedis.addr,
 			})
@@ -46,8 +46,8 @@ func TestDispatcherContract_DatabaseMySQL(t *testing.T) {
 	}
 	factory := contractFactory{
 		name: "database-mysql",
-		newDispatcher: func(_ *testing.T) Dispatcher {
-			dispatcher, err := NewDispatcher(DispatcherConfig{
+		newDispatcher: func(_ *testing.T) Queue {
+			dispatcher, err := NewQueue(QueueConfig{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
@@ -78,8 +78,8 @@ func TestDispatcherContract_DatabasePostgres(t *testing.T) {
 	}
 	factory := contractFactory{
 		name: "database-postgres",
-		newDispatcher: func(_ *testing.T) Dispatcher {
-			dispatcher, err := NewDispatcher(DispatcherConfig{
+		newDispatcher: func(_ *testing.T) Queue {
+			dispatcher, err := NewQueue(QueueConfig{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
@@ -104,14 +104,14 @@ func TestDispatcherContract_DatabaseSQLiteIntegration(t *testing.T) {
 	}
 	factory := contractFactory{
 		name: "database-sqlite",
-		newDispatcher: func(t *testing.T) Dispatcher {
+		newDispatcher: func(t *testing.T) Queue {
 			cfg := DatabaseConfig{
 				DriverName:   "sqlite",
 				DSN:          fmt.Sprintf("%s/contract-integration-%d.db", t.TempDir(), time.Now().UnixNano()),
 				Workers:      1,
 				PollInterval: 10 * time.Millisecond,
 			}
-			dispatcher, err := NewDispatcher(DispatcherConfig{
+			dispatcher, err := NewQueue(QueueConfig{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,

@@ -71,7 +71,7 @@ type WorkerConfig struct {
 func NewWorker(cfg WorkerConfig) (Worker, error) {
 	switch cfg.Driver {
 	case DriverSync:
-		return &dispatcherWorkerAdapter{dispatcher: newSyncDispatcher()}, nil
+		return &dispatcherWorkerAdapter{dispatcher: newSyncQueue()}, nil
 	case DriverWorkerpool:
 		return &dispatcherWorkerAdapter{
 			dispatcher: newLocalDispatcherWithConfig(DriverWorkerpool, WorkerpoolConfig{
@@ -123,7 +123,7 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 }
 
 type dispatcherWorkerAdapter struct {
-	dispatcher Dispatcher
+	dispatcher Queue
 }
 
 func (w *dispatcherWorkerAdapter) Driver() Driver {

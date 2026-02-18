@@ -21,7 +21,7 @@ func (f fakeEnqueuer) Close() error {
 }
 
 func TestNewSyncDispatcher(t *testing.T) {
-	dispatcher, err := NewDispatcher(DispatcherConfig{Driver: DriverSync})
+	dispatcher, err := NewQueue(QueueConfig{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestNewSyncDispatcher(t *testing.T) {
 }
 
 func TestNewWorkerpoolDispatcher(t *testing.T) {
-	dispatcher, err := NewDispatcher(DispatcherConfig{
+	dispatcher, err := NewQueue(QueueConfig{
 		Driver: DriverWorkerpool,
 	})
 	if err != nil {
@@ -43,7 +43,7 @@ func TestNewWorkerpoolDispatcher(t *testing.T) {
 }
 
 func TestNewRedisDispatcher(t *testing.T) {
-	dispatcher, err := NewDispatcher(DispatcherConfig{
+	dispatcher, err := NewQueue(QueueConfig{
 		Driver:    DriverRedis,
 		RedisAddr: "127.0.0.1:6379",
 	})
@@ -58,15 +58,15 @@ func TestNewRedisDispatcher(t *testing.T) {
 func TestNewDispatcher_SelectsByConfig(t *testing.T) {
 	testCases := []struct {
 		name   string
-		cfg    DispatcherConfig
+		cfg    QueueConfig
 		driver Driver
 	}{
-		{name: "sync", cfg: DispatcherConfig{Driver: DriverSync}, driver: DriverSync},
-		{name: "workerpool", cfg: DispatcherConfig{Driver: DriverWorkerpool}, driver: DriverWorkerpool},
-		{name: "redis", cfg: DispatcherConfig{Driver: DriverRedis, RedisAddr: "127.0.0.1:6379"}, driver: DriverRedis},
+		{name: "sync", cfg: QueueConfig{Driver: DriverSync}, driver: DriverSync},
+		{name: "workerpool", cfg: QueueConfig{Driver: DriverWorkerpool}, driver: DriverWorkerpool},
+		{name: "redis", cfg: QueueConfig{Driver: DriverRedis, RedisAddr: "127.0.0.1:6379"}, driver: DriverRedis},
 		{
 			name: "database",
-			cfg: DispatcherConfig{
+			cfg: QueueConfig{
 				Driver:         DriverDatabase,
 				DatabaseDriver: "sqlite",
 				DatabaseDSN:    t.TempDir() + "/queue.db",
@@ -77,7 +77,7 @@ func TestNewDispatcher_SelectsByConfig(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			dispatcher, err := NewDispatcher(tc.cfg)
+			dispatcher, err := NewQueue(tc.cfg)
 			if err != nil {
 				t.Fatalf("new dispatcher failed: %v", err)
 			}
@@ -89,7 +89,7 @@ func TestNewDispatcher_SelectsByConfig(t *testing.T) {
 }
 
 func TestNewDispatcher_UnknownDriverFails(t *testing.T) {
-	dispatcher, err := NewDispatcher(DispatcherConfig{Driver: Driver("unknown")})
+	dispatcher, err := NewQueue(QueueConfig{Driver: Driver("unknown")})
 	if err == nil {
 		t.Fatal("expected unknown driver error")
 	}
@@ -99,7 +99,7 @@ func TestNewDispatcher_UnknownDriverFails(t *testing.T) {
 }
 
 func TestRedisDispatcher_EnqueueWithoutClientFails(t *testing.T) {
-	dispatcher, err := NewDispatcher(DispatcherConfig{Driver: DriverRedis})
+	dispatcher, err := NewQueue(QueueConfig{Driver: DriverRedis})
 	if err == nil {
 		t.Fatal("expected constructor error for missing redis addr")
 	}
@@ -113,9 +113,9 @@ func TestRedisDispatcher_EnqueueWithoutClientFails(t *testing.T) {
 
 func TestRedisDispatcher_BackoffUnsupported(t *testing.T) {
 	dispatcher := newRedisDispatcher(fakeEnqueuer{}, false)
-	err := dispatcher.Enqueue(
-		context.Background(),
-		Task{Type: "job:test", Payload: []byte("{}")},
+	err := dispatcher.Dispatch(
+		"job:test",
+		[]byte("{}"),
 		WithBackoff(time.Second),
 	)
 	if !errors.Is(err, ErrBackoffUnsupported) {
@@ -124,7 +124,7 @@ func TestRedisDispatcher_BackoffUnsupported(t *testing.T) {
 }
 
 func TestDispatcher_ShutdownNoopForSyncAndRedis(t *testing.T) {
-	syncDispatcher, err := NewDispatcher(DispatcherConfig{Driver: DriverSync})
+	syncDispatcher, err := NewQueue(QueueConfig{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("sync constructor failed: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestDispatcher_ShutdownNoopForSyncAndRedis(t *testing.T) {
 		t.Fatalf("sync shutdown failed: %v", err)
 	}
 
-	redisDispatcher, err := NewDispatcher(DispatcherConfig{
+	redisDispatcher, err := NewQueue(QueueConfig{
 		Driver:    DriverRedis,
 		RedisAddr: "127.0.0.1:6379",
 	})

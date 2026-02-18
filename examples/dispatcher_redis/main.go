@@ -4,14 +4,13 @@
 package main
 
 import (
-	"context"
 	"time"
 
 	"github.com/goforj/queue"
 )
 
 func main() {
-	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+	dispatcher, err := queue.NewQueue(queue.QueueConfig{
 		Driver:    queue.DriverRedis,
 		RedisAddr: "127.0.0.1:6379",
 	})
@@ -19,10 +18,9 @@ func main() {
 		return
 	}
 
-	ctx := context.Background()
-	_ = dispatcher.Enqueue(
-		ctx,
-		queue.Task{Type: "emails:send", Payload: []byte(`{"id":999}`)},
+	_ = dispatcher.Dispatch(
+		"emails:send",
+		[]byte(`{"id":999}`),
 		queue.WithQueue("critical"),
 		queue.WithTimeout(30*time.Second),
 		queue.WithMaxRetry(8),

@@ -17,7 +17,7 @@ import (
 
 type contractFactory struct {
 	name                     string
-	newDispatcher            func(t *testing.T) Dispatcher
+	newDispatcher            func(t *testing.T) Queue
 	requiresRegisteredHandle bool
 	assertMissingHandlerErr  bool
 	backoffUnsupported       bool
@@ -55,7 +55,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.Enqueue(context.Background(), Task{Type: "job:contract:immediate", Payload: []byte("ok")})
+		err := d.DispatchCtx(context.Background(), "job:contract:immediate", []byte("ok"))
 		if err != nil {
 			t.Fatalf("immediate enqueue failed: %v", err)
 		}
@@ -73,9 +73,9 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.Enqueue(
-			context.Background(),
-			Task{Type: "job:contract:delay", Payload: []byte("delayed")},
+		err := d.Dispatch(
+			"job:contract:delay",
+			[]byte("delayed"),
 			WithDelay(20*time.Millisecond),
 		)
 		if err != nil {
@@ -95,9 +95,9 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.Enqueue(
-			context.Background(),
-			Task{Type: "job:contract:queue", Payload: []byte("queue")},
+		err := d.Dispatch(
+			"job:contract:queue",
+			[]byte("queue"),
 			WithQueue("contract"),
 		)
 		if err != nil {
@@ -122,9 +122,9 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.Enqueue(
-			context.Background(),
-			Task{Type: "job:contract:timeout", Payload: []byte("timeout")},
+		err := d.Dispatch(
+			"job:contract:timeout",
+			[]byte("timeout"),
 			WithTimeout(80*time.Millisecond),
 		)
 		if err != nil {
@@ -162,9 +162,9 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.Enqueue(
-			context.Background(),
-			Task{Type: "job:contract:maxretry", Payload: []byte("retry")},
+		err := d.Dispatch(
+			"job:contract:maxretry",
+			[]byte("retry"),
 			WithMaxRetry(2),
 		)
 		if err != nil {
@@ -203,9 +203,9 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.Enqueue(
-			context.Background(),
-			Task{Type: "job:contract:backoff", Payload: []byte("backoff")},
+		err := d.Dispatch(
+			"job:contract:backoff",
+			[]byte("backoff"),
 			WithMaxRetry(1),
 			WithBackoff(10*time.Millisecond),
 		)
@@ -253,17 +253,18 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if expiryWait <= 0 {
 			expiryWait = ttl + 30*time.Millisecond
 		}
-		task := Task{Type: "job:contract:unique", Payload: []byte("same")}
-		err := d.Enqueue(context.Background(), task, WithUnique(ttl))
+		taskType := "job:contract:unique"
+		payload := []byte("same")
+		err := d.Dispatch(taskType, payload, WithUnique(ttl))
 		if err != nil {
 			t.Fatalf("first unique enqueue failed: %v", err)
 		}
-		err = d.Enqueue(context.Background(), task, WithUnique(ttl))
+		err = d.Dispatch(taskType, payload, WithUnique(ttl))
 		if !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
 		time.Sleep(expiryWait)
-		err = d.Enqueue(context.Background(), task, WithUnique(ttl))
+		err = d.Dispatch(taskType, payload, WithUnique(ttl))
 		if err != nil {
 			t.Fatalf("enqueue after unique ttl failed: %v", err)
 		}
@@ -272,7 +273,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	t.Run("missing_task_type", func(t *testing.T) {
 		d := factory.newDispatcher(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
-		err := d.Enqueue(context.Background(), Task{})
+		err := d.Dispatch("", nil)
 		if err == nil {
 			t.Fatal("expected missing task type error")
 		}
@@ -287,7 +288,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.Enqueue(context.Background(), Task{Type: "job:contract:missing-handler"})
+		err := d.Dispatch("job:contract:missing-handler", nil)
 		if factory.assertMissingHandlerErr && err == nil {
 			t.Fatal("expected missing handler error")
 		}
@@ -358,8 +359,8 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 	factories := []contractFactory{
 		{
 			name: "sync",
-			newDispatcher: func(_ *testing.T) Dispatcher {
-				dispatcher, err := NewDispatcher(DispatcherConfig{Driver: DriverSync})
+			newDispatcher: func(_ *testing.T) Queue {
+				dispatcher, err := NewQueue(QueueConfig{Driver: DriverSync})
 				if err != nil {
 					t.Fatalf("new sync dispatcher failed: %v", err)
 				}
@@ -370,8 +371,8 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		},
 		{
 			name: "workerpool",
-			newDispatcher: func(_ *testing.T) Dispatcher {
-				dispatcher, err := NewDispatcher(DispatcherConfig{
+			newDispatcher: func(_ *testing.T) Queue {
+				dispatcher, err := NewQueue(QueueConfig{
 					Driver: DriverWorkerpool,
 				})
 				if err != nil {
@@ -384,8 +385,8 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		},
 		{
 			name: "database-sqlite",
-			newDispatcher: func(t *testing.T) Dispatcher {
-				dispatcher, err := NewDispatcher(DispatcherConfig{
+			newDispatcher: func(t *testing.T) Queue {
+				dispatcher, err := NewQueue(QueueConfig{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "sqlite",
 					DatabaseDSN:    fmt.Sprintf("%s/contract-%d.db", t.TempDir(), time.Now().UnixNano()),
@@ -404,7 +405,7 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		factory := factory
 		t.Run(factory.name, func(t *testing.T) {
 			contractFactory := factory
-			contractFactory.newDispatcher = func(t *testing.T) Dispatcher {
+			contractFactory.newDispatcher = func(t *testing.T) Queue {
 				d := factory.newDispatcher(t)
 				t.Cleanup(func() {
 					_ = d.Shutdown(context.Background())

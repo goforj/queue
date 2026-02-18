@@ -135,7 +135,7 @@ func TestRedisIntegration_EnqueueSmoke(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
-	dispatcher, err := NewDispatcher(DispatcherConfig{
+	dispatcher, err := NewQueue(QueueConfig{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 	})
@@ -144,17 +144,18 @@ func TestRedisIntegration_EnqueueSmoke(t *testing.T) {
 	}
 
 	queueName := uniqueQueueName("redis-smoke")
-	task := Task{Type: "job:smoke", Payload: []byte("hello")}
-	if err := dispatcher.Enqueue(context.Background(), task, WithQueue(queueName)); err != nil {
+	taskType := "job:smoke"
+	payload := []byte("hello")
+	if err := dispatcher.Dispatch(taskType, payload, WithQueue(queueName)); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
 	pending := waitForPendingTask(t, inspector, queueName, 3*time.Second)
-	if pending.Type != task.Type {
-		t.Fatalf("expected task type %q, got %q", task.Type, pending.Type)
+	if pending.Type != taskType {
+		t.Fatalf("expected task type %q, got %q", taskType, pending.Type)
 	}
-	if string(pending.Payload) != string(task.Payload) {
-		t.Fatalf("expected payload %q, got %q", string(task.Payload), string(pending.Payload))
+	if string(pending.Payload) != string(payload) {
+		t.Fatalf("expected payload %q, got %q", string(payload), string(pending.Payload))
 	}
 }
 
@@ -163,7 +164,7 @@ func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
-	dispatcher, err := NewDispatcher(DispatcherConfig{
+	dispatcher, err := NewQueue(QueueConfig{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 	})
@@ -177,9 +178,9 @@ func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
 	maxRetry := 4
 	start := time.Now()
 
-	err = dispatcher.Enqueue(
-		context.Background(),
-		Task{Type: "job:options", Payload: []byte("opts")},
+	err = dispatcher.Dispatch(
+		"job:options",
+		[]byte("opts"),
 		WithQueue(queueName),
 		WithDelay(delay),
 		WithTimeout(timeout),
@@ -209,7 +210,7 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	_ = newRedisInspector(t)
-	dispatcher, err := NewDispatcher(DispatcherConfig{
+	dispatcher, err := NewQueue(QueueConfig{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 	})
@@ -218,13 +219,14 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 	}
 
 	queueName := uniqueQueueName("redis-unique")
-	task := Task{Type: "job:unique", Payload: []byte("same")}
+	taskType := "job:unique"
+	payload := []byte("same")
 	opts := []Option{WithQueue(queueName), WithUnique(5 * time.Second)}
 
-	if err := dispatcher.Enqueue(context.Background(), task, opts...); err != nil {
+	if err := dispatcher.Dispatch(taskType, payload, opts...); err != nil {
 		t.Fatalf("first enqueue failed: %v", err)
 	}
-	err = dispatcher.Enqueue(context.Background(), task, opts...)
+	err = dispatcher.Dispatch(taskType, payload, opts...)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
@@ -235,7 +237,7 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	_ = newRedisInspector(t)
-	dispatcher, err := NewDispatcher(DispatcherConfig{
+	dispatcher, err := NewQueue(QueueConfig{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 	})
@@ -243,9 +245,9 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 		t.Fatalf("new redis dispatcher failed: %v", err)
 	}
 
-	err = dispatcher.Enqueue(
-		context.Background(),
-		Task{Type: "job:backoff-unsupported", Payload: []byte("x")},
+	err = dispatcher.Dispatch(
+		"job:backoff-unsupported",
+		[]byte("x"),
 		WithBackoff(1*time.Second),
 	)
 	if !errors.Is(err, ErrBackoffUnsupported) {

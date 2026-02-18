@@ -8,16 +8,19 @@ import (
 	"time"
 )
 
-// Dispatcher is the queue abstraction exposed to callers.
-type Dispatcher interface {
+// Queue is the queue abstraction exposed to callers.
+type Queue interface {
 	// Driver returns the active backend driver.
 	Driver() Driver
 
 	// Start initializes background resources for drivers that need them.
 	Start(ctx context.Context) error
 
-	// Enqueue submits a task for execution with optional enqueue options.
-	Enqueue(ctx context.Context, task Task, opts ...Option) error
+	// Dispatch submits a task for execution with optional dispatch options.
+	Dispatch(taskType string, payload []byte, opts ...Option) error
+
+	// DispatchCtx submits a task with an explicit context for cancellation and deadlines.
+	DispatchCtx(ctx context.Context, taskType string, payload []byte, opts ...Option) error
 
 	// Register associates a handler with a task type.
 	Register(taskType string, handler Handler)
@@ -47,9 +50,9 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 	return c
 }
 
-// DispatcherConfig configures dispatcher creation for NewDispatcher.
+// QueueConfig configures queuer creation for NewQueue.
 // @group Config
-type DispatcherConfig struct {
+type QueueConfig struct {
 	Driver Driver
 
 	DefaultQueue string
@@ -63,11 +66,11 @@ type DispatcherConfig struct {
 	RedisDB       int
 }
 
-func newSyncDispatcher() Dispatcher {
+func newSyncQueue() Queue {
 	return newLocalDispatcherWithConfig(DriverSync, WorkerpoolConfig{})
 }
 
-func (cfg DispatcherConfig) databaseConfig() DatabaseConfig {
+func (cfg QueueConfig) databaseConfig() DatabaseConfig {
 	return DatabaseConfig{
 		DB:           cfg.Database,
 		DriverName:   cfg.DatabaseDriver,
@@ -76,23 +79,23 @@ func (cfg DispatcherConfig) databaseConfig() DatabaseConfig {
 	}
 }
 
-// NewDispatcher creates a dispatcher based on DispatcherConfig.Driver.
+// NewQueue creates a queuer based on QueueConfig.Driver.
 // @group Constructors
 //
-// Example: new dispatcher from config
+// Example: new queuer from config
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	queuer, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
-//	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//	queuer.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 //		return nil
 //	})
-//	_ = dispatcher.Enqueue(context.Background(), queue.Task{Type: "emails:send"})
-func NewDispatcher(cfg DispatcherConfig) (Dispatcher, error) {
+//	_ = queuer.Dispatch("emails:send", []byte(`{"id":1}`))
+func NewQueue(cfg QueueConfig) (Queue, error) {
 	switch cfg.Driver {
 	case DriverSync:
-		return newSyncDispatcher(), nil
+		return newSyncQueue(), nil
 	case DriverWorkerpool:
 		return newLocalDispatcherWithConfig(DriverWorkerpool, WorkerpoolConfig{}), nil
 	case DriverRedis:

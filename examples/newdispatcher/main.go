@@ -9,15 +9,15 @@ import (
 )
 
 func main() {
-	// NewDispatcher creates a dispatcher based on DispatcherConfig.Driver.
+	// NewQueue creates a dispatcher based on QueueConfig.Driver.
 
 	// Example: new dispatcher from config
-	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}
 	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 		return nil
 	})
-	_ = dispatcher.Enqueue(context.Background(), queue.Task{Type: "emails:send"})
+	_ = dispatcher.Dispatch("emails:send", []byte(`{"id":1}`))
 }

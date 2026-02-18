@@ -41,13 +41,12 @@ func resolveOptions(opts ...Option) enqueueOptions {
 //
 // Example: with queue
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
 //	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-//	ctx := context.Background()
-//	err = dispatcher.Enqueue(ctx, queue.Task{Type: "emails:send"}, queue.WithQueue("critical"))
+//	err = dispatcher.Dispatch("emails:send", []byte(`{"id":1}`), queue.WithQueue("critical"))
 //	_ = err
 func WithQueue(name string) Option {
 	return optionFunc(func(target *enqueueOptions) {
@@ -60,13 +59,12 @@ func WithQueue(name string) Option {
 //
 // Example: with timeout
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
 //	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-//	ctx := context.Background()
-//	err = dispatcher.Enqueue(ctx, queue.Task{Type: "emails:send"}, queue.WithTimeout(15*time.Second))
+//	err = dispatcher.Dispatch("emails:send", []byte(`{"id":1}`), queue.WithTimeout(15*time.Second))
 //	_ = err
 func WithTimeout(timeout time.Duration) Option {
 	return optionFunc(func(target *enqueueOptions) {
@@ -79,13 +77,12 @@ func WithTimeout(timeout time.Duration) Option {
 //
 // Example: with max retry
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
 //	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-//	ctx := context.Background()
-//	err = dispatcher.Enqueue(ctx, queue.Task{Type: "emails:send"}, queue.WithMaxRetry(3))
+//	err = dispatcher.Dispatch("emails:send", []byte(`{"id":1}`), queue.WithMaxRetry(3))
 //	_ = err
 func WithMaxRetry(maxRetry int) Option {
 	return optionFunc(func(target *enqueueOptions) {
@@ -98,13 +95,12 @@ func WithMaxRetry(maxRetry int) Option {
 //
 // Example: with backoff
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
 //	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-//	ctx := context.Background()
-//	err = dispatcher.Enqueue(ctx, queue.Task{Type: "emails:send"}, queue.WithBackoff(2*time.Second))
+//	err = dispatcher.Dispatch("emails:send", []byte(`{"id":1}`), queue.WithBackoff(2*time.Second))
 //	_ = err
 func WithBackoff(backoff time.Duration) Option {
 	return optionFunc(func(target *enqueueOptions) {
@@ -117,13 +113,12 @@ func WithBackoff(backoff time.Duration) Option {
 //
 // Example: with delay
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
 //	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-//	ctx := context.Background()
-//	err = dispatcher.Enqueue(ctx, queue.Task{Type: "emails:send"}, queue.WithDelay(10*time.Second))
+//	err = dispatcher.Dispatch("emails:send", []byte(`{"id":1}`), queue.WithDelay(10*time.Second))
 //	_ = err
 func WithDelay(delay time.Duration) Option {
 	return optionFunc(func(target *enqueueOptions) {
@@ -136,13 +131,12 @@ func WithDelay(delay time.Duration) Option {
 //
 // Example: with unique
 //
-//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
 //	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-//	ctx := context.Background()
-//	err = dispatcher.Enqueue(ctx, queue.Task{Type: "emails:send", Payload: []byte(`{"id":1}`)}, queue.WithUnique(30*time.Second))
+//	err = dispatcher.Dispatch("emails:send", []byte(`{"id":1}`), queue.WithUnique(30*time.Second))
 //	_ = err
 func WithUnique(ttl time.Duration) Option {
 	return optionFunc(func(target *enqueueOptions) {
