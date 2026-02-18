@@ -5,9 +5,12 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func newRabbitMQIntegrationConfig() Config {
@@ -167,5 +170,256 @@ func TestRabbitMQIntegration_UniqueDuplicate(t *testing.T) {
 	time.Sleep(600 * time.Millisecond)
 	if err := q.Enqueue(context.Background(), second); err != nil {
 		t.Fatalf("enqueue after ttl failed: %v", err)
+	}
+}
+
+func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
+	if !integrationBackendEnabled("rabbitmq") {
+		t.Skip("rabbitmq integration backend not selected")
+	}
+	queueName := uniqueQueueName("rabbitmq-delay-restart")
+	taskType := "job:rabbitmq:delay-restart"
+	delay := 2 * time.Second
+	start := time.Now()
+	done := make(chan struct{}, 1)
+
+	newWorkerCfg := func() WorkerConfig {
+		return WorkerConfig{
+			Driver:       DriverRabbitMQ,
+			RabbitMQURL:  integrationRabbitMQ.url,
+			DefaultQueue: queueName,
+		}
+	}
+
+	worker, err := NewWorker(newWorkerCfg())
+	if err != nil {
+		t.Fatalf("new rabbitmq worker failed: %v", err)
+	}
+	worker.Register(taskType, func(_ context.Context, _ Task) error {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	if err := worker.Start(); err != nil {
+		t.Fatalf("rabbitmq worker start failed: %v", err)
+	}
+
+	q, err := New(newRabbitMQIntegrationConfig())
+	if err != nil {
+		t.Fatalf("new rabbitmq queue failed: %v", err)
+	}
+	defer q.Shutdown(context.Background())
+
+	task := NewTask(taskType).
+		Payload(hardeningPayload{ID: 1, Name: "delay-restart"}).
+		OnQueue(queueName).
+		Delay(delay)
+	if err := q.Enqueue(context.Background(), task); err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+
+	if err := worker.Shutdown(); err != nil {
+		t.Fatalf("rabbitmq worker shutdown failed: %v", err)
+	}
+
+	worker2, err := NewWorker(newWorkerCfg())
+	if err != nil {
+		t.Fatalf("new rabbitmq worker 2 failed: %v", err)
+	}
+	worker2.Register(taskType, func(_ context.Context, _ Task) error {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	if err := worker2.Start(); err != nil {
+		t.Fatalf("rabbitmq worker 2 start failed: %v", err)
+	}
+	defer worker2.Shutdown()
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for delayed task after worker restart")
+	}
+	if elapsed := time.Since(start); elapsed < delay-150*time.Millisecond {
+		t.Fatalf("expected delayed execution after about %s, got %s", delay, elapsed)
+	}
+}
+
+func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
+	if !integrationBackendEnabled("rabbitmq") {
+		t.Skip("rabbitmq integration backend not selected")
+	}
+	queueName := uniqueQueueName("rabbitmq-retry-restart")
+	taskType := "job:rabbitmq:retry-restart"
+	backoff := 1200 * time.Millisecond
+	firstAttempt := make(chan struct{}, 1)
+	done := make(chan struct{}, 1)
+	var calls atomic.Int32
+
+	newWorkerCfg := func() WorkerConfig {
+		return WorkerConfig{
+			Driver:       DriverRabbitMQ,
+			RabbitMQURL:  integrationRabbitMQ.url,
+			DefaultQueue: queueName,
+		}
+	}
+
+	worker, err := NewWorker(newWorkerCfg())
+	if err != nil {
+		t.Fatalf("new rabbitmq worker failed: %v", err)
+	}
+	worker.Register(taskType, func(_ context.Context, _ Task) error {
+		if calls.Add(1) == 1 {
+			select {
+			case firstAttempt <- struct{}{}:
+			default:
+			}
+			return errors.New("retry once")
+		}
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	if err := worker.Start(); err != nil {
+		t.Fatalf("rabbitmq worker start failed: %v", err)
+	}
+
+	q, err := New(newRabbitMQIntegrationConfig())
+	if err != nil {
+		t.Fatalf("new rabbitmq queue failed: %v", err)
+	}
+	defer q.Shutdown(context.Background())
+
+	task := NewTask(taskType).
+		Payload(hardeningPayload{ID: 2, Name: "retry-restart"}).
+		OnQueue(queueName).
+		Retry(1).
+		Backoff(backoff)
+	if err := q.Enqueue(context.Background(), task); err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+
+	select {
+	case <-firstAttempt:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for first retry attempt")
+	}
+	if err := worker.Shutdown(); err != nil {
+		t.Fatalf("rabbitmq worker shutdown failed: %v", err)
+	}
+
+	worker2, err := NewWorker(newWorkerCfg())
+	if err != nil {
+		t.Fatalf("new rabbitmq worker 2 failed: %v", err)
+	}
+	worker2.Register(taskType, func(_ context.Context, _ Task) error {
+		if calls.Add(1) == 1 {
+			return errors.New("retry once")
+		}
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	if err := worker2.Start(); err != nil {
+		t.Fatalf("rabbitmq worker 2 start failed: %v", err)
+	}
+	defer worker2.Shutdown()
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for retry completion after worker restart")
+	}
+	if got := calls.Load(); got < 2 {
+		t.Fatalf("expected at least 2 attempts, got %d", got)
+	}
+}
+
+func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
+	if !integrationBackendEnabled("rabbitmq") {
+		t.Skip("rabbitmq integration backend not selected")
+	}
+	queueName := uniqueQueueName("rabbitmq-delay-queue")
+	taskType := "job:rabbitmq:delay-queue"
+	delay := 2 * time.Second
+	start := time.Now()
+	done := make(chan struct{}, 1)
+
+	worker, err := NewWorker(WorkerConfig{
+		Driver:       DriverRabbitMQ,
+		RabbitMQURL:  integrationRabbitMQ.url,
+		DefaultQueue: queueName,
+	})
+	if err != nil {
+		t.Fatalf("new rabbitmq worker failed: %v", err)
+	}
+	worker.Register(taskType, func(_ context.Context, _ Task) error {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	if err := worker.Start(); err != nil {
+		t.Fatalf("rabbitmq worker start failed: %v", err)
+	}
+	defer worker.Shutdown()
+
+	q, err := New(newRabbitMQIntegrationConfig())
+	if err != nil {
+		t.Fatalf("new rabbitmq queue failed: %v", err)
+	}
+	defer q.Shutdown(context.Background())
+
+	task := NewTask(taskType).
+		Payload(hardeningPayload{ID: 3, Name: "delay-queue"}).
+		OnQueue(queueName).
+		Delay(delay)
+	if err := q.Enqueue(context.Background(), task); err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+
+	conn, err := amqp.Dial(integrationRabbitMQ.url)
+	if err != nil {
+		t.Fatalf("dial rabbitmq failed: %v", err)
+	}
+	defer conn.Close()
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("open rabbitmq channel failed: %v", err)
+	}
+	defer ch.Close()
+
+	delayQueue := fmt.Sprintf("%s.delay", queueName)
+	deadline := time.Now().Add(5 * time.Second)
+	sawBuffered := false
+	for time.Now().Before(deadline) {
+		info, inspectErr := ch.QueueInspect(delayQueue)
+		if inspectErr == nil && info.Messages > 0 {
+			sawBuffered = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !sawBuffered {
+		t.Fatalf("expected delay queue %q to contain buffered messages", delayQueue)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for delayed task processing")
+	}
+	if elapsed := time.Since(start); elapsed < delay-150*time.Millisecond {
+		t.Fatalf("expected delayed execution after about %s, got %s", delay, elapsed)
 	}
 }

@@ -1,0 +1,32 @@
+name: Soak Test
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  integration-soak:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Run integration soak hardening suite
+        env:
+          RUN_INTEGRATION: "1"
+          RUN_SOAK: "1"
+          INTEGRATION_BACKEND: ${{ matrix.backend }}
+        run: go test -tags integration ./... -run '^TestIntegrationHardening_AllBackends$'

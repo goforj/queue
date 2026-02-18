@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"strings"
@@ -312,6 +313,36 @@ func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
 	}
 	if scheduled.NextProcessAt.Before(start.Add(delay - time.Second)) {
 		t.Fatalf("expected next process time after delay, got %s", scheduled.NextProcessAt)
+	}
+}
+
+func TestRedisIntegration_DefaultTimeoutApplied(t *testing.T) {
+	if !integrationBackendEnabled("redis") {
+		t.Skip("redis integration backend not selected")
+	}
+	inspector := newRedisInspector(t)
+	q, err := New(Config{
+		Driver:    DriverRedis,
+		RedisAddr: integrationRedis.addr,
+	})
+	if err != nil {
+		t.Fatalf("new redis queue failed: %v", err)
+	}
+
+	queueName := uniqueQueueName("redis-default-timeout")
+	err = q.Enqueue(
+		context.Background(),
+		NewTask("job:default-timeout").
+			Payload([]byte("opts")).
+			OnQueue(queueName),
+	)
+	if err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+
+	pending := waitForPendingTask(t, inspector, queueName, 3*time.Second)
+	if pending.Timeout != redisDefaultTaskTimeout {
+		t.Fatalf("expected default timeout %s, got %s", redisDefaultTaskTimeout, pending.Timeout)
 	}
 }
 
@@ -962,7 +993,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			supportsDeterministicNoDupes: true,
 			supportsOrderingContract:     false,
 			supportsBrokerFault:          false,
-			supportsShutdownDelayRetry:   false,
+			supportsShutdownDelayRetry:   true,
 		},
 	}
 
@@ -1791,6 +1822,142 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		case <-time.After(15 * time.Second):
 			t.Fatalf("[payload_large_processed] large payload task was not processed")
 		}
+	})
+
+	t.Run("step_config_option_fuzz", func(t *testing.T) {
+		requireStepNoErr(t, "fuzz_worker_start", w.Start())
+
+		taskType := "job:hardening:fuzz:" + fx.name
+		var processed atomic.Int32
+		w.Register(taskType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			processed.Add(1)
+			return nil
+		})
+
+		seed := int64(1337 + len(fx.name)*97)
+		r := rand.New(rand.NewSource(seed))
+		expected := int32(0)
+		const cases = 80
+		for i := 0; i < cases; i++ {
+			task := NewTask(taskType).
+				Payload(hardeningPayload{ID: 10000 + i, Name: "fuzz"}).
+				OnQueue(fx.queueName)
+			if r.Intn(2) == 0 {
+				task = task.Delay(time.Duration(20+r.Intn(120)) * time.Millisecond)
+			}
+			if r.Intn(2) == 0 {
+				timeout := time.Duration(80+r.Intn(260)) * time.Millisecond
+				if fx.forceTimeout && timeout < time.Second {
+					timeout = 2 * time.Second
+				}
+				task = task.Timeout(timeout)
+			}
+			retrySet := false
+			if r.Intn(2) == 0 {
+				task = task.Retry(r.Intn(3))
+				retrySet = true
+			}
+			if retrySet && fx.supportsBackoff && r.Intn(2) == 0 {
+				task = task.Backoff(time.Duration(30+r.Intn(160)) * time.Millisecond)
+			}
+			if r.Intn(4) == 0 {
+				task = task.UniqueFor(time.Duration(1+r.Intn(2)) * time.Second)
+			}
+			if err := q.Enqueue(context.Background(), task); err != nil {
+				t.Fatalf("[fuzz_enqueue_case_%d] enqueue failed: %v", i, err)
+			}
+			expected++
+		}
+
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if processed.Load() == expected {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		requireStepTrue(t, "fuzz_all_processed", processed.Load() == expected, "processed=%d expected=%d", processed.Load(), expected)
+	})
+
+	t.Run("step_soak_mixed_load", func(t *testing.T) {
+		if os.Getenv("RUN_SOAK") != "1" {
+			t.Skip("set RUN_SOAK=1 to enable long-running soak step")
+		}
+		requireStepNoErr(t, "soak_worker_start", w.Start())
+
+		taskType := "job:hardening:soak:" + fx.name
+		var processed atomic.Int32
+		w.Register(taskType, func(_ context.Context, task Task) error {
+			var payload hardeningPayload
+			if err := task.Bind(&payload); err != nil {
+				return err
+			}
+			if payload.ID%7 == 0 {
+				time.Sleep(5 * time.Millisecond)
+			}
+			processed.Add(1)
+			return nil
+		})
+
+		const total = 1600
+		producers := 16
+		perProducer := total / producers
+		errCh := make(chan error, total)
+		var wg sync.WaitGroup
+		for p := 0; p < producers; p++ {
+			base := p * perProducer
+			wg.Add(1)
+			go func(startID int) {
+				defer wg.Done()
+				for i := 0; i < perProducer; i++ {
+					id := startID + i
+					task := NewTask(taskType).
+						Payload(hardeningPayload{ID: id, Name: "soak"}).
+						OnQueue(fx.queueName)
+					if id%5 == 0 {
+						task = task.Delay(30 * time.Millisecond)
+					}
+					if id%6 == 0 {
+						timeout := 250 * time.Millisecond
+						if fx.forceTimeout {
+							timeout = 2 * time.Second
+						}
+						task = task.Timeout(timeout)
+					}
+					if id%8 == 0 {
+						task = task.Retry(1)
+						if fx.supportsBackoff {
+							task = task.Backoff(80 * time.Millisecond)
+						}
+					}
+					if id%10 == 0 {
+						task = task.UniqueFor(1 * time.Second)
+					}
+					if err := q.Enqueue(context.Background(), task); err != nil {
+						errCh <- err
+						return
+					}
+				}
+			}(base)
+		}
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Fatalf("[soak_enqueue] enqueue failed: %v", err)
+		}
+
+		deadline := time.Now().Add(2 * time.Minute)
+		for time.Now().Before(deadline) {
+			if processed.Load() >= total {
+				break
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
+		requireStepTrue(t, "soak_processed", processed.Load() >= total, "processed=%d expected>=%d", processed.Load(), total)
 	})
 
 	t.Run("step_shutdown_idempotent", func(t *testing.T) {

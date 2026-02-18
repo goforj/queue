@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/hibiken/asynq"
 )
@@ -20,6 +21,8 @@ type redisQueue struct {
 	ownsClient bool
 	closeOnce  sync.Once
 }
+
+const redisDefaultTaskTimeout = 30 * time.Second
 
 func newRedisQueue(client redisEnqueueClient, ownsClient bool) Queue {
 	return &redisQueue{client: client, ownsClient: ownsClient}
@@ -69,6 +72,8 @@ func (d *redisQueue) Enqueue(_ context.Context, task Task) error {
 	asynqOpts = append(asynqOpts, asynq.Queue(parsed.queueName))
 	if parsed.timeout != nil {
 		asynqOpts = append(asynqOpts, asynq.Timeout(*parsed.timeout))
+	} else {
+		asynqOpts = append(asynqOpts, asynq.Timeout(redisDefaultTaskTimeout))
 	}
 	if parsed.maxRetry != nil {
 		asynqOpts = append(asynqOpts, asynq.MaxRetry(*parsed.maxRetry))
