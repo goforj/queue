@@ -707,6 +707,8 @@ type hardeningFixture struct {
 
 	supportsBackoff bool
 	forceTimeout    bool
+	supportsRestart bool
+	supportsPoisonRetry bool
 }
 
 type hardeningPayload struct {
@@ -742,6 +744,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 			},
 			supportsBackoff: false,
 			forceTimeout:    true,
+			supportsRestart: true,
+			supportsPoisonRetry: false,
 		},
 		{
 			name:      "mysql",
@@ -772,6 +776,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return w
 			},
 			supportsBackoff: true,
+			supportsRestart: false,
+			supportsPoisonRetry: true,
 		},
 		{
 			name:      "postgres",
@@ -802,6 +808,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return w
 			},
 			supportsBackoff: true,
+			supportsRestart: true,
+			supportsPoisonRetry: true,
 		},
 		{
 			name:      "sqlite",
@@ -823,6 +831,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return nil
 			},
 			supportsBackoff: true,
+			supportsRestart: true,
+			supportsPoisonRetry: true,
 		},
 		{
 			name:      "nats",
@@ -848,6 +858,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return w
 			},
 			supportsBackoff: true,
+			supportsRestart: false,
+			supportsPoisonRetry: true,
 		},
 		{
 			name:      "sqs",
@@ -880,6 +892,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return w
 			},
 			supportsBackoff: true,
+			supportsRestart: true,
+			supportsPoisonRetry: true,
 		},
 		{
 			name:      "rabbitmq",
@@ -906,6 +920,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				return w
 			},
 			supportsBackoff: true,
+			supportsRestart: true,
+			supportsPoisonRetry: true,
 		},
 	}
 
@@ -945,6 +961,8 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 					return w
 				}
 				fx.supportsBackoff = true
+				fx.supportsRestart = true
+				fx.supportsPoisonRetry = true
 			}
 
 			runIntegrationHardeningSuite(t, fx)
@@ -961,6 +979,10 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 
 	taskType := "job:hardening:" + fx.name
 	total := int32(40)
+	taskTimeout := 250 * time.Millisecond
+	if fx.forceTimeout {
+		taskTimeout = 2 * time.Second
+	}
 	var seen atomic.Int32
 	var expected atomic.Int32
 
@@ -995,10 +1017,10 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 					task = task.Delay(50 * time.Millisecond)
 				}
 				if i%4 == 0 {
-					task = task.Timeout(250 * time.Millisecond)
+					task = task.Timeout(taskTimeout)
 				}
 				if fx.forceTimeout && i%4 != 0 {
-					task = task.Timeout(250 * time.Millisecond)
+					task = task.Timeout(taskTimeout)
 				}
 				if fx.supportsBackoff && i%5 == 0 {
 					task = task.Retry(1).Backoff(20 * time.Millisecond)
@@ -1035,6 +1057,113 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			time.Sleep(20 * time.Millisecond)
 		}
 		requireStepTrue(t, "all_processed", seen.Load() == want, "processed=%d expected=%d", seen.Load(), want)
+	})
+
+	t.Run("step_poison_message_max_retry", func(t *testing.T) {
+		poisonType := "job:hardening:poison:" + fx.name
+		goodType := "job:hardening:poison-recovery:" + fx.name
+		var poisonCalls atomic.Int32
+		recoveryDone := make(chan struct{}, 1)
+
+		w.Register(poisonType, func(_ context.Context, _ Task) error {
+			poisonCalls.Add(1)
+			return errors.New("poison")
+		})
+		w.Register(goodType, func(_ context.Context, _ Task) error {
+			select {
+			case recoveryDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		poison := NewTask(poisonType).
+			Payload(hardeningPayload{ID: 9001, Name: "poison"}).
+			OnQueue(fx.queueName).
+			Retry(2)
+		if fx.forceTimeout {
+			poison = poison.Timeout(taskTimeout)
+		}
+		if fx.supportsBackoff {
+			poison = poison.Backoff(20 * time.Millisecond)
+		}
+		requireStepNoErr(t, "poison_enqueue", q.Enqueue(context.Background(), poison))
+
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if poisonCalls.Load() >= 3 {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		expectedPoisonCalls := int32(3)
+		if !fx.supportsPoisonRetry {
+			expectedPoisonCalls = 1
+		}
+		requireStepTrue(
+			t,
+			"poison_retry_limit",
+			poisonCalls.Load() == expectedPoisonCalls,
+			"calls=%d expected=%d",
+			poisonCalls.Load(),
+			expectedPoisonCalls,
+		)
+
+		good := NewTask(goodType).
+			Payload(hardeningPayload{ID: 9002, Name: "recovery"}).
+			OnQueue(fx.queueName)
+		requireStepNoErr(t, "poison_recovery_enqueue", q.Enqueue(context.Background(), good))
+
+		select {
+		case <-recoveryDone:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("[poison_recovery_processing] recovery task was not processed")
+		}
+	})
+
+	t.Run("step_worker_restart_recovery", func(t *testing.T) {
+		if !fx.supportsRestart {
+			t.Skip("backend does not provide deterministic restart durability in this runtime")
+		}
+		restartType := "job:hardening:restart:" + fx.name
+		done := make(chan struct{}, 1)
+
+		w.Register(restartType, func(_ context.Context, _ Task) error {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		task := NewTask(restartType).
+			Payload(hardeningPayload{ID: 9100, Name: "restart"}).
+			OnQueue(fx.queueName).
+			Delay(750 * time.Millisecond)
+		if fx.forceTimeout {
+			task = task.Timeout(taskTimeout)
+		}
+		if fx.supportsBackoff {
+			task = task.Retry(1).Backoff(250 * time.Millisecond)
+		}
+		requireStepNoErr(t, "restart_enqueue", q.Enqueue(context.Background(), task))
+
+		requireStepNoErr(t, "restart_shutdown_first_worker", w.Shutdown())
+		w = fx.newWorker(t)
+		w.Register(restartType, func(_ context.Context, _ Task) error {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		requireStepNoErr(t, "restart_start_second_worker", w.Start())
+
+		select {
+		case <-done:
+		case <-time.After(12 * time.Second):
+			t.Fatalf("[restart_recovery_processing] task did not recover after worker restart")
+		}
 	})
 
 	t.Run("step_shutdown_idempotent", func(t *testing.T) {
