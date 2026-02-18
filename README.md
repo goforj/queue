@@ -134,13 +134,13 @@ q, _ := queue.New(queue.Config{
 ## Task builder options
 
 | Method | Default | Behavior |
-|:--|:--|:--|
-| `OnQueue(name)` | Empty | Sets target queue name. For Redis/Database, enqueue requires an explicit queue. Sync/Workerpool do not use queue routing semantics. |
-| `Timeout(d)` | Unset | Applies per-task timeout. Workerpool may still apply `WorkerConfig.DefaultTaskTimeout` when task timeout is not set. |
-| `Retry(n)` | `0` | Sets max retries (attempts = `1 + n`). |
-| `Backoff(d)` | Unset | Wait duration between retries. Redis enqueue returns `ErrBackoffUnsupported`. |
-| `Delay(d)` | `0` | Schedules future execution; `0` means run immediately. |
-| `UniqueFor(ttl)` | `0` | Deduplicates by `Type + Payload` for the TTL window. |
+|--:|:--|:--|
+| **OnQueue(name)** | Empty | Sets target queue name. For Redis/Database, enqueue requires an explicit queue. Sync/Workerpool do not use queue routing semantics. |
+| **Timeout(d)** | Unset | Applies per-task timeout. Workerpool may still apply `WorkerConfig.DefaultTaskTimeout` when task timeout is not set. |
+| **Retry(n)** | `0` | Sets max retries (attempts = `1 + n`). |
+| **Backoff(d)** | Unset | Wait duration between retries. Redis enqueue returns `ErrBackoffUnsupported`. |
+| **Delay(d)** | `0` | Schedules future execution; `0` means run immediately. |
+| **UniqueFor(ttl)** | `0` | Deduplicates by `Type + Payload` for the TTL window. |
 
 ## How workers attach
 
