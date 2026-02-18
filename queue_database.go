@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// DatabaseConfig configures the SQL-backed database dispatcher.
+// DatabaseConfig configures the SQL-backed database q.
 // @group Config
 type DatabaseConfig struct {
 	DB           *sql.DB
@@ -50,7 +50,7 @@ func (c DatabaseConfig) normalize() DatabaseConfig {
 	return c
 }
 
-type databaseDispatcher struct {
+type databaseQueue struct {
 	cfg DatabaseConfig
 	db  *sql.DB
 
@@ -79,7 +79,7 @@ type dbJob struct {
 	attempt        int
 }
 
-func newDatabaseDispatcher(cfg DatabaseConfig) (Queue, error) {
+func newDatabaseQueue(cfg DatabaseConfig) (Queue, error) {
 	cfg = cfg.normalize()
 	if cfg.DB == nil {
 		if cfg.DriverName == "" {
@@ -95,7 +95,7 @@ func newDatabaseDispatcher(cfg DatabaseConfig) (Queue, error) {
 		cfg.DB = db
 	}
 
-	d := &databaseDispatcher{
+	d := &databaseQueue{
 		cfg:        cfg,
 		db:         cfg.DB,
 		handlers:   make(map[string]Handler),
@@ -111,11 +111,11 @@ func newDatabaseDispatcher(cfg DatabaseConfig) (Queue, error) {
 	return d, nil
 }
 
-func (d *databaseDispatcher) Driver() Driver {
+func (d *databaseQueue) Driver() Driver {
 	return DriverDatabase
 }
 
-func (d *databaseDispatcher) Register(taskType string, handler Handler) {
+func (d *databaseQueue) Register(taskType string, handler Handler) {
 	if taskType == "" || handler == nil {
 		return
 	}
@@ -124,7 +124,7 @@ func (d *databaseDispatcher) Register(taskType string, handler Handler) {
 	d.mu.Unlock()
 }
 
-func (d *databaseDispatcher) Start(ctx context.Context) error {
+func (d *databaseQueue) Start(ctx context.Context) error {
 	if d.started.Load() {
 		return nil
 	}
@@ -145,7 +145,7 @@ func (d *databaseDispatcher) Start(ctx context.Context) error {
 	return startErr
 }
 
-func (d *databaseDispatcher) Shutdown(ctx context.Context) error {
+func (d *databaseQueue) Shutdown(ctx context.Context) error {
 	d.shutdownOnce.Do(func() {
 		d.shuttingDown.Store(true)
 		close(d.shutdownCh)
@@ -159,7 +159,7 @@ func (d *databaseDispatcher) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *databaseDispatcher) Enqueue(ctx context.Context, task Task) error {
+func (d *databaseQueue) Enqueue(ctx context.Context, task Task) error {
 	if d.shuttingDown.Load() {
 		return ErrQueuerShuttingDown
 	}
@@ -239,14 +239,14 @@ func (d *databaseDispatcher) Enqueue(ctx context.Context, task Task) error {
 	return err
 }
 
-func (d *databaseDispatcher) lookup(taskType string) (Handler, bool) {
+func (d *databaseQueue) lookup(taskType string) (Handler, bool) {
 	d.mu.RLock()
 	handler, ok := d.handlers[taskType]
 	d.mu.RUnlock()
 	return handler, ok
 }
 
-func (d *databaseDispatcher) workerLoop() {
+func (d *databaseQueue) workerLoop() {
 	defer d.workerWG.Done()
 	for {
 		select {
@@ -268,7 +268,7 @@ func (d *databaseDispatcher) workerLoop() {
 	}
 }
 
-func (d *databaseDispatcher) processJob(job *dbJob) {
+func (d *databaseQueue) processJob(job *dbJob) {
 	handler, ok := d.lookup(job.taskType)
 	if !ok {
 		_ = d.markFailed(context.Background(), job, fmt.Errorf("no handler registered for task type %q", job.taskType))
@@ -288,7 +288,7 @@ func (d *databaseDispatcher) processJob(job *dbJob) {
 	_ = d.markFailed(context.Background(), job, err)
 }
 
-func (d *databaseDispatcher) claimOne(ctx context.Context) (*dbJob, error) {
+func (d *databaseQueue) claimOne(ctx context.Context) (*dbJob, error) {
 	now := time.Now().UnixMilli()
 	maxAttempts := 1
 	if d.usesOptimisticClaimLoop() {
@@ -327,7 +327,7 @@ func (d *databaseDispatcher) claimOne(ctx context.Context) (*dbJob, error) {
 	return nil, nil
 }
 
-func (d *databaseDispatcher) selectPendingJob(ctx context.Context, tx *sql.Tx, now int64) (*dbJob, error) {
+func (d *databaseQueue) selectPendingJob(ctx context.Context, tx *sql.Tx, now int64) (*dbJob, error) {
 	query := `SELECT id, queue_name, task_type, payload, timeout_seconds, max_retry, backoff_millis, attempt
 FROM queue_jobs
 WHERE state='pending' AND available_at <= ?
@@ -357,17 +357,17 @@ LIMIT 1`
 	return job, nil
 }
 
-func (d *databaseDispatcher) usesOptimisticClaimLoop() bool {
+func (d *databaseQueue) usesOptimisticClaimLoop() bool {
 	return d.cfg.DriverName == "sqlite"
 }
 
-func (d *databaseDispatcher) markDone(ctx context.Context, job *dbJob) error {
+func (d *databaseQueue) markDone(ctx context.Context, job *dbJob) error {
 	query := d.rebind(`DELETE FROM queue_jobs WHERE id=?`)
 	_, err := d.db.ExecContext(ctx, query, job.id)
 	return err
 }
 
-func (d *databaseDispatcher) markFailed(ctx context.Context, job *dbJob, runErr error) error {
+func (d *databaseQueue) markFailed(ctx context.Context, job *dbJob, runErr error) error {
 	nextAttempt := job.attempt + 1
 	now := time.Now().UnixMilli()
 	if nextAttempt > job.maxRetry {
@@ -386,7 +386,7 @@ WHERE id=?`)
 	return err
 }
 
-func (d *databaseDispatcher) acquireUnique(ctx context.Context, task Task, expiresAt time.Time) (bool, error) {
+func (d *databaseQueue) acquireUnique(ctx context.Context, task Task, expiresAt time.Time) (bool, error) {
 	now := time.Now().UnixMilli()
 	expiresAtMillis := expiresAt.UnixMilli()
 	key := uniqueTaskKey(task)
@@ -423,7 +423,7 @@ func isUniqueConstraintErr(err error) bool {
 		strings.Contains(msg, "unique violation")
 }
 
-func (d *databaseDispatcher) ensureSchema(ctx context.Context) error {
+func (d *databaseQueue) ensureSchema(ctx context.Context) error {
 	stmts := d.schemaStatements()
 	for _, stmt := range stmts {
 		if _, err := d.db.ExecContext(ctx, stmt); err != nil {
@@ -433,7 +433,7 @@ func (d *databaseDispatcher) ensureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (d *databaseDispatcher) schemaStatements() []string {
+func (d *databaseQueue) schemaStatements() []string {
 	switch d.cfg.DriverName {
 	case "pgx", "postgres":
 		return []string{
@@ -510,7 +510,7 @@ func (d *databaseDispatcher) schemaStatements() []string {
 	}
 }
 
-func (d *databaseDispatcher) rebind(query string) string {
+func (d *databaseQueue) rebind(query string) string {
 	if d.cfg.DriverName != "pgx" && d.cfg.DriverName != "postgres" {
 		return query
 	}

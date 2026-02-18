@@ -9,25 +9,25 @@ import (
 	"time"
 )
 
-func newSQLiteDispatcherForTest(t *testing.T) Queue {
+func newSQLiteQueueForTest(t *testing.T) Queue {
 	t.Helper()
 	dbPath := fmt.Sprintf("%s/queue-%d.db", t.TempDir(), time.Now().UnixNano())
-	dispatcher, err := NewQueue(QueueConfig{
+	q, err := New(Config{
 		Driver:         DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    dbPath,
 	})
 	if err != nil {
-		t.Fatalf("new database dispatcher failed: %v", err)
+		t.Fatalf("new database queue failed: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = dispatcher.Shutdown(context.Background())
+		_ = q.Shutdown(context.Background())
 	})
-	return dispatcher
+	return q
 }
 
-func TestDatabaseDispatcher_EnqueueAndProcess(t *testing.T) {
-	d := newSQLiteDispatcherForTest(t)
+func TestDatabaseQueue_EnqueueAndProcess(t *testing.T) {
+	d := newSQLiteQueueForTest(t)
 	triggered := make(chan struct{}, 1)
 	d.Register("job:db-basic", func(_ context.Context, _ Task) error {
 		triggered <- struct{}{}
@@ -36,7 +36,7 @@ func TestDatabaseDispatcher_EnqueueAndProcess(t *testing.T) {
 	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
-	if err := dispatch(d, "job:db-basic", []byte("hello")); err != nil {
+	if err := d.Enqueue(context.Background(), NewTask("job:db-basic").Payload([]byte("hello")).OnQueue("default")); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 	select {
@@ -46,24 +46,24 @@ func TestDatabaseDispatcher_EnqueueAndProcess(t *testing.T) {
 	}
 }
 
-func TestDatabaseDispatcher_Unique(t *testing.T) {
-	d := newSQLiteDispatcherForTest(t)
+func TestDatabaseQueue_Unique(t *testing.T) {
+	d := newSQLiteQueueForTest(t)
 	d.Register("job:db-unique", func(_ context.Context, _ Task) error { return nil })
 	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
 	taskType := "job:db-unique"
 	payload := []byte("same")
-	if err := dispatch(d, taskType, payload, WithUnique(300*time.Millisecond)); err != nil {
+	if err := d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); err != nil {
 		t.Fatalf("first enqueue failed: %v", err)
 	}
-	if err := dispatch(d, taskType, payload, WithUnique(300*time.Millisecond)); !errors.Is(err, ErrDuplicate) {
+	if err := d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
 }
 
-func TestDatabaseDispatcher_RetryWithBackoff(t *testing.T) {
-	d := newSQLiteDispatcherForTest(t)
+func TestDatabaseQueue_RetryWithBackoff(t *testing.T) {
+	d := newSQLiteQueueForTest(t)
 	triggered := make(chan struct{}, 1)
 	var calls atomic.Int64
 	d.Register("job:db-retry", func(_ context.Context, _ Task) error {
@@ -76,12 +76,7 @@ func TestDatabaseDispatcher_RetryWithBackoff(t *testing.T) {
 	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
-	if err := dispatch(d,
-		"job:db-retry",
-		nil,
-		WithMaxRetry(2),
-		WithBackoff(20*time.Millisecond),
-	); err != nil {
+	if err := d.Enqueue(context.Background(), NewTask("job:db-retry").OnQueue("default").Retry(2).Backoff(20*time.Millisecond)); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 	select {

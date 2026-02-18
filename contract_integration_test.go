@@ -8,22 +8,22 @@ import (
 	"time"
 )
 
-func TestDispatcherContract_Redis(t *testing.T) {
+func TestQueueContract_Redis(t *testing.T) {
 	if !integrationBackendEnabled("redis") {
 		t.Skip("redis integration backend not selected")
 	}
 
 	factory := contractFactory{
 		name: "redis",
-		newDispatcher: func(t *testing.T) Queue {
-			dispatcher, err := NewQueue(QueueConfig{
+		newQueue: func(t *testing.T) Queue {
+			q, err := New(Config{
 				Driver:    DriverRedis,
 				RedisAddr: integrationRedis.addr,
 			})
 			if err != nil {
-				t.Fatalf("new redis dispatcher failed: %v", err)
+				t.Fatalf("new redis queue failed: %v", err)
 			}
-			return dispatcher
+			return q
 		},
 		requiresRegisteredHandle: false,
 		assertMissingHandlerErr:  false,
@@ -31,10 +31,10 @@ func TestDispatcherContract_Redis(t *testing.T) {
 		uniqueTTL:                time.Second,
 		uniqueExpiryWait:         1200 * time.Millisecond,
 	}
-	runDispatcherContractSuite(t, factory)
+	runQueueContractSuite(t, factory)
 }
 
-func TestDispatcherContract_DatabaseMySQL(t *testing.T) {
+func TestQueueContract_DatabaseMySQL(t *testing.T) {
 	if !integrationBackendEnabled("mysql") {
 		t.Skip("mysql integration backend not selected")
 	}
@@ -46,16 +46,16 @@ func TestDispatcherContract_DatabaseMySQL(t *testing.T) {
 	}
 	factory := contractFactory{
 		name: "database-mysql",
-		newDispatcher: func(_ *testing.T) Queue {
-			dispatcher, err := NewQueue(QueueConfig{
+		newQueue: func(_ *testing.T) Queue {
+			q, err := New(Config{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
 			})
 			if err != nil {
-				t.Fatalf("new mysql dispatcher failed: %v", err)
+				t.Fatalf("new mysql q failed: %v", err)
 			}
-			return dispatcher
+			return q
 		},
 		requiresRegisteredHandle: true,
 		assertMissingHandlerErr:  true,
@@ -63,10 +63,10 @@ func TestDispatcherContract_DatabaseMySQL(t *testing.T) {
 			resetQueueTables(t, cfg)
 		},
 	}
-	runDispatcherContractSuite(t, factory)
+	runQueueContractSuite(t, factory)
 }
 
-func TestDispatcherContract_DatabasePostgres(t *testing.T) {
+func TestQueueContract_DatabasePostgres(t *testing.T) {
 	if !integrationBackendEnabled("postgres") {
 		t.Skip("postgres integration backend not selected")
 	}
@@ -78,16 +78,16 @@ func TestDispatcherContract_DatabasePostgres(t *testing.T) {
 	}
 	factory := contractFactory{
 		name: "database-postgres",
-		newDispatcher: func(_ *testing.T) Queue {
-			dispatcher, err := NewQueue(QueueConfig{
+		newQueue: func(_ *testing.T) Queue {
+			q, err := New(Config{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
 			})
 			if err != nil {
-				t.Fatalf("new postgres dispatcher failed: %v", err)
+				t.Fatalf("new postgres q failed: %v", err)
 			}
-			return dispatcher
+			return q
 		},
 		requiresRegisteredHandle: true,
 		assertMissingHandlerErr:  true,
@@ -95,34 +95,34 @@ func TestDispatcherContract_DatabasePostgres(t *testing.T) {
 			resetQueueTables(t, cfg)
 		},
 	}
-	runDispatcherContractSuite(t, factory)
+	runQueueContractSuite(t, factory)
 }
 
-func TestDispatcherContract_DatabaseSQLiteIntegration(t *testing.T) {
+func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 	if !integrationBackendEnabled("sqlite") {
 		t.Skip("sqlite integration backend not selected")
 	}
 	factory := contractFactory{
 		name: "database-sqlite",
-		newDispatcher: func(t *testing.T) Queue {
+		newQueue: func(t *testing.T) Queue {
 			cfg := DatabaseConfig{
 				DriverName:   "sqlite",
 				DSN:          fmt.Sprintf("%s/contract-integration-%d.db", t.TempDir(), time.Now().UnixNano()),
 				Workers:      1,
 				PollInterval: 10 * time.Millisecond,
 			}
-			dispatcher, err := NewQueue(QueueConfig{
+			q, err := New(Config{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
 			})
 			if err != nil {
-				t.Fatalf("new sqlite dispatcher failed: %v", err)
+				t.Fatalf("new sqlite q failed: %v", err)
 			}
-			return dispatcher
+			return q
 		},
 		requiresRegisteredHandle: true,
 		assertMissingHandlerErr:  true,
 	}
-	runDispatcherContractSuite(t, factory)
+	runQueueContractSuite(t, factory)
 }

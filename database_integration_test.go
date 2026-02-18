@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-func newDatabaseDispatcherIntegration(t *testing.T, cfg DatabaseConfig) Queue {
+func newDatabaseQueueIntegration(t *testing.T, cfg DatabaseConfig) Queue {
 	t.Helper()
-	dispatcher, err := NewQueue(QueueConfig{
+	q, err := New(Config{
 		Driver:         DriverDatabase,
 		Database:       cfg.DB,
 		DatabaseDriver: cfg.DriverName,
@@ -22,19 +22,19 @@ func newDatabaseDispatcherIntegration(t *testing.T, cfg DatabaseConfig) Queue {
 		DefaultQueue:   cfg.DefaultQueue,
 	})
 	if err != nil {
-		t.Fatalf("new database dispatcher failed: %v", err)
+		t.Fatalf("new database queue failed: %v", err)
 	}
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = dispatcher.Shutdown(shutdownCtx)
+		_ = q.Shutdown(shutdownCtx)
 	})
-	return dispatcher
+	return q
 }
 
 func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) {
 	t.Run(name+"_enqueue_and_process", func(t *testing.T) {
-		d := newDatabaseDispatcherIntegration(t, cfg)
+		d := newDatabaseQueueIntegration(t, cfg)
 		triggered := make(chan struct{}, 1)
 		d.Register("job:db:basic", func(_ context.Context, _ Task) error {
 			triggered <- struct{}{}
@@ -44,7 +44,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := dispatch(d, "job:db:basic", []byte("hello")); err != nil {
+		if err := d.Enqueue(context.Background(), NewTask("job:db:basic").Payload([]byte("hello")).OnQueue("default")); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {
@@ -56,7 +56,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 	})
 
 	t.Run(name+"_delay", func(t *testing.T) {
-		d := newDatabaseDispatcherIntegration(t, cfg)
+		d := newDatabaseQueueIntegration(t, cfg)
 		triggered := make(chan time.Time, 1)
 		d.Register("job:db:delay", func(_ context.Context, _ Task) error {
 			triggered <- time.Now()
@@ -68,7 +68,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 		resetQueueTables(t, cfg)
 		start := time.Now()
 		delay := 300 * time.Millisecond
-		if err := dispatch(d, "job:db:delay", nil, WithDelay(delay)); err != nil {
+		if err := d.Enqueue(context.Background(), NewTask("job:db:delay").OnQueue("default").Delay(delay)); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {
@@ -83,7 +83,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 	})
 
 	t.Run(name+"_unique", func(t *testing.T) {
-		d := newDatabaseDispatcherIntegration(t, cfg)
+		d := newDatabaseQueueIntegration(t, cfg)
 		d.Register("job:db:unique", func(_ context.Context, _ Task) error { return nil })
 		if err := d.Start(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
@@ -91,18 +91,18 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 		resetQueueTables(t, cfg)
 		taskType := "job:db:unique"
 		payload := []byte("same")
-		err := dispatch(d, taskType, payload, WithUnique(500*time.Millisecond))
+		err := d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
 		if err != nil {
 			t.Fatalf("first enqueue failed: %v", err)
 		}
-		err = dispatch(d, taskType, payload, WithUnique(500*time.Millisecond))
+		err = d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
 		if !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
 	})
 
 	t.Run(name+"_retry_backoff", func(t *testing.T) {
-		d := newDatabaseDispatcherIntegration(t, cfg)
+		d := newDatabaseQueueIntegration(t, cfg)
 		triggered := make(chan struct{}, 1)
 		var calls atomic.Int64
 		d.Register("job:db:retry", func(_ context.Context, _ Task) error {
@@ -116,7 +116,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := dispatch(d, "job:db:retry", nil, WithMaxRetry(2), WithBackoff(50*time.Millisecond)); err != nil {
+		if err := d.Enqueue(context.Background(), NewTask("job:db:retry").OnQueue("default").Retry(2).Backoff(50*time.Millisecond)); err != nil {
 			t.Fatalf("enqueue failed: %v", err)
 		}
 		select {

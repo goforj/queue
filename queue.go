@@ -23,7 +23,7 @@ type Queue interface {
 	Shutdown(ctx context.Context) error
 }
 
-// WorkerpoolConfig configures the in-memory workerpool dispatcher.
+// WorkerpoolConfig configures the in-memory workerpool q.
 // @group Config
 type WorkerpoolConfig struct {
 	Workers            int
@@ -44,9 +44,9 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 	return c
 }
 
-// QueueConfig configures queuer creation for NewQueue.
+// Config configures queue runtime creation for New.
 // @group Config
-type QueueConfig struct {
+type Config struct {
 	Driver Driver
 
 	DefaultQueue string
@@ -61,10 +61,10 @@ type QueueConfig struct {
 }
 
 func newSyncQueue() Queue {
-	return newLocalDispatcherWithConfig(DriverSync, WorkerpoolConfig{})
+	return newLocalQueueWithConfig(DriverSync, WorkerpoolConfig{})
 }
 
-func (cfg QueueConfig) databaseConfig() DatabaseConfig {
+func (cfg Config) databaseConfig() DatabaseConfig {
 	return DatabaseConfig{
 		DB:           cfg.Database,
 		DriverName:   cfg.DatabaseDriver,
@@ -73,12 +73,12 @@ func (cfg QueueConfig) databaseConfig() DatabaseConfig {
 	}
 }
 
-// NewQueue creates a queue based on QueueConfig.Driver.
+// New creates a queue based on Config.Driver.
 // @group Constructors
 //
 // Example: new queue from config
 //
-//	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+//	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -86,19 +86,19 @@ func (cfg QueueConfig) databaseConfig() DatabaseConfig {
 //		return nil
 //	})
 //	_ = q.Enqueue(context.Background(), queue.NewTask("emails:send").Payload([]byte(`{"id":1}`)))
-func NewQueue(cfg QueueConfig) (Queue, error) {
+func New(cfg Config) (Queue, error) {
 	switch cfg.Driver {
 	case DriverSync:
 		return newSyncQueue(), nil
 	case DriverWorkerpool:
-		return newLocalDispatcherWithConfig(DriverWorkerpool, WorkerpoolConfig{}), nil
+		return newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{}), nil
 	case DriverRedis:
 		if cfg.RedisAddr == "" {
 			return nil, fmt.Errorf("redis addr is required")
 		}
-		return newRedisDispatcher(newAsynqClient(cfg), true), nil
+		return newRedisQueue(newAsynqClient(cfg), true), nil
 	case DriverDatabase:
-		return newDatabaseDispatcher(cfg.databaseConfig())
+		return newDatabaseQueue(cfg.databaseConfig())
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}

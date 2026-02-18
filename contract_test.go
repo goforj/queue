@@ -17,7 +17,7 @@ import (
 
 type contractFactory struct {
 	name                     string
-	newDispatcher            func(t *testing.T) Queue
+	newQueue                 func(t *testing.T) Queue
 	requiresRegisteredHandle bool
 	assertMissingHandlerErr  bool
 	backoffUnsupported       bool
@@ -26,11 +26,11 @@ type contractFactory struct {
 	beforeEach               func(t *testing.T)
 }
 
-func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
+func runQueueContractSuite(t *testing.T, factory contractFactory) {
 	t.Helper()
 
 	t.Run("lifecycle_start_shutdown", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if err := d.Start(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
@@ -44,7 +44,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("enqueue_immediate", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			d.Register("job:contract:immediate", func(_ context.Context, _ Task) error { return nil })
@@ -62,7 +62,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("enqueue_delayed", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			d.Register("job:contract:delay", func(_ context.Context, _ Task) error { return nil })
@@ -80,7 +80,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("enqueue_with_queue", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			d.Register("job:contract:queue", func(_ context.Context, _ Task) error { return nil })
@@ -98,7 +98,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("enqueue_with_timeout", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		timeoutChecked := make(chan bool, 1)
 		if factory.requiresRegisteredHandle {
@@ -131,7 +131,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("enqueue_with_max_retry", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		var calls atomic.Int32
 		done := make(chan struct{}, 1)
@@ -167,7 +167,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("enqueue_with_backoff_behavior", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		start := time.Now()
 		done := make(chan time.Duration, 1)
@@ -213,7 +213,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("unique_duplicate_and_ttl_expiry", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			d.Register("job:contract:unique", func(_ context.Context, _ Task) error { return nil })
@@ -250,7 +250,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("missing_task_type", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		err := d.Enqueue(context.Background(), NewTask("").OnQueue("default"))
 		if err == nil {
@@ -259,7 +259,7 @@ func runDispatcherContractSuite(t *testing.T, factory contractFactory) {
 	})
 
 	t.Run("missing_handler", func(t *testing.T) {
-		d := factory.newDispatcher(t)
+		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if err := d.Start(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
@@ -334,46 +334,46 @@ func declaredDriversFromSource(t *testing.T) []Driver {
 	return out
 }
 
-func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
+func TestQueueContract_LocalAndSQLite(t *testing.T) {
 	factories := []contractFactory{
 		{
 			name: "sync",
-			newDispatcher: func(_ *testing.T) Queue {
-				dispatcher, err := NewQueue(QueueConfig{Driver: DriverSync})
+			newQueue: func(_ *testing.T) Queue {
+				q, err := New(Config{Driver: DriverSync})
 				if err != nil {
-					t.Fatalf("new sync dispatcher failed: %v", err)
+					t.Fatalf("new sync q failed: %v", err)
 				}
-				return dispatcher
+				return q
 			},
 			requiresRegisteredHandle: true,
 			assertMissingHandlerErr:  true,
 		},
 		{
 			name: "workerpool",
-			newDispatcher: func(_ *testing.T) Queue {
-				dispatcher, err := NewQueue(QueueConfig{
+			newQueue: func(_ *testing.T) Queue {
+				q, err := New(Config{
 					Driver: DriverWorkerpool,
 				})
 				if err != nil {
-					t.Fatalf("new workerpool dispatcher failed: %v", err)
+					t.Fatalf("new workerpool q failed: %v", err)
 				}
-				return dispatcher
+				return q
 			},
 			requiresRegisteredHandle: true,
 			assertMissingHandlerErr:  true,
 		},
 		{
 			name: "database-sqlite",
-			newDispatcher: func(t *testing.T) Queue {
-				dispatcher, err := NewQueue(QueueConfig{
+			newQueue: func(t *testing.T) Queue {
+				q, err := New(Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "sqlite",
 					DatabaseDSN:    fmt.Sprintf("%s/contract-%d.db", t.TempDir(), time.Now().UnixNano()),
 				})
 				if err != nil {
-					t.Fatalf("new sqlite dispatcher failed: %v", err)
+					t.Fatalf("new sqlite q failed: %v", err)
 				}
-				return dispatcher
+				return q
 			},
 			requiresRegisteredHandle: true,
 			assertMissingHandlerErr:  true,
@@ -384,14 +384,14 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		factory := factory
 		t.Run(factory.name, func(t *testing.T) {
 			contractFactory := factory
-			contractFactory.newDispatcher = func(t *testing.T) Queue {
-				d := factory.newDispatcher(t)
+			contractFactory.newQueue = func(t *testing.T) Queue {
+				d := factory.newQueue(t)
 				t.Cleanup(func() {
 					_ = d.Shutdown(context.Background())
 				})
 				return d
 			}
-			runDispatcherContractSuite(t, contractFactory)
+			runQueueContractSuite(t, contractFactory)
 		})
 	}
 }

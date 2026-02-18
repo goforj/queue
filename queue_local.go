@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type localDispatcher struct {
+type localQueue struct {
 	driver       Driver
 	cfg          WorkerpoolConfig
 	mu           sync.RWMutex
@@ -37,27 +37,27 @@ type queuedTask struct {
 	opts taskOptions
 }
 
-func newLocalDispatcher(driver Driver) *localDispatcher {
-	return newLocalDispatcherWithConfig(driver, WorkerpoolConfig{})
+func newLocalQueue(driver Driver) *localQueue {
+	return newLocalQueueWithConfig(driver, WorkerpoolConfig{})
 }
 
-func newLocalDispatcherWithConfig(driver Driver, cfg WorkerpoolConfig) *localDispatcher {
-	dispatcher := &localDispatcher{
+func newLocalQueueWithConfig(driver Driver, cfg WorkerpoolConfig) *localQueue {
+	q := &localQueue{
 		driver:     driver,
 		cfg:        cfg.normalize(),
 		handlers:   make(map[string]Handler),
 		unique:     make(map[string]time.Time),
 		shutdownCh: make(chan struct{}),
 	}
-	return dispatcher
+	return q
 }
 
-// Driver returns the local dispatcher's driver mode.
+// Driver returns the local queue runtime's driver mode.
 // @group Queue
 //
 // Example: local driver
 //
-//	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+//	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -67,21 +67,21 @@ func newLocalDispatcherWithConfig(driver Driver, cfg WorkerpoolConfig) *localDis
 //	}
 //	fmt.Println(driverAware.Driver())
 //	// Output: sync
-func (d *localDispatcher) Driver() Driver {
+func (d *localQueue) Driver() Driver {
 	return d.driver
 }
 
-// Register adds a task handler to the local dispatcher.
+// Register adds a task handler to the local queue runtime.
 // @group Queue
 //
 // Example: local register
 //
-//	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+//	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
-//	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
-func (d *localDispatcher) Register(taskType string, handler Handler) {
+//	q.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
+func (d *localQueue) Register(taskType string, handler Handler) {
 	if taskType == "" || handler == nil {
 		return
 	}
@@ -95,14 +95,14 @@ func (d *localDispatcher) Register(taskType string, handler Handler) {
 //
 // Example: local start
 //
-//	dispatcher, err := queue.NewQueue(queue.QueueConfig{
+//	q, err := queue.New(queue.Config{
 //		Driver: queue.DriverWorkerpool,
 //	})
 //	if err != nil {
 //		return
 //	}
-//	_ = dispatcher.Start(context.Background())
-func (d *localDispatcher) Start(_ context.Context) error {
+//	_ = q.Start(context.Background())
+func (d *localQueue) Start(_ context.Context) error {
 	if d.driver != DriverWorkerpool {
 		return nil
 	}
@@ -115,15 +115,15 @@ func (d *localDispatcher) Start(_ context.Context) error {
 //
 // Example: local shutdown
 //
-//	dispatcher, err := queue.NewQueue(queue.QueueConfig{
+//	q, err := queue.New(queue.Config{
 //		Driver: queue.DriverWorkerpool,
 //	})
 //	if err != nil {
 //		return
 //	}
-//	_ = dispatcher.Start(context.Background())
-//	_ = dispatcher.Shutdown(context.Background())
-func (d *localDispatcher) Shutdown(ctx context.Context) error {
+//	_ = q.Start(context.Background())
+//	_ = q.Shutdown(context.Background())
+func (d *localQueue) Shutdown(ctx context.Context) error {
 	if d.driver != DriverWorkerpool {
 		return nil
 	}
@@ -155,14 +155,14 @@ func (d *localDispatcher) Shutdown(ctx context.Context) error {
 //
 // Example: local enqueue
 //
-//	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+//	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
 //	q.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
 //	task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`)).Delay(10 * time.Millisecond)
 //	_ = q.Enqueue(context.Background(), task)
-func (d *localDispatcher) Enqueue(ctx context.Context, task Task) error {
+func (d *localQueue) Enqueue(ctx context.Context, task Task) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
@@ -195,7 +195,7 @@ func (d *localDispatcher) Enqueue(ctx context.Context, task Task) error {
 	return nil
 }
 
-func (d *localDispatcher) enqueueNow(ctx context.Context, task Task, parsed taskOptions) error {
+func (d *localQueue) enqueueNow(ctx context.Context, task Task, parsed taskOptions) error {
 	if _, ok := d.lookup(task.Type); !ok {
 		return fmt.Errorf("no handler registered for task type %q", task.Type)
 	}
@@ -205,7 +205,7 @@ func (d *localDispatcher) enqueueNow(ctx context.Context, task Task, parsed task
 	return d.runWithRetry(ctx, task, parsed)
 }
 
-func (d *localDispatcher) enqueueAsync(ctx context.Context, task Task, parsed taskOptions) error {
+func (d *localQueue) enqueueAsync(ctx context.Context, task Task, parsed taskOptions) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
@@ -225,7 +225,7 @@ func (d *localDispatcher) enqueueAsync(ctx context.Context, task Task, parsed ta
 	}
 }
 
-func (d *localDispatcher) workerQueueForEnqueue() (chan queuedTask, error) {
+func (d *localQueue) workerQueueForEnqueue() (chan queuedTask, error) {
 	d.queueMu.RLock()
 	workQueue := d.workQueue
 	d.queueMu.RUnlock()
@@ -234,7 +234,7 @@ func (d *localDispatcher) workerQueueForEnqueue() (chan queuedTask, error) {
 	}
 
 	// Self-heal: if the in-memory worker queue is unexpectedly nil while the
-	// queuer is active, rebuild workers so dispatch can continue.
+	// the queue runtime is active, rebuild workers so dispatch can continue.
 	d.queueMu.Lock()
 	defer d.queueMu.Unlock()
 	if d.workQueue != nil {
@@ -250,13 +250,13 @@ func (d *localDispatcher) workerQueueForEnqueue() (chan queuedTask, error) {
 	return d.workQueue, nil
 }
 
-func (d *localDispatcher) startMemoryWorkers() {
+func (d *localQueue) startMemoryWorkers() {
 	d.queueMu.Lock()
 	defer d.queueMu.Unlock()
 	d.startMemoryWorkersLocked()
 }
 
-func (d *localDispatcher) startMemoryWorkersLocked() {
+func (d *localQueue) startMemoryWorkersLocked() {
 	if d.workQueue != nil {
 		return
 	}
@@ -270,7 +270,7 @@ func (d *localDispatcher) startMemoryWorkersLocked() {
 	}
 }
 
-func (d *localDispatcher) worker(workQueue <-chan queuedTask) {
+func (d *localQueue) worker(workQueue <-chan queuedTask) {
 	defer d.workerWG.Done()
 	taskTimeout := d.cfg.DefaultTaskTimeout
 	for job := range workQueue {
@@ -291,7 +291,7 @@ func (d *localDispatcher) worker(workQueue <-chan queuedTask) {
 	}
 }
 
-func (d *localDispatcher) run(ctx context.Context, task Task) error {
+func (d *localQueue) run(ctx context.Context, task Task) error {
 	handler, ok := d.lookup(task.Type)
 	if !ok {
 		return fmt.Errorf("no handler registered for task type %q", task.Type)
@@ -299,7 +299,7 @@ func (d *localDispatcher) run(ctx context.Context, task Task) error {
 	return handler(ctx, task)
 }
 
-func (d *localDispatcher) runWithRetry(ctx context.Context, task Task, parsed taskOptions) error {
+func (d *localQueue) runWithRetry(ctx context.Context, task Task, parsed taskOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -335,14 +335,14 @@ func (d *localDispatcher) runWithRetry(ctx context.Context, task Task, parsed ta
 	return lastErr
 }
 
-func (d *localDispatcher) lookup(taskType string) (Handler, bool) {
+func (d *localQueue) lookup(taskType string) (Handler, bool) {
 	d.mu.RLock()
 	handler, ok := d.handlers[taskType]
 	d.mu.RUnlock()
 	return handler, ok
 }
 
-func (d *localDispatcher) claimUnique(task Task, ttl time.Duration) bool {
+func (d *localQueue) claimUnique(task Task, ttl time.Duration) bool {
 	now := time.Now()
 	key := task.Type + ":" + string(task.PayloadBytes())
 
@@ -388,7 +388,7 @@ func allowEnqueueDuringShutdown(ctx context.Context) bool {
 	return allowed
 }
 
-func (d *localDispatcher) shutdownStats() string {
+func (d *localQueue) shutdownStats() string {
 	d.queueMu.RLock()
 	queued := 0
 	capacity := 0

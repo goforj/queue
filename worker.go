@@ -71,10 +71,10 @@ type WorkerConfig struct {
 func NewWorker(cfg WorkerConfig) (Worker, error) {
 	switch cfg.Driver {
 	case DriverSync:
-		return &dispatcherWorkerAdapter{dispatcher: newSyncQueue(), driver: DriverSync}, nil
+		return &queueWorkerAdapter{q: newSyncQueue(), driver: DriverSync}, nil
 	case DriverWorkerpool:
-		return &dispatcherWorkerAdapter{
-			dispatcher: newLocalDispatcherWithConfig(DriverWorkerpool, WorkerpoolConfig{
+		return &queueWorkerAdapter{
+			q: newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{
 				Workers:            cfg.Workers,
 				QueueCapacity:      cfg.QueueCapacity,
 				DefaultTaskTimeout: cfg.DefaultTaskTimeout,
@@ -86,7 +86,7 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 		if !autoMigrate {
 			autoMigrate = true
 		}
-		d, err := newDatabaseDispatcher(DatabaseConfig{
+		d, err := newDatabaseQueue(DatabaseConfig{
 			DB:           cfg.Database,
 			DriverName:   cfg.DatabaseDriver,
 			DSN:          cfg.DatabaseDSN,
@@ -98,7 +98,7 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &dispatcherWorkerAdapter{dispatcher: d, driver: DriverDatabase}, nil
+		return &queueWorkerAdapter{q: d, driver: DriverDatabase}, nil
 	case DriverRedis:
 		if cfg.RedisAddr == "" {
 			return nil, fmt.Errorf("redis addr is required")
@@ -123,23 +123,23 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 	}
 }
 
-type dispatcherWorkerAdapter struct {
-	dispatcher Queue
-	driver     Driver
+type queueWorkerAdapter struct {
+	q      Queue
+	driver Driver
 }
 
-func (w *dispatcherWorkerAdapter) Driver() Driver {
+func (w *queueWorkerAdapter) Driver() Driver {
 	return w.driver
 }
 
-func (w *dispatcherWorkerAdapter) Register(taskType string, handler Handler) {
-	w.dispatcher.Register(taskType, handler)
+func (w *queueWorkerAdapter) Register(taskType string, handler Handler) {
+	w.q.Register(taskType, handler)
 }
 
-func (w *dispatcherWorkerAdapter) Start() error {
-	return w.dispatcher.Start(nil)
+func (w *queueWorkerAdapter) Start() error {
+	return w.q.Start(nil)
 }
 
-func (w *dispatcherWorkerAdapter) Shutdown() error {
-	return w.dispatcher.Shutdown(nil)
+func (w *queueWorkerAdapter) Shutdown() error {
+	return w.q.Shutdown(nil)
 }

@@ -14,18 +14,18 @@ type redisEnqueueClient interface {
 	Close() error
 }
 
-type redisDispatcher struct {
+type redisQueue struct {
 	client redisEnqueueClient
 
 	ownsClient bool
 	closeOnce  sync.Once
 }
 
-func newRedisDispatcher(client redisEnqueueClient, ownsClient bool) Queue {
-	return &redisDispatcher{client: client, ownsClient: ownsClient}
+func newRedisQueue(client redisEnqueueClient, ownsClient bool) Queue {
+	return &redisQueue{client: client, ownsClient: ownsClient}
 }
 
-func newAsynqClient(cfg QueueConfig) redisEnqueueClient {
+func newAsynqClient(cfg Config) redisEnqueueClient {
 	return asynq.NewClient(asynq.RedisClientOpt{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,
@@ -33,19 +33,19 @@ func newAsynqClient(cfg QueueConfig) redisEnqueueClient {
 	})
 }
 
-func (d *redisDispatcher) Driver() Driver {
+func (d *redisQueue) Driver() Driver {
 	return DriverRedis
 }
 
-func (d *redisDispatcher) Register(_ string, _ Handler) {
-	// No-op for redis dispatcher; workers register handlers on server mux.
+func (d *redisQueue) Register(_ string, _ Handler) {
+	// No-op for redis queue runtime; workers register handlers on server mux.
 }
 
-func (d *redisDispatcher) Start(_ context.Context) error {
+func (d *redisQueue) Start(_ context.Context) error {
 	return nil
 }
 
-func (d *redisDispatcher) Shutdown(_ context.Context) error {
+func (d *redisQueue) Shutdown(_ context.Context) error {
 	if d.ownsClient && d.client != nil {
 		d.closeOnce.Do(func() {
 			_ = d.client.Close()
@@ -54,7 +54,7 @@ func (d *redisDispatcher) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (d *redisDispatcher) Enqueue(_ context.Context, task Task) error {
+func (d *redisQueue) Enqueue(_ context.Context, task Task) error {
 	if d.client == nil {
 		return fmt.Errorf("queue client unavailable for redis driver")
 	}

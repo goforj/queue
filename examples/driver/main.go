@@ -9,10 +9,10 @@ import (
 )
 
 func main() {
-	// Driver returns the local dispatcher's driver mode.
+	// Driver returns the local queue runtime's driver mode.
 
 	// Example: local driver
-	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

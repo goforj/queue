@@ -9,12 +9,12 @@ import (
 )
 
 func main() {
-	// Register adds a task handler to the local dispatcher.
+	// Register adds a task handler to the local queue runtime.
 
 	// Example: local register
-	dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}
-	dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
+	q.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
 }

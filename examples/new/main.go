@@ -9,10 +9,10 @@ import (
 )
 
 func main() {
-	// NewQueue creates a queue based on QueueConfig.Driver.
+	// New creates a queue based on Config.Driver.
 
 	// Example: new queue from config
-	q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

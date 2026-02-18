@@ -20,7 +20,7 @@
 
 ## What queue is
 
-queue is a backend-agnostic job dispatcher. Your application code only depends on `queue.Dispatcher`, `queue.Task`, and fluent enqueue options. The driver decides whether work runs via Redis/Asynq, a SQL table, an in-process worker pool, or synchronously in the caller.
+queue is a backend-agnostic job queue runtime. Your application code depends on `queue.Queue` and fluent `queue.Task` values. The driver decides whether work runs via Redis/Asynq, a SQL table, an in-process worker pool, or synchronously in the caller.
 
 ## Drivers
 
@@ -36,7 +36,7 @@ queue is a backend-agnostic job dispatcher. Your application code only depends o
 ### Workerpool (in-process async)
 - Runs tasks on background goroutines with a bounded channel.
 - Call `Start` once per process and `Shutdown` on exit to drain work.
-- Honors `WithDelay`, `WithTimeout`, `WithMaxRetry`, `WithBackoff`, and `WithUnique`.
+- Honors task metadata such as `Delay`, `Timeout`, `Retry`, `Backoff`, and `UniqueFor`.
 
 ### Sync (in-process inline)
 - Executes handlers immediately in the caller goroutine.
@@ -59,56 +59,55 @@ import (
 )
 
 func main() {
-    dispatcher, _ := queue.NewDispatcher(queue.DispatcherConfig{
+    q, _ := queue.New(queue.Config{
         Driver: queue.DriverWorkerpool,
     })
 
-    dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-        return sendEmail(ctx, task.Payload)
+    q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+        return sendEmail(ctx, task.PayloadBytes())
     })
 
-    _ = dispatcher.Start(context.Background())
-    defer dispatcher.Shutdown(context.Background())
+    _ = q.Start(context.Background())
+    defer q.Shutdown(context.Background())
 
-    _ = dispatcher.Enqueue(context.Background(), queue.Task{
-        Type:    "emails:send",
-        Payload: []byte("hello"),
-    },
-        queue.WithQueue("critical"),
-        queue.WithDelay(5*time.Second),
-        queue.WithTimeout(20*time.Second),
-        queue.WithMaxRetry(3),
-    )
+    task := queue.NewTask("emails:send").
+        Payload(map[string]any{"id": 123, "to": "user@example.com"}).
+        OnQueue("critical").
+        Delay(5*time.Second).
+        Timeout(20*time.Second).
+        Retry(3)
+
+    _ = q.Enqueue(context.Background(), task)
 }
 ```
 
 Switch to Redis without changing job code:
 
 ```go
-dispatcher, _ := queue.NewDispatcher(queue.DispatcherConfig{
+q, _ := queue.New(queue.Config{
     Driver: queue.DriverRedis,
     RedisAddr: "127.0.0.1:6379",
 })
 ```
 
-Use SQL for durable local queues:
+Use SQL for durable local queue runtimeueues:
 
 ```go
-dispatcher, _ := queue.NewDispatcher(queue.DispatcherConfig{
+q, _ := queue.New(queue.Config{
     Driver: queue.DriverDatabase,
     DatabaseDriver: "sqlite",
     DatabaseDSN: "file:queue.db?_busy_timeout=5000",
 })
 ```
 
-## Enqueue options
+## Task builder options
 
-- `WithQueue(name)` sets a queue name (Redis: Asynq queue; Database: column; Workerpool/Sync: in-memory grouping).
-- `WithTimeout(d)` applies a per-task timeout; respected by all drivers.
-- `WithMaxRetry(n)` sets max retries (attempts = 1 + n).
-- `WithBackoff(d)` waits between retries; unsupported on Redis dispatcher (returns `ErrBackoffUnsupported`).
-- `WithDelay(d)` schedules future execution.
-- `WithUnique(ttl)` deduplicates by `Type + Payload` for the TTL window.
+- `OnQueue(name)` sets the queue name for the task.
+- `Timeout(d)` applies a per-task timeout.
+- `Retry(n)` sets max retries (attempts = 1 + n).
+- `Backoff(d)` waits between retries (Redis enqueue returns `ErrBackoffUnsupported`).
+- `Delay(d)` schedules future execution.
+- `UniqueFor(ttl)` deduplicates by `Type + Payload` for the TTL window.
 
 ## How workers attach
 
@@ -117,26 +116,26 @@ dispatcher, _ := queue.NewDispatcher(queue.DispatcherConfig{
 No separate worker exists. The handler runs inline during `Enqueue`.
 
 ```go
-dispatcher, _ := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
-dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.Payload)
+q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
 })
-_ = dispatcher.Enqueue(context.Background(), queue.Task{Type: "emails:send"})
+_ = q.Enqueue(context.Background(), queue.NewTask("emails:send").Payload([]byte("hello")).OnQueue("default"))
 ```
 
 ### Workerpool driver
 
-The worker is in-process. Attach by registering handlers and starting the dispatcher.
+The worker is in-process. Attach by registering handlers and starting the queue runtime.
 
 ```go
-dispatcher, _ := queue.NewDispatcher(queue.DispatcherConfig{
+q, _ := queue.New(queue.Config{
     Driver: queue.DriverWorkerpool,
 })
-dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.Payload)
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
 })
-_ = dispatcher.Start(context.Background())
-defer dispatcher.Shutdown(context.Background())
+_ = q.Start(context.Background())
+defer q.Shutdown(context.Background())
 ```
 
 ### Database driver
@@ -144,16 +143,16 @@ defer dispatcher.Shutdown(context.Background())
 Same attachment model as workerpool, but jobs are durable in SQL.
 
 ```go
-dispatcher, _ := queue.NewDispatcher(queue.DispatcherConfig{
+q, _ := queue.New(queue.Config{
     Driver: queue.DriverDatabase,
     DatabaseDriver: "sqlite",
     DatabaseDSN: "file:queue.db?_busy_timeout=5000",
 })
-dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.Payload)
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
 })
-_ = dispatcher.Start(context.Background())
-defer dispatcher.Shutdown(context.Background())
+_ = q.Start(context.Background())
+defer q.Shutdown(context.Background())
 ```
 
 ### Redis driver
@@ -167,7 +166,7 @@ worker, _ := queue.NewWorker(queue.WorkerConfig{
     Workers: 10,
 })
 worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.Payload)
+    return sendEmail(ctx, task.PayloadBytes())
 })
 _ = worker.Start()
 defer worker.Shutdown()
@@ -181,21 +180,21 @@ defer worker.Shutdown()
 
 ## Driver selection via config
 
-Use `queue.DispatcherConfig` with `NewDispatcher` and `queue.WorkerConfig` with `NewWorker`.  
+Use `queue.Config` with `New` and `queue.WorkerConfig` with `NewWorker`.  
 These are intentionally separate so enqueue-side settings and worker execution settings are documented independently.
 
-### DispatcherConfig support matrix
+### Config support matrix
 
 Legend: `✓` supported, `-` ignored, `o` optional.
 
-| DispatcherConfig field | Sync | Workerpool | Database | Redis | Notes |
+| Config field | Sync | Workerpool | Database | Redis | Notes |
 |:--|:--:|:--:|:--:|:--:|:--|
 | `Driver` | ✓ | ✓ | ✓ | ✓ | Selects backend. |
-| `DefaultQueue` | - | - | ✓ | - | Default queue column value in database driver. |
+| `DefaultQueue` | - | - | ✓ | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
 | `Database` | - | - | o | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
 | `DatabaseDriver` | - | - | ✓ | - | `sqlite`, `mysql`, or `pgx`. |
 | `DatabaseDSN` | - | - | ✓ | - | Connection string for database driver. |
-| `RedisAddr` | - | - | - | ✓ | Required for Redis dispatcher enqueueing. |
+| `RedisAddr` | - | - | - | ✓ | Required for Redis queue enqueueing. |
 | `RedisPassword` | - | - | - | o | Redis auth password. |
 | `RedisDB` | - | - | - | o | Redis logical DB index. |
 
@@ -208,9 +207,9 @@ Legend: `✓` supported, `-` ignored, `o` optional.
 | `Driver` | ✓ | ✓ | ✓ | ✓ | Selects backend. |
 | `Workers` | - | ✓ | ✓ | ✓ | Redis uses this for Asynq worker concurrency. |
 | `QueueCapacity` | - | ✓ | - | - | In-memory pending queue capacity for workerpool workers. |
-| `DefaultTaskTimeout` | - | ✓ | - | - | Workerpool default task timeout unless task overrides with `WithTimeout`. |
+| `DefaultTaskTimeout` | - | ✓ | - | - | Workerpool default task timeout unless task overrides with `Timeout(...)`. |
 | `PollInterval` | - | - | ✓ | - | Job polling interval for database worker loop. |
-| `DefaultQueue` | - | - | ✓ | - | Default queue when none is set on enqueue. |
+| `DefaultQueue` | - | - | ✓ | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
 | `AutoMigrate` | - | - | ✓ | - | Creates/updates DB schema on start. |
 | `Database` | - | - | o | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
 | `DatabaseDriver` | - | - | ✓ | - | `sqlite`, `mysql`, or `pgx`. |
@@ -229,19 +228,19 @@ The API section below is autogenerated; do not edit between the markers.
 
 | Group | Functions |
 |------:|:-----------|
-| **Constructors** | [NewQueue](#newqueue) [NewWorker](#newworker) |
+| **Constructors** | [New](#new) [NewWorker](#newworker) |
 | **Queue** | [Driver](#driver) [Enqueue](#enqueue) [Register](#register) [Shutdown](#shutdown) [Start](#start) |
 | **Task** | [Backoff](#backoff) [Delay](#delay) [NewTask](#newtask) [OnQueue](#onqueue) [Payload](#payload) [PayloadBytes](#payloadbytes) [PayloadJSON](#payloadjson) [Retry](#retry) [Timeout](#timeout) [UniqueFor](#uniquefor) |
 
 
 ## Constructors
 
-### <a id="newqueue"></a>NewQueue
+### <a id="new"></a>New
 
-NewQueue creates a queue based on QueueConfig.Driver.
+New creates a queue based on Config.Driver.
 
 ```go
-q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 if err != nil {
 	return
 }
@@ -273,10 +272,10 @@ _ = worker.Shutdown()
 
 ### <a id="driver"></a>Driver
 
-Driver returns the local dispatcher's driver mode.
+Driver returns the local queue runtime's driver mode.
 
 ```go
-q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 if err != nil {
 	return
 }
@@ -293,7 +292,7 @@ fmt.Println(driverAware.Driver())
 Enqueue schedules or executes a task using the local driver.
 
 ```go
-q, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 if err != nil {
 	return
 }
@@ -304,14 +303,14 @@ _ = q.Enqueue(context.Background(), task)
 
 ### <a id="register"></a>Register
 
-Register adds a task handler to the local dispatcher.
+Register adds a task handler to the local queue runtime.
 
 ```go
-dispatcher, err := queue.NewQueue(queue.QueueConfig{Driver: queue.DriverSync})
+q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 if err != nil {
 	return
 }
-dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error { return nil })
 ```
 
 ### <a id="shutdown"></a>Shutdown
@@ -319,14 +318,14 @@ dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) er
 Shutdown drains delayed and active local workerpool tasks.
 
 ```go
-dispatcher, err := queue.NewQueue(queue.QueueConfig{
+q, err := queue.New(queue.Config{
 	Driver: queue.DriverWorkerpool,
 })
 if err != nil {
 	return
 }
-_ = dispatcher.Start(context.Background())
-_ = dispatcher.Shutdown(context.Background())
+_ = q.Start(context.Background())
+_ = q.Shutdown(context.Background())
 ```
 
 ### <a id="start"></a>Start
@@ -334,13 +333,13 @@ _ = dispatcher.Shutdown(context.Background())
 Start initializes worker goroutines for workerpool mode.
 
 ```go
-dispatcher, err := queue.NewQueue(queue.QueueConfig{
+q, err := queue.New(queue.Config{
 	Driver: queue.DriverWorkerpool,
 })
 if err != nil {
 	return
 }
-_ = dispatcher.Start(context.Background())
+_ = q.Start(context.Background())
 ```
 
 ## Task
