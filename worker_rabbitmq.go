@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"sync"
 	"time"
 
@@ -136,12 +137,14 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 	if incoming.AvailableAtMS > 0 {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
-			time.AfterFunc(remaining, func() {
-				_ = w.publish(incoming)
-			})
+			if err := w.publish(incoming); err != nil {
+				_ = delivery.Nack(false, true)
+				return
+			}
 			_ = delivery.Ack(false)
 			return
 		}
+		incoming.AvailableAtMS = 0
 	}
 
 	w.mu.RLock()
@@ -195,13 +198,43 @@ func (w *rabbitMQWorker) publish(message rabbitMQMessage) error {
 	if queueName == "" {
 		queueName = w.cfg.DefaultQueue
 	}
+	delay := time.Duration(0)
+	if message.AvailableAtMS > 0 {
+		delay = time.Until(time.UnixMilli(message.AvailableAtMS))
+		if delay <= 0 {
+			message.AvailableAtMS = 0
+			delay = 0
+		}
+	}
 	w.pubMu.Lock()
 	defer w.pubMu.Unlock()
 	if _, err := ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
 		return err
 	}
-	return ch.PublishWithContext(context.Background(), "", queueName, false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        body,
+	if delay <= 0 {
+		return ch.PublishWithContext(context.Background(), "", queueName, false, false, amqp.Publishing{
+			ContentType:  "application/json",
+			Body:         body,
+			DeliveryMode: amqp.Persistent,
+		})
+	}
+
+	delayQueue := queueName + ".delay"
+	delayMS := delay.Milliseconds()
+	if delayMS < 1 {
+		delayMS = 1
+	}
+	args := amqp.Table{
+		"x-dead-letter-exchange":    "",
+		"x-dead-letter-routing-key": queueName,
+	}
+	if _, err := ch.QueueDeclare(delayQueue, true, false, false, false, args); err != nil {
+		return err
+	}
+	return ch.PublishWithContext(context.Background(), "", delayQueue, false, false, amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         body,
+		Expiration:   strconv.FormatInt(delayMS, 10),
+		DeliveryMode: amqp.Persistent,
 	})
 }
