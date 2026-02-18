@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	worker, err := queue.NewWorker(queue.Config{Driver: queue.DriverSync})
+	worker, err := queue.NewWorker(queue.WorkerConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

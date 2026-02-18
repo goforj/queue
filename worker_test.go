@@ -31,14 +31,14 @@ func (s *fakeAsynqServer) Stop() {
 }
 
 func TestNewWorkerAdapters(t *testing.T) {
-	sw, err := NewWorker(Config{Driver: DriverSync})
+	sw, err := NewWorker(WorkerConfig{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new sync worker failed: %v", err)
 	}
 	if sw.Driver() != DriverSync {
 		t.Fatal("expected sync worker driver")
 	}
-	wp, err := NewWorker(Config{
+	wp, err := NewWorker(WorkerConfig{
 		Driver:        DriverWorkerpool,
 		Workers:       1,
 		QueueCapacity: 2,
@@ -49,7 +49,7 @@ func TestNewWorkerAdapters(t *testing.T) {
 	if wp.Driver() != DriverWorkerpool {
 		t.Fatal("expected workerpool worker driver")
 	}
-	dw, err := NewWorker(Config{
+	dw, err := NewWorker(WorkerConfig{
 		Driver:         DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    t.TempDir() + "/worker.db",
@@ -60,7 +60,7 @@ func TestNewWorkerAdapters(t *testing.T) {
 	if dw.Driver() != DriverDatabase {
 		t.Fatal("expected database worker driver")
 	}
-	rw, err := NewWorker(Config{
+	rw, err := NewWorker(WorkerConfig{
 		Driver:    DriverRedis,
 		RedisAddr: "127.0.0.1:6379",
 	})
@@ -73,7 +73,7 @@ func TestNewWorkerAdapters(t *testing.T) {
 }
 
 func TestNewWorker_UnknownDriverFails(t *testing.T) {
-	worker, err := NewWorker(Config{Driver: Driver("unknown")})
+	worker, err := NewWorker(WorkerConfig{Driver: Driver("unknown")})
 	if err == nil {
 		t.Fatal("expected unknown driver error")
 	}
@@ -83,7 +83,7 @@ func TestNewWorker_UnknownDriverFails(t *testing.T) {
 }
 
 func TestNewWorker_RedisRequiresConn(t *testing.T) {
-	worker, err := NewWorker(Config{Driver: DriverRedis})
+	worker, err := NewWorker(WorkerConfig{Driver: DriverRedis})
 	if err == nil {
 		t.Fatal("expected redis addr error")
 	}

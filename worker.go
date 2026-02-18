@@ -1,8 +1,10 @@
 package queue
 
 import (
+	"database/sql"
 	"fmt"
 	"runtime"
+	"time"
 
 	"github.com/hibiken/asynq"
 )
@@ -12,7 +14,7 @@ import (
 //
 // Example: worker lifecycle
 //
-//	worker, err := queue.NewWorker(queue.Config{Driver: queue.DriverSync})
+//	worker, err := queue.NewWorker(queue.WorkerConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -28,12 +30,34 @@ type Worker interface {
 	Shutdown() error
 }
 
-// NewWorker creates a worker based on Config.Driver.
+// WorkerConfig configures worker creation for NewWorker.
+// @group Config
+type WorkerConfig struct {
+	Driver Driver
+
+	Workers            int
+	QueueCapacity      int
+	DefaultTaskTimeout time.Duration
+
+	PollInterval time.Duration
+	DefaultQueue string
+	AutoMigrate  bool
+
+	Database       *sql.DB
+	DatabaseDriver string
+	DatabaseDSN    string
+
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
+}
+
+// NewWorker creates a worker based on WorkerConfig.Driver.
 // @group Constructors
 //
 // Example: new sync worker
 //
-//	worker, err := queue.NewWorker(queue.Config{
+//	worker, err := queue.NewWorker(queue.WorkerConfig{
 //		Driver: queue.DriverSync,
 //	})
 //	if err != nil {
@@ -44,16 +68,32 @@ type Worker interface {
 //	})
 //	_ = worker.Start()
 //	_ = worker.Shutdown()
-func NewWorker(cfg Config) (Worker, error) {
+func NewWorker(cfg WorkerConfig) (Worker, error) {
 	switch cfg.Driver {
 	case DriverSync:
 		return &dispatcherWorkerAdapter{dispatcher: newSyncDispatcher()}, nil
 	case DriverWorkerpool:
 		return &dispatcherWorkerAdapter{
-			dispatcher: newLocalDispatcherWithConfig(DriverWorkerpool, cfg.workerpoolConfig().normalize()),
+			dispatcher: newLocalDispatcherWithConfig(DriverWorkerpool, WorkerpoolConfig{
+				Workers:            cfg.Workers,
+				QueueCapacity:      cfg.QueueCapacity,
+				DefaultTaskTimeout: cfg.DefaultTaskTimeout,
+			}.normalize()),
 		}, nil
 	case DriverDatabase:
-		d, err := newDatabaseDispatcher(cfg.databaseConfig())
+		autoMigrate := cfg.AutoMigrate
+		if !autoMigrate {
+			autoMigrate = true
+		}
+		d, err := newDatabaseDispatcher(DatabaseConfig{
+			DB:           cfg.Database,
+			DriverName:   cfg.DatabaseDriver,
+			DSN:          cfg.DatabaseDSN,
+			Workers:      cfg.Workers,
+			PollInterval: cfg.PollInterval,
+			DefaultQueue: cfg.DefaultQueue,
+			AutoMigrate:  autoMigrate,
+		})
 		if err != nil {
 			return nil, err
 		}

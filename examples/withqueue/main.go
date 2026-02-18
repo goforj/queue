@@ -12,7 +12,7 @@ func main() {
 	// WithQueue routes a task to a named queue.
 
 	// Example: with queue
-	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

@@ -13,7 +13,7 @@ func main() {
 	// Enqueue schedules or executes a task using the local driver.
 
 	// Example: local enqueue
-	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

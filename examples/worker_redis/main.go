@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	worker, err := queue.NewWorker(queue.Config{
+	worker, err := queue.NewWorker(queue.WorkerConfig{
 		Driver:    queue.DriverRedis,
 		RedisAddr: "127.0.0.1:6379",
 		Workers:   10,

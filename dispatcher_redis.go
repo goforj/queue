@@ -25,7 +25,7 @@ func newRedisDispatcher(client redisEnqueueClient, ownsClient bool) Dispatcher {
 	return &redisDispatcher{client: client, ownsClient: ownsClient}
 }
 
-func newAsynqClient(cfg Config) redisEnqueueClient {
+func newAsynqClient(cfg DispatcherConfig) redisEnqueueClient {
 	return asynq.NewClient(asynq.RedisClientOpt{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,

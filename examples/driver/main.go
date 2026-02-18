@@ -12,7 +12,7 @@ func main() {
 	// Driver returns the local dispatcher's driver mode.
 
 	// Example: local driver
-	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

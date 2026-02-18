@@ -11,11 +11,8 @@ import (
 )
 
 func main() {
-	dispatcher, err := queue.NewDispatcher(queue.Config{
-		Driver:        queue.DriverWorkerpool,
-		Workers:       4,
-		QueueCapacity: 64,
-		TaskTimeout:   30 * time.Second,
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+		Driver: queue.DriverWorkerpool,
 	})
 	if err != nil {
 		return

@@ -9,10 +9,10 @@ import (
 )
 
 func main() {
-	// NewWorker creates a worker based on Config.Driver.
+	// NewWorker creates a worker based on WorkerConfig.Driver.
 
 	// Example: new sync worker
-	worker, err := queue.NewWorker(queue.Config{
+	worker, err := queue.NewWorker(queue.WorkerConfig{
 		Driver: queue.DriverSync,
 	})
 	if err != nil {

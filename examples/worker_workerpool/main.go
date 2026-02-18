@@ -11,11 +11,11 @@ import (
 )
 
 func main() {
-	worker, err := queue.NewWorker(queue.Config{
-		Driver:        queue.DriverWorkerpool,
-		Workers:       4,
-		QueueCapacity: 64,
-		TaskTimeout:   20 * time.Second,
+	worker, err := queue.NewWorker(queue.WorkerConfig{
+		Driver:             queue.DriverWorkerpool,
+		Workers:            4,
+		QueueCapacity:      64,
+		DefaultTaskTimeout: 20 * time.Second,
 	})
 	if err != nil {
 		return

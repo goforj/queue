@@ -12,10 +12,8 @@ func main() {
 	// Start initializes worker goroutines for workerpool mode.
 
 	// Example: local start
-	dispatcher, err := queue.NewDispatcher(queue.Config{
-		Driver:        queue.DriverWorkerpool,
-		Workers:       1,
-		QueueCapacity: 4,
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+		Driver: queue.DriverWorkerpool,
 	})
 	if err != nil {
 		return

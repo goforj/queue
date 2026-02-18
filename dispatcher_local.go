@@ -57,7 +57,7 @@ func newLocalDispatcherWithConfig(driver Driver, cfg WorkerpoolConfig) *localDis
 //
 // Example: local driver
 //
-//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -72,7 +72,7 @@ func (d *localDispatcher) Driver() Driver {
 //
 // Example: local register
 //
-//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -91,10 +91,8 @@ func (d *localDispatcher) Register(taskType string, handler Handler) {
 //
 // Example: local start
 //
-//	dispatcher, err := queue.NewDispatcher(queue.Config{
-//		Driver:        queue.DriverWorkerpool,
-//		Workers:       1,
-//		QueueCapacity: 4,
+//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+//		Driver: queue.DriverWorkerpool,
 //	})
 //	if err != nil {
 //		return
@@ -113,10 +111,8 @@ func (d *localDispatcher) Start(_ context.Context) error {
 //
 // Example: local shutdown
 //
-//	dispatcher, err := queue.NewDispatcher(queue.Config{
-//		Driver:        queue.DriverWorkerpool,
-//		Workers:       1,
-//		QueueCapacity: 4,
+//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
+//		Driver: queue.DriverWorkerpool,
 //	})
 //	if err != nil {
 //		return
@@ -155,7 +151,7 @@ func (d *localDispatcher) Shutdown(ctx context.Context) error {
 //
 // Example: local enqueue
 //
-//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -271,7 +267,7 @@ func (d *localDispatcher) startMemoryWorkersLocked() {
 
 func (d *localDispatcher) worker(workQueue <-chan queuedTask) {
 	defer d.workerWG.Done()
-	taskTimeout := d.cfg.TaskTimeout
+	taskTimeout := d.cfg.DefaultTaskTimeout
 	for job := range workQueue {
 		func() {
 			defer func() {

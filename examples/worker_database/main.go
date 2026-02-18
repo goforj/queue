@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	worker, err := queue.NewWorker(queue.Config{
+	worker, err := queue.NewWorker(queue.WorkerConfig{
 		Driver:         queue.DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    "file:queue-worker.db?_busy_timeout=5000",

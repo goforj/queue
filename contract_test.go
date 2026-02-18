@@ -254,7 +254,7 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		{
 			name: "sync",
 			newDispatcher: func(_ *testing.T) Dispatcher {
-				dispatcher, err := NewDispatcher(Config{Driver: DriverSync})
+				dispatcher, err := NewDispatcher(DispatcherConfig{Driver: DriverSync})
 				if err != nil {
 					t.Fatalf("new sync dispatcher failed: %v", err)
 				}
@@ -266,10 +266,8 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		{
 			name: "workerpool",
 			newDispatcher: func(_ *testing.T) Dispatcher {
-				dispatcher, err := NewDispatcher(Config{
-					Driver:        DriverWorkerpool,
-					Workers:       1,
-					QueueCapacity: 4,
+				dispatcher, err := NewDispatcher(DispatcherConfig{
+					Driver: DriverWorkerpool,
 				})
 				if err != nil {
 					t.Fatalf("new workerpool dispatcher failed: %v", err)
@@ -282,12 +280,10 @@ func TestDispatcherContract_LocalAndSQLite(t *testing.T) {
 		{
 			name: "database-sqlite",
 			newDispatcher: func(t *testing.T) Dispatcher {
-				dispatcher, err := NewDispatcher(Config{
+				dispatcher, err := NewDispatcher(DispatcherConfig{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "sqlite",
 					DatabaseDSN:    fmt.Sprintf("%s/contract-%d.db", t.TempDir(), time.Now().UnixNano()),
-					Workers:        1,
-					PollInterval:   10 * time.Millisecond,
 				})
 				if err != nil {
 					t.Fatalf("new sqlite dispatcher failed: %v", err)

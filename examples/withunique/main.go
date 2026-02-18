@@ -13,7 +13,7 @@ func main() {
 	// WithUnique deduplicates by task type and payload for a TTL window.
 
 	// Example: with unique
-	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

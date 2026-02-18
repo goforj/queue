@@ -16,7 +16,7 @@ func TestDispatcherContract_Redis(t *testing.T) {
 	factory := contractFactory{
 		name: "redis",
 		newDispatcher: func(t *testing.T) Dispatcher {
-			dispatcher, err := NewDispatcher(Config{
+			dispatcher, err := NewDispatcher(DispatcherConfig{
 				Driver:    DriverRedis,
 				RedisAddr: integrationRedis.addr,
 			})
@@ -47,12 +47,10 @@ func TestDispatcherContract_DatabaseMySQL(t *testing.T) {
 	factory := contractFactory{
 		name: "database-mysql",
 		newDispatcher: func(_ *testing.T) Dispatcher {
-			dispatcher, err := NewDispatcher(Config{
+			dispatcher, err := NewDispatcher(DispatcherConfig{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
-				Workers:        cfg.Workers,
-				PollInterval:   cfg.PollInterval,
 			})
 			if err != nil {
 				t.Fatalf("new mysql dispatcher failed: %v", err)
@@ -81,12 +79,10 @@ func TestDispatcherContract_DatabasePostgres(t *testing.T) {
 	factory := contractFactory{
 		name: "database-postgres",
 		newDispatcher: func(_ *testing.T) Dispatcher {
-			dispatcher, err := NewDispatcher(Config{
+			dispatcher, err := NewDispatcher(DispatcherConfig{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
-				Workers:        cfg.Workers,
-				PollInterval:   cfg.PollInterval,
 			})
 			if err != nil {
 				t.Fatalf("new postgres dispatcher failed: %v", err)
@@ -115,12 +111,10 @@ func TestDispatcherContract_DatabaseSQLiteIntegration(t *testing.T) {
 				Workers:      1,
 				PollInterval: 10 * time.Millisecond,
 			}
-			dispatcher, err := NewDispatcher(Config{
+			dispatcher, err := NewDispatcher(DispatcherConfig{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
-				Workers:        cfg.Workers,
-				PollInterval:   cfg.PollInterval,
 			})
 			if err != nil {
 				t.Fatalf("new sqlite dispatcher failed: %v", err)

@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	dispatcher, err := queue.NewDispatcher(queue.Config{
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
 		Driver:    queue.DriverRedis,
 		RedisAddr: "127.0.0.1:6379",
 	})

@@ -29,9 +29,9 @@ type Dispatcher interface {
 // WorkerpoolConfig configures the in-memory workerpool dispatcher.
 // @group Config
 type WorkerpoolConfig struct {
-	Workers       int
-	QueueCapacity int
-	TaskTimeout   time.Duration
+	Workers            int
+	QueueCapacity      int
+	DefaultTaskTimeout time.Duration
 }
 
 func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
@@ -47,18 +47,12 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 	return c
 }
 
-// Config configures dispatcher creation for NewDispatcher.
+// DispatcherConfig configures dispatcher creation for NewDispatcher.
 // @group Config
-type Config struct {
+type DispatcherConfig struct {
 	Driver Driver
 
-	Workers       int
-	QueueCapacity int
-	TaskTimeout   time.Duration
-
-	PollInterval time.Duration
 	DefaultQueue string
-	AutoMigrate  bool
 
 	Database       *sql.DB
 	DatabaseDriver string
@@ -73,36 +67,21 @@ func newSyncDispatcher() Dispatcher {
 	return newLocalDispatcherWithConfig(DriverSync, WorkerpoolConfig{})
 }
 
-func (cfg Config) workerpoolConfig() WorkerpoolConfig {
-	return WorkerpoolConfig{
-		Workers:       cfg.Workers,
-		QueueCapacity: cfg.QueueCapacity,
-		TaskTimeout:   cfg.TaskTimeout,
-	}
-}
-
-func (cfg Config) databaseConfig() DatabaseConfig {
-	autoMigrate := cfg.AutoMigrate
-	if !autoMigrate {
-		autoMigrate = true
-	}
+func (cfg DispatcherConfig) databaseConfig() DatabaseConfig {
 	return DatabaseConfig{
 		DB:           cfg.Database,
 		DriverName:   cfg.DatabaseDriver,
 		DSN:          cfg.DatabaseDSN,
-		Workers:      cfg.Workers,
-		PollInterval: cfg.PollInterval,
 		DefaultQueue: cfg.DefaultQueue,
-		AutoMigrate:  autoMigrate,
 	}
 }
 
-// NewDispatcher creates a dispatcher based on Config.Driver.
+// NewDispatcher creates a dispatcher based on DispatcherConfig.Driver.
 // @group Constructors
 //
 // Example: new dispatcher from config
 //
-//	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+//	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 //	if err != nil {
 //		return
 //	}
@@ -110,12 +89,12 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //		return nil
 //	})
 //	_ = dispatcher.Enqueue(context.Background(), queue.Task{Type: "emails:send"})
-func NewDispatcher(cfg Config) (Dispatcher, error) {
+func NewDispatcher(cfg DispatcherConfig) (Dispatcher, error) {
 	switch cfg.Driver {
 	case DriverSync:
 		return newSyncDispatcher(), nil
 	case DriverWorkerpool:
-		return newLocalDispatcherWithConfig(DriverWorkerpool, cfg.workerpoolConfig().normalize()), nil
+		return newLocalDispatcherWithConfig(DriverWorkerpool, WorkerpoolConfig{}), nil
 	case DriverRedis:
 		if cfg.RedisAddr == "" {
 			return nil, fmt.Errorf("redis addr is required")

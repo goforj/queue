@@ -11,14 +11,11 @@ import (
 )
 
 func main() {
-	dispatcher, err := queue.NewDispatcher(queue.Config{
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{
 		Driver:         queue.DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    "file:queue.db?_busy_timeout=5000",
-		Workers:        2,
-		PollInterval:   50 * time.Millisecond,
 		DefaultQueue:   "default",
-		AutoMigrate:    true,
 	})
 	if err != nil {
 		return

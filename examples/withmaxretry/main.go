@@ -12,7 +12,7 @@ func main() {
 	// WithMaxRetry sets maximum retry attempts.
 
 	// Example: with max retry
-	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}

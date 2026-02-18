@@ -135,7 +135,7 @@ func TestRedisIntegration_EnqueueSmoke(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
-	dispatcher, err := NewDispatcher(Config{
+	dispatcher, err := NewDispatcher(DispatcherConfig{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 	})
@@ -163,7 +163,7 @@ func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
-	dispatcher, err := NewDispatcher(Config{
+	dispatcher, err := NewDispatcher(DispatcherConfig{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 	})
@@ -209,7 +209,7 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	_ = newRedisInspector(t)
-	dispatcher, err := NewDispatcher(Config{
+	dispatcher, err := NewDispatcher(DispatcherConfig{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 	})
@@ -235,7 +235,7 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	_ = newRedisInspector(t)
-	dispatcher, err := NewDispatcher(Config{
+	dispatcher, err := NewDispatcher(DispatcherConfig{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 	})

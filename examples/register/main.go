@@ -12,7 +12,7 @@ func main() {
 	// Register adds a task handler to the local dispatcher.
 
 	// Example: local register
-	dispatcher, err := queue.NewDispatcher(queue.Config{Driver: queue.DriverSync})
+	dispatcher, err := queue.NewDispatcher(queue.DispatcherConfig{Driver: queue.DriverSync})
 	if err != nil {
 		return
 	}
