@@ -302,52 +302,43 @@ defer worker.Shutdown()
 Use `queue.Config` with `New` and `queue.WorkerConfig` with `NewWorker`.  
 These are intentionally separate so enqueue-side settings and worker execution settings are documented independently.
 
-### Config support matrix
+### Config support
 
 Legend: `✓` supported, `-` ignored, `o` optional.
 
-| Config field | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ | Notes |
-|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
-| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
-| **DefaultQueue** | - | - | ✓ | - | - | - | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
-| **Database** | - | - | o | - | - | - | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
-| **DatabaseDriver** | - | - | ✓ | - | - | - | - | `sqlite`, `mysql`, or `pgx`. |
-| **DatabaseDSN** | - | - | ✓ | - | - | - | - | Connection string for database driver. |
-| **RedisAddr** | - | - | - | ✓ | - | - | - | Required for Redis queue enqueueing. |
-| **RedisPassword** | - | - | - | o | - | - | - | Redis auth password. |
-| **RedisDB** | - | - | - | o | - | - | - | Redis logical DB index. |
-| **NATSURL** | - | - | - | - | ✓ | - | - | Required for NATS queue enqueueing. |
-| **SQSRegion** | - | - | - | - | - | o | - | AWS region (defaults to `us-east-1`). |
-| **SQSEndpoint** | - | - | - | - | - | o | - | Override endpoint (localstack/testing). |
-| **SQSAccessKey** | - | - | - | - | - | o | - | Static access key (optional). |
-| **SQSSecretKey** | - | - | - | - | - | o | - | Static secret key (optional). |
-| **RabbitMQURL** | - | - | - | - | - | - | ✓ | Required for RabbitMQ queue enqueueing. |
+| Field group | `Config` | `WorkerConfig` | Notes |
+|--:|:--:|:--:|:--|
+| **Core** | `Driver` | `Driver` | Backend selector. |
+| **Workerpool** | - | `Workers`, `QueueCapacity`, `DefaultTaskTimeout` | In-process async worker tuning. |
+| **Database** | `DefaultQueue`, `Database`, `DatabaseDriver`, `DatabaseDSN` | `DefaultQueue`, `PollInterval`, `AutoMigrate`, `Database`, `DatabaseDriver`, `DatabaseDSN`, `Workers` | SQL queue runtime/worker options. |
+| **Redis** | `RedisAddr`, `RedisPassword`, `RedisDB` | `RedisAddr`, `RedisPassword`, `RedisDB`, `Workers` | Asynq queue/worker options. |
+| **NATS** | `NATSURL` | `NATSURL` | NATS connection URL. |
+| **SQS** | `SQSRegion`, `SQSEndpoint`, `SQSAccessKey`, `SQSSecretKey` | `SQSRegion`, `SQSEndpoint`, `SQSAccessKey`, `SQSSecretKey`, `DefaultQueue` | AWS/localstack connection + queue name. |
+| **RabbitMQ** | `RabbitMQURL` | `RabbitMQURL`, `DefaultQueue` | AMQP URL + consumer queue name. |
 
-### WorkerConfig support matrix
+### Config by backend
 
-Legend: `✓` supported, `-` ignored, `o` optional.
+| Backend | `Config` fields |
+|--:|:--|
+| **Sync** | `Driver` |
+| **Workerpool** | `Driver` |
+| **Database** | `Driver`, `DefaultQueue`, `Database`, `DatabaseDriver`, `DatabaseDSN` |
+| **Redis** | `Driver`, `RedisAddr`, `RedisPassword`, `RedisDB` |
+| **NATS** | `Driver`, `NATSURL` |
+| **SQS** | `Driver`, `SQSRegion`, `SQSEndpoint`, `SQSAccessKey`, `SQSSecretKey` |
+| **RabbitMQ** | `Driver`, `RabbitMQURL` |
 
-| WorkerConfig field | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ | Notes |
-|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
-| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
-| **Workers** | - | ✓ | ✓ | ✓ | - | - | - | Redis uses this for Asynq worker concurrency. |
-| **QueueCapacity** | - | ✓ | - | - | - | - | - | In-memory pending queue capacity for workerpool workers. |
-| **DefaultTaskTimeout** | - | ✓ | - | - | - | - | - | Workerpool default task timeout unless task overrides with `Timeout(...)`. |
-| **PollInterval** | - | - | ✓ | - | - | - | - | Job polling interval for database worker loop. |
-| **DefaultQueue** | - | - | ✓ | - | - | ✓ | ✓ | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
-| **AutoMigrate** | - | - | ✓ | - | - | - | - | Creates/updates DB schema on start. |
-| **Database** | - | - | o | - | - | - | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
-| **DatabaseDriver** | - | - | ✓ | - | - | - | - | `sqlite`, `mysql`, or `pgx`. |
-| **DatabaseDSN** | - | - | ✓ | - | - | - | - | Connection string for database worker. |
-| **RedisAddr** | - | - | - | ✓ | - | - | - | Required for Redis worker startup. |
-| **RedisPassword** | - | - | - | o | - | - | - | Redis auth password. |
-| **RedisDB** | - | - | - | o | - | - | - | Redis logical DB index. |
-| **NATSURL** | - | - | - | - | ✓ | - | - | Required for NATS worker startup. |
-| **SQSRegion** | - | - | - | - | - | o | - | AWS region (defaults to `us-east-1`). |
-| **SQSEndpoint** | - | - | - | - | - | o | - | Override endpoint (localstack/testing). |
-| **SQSAccessKey** | - | - | - | - | - | o | - | Static access key (optional). |
-| **SQSSecretKey** | - | - | - | - | - | o | - | Static secret key (optional). |
-| **RabbitMQURL** | - | - | - | - | - | - | ✓ | Required for RabbitMQ worker startup. |
+### WorkerConfig by backend
+
+| Backend | `WorkerConfig` fields |
+|--:|:--|
+| **Sync** | `Driver` |
+| **Workerpool** | `Driver`, `Workers`, `QueueCapacity`, `DefaultTaskTimeout` |
+| **Database** | `Driver`, `Workers`, `PollInterval`, `DefaultQueue`, `AutoMigrate`, `Database`, `DatabaseDriver`, `DatabaseDSN` |
+| **Redis** | `Driver`, `Workers`, `RedisAddr`, `RedisPassword`, `RedisDB` |
+| **NATS** | `Driver`, `NATSURL` |
+| **SQS** | `Driver`, `DefaultQueue`, `SQSRegion`, `SQSEndpoint`, `SQSAccessKey`, `SQSSecretKey` |
+| **RabbitMQ** | `Driver`, `DefaultQueue`, `RabbitMQURL` |
 
 ## API reference
 
