@@ -31,45 +31,15 @@ queue is a backend-agnostic job queue runtime. Your application code depends on 
 
 ## Drivers
 
-### Redis (production)
-- Uses Asynq for durable queues, retries, delays, and uniqueness.
-- Best for production or any place you already run Redis.
-
-### Database (PostgreSQL, MySQL, SQLite)
-- Persists jobs in a lightweight `queue_jobs` table and polls for work.
-- Auto-migrates schema by default in worker/database execution paths.
-- Supports retries, per-task timeouts, backoff, delays, and uniqueness.
-
-### NATS
-- Publishes tasks over NATS subjects with queue-based routing.
-- Use `queue.Worker` to consume and run handlers.
-
-### SQS
-- Publishes tasks to AWS SQS queues (or localstack for local integration).
-- Use `queue.Worker` to poll and process handlers.
-
-### RabbitMQ
-- Publishes tasks to RabbitMQ queues.
-- Use `queue.Worker` to consume and process handlers.
-
-### Workerpool (in-process async)
-- Runs tasks on background goroutines with a bounded channel.
-- Call `Start` once per process and `Shutdown` on exit to drain work.
-- Honors task metadata such as `Delay`, `Timeout`, `Retry`, `Backoff`, and `UniqueFor`.
-
-### Sync (in-process inline)
-- Executes handlers immediately in the caller goroutine.
-- Useful for tests or very small services without background workers.
-
 | Driver | Mode | Durable | Async | Delay | Unique | Backoff | Timeout |
 | ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ |
 | <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | — | — | — | ✓ | — | ✓ |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | - | - | - | ✓ | - | ✓ |
+| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Installation
 
