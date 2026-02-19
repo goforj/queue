@@ -274,10 +274,26 @@ For full field-level semantics and guarantees, see [`docs/events.md`](docs/event
 
 ## Runtime lifecycle
 
-- `q.Register(taskType, handler)` attaches handlers.
-- `q.Workers(n).StartWorkers(ctx)` starts processing with explicit concurrency.
-- `q.Dispatch(...)` / `q.DispatchCtx(...)` submits jobs.
-- `q.Shutdown(ctx)` drains in-flight work where supported and closes owned resources.
+```go
+// 1) Register handlers before starting workers.
+q.Register("emails:send", emailHandler)
+
+// 2) Start workers with explicit concurrency.
+ctx := context.Background()
+_ = q.Workers(2).StartWorkers(ctx)
+
+// 3) Dispatch jobs using either Dispatch(...) or DispatchCtx(...).
+_ = q.Dispatch(
+    queue.NewTask("emails:send").
+        Payload(EmailPayload{ID: 123, To: "user@example.com"}).
+        OnQueue("default"),
+)
+
+// 4) Shutdown gracefully drains in-flight work (where supported).
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+_ = q.Shutdown(shutdownCtx)
+```
 
 ## Driver selection via config
 
@@ -286,24 +302,73 @@ Use `q.Workers(n).StartWorkers(ctx)` to configure worker count before start.
 
 ### Config support matrix
 
-Legend: `✓` supported, `-` ignored, `o` optional.
+Common:
 
-| Config field | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ | Notes |
-|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
-| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
-| **DefaultQueue** | - | - | ✓ | - | - | - | - | Queue runtime config field; task-level `OnQueue(...)` controls dispatch target. |
-| **Database** | - | - | o | - | - | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
-| **DatabaseDriver** | - | - | ✓ | - | - | - | `sqlite`, `mysql`, or `pgx`. |
-| **DatabaseDSN** | - | - | ✓ | - | - | - | Connection string for database driver. |
-| **RedisAddr** | - | - | - | ✓ | - | - | - | Required for Redis queue dispatching. |
-| **RedisPassword** | - | - | - | o | - | - | Redis auth password. |
-| **RedisDB** | - | - | - | o | - | - | Redis logical DB index. |
-| **NATSURL** | - | - | - | - | ✓ | - | - | Required for NATS queue dispatching. |
-| **SQSRegion** | - | - | - | - | - | o | AWS region (defaults to `us-east-1`). |
-| **SQSEndpoint** | - | - | - | - | - | o | Override endpoint (localstack/testing). |
-| **SQSAccessKey** | - | - | - | - | - | o | Static access key (optional). |
-| **SQSSecretKey** | - | - | - | - | - | o | - | Static secret key (optional). |
-| **RabbitMQURL** | - | - | - | - | - | - | ✓ | Required for RabbitMQ queue dispatching. |
+| Field | Notes |
+|--:|:--|
+| **Driver** | Selects backend. |
+| **DefaultQueue** | Default queue name used by helpers (task-level `OnQueue(...)` still controls dispatch target). |
+
+Null (`DriverNull`):
+
+| Field | Required | Notes |
+|--:|:--:|:--|
+| **Driver** | ✓ | `DriverNull` |
+
+Sync (`DriverSync`):
+
+| Field | Required | Notes |
+|--:|:--:|:--|
+| **Driver** | ✓ | `DriverSync` |
+
+Workerpool (`DriverWorkerpool`):
+
+| Field | Required | Notes |
+|--:|:--:|:--|
+| **Driver** | ✓ | `DriverWorkerpool` |
+
+Database (`DriverDatabase`):
+
+| Field | Required | Notes |
+|--:|:--:|:--|
+| **Driver** | ✓ | `DriverDatabase` |
+| **Database** | o | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
+| **DatabaseDriver** | ✓* | `sqlite`, `mysql`, or `pgx` (required when `Database` is nil). |
+| **DatabaseDSN** | ✓* | Connection string (required when `Database` is nil). |
+| **DefaultQueue** | o | Queue default for DB-backed runtime. |
+
+Redis (`DriverRedis`):
+
+| Field | Required | Notes |
+|--:|:--:|:--|
+| **Driver** | ✓ | `DriverRedis` |
+| **RedisAddr** | ✓ | Required for Redis queue dispatching. |
+| **RedisPassword** | o | Redis auth password. |
+| **RedisDB** | o | Redis logical DB index. |
+
+NATS (`DriverNATS`):
+
+| Field | Required | Notes |
+|--:|:--:|:--|
+| **Driver** | ✓ | `DriverNATS` |
+| **NATSURL** | ✓ | Required for NATS queue dispatching. |
+
+SQS (`DriverSQS`):
+
+| Field | Required | Notes |
+|--:|:--:|:--|
+| **Driver** | ✓ | `DriverSQS` |
+| **SQSRegion** | o | AWS region (defaults to `us-east-1`). |
+| **SQSEndpoint** | o | Override endpoint (localstack/testing). |
+| **SQSAccessKey** | o | Static access key. |
+| **SQSSecretKey** | o | Static secret key. |
+
+RabbitMQ (`DriverRabbitMQ`):
+
+| Field | Required | Notes |
+|--:|:--:|:--|
+| **Driver** | ✓ | `DriverRabbitMQ` |
+| **RabbitMQURL** | ✓ | Required for RabbitMQ queue dispatching. |
 
 ## API reference
 
