@@ -23,43 +23,22 @@
   <img src="https://img.shields.io/badge/options-delay%20|%20backoff%20|%20timeout%20|%20retry%20|%20unique%20|%20queue-brightgreen" alt="Options covered">
 </p>
 
-<p align="center"><strong>Drivers</strong></p>
-
-| Driver badge | Mode |
-| --- | --- |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Durable queue via Redis/Asynq |
-| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="PostgreSQL"> | Durable queue via database dispatcher |
-| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | Durable queue via database dispatcher |
-| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | Durable queue via database dispatcher |
-| <img src="https://img.shields.io/badge/nats-%23007ACC?logo=cloudflare&logoColor=white" alt="NATS"> | Broker-backed integration matrix target |
-| <img src="https://img.shields.io/badge/sqs-%23232F3E?logo=amazon-aws&logoColor=white" alt="SQS"> | Broker-backed integration matrix target |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker-backed integration matrix target |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process async worker pool |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | In-process synchronous |
-
 ## What queue is
 
 queue is a backend-agnostic job dispatcher. Your application code only depends on `queue.Dispatcher`, `queue.Task`, and fluent enqueue options. The driver decides whether work runs via Redis/Asynq, a SQL table, an in-process worker pool, or synchronously in the caller.
 
 ## Drivers
 
-### Redis (production)
-- Uses Asynq for durable queues, retries, delays, and uniqueness.
-- Best for production or any place you already run Redis.
+| Driver | Mode | Durable | Async | Delay | Unique | Backoff | Timeout |
+| ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="PostgreSQL"> | SQL queue | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL queue | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL queue | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | — | — | — | ✓ | — | ✓ |
 
-### Database (PostgreSQL, MySQL, SQLite)
-- Persists jobs in a lightweight `queue_jobs` table and polls for work.
-- Auto-migrates schema by default; set `AutoMigrate` to false to manage DDL yourself.
-- Supports retries, per-task timeouts, backoff, delays, and uniqueness.
-
-### Workerpool (in-process async)
-- Runs tasks on background goroutines with a bounded channel.
-- Call `Start` once per process and `Shutdown` on exit to drain work.
-- Honors `WithDelay`, `WithTimeout`, `WithMaxRetry`, `WithBackoff`, and `WithUnique`.
-
-### Sync (in-process inline)
-- Executes handlers immediately in the caller goroutine.
-- Useful for tests or very small services without background workers.
+Integration scenarios also exercise broker targets (NATS, SQS, RabbitMQ) in CI, but primary dispatchers are the rows above.
 
 ## Installation
 
