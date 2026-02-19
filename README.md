@@ -463,31 +463,31 @@ Non-goals (honest boundary):
 
 Legend: `✓` covered, `o` conditional capability coverage, `-` not applicable.
 
-| Reliability area | Depth | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ |
-|:--|:--|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| Core queue contract (`Enqueue`, handler dispatch, lifecycle) | Unit + integration contract suites | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Worker contract (`Register`, `Start`, `Shutdown`, handler execution) | Unit + integration contract suites | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Task option behavior (`OnQueue`, `Delay`, `Timeout`, `Retry`, `Backoff`, `UniqueFor`) | Contract + backend integration mapping checks | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Payload bind/JSON decode (`Task.Bind`) | Unit + hardening invalid/empty/valid payload steps | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Retry/poison handling | Hardening step (`step_poison_message_max_retry`) | o | o | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Queue-scoped uniqueness | Contract + hardening step (`step_unique_queue_scope`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Enqueue context cancellation | Hardening step (`step_enqueue_context_cancellation`) | o | o | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Shutdown during delayed/retry work | Hardening step (`step_shutdown_during_delay_retry`) | o | o | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Multi-worker contention/idempotency pressure | Hardening steps (`step_multi_worker_contention`, `step_duplicate_delivery_idempotency`) | o | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Broker fault/recovery | Hardening steps (`step_enqueue_during_broker_fault`, `step_consume_after_broker_recovery`) | - | - | - | ✓ | - | - | - |
-| Ordering contract checks | Hardening step (`step_ordering_contract`) | o | o | o | o | o | o | o |
-| Large payload handling | Hardening step (`step_payload_large`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Mixed option fuzz stability | Hardening step (`step_config_option_fuzz`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Long-run soak stability | Scheduled soak workflow (`RUN_SOAK=1`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Observability event contract | Integration suite (`TestObservabilityIntegration_AllBackends`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Pause/resume support contract | Integration suite (`TestObservabilityIntegration_PauseResumeSupport_AllBackends`) | ✓ | ✓ | o | ✓ | o | o | o |
-| Native snapshot stats contract | Integration + runtime capability checks | ✓ | ✓ | ✓ | ✓ | o | o | o |
+| Reliability area | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ | Depth |
+|:--|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
+| Core queue contract (`Enqueue`, handler dispatch, lifecycle) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Unit + integration contract suites |
+| Worker contract (`Register`, `Start`, `Shutdown`, handler execution) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Unit + integration contract suites |
+| Task option behavior (`OnQueue`, `Delay`, `Timeout`, `Retry`, `Backoff`, `UniqueFor`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Contract + backend integration mapping checks |
+| Payload bind/JSON decode (`Task.Bind`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Unit + payload validation scenarios (invalid/empty/valid) |
+| Retry/poison handling | o | o | ✓ | ✓ | ✓ | ✓ | ✓ | Scenario: `step_poison_message_max_retry` |
+| Queue-scoped uniqueness | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Contract + scenario: `step_unique_queue_scope` |
+| Enqueue context cancellation | o | o | ✓ | ✓ | ✓ | ✓ | ✓ | Scenario: `step_enqueue_context_cancellation` |
+| Shutdown during delayed/retry work | o | o | ✓ | ✓ | ✓ | ✓ | ✓ | Scenario: `step_shutdown_during_delay_retry` |
+| Multi-worker contention/idempotency pressure | o | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Scenarios: `step_multi_worker_contention`, `step_duplicate_delivery_idempotency` |
+| Broker fault/recovery | - | - | - | ✓ | - | - | - | Scenarios: `step_enqueue_during_broker_fault`, `step_consume_after_broker_recovery` |
+| Ordering contract checks | o | o | o | o | o | o | o | Scenario: `step_ordering_contract` |
+| Large payload handling | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Scenario: `step_payload_large` |
+| Mixed option fuzz stability | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Scenario: `step_config_option_fuzz` |
+| Long-run soak stability | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Scheduled soak workflow (`RUN_SOAK=1`) |
+| Observability event contract | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Integration suite (`TestObservabilityIntegration_AllBackends`) |
+| Pause/resume support contract | ✓ | ✓ | o | ✓ | o | o | o | Integration suite (`TestObservabilityIntegration_PauseResumeSupport_AllBackends`) |
+| Native snapshot stats contract | ✓ | ✓ | ✓ | ✓ | o | o | o | Integration + runtime capability checks |
 
 Depth notes:
 
 - Unit: local deterministic behavior and API shape.
 - Integration contract: backend container validation for each selected driver.
-- Hardening: named fault/race/load scenarios in `TestIntegrationHardening_AllBackends`.
+- Scenarios: named fault/race/load coverage in `TestIntegrationHardening_AllBackends`.
 - Soak/chaos: scheduled workflows that run extended and failure-injection subsets.
 
 ## Driver selection via config
