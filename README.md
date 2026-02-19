@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-172-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-173-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
@@ -120,6 +120,112 @@ q, _ := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
 - `sync`: deterministic unit tests with inline execution and no external broker.
 - `workerpool`: async local behavior tests without external infrastructure.
 - `integration` tag + backend matrix: full broker/database realism (Redis, SQL, NATS, SQS, RabbitMQ).
+
+Use `null` when you only need to exercise dispatch call paths without execution.
+Use `sync` when you need handler logic to run in the same test/process deterministically.
+
+## Backend end-to-end snippets
+
+```go
+// Null: dispatch is accepted and dropped.
+q, _ := queue.NewNull()
+_ = q.Dispatch(
+	queue.NewTask("emails:send").
+		Payload(map[string]any{"id": 1}).
+		OnQueue("default"),
+)
+```
+
+```go
+// Sync: register handler and execute inline on dispatch.
+q, _ := queue.NewSync()
+q.Register("emails:send", emailHandler)
+_ = q.Workers(1).StartWorkers(context.Background())
+defer q.Shutdown(context.Background())
+_ = q.Dispatch(
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
+		OnQueue("default"),
+)
+```
+
+```go
+// Workerpool: async local workers.
+q, _ := queue.NewWorkerpool()
+q.Register("emails:send", emailHandler)
+_ = q.Workers(2).StartWorkers(context.Background())
+defer q.Shutdown(context.Background())
+_ = q.Dispatch(
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
+		OnQueue("default"),
+)
+```
+
+```go
+// Database: durable SQL-backed queue.
+q, _ := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
+q.Register("emails:send", emailHandler)
+_ = q.Workers(2).StartWorkers(context.Background())
+defer q.Shutdown(context.Background())
+_ = q.Dispatch(
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
+		OnQueue("default"),
+)
+```
+
+```go
+// Redis: broker-backed async queue.
+q, _ := queue.NewRedis("127.0.0.1:6379")
+q.Register("emails:send", emailHandler)
+_ = q.Workers(2).StartWorkers(context.Background())
+defer q.Shutdown(context.Background())
+_ = q.Dispatch(
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
+		OnQueue("default"),
+)
+```
+
+```go
+// NATS: broker-backed async queue.
+q, _ := queue.NewNATS("nats://127.0.0.1:4222")
+q.Register("emails:send", emailHandler)
+_ = q.Workers(2).StartWorkers(context.Background())
+defer q.Shutdown(context.Background())
+_ = q.Dispatch(
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
+		OnQueue("default"),
+)
+```
+
+```go
+// SQS: broker-backed async queue.
+q, _ := queue.NewSQS("us-east-1")
+q.Register("emails:send", emailHandler)
+_ = q.Workers(2).StartWorkers(context.Background())
+defer q.Shutdown(context.Background())
+_ = q.Dispatch(
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
+		OnQueue("default"),
+)
+```
+
+```go
+// RabbitMQ: broker-backed async queue.
+q, _ := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
+q.Register("emails:send", emailHandler)
+_ = q.Workers(2).StartWorkers(context.Background())
+defer q.Shutdown(context.Background())
+_ = q.Dispatch(
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
+		OnQueue("default"),
+)
+```
 
 ## Task builder options
 
@@ -306,7 +412,7 @@ _ = q.Shutdown(shutdownCtx)
 
 ## Driver selection via config
 
-Use `queue.Config` with `New`.  
+Use `queue.Config` with `New` for advanced/custom setups where you need multiple fields together.
 Use `q.Workers(n).StartWorkers(ctx)` to configure worker count before start.
 
 ### Config support matrix

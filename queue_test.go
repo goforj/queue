@@ -28,7 +28,7 @@ func queueDriver(q Queue) Driver {
 }
 
 func TestNewSyncQueue(t *testing.T) {
-	q, err := New(Config{Driver: DriverSync})
+	q, err := NewSync()
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestNewSyncQueue(t *testing.T) {
 }
 
 func TestNewNullQueue(t *testing.T) {
-	q, err := New(Config{Driver: DriverNull})
+	q, err := NewNull()
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -48,9 +48,7 @@ func TestNewNullQueue(t *testing.T) {
 }
 
 func TestNewWorkerpoolQueue(t *testing.T) {
-	q, err := New(Config{
-		Driver: DriverWorkerpool,
-	})
+	q, err := NewWorkerpool()
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -60,10 +58,7 @@ func TestNewWorkerpoolQueue(t *testing.T) {
 }
 
 func TestNewRedisQueue(t *testing.T) {
-	q, err := New(Config{
-		Driver:    DriverRedis,
-		RedisAddr: "127.0.0.1:6379",
-	})
+	q, err := NewRedis("127.0.0.1:6379")
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -73,10 +68,7 @@ func TestNewRedisQueue(t *testing.T) {
 }
 
 func TestNewNATSQueue(t *testing.T) {
-	q, err := New(Config{
-		Driver:  DriverNATS,
-		NATSURL: "nats://127.0.0.1:4222",
-	})
+	q, err := NewNATS("nats://127.0.0.1:4222")
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -86,10 +78,7 @@ func TestNewNATSQueue(t *testing.T) {
 }
 
 func TestNewSQSQueue(t *testing.T) {
-	q, err := New(Config{
-		Driver:    DriverSQS,
-		SQSRegion: "us-east-1",
-	})
+	q, err := NewSQS("us-east-1")
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -99,15 +88,22 @@ func TestNewSQSQueue(t *testing.T) {
 }
 
 func TestNewRabbitMQQueue(t *testing.T) {
-	q, err := New(Config{
-		Driver:      DriverRabbitMQ,
-		RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/",
-	})
+	q, err := NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
 	if queueDriver(q) != DriverRabbitMQ {
 		t.Fatalf("expected rabbitmq driver, got %q", queueDriver(q))
+	}
+}
+
+func TestNewDatabaseQueue(t *testing.T) {
+	q, err := NewDatabase("sqlite", t.TempDir()+"/queue.db")
+	if err != nil {
+		t.Fatalf("new q failed: %v", err)
+	}
+	if queueDriver(q) != DriverDatabase {
+		t.Fatalf("expected database driver, got %q", queueDriver(q))
 	}
 }
 
