@@ -31,12 +31,12 @@ queue is a backend-agnostic job dispatcher. Your application code only depends o
 
 | Driver | Mode | Durable | Async | Delay | Unique | Backoff | Timeout |
 | ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ |
 | <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="PostgreSQL"> | SQL queue | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL queue | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL queue | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | — | — | — | ✓ | — | ✓ |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | - | - | - | ✓ | - | ✓ |
 
 Integration scenarios also exercise broker targets (NATS, SQS, RabbitMQ) in CI, but primary dispatchers are the rows above.
 
