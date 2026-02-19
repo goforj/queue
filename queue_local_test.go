@@ -15,7 +15,7 @@ func TestLocalQueue_Driver(t *testing.T) {
 	}
 }
 
-func TestLocalQueue_EnqueueRunsRegisteredHandler(t *testing.T) {
+func TestLocalQueue_DispatchRunsRegisteredHandler(t *testing.T) {
 	d := newLocalQueue(DriverSync)
 	var calls atomic.Int64
 	d.Register("job:test", func(_ context.Context, task Task) error {
@@ -29,16 +29,16 @@ func TestLocalQueue_EnqueueRunsRegisteredHandler(t *testing.T) {
 		return nil
 	})
 
-	err := d.Enqueue(context.Background(), NewTask("job:test").Payload([]byte("hello")).OnQueue("default"))
+	err := d.Dispatch(context.Background(), NewTask("job:test").Payload([]byte("hello")).OnQueue("default"))
 	if err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+		t.Fatalf("dispatch failed: %v", err)
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("expected 1 call, got %d", calls.Load())
 	}
 }
 
-func TestLocalQueue_EnqueueDelayed(t *testing.T) {
+func TestLocalQueue_DispatchDelayed(t *testing.T) {
 	d := newLocalQueue(DriverSync)
 	triggered := make(chan struct{}, 1)
 	d.Register("job:delay", func(_ context.Context, _ Task) error {
@@ -46,9 +46,9 @@ func TestLocalQueue_EnqueueDelayed(t *testing.T) {
 		return nil
 	})
 
-	err := d.Enqueue(context.Background(), NewTask("job:delay").OnQueue("default").Delay(25*time.Millisecond))
+	err := d.Dispatch(context.Background(), NewTask("job:delay").OnQueue("default").Delay(25*time.Millisecond))
 	if err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {
@@ -58,23 +58,23 @@ func TestLocalQueue_EnqueueDelayed(t *testing.T) {
 	}
 }
 
-func TestLocalQueue_EnqueueMissingHandlerFails(t *testing.T) {
+func TestLocalQueue_DispatchMissingHandlerFails(t *testing.T) {
 	d := newLocalQueue(DriverSync)
-	err := d.Enqueue(context.Background(), NewTask("missing").OnQueue("default"))
+	err := d.Dispatch(context.Background(), NewTask("missing").OnQueue("default"))
 	if err == nil {
 		t.Fatal("expected error for missing handler")
 	}
 }
 
-func TestLocalQueue_EnqueueMissingTypeFails(t *testing.T) {
+func TestLocalQueue_DispatchMissingTypeFails(t *testing.T) {
 	d := newLocalQueue(DriverSync)
-	err := d.Enqueue(context.Background(), NewTask("").OnQueue("default"))
+	err := d.Dispatch(context.Background(), NewTask("").OnQueue("default"))
 	if err == nil {
 		t.Fatal("expected missing task type error")
 	}
 }
 
-func TestLocalQueue_EnqueueWithUnique(t *testing.T) {
+func TestLocalQueue_DispatchWithUnique(t *testing.T) {
 	d := newLocalQueue(DriverSync)
 	var calls atomic.Int64
 	d.Register("job:unique", func(_ context.Context, _ Task) error {
@@ -84,12 +84,12 @@ func TestLocalQueue_EnqueueWithUnique(t *testing.T) {
 
 	taskType := "job:unique"
 	payload := []byte("payload")
-	err := d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
+	err := d.Dispatch(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
 	if err != nil {
-		t.Fatalf("first enqueue failed: %v", err)
+		t.Fatalf("first dispatch failed: %v", err)
 	}
 
-	err = d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
+	err = d.Dispatch(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
@@ -98,16 +98,16 @@ func TestLocalQueue_EnqueueWithUnique(t *testing.T) {
 	}
 
 	time.Sleep(150 * time.Millisecond)
-	err = d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
+	err = d.Dispatch(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
 	if err != nil {
-		t.Fatalf("expected enqueue after ttl expiry to succeed, got %v", err)
+		t.Fatalf("expected dispatch after ttl expiry to succeed, got %v", err)
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("expected 2 calls after ttl expiry, got %d", calls.Load())
 	}
 }
 
-func TestLocalQueue_WorkerpoolEnqueueRunsOnWorkers(t *testing.T) {
+func TestLocalQueue_WorkerpoolDispatchRunsOnWorkers(t *testing.T) {
 	t.Setenv("QUEUE_WORKERPOOL_WORKERS", "2")
 	t.Setenv("QUEUE_WORKERPOOL_BUFFER", "4")
 
@@ -118,8 +118,8 @@ func TestLocalQueue_WorkerpoolEnqueueRunsOnWorkers(t *testing.T) {
 		return nil
 	})
 
-	if err := d.Enqueue(context.Background(), NewTask("job:workerpool").OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := d.Dispatch(context.Background(), NewTask("job:workerpool").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {
@@ -129,9 +129,9 @@ func TestLocalQueue_WorkerpoolEnqueueRunsOnWorkers(t *testing.T) {
 	}
 }
 
-func TestLocalQueue_WorkerpoolEnqueueMissingHandlerFails(t *testing.T) {
+func TestLocalQueue_WorkerpoolDispatchMissingHandlerFails(t *testing.T) {
 	d := newLocalQueue(DriverWorkerpool)
-	err := d.Enqueue(context.Background(), NewTask("job:missing").OnQueue("default"))
+	err := d.Dispatch(context.Background(), NewTask("job:missing").OnQueue("default"))
 	if err == nil {
 		t.Fatal("expected missing handler error")
 	}
@@ -149,8 +149,8 @@ func TestLocalQueue_WorkerpoolShutdownWaitsForRunningJobs(t *testing.T) {
 		return nil
 	})
 
-	if err := d.Enqueue(context.Background(), NewTask("job:slow").OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := d.Dispatch(context.Background(), NewTask("job:slow").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	shutdownDone := make(chan error, 1)
@@ -180,7 +180,7 @@ func TestLocalQueue_WorkerpoolShutdownWaitsForRunningJobs(t *testing.T) {
 	}
 }
 
-func TestLocalQueue_WorkerpoolShutdownRejectsNewEnqueue(t *testing.T) {
+func TestLocalQueue_WorkerpoolShutdownRejectsNewDispatch(t *testing.T) {
 	t.Setenv("QUEUE_WORKERPOOL_WORKERS", "1")
 	d := newLocalQueue(DriverWorkerpool)
 
@@ -189,9 +189,9 @@ func TestLocalQueue_WorkerpoolShutdownRejectsNewEnqueue(t *testing.T) {
 	}
 
 	d.Register("job:after-shutdown", func(_ context.Context, _ Task) error { return nil })
-	err := d.Enqueue(context.Background(), NewTask("job:after-shutdown").OnQueue("default"))
+	err := d.Dispatch(context.Background(), NewTask("job:after-shutdown").OnQueue("default"))
 	if err == nil {
-		t.Fatal("expected enqueue to fail after shutdown")
+		t.Fatal("expected dispatch to fail after shutdown")
 	}
 }
 
@@ -210,8 +210,8 @@ func TestLocalQueue_WorkerpoolSelfHealsQueueWhenNil(t *testing.T) {
 	d.workQueue = nil
 	d.queueMu.Unlock()
 
-	if err := d.Enqueue(context.Background(), NewTask("job:heal-queue").OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed after queue reset: %v", err)
+	if err := d.Dispatch(context.Background(), NewTask("job:heal-queue").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed after queue reset: %v", err)
 	}
 
 	select {
@@ -236,11 +236,11 @@ func TestLocalQueue_WorkerpoolRecoversWorkerAfterPanic(t *testing.T) {
 		return nil
 	})
 
-	if err := d.Enqueue(context.Background(), NewTask("job:panic-then-ok").OnQueue("default")); err != nil {
-		t.Fatalf("first enqueue failed: %v", err)
+	if err := d.Dispatch(context.Background(), NewTask("job:panic-then-ok").OnQueue("default")); err != nil {
+		t.Fatalf("first dispatch failed: %v", err)
 	}
-	if err := d.Enqueue(context.Background(), NewTask("job:panic-then-ok").OnQueue("default")); err != nil {
-		t.Fatalf("second enqueue failed: %v", err)
+	if err := d.Dispatch(context.Background(), NewTask("job:panic-then-ok").OnQueue("default")); err != nil {
+		t.Fatalf("second dispatch failed: %v", err)
 	}
 
 	select {
@@ -262,9 +262,9 @@ func TestLocalQueue_SyncRetriesWithBackoff(t *testing.T) {
 		return nil
 	})
 
-	err := d.Enqueue(context.Background(), NewTask("job:retry-sync").OnQueue("default").Retry(3).Backoff(5*time.Millisecond))
+	err := d.Dispatch(context.Background(), NewTask("job:retry-sync").OnQueue("default").Retry(3).Backoff(5*time.Millisecond))
 	if err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+		t.Fatalf("dispatch failed: %v", err)
 	}
 	if calls.Load() != 3 {
 		t.Fatalf("expected 3 attempts, got %d", calls.Load())
@@ -288,8 +288,8 @@ func TestLocalQueue_WorkerpoolRetriesWithBackoff(t *testing.T) {
 		return nil
 	})
 
-	if err := d.Enqueue(context.Background(), NewTask("job:retry-workerpool").OnQueue("default").Retry(2).Backoff(5*time.Millisecond)); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := d.Dispatch(context.Background(), NewTask("job:retry-workerpool").OnQueue("default").Retry(2).Backoff(5*time.Millisecond)); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {

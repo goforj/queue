@@ -13,16 +13,17 @@ import (
 
 func TestObservabilityIntegration_AllBackends(t *testing.T) {
 	fixtures := []struct {
-		name      string
-		queue     string
-		native    bool
-		newQueue  func(t *testing.T, collector *StatsCollector) Queue
-		newWorker func(t *testing.T, collector *StatsCollector) Worker
+		name     string
+		queue    string
+		native   bool
+		workers  int
+		newQueue func(t *testing.T, collector *StatsCollector) Queue
 	}{
 		{
-			name:   "redis",
-			queue:  "default",
-			native: true,
+			name:    "redis",
+			queue:   "default",
+			native:  true,
+			workers: 2,
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				q, err := New(Config{
 					Driver:    DriverRedis,
@@ -34,23 +35,12 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T, collector *StatsCollector) Worker {
-				w, err := NewWorker(WorkerConfig{
-					Driver:    DriverRedis,
-					RedisAddr: integrationRedis.addr,
-					Workers:   2,
-					Observer:  collector,
-				})
-				if err != nil {
-					t.Fatalf("new redis worker failed: %v", err)
-				}
-				return w
-			},
 		},
 		{
-			name:   "mysql",
-			queue:  "obs_mysql",
-			native: true,
+			name:    "mysql",
+			queue:   "obs_mysql",
+			native:  true,
+			workers: 2,
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				q, err := New(Config{
 					Driver:         DriverDatabase,
@@ -63,26 +53,12 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T, collector *StatsCollector) Worker {
-				w, err := NewWorker(WorkerConfig{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "mysql",
-					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-					Workers:        2,
-					PollInterval:   10 * time.Millisecond,
-					DefaultQueue:   "obs_mysql",
-					Observer:       collector,
-				})
-				if err != nil {
-					t.Fatalf("new mysql worker failed: %v", err)
-				}
-				return w
-			},
 		},
 		{
-			name:   "postgres",
-			queue:  "obs_postgres",
-			native: true,
+			name:    "postgres",
+			queue:   "obs_postgres",
+			native:  true,
+			workers: 2,
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				q, err := New(Config{
 					Driver:         DriverDatabase,
@@ -95,26 +71,12 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T, collector *StatsCollector) Worker {
-				w, err := NewWorker(WorkerConfig{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "pgx",
-					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-					Workers:        2,
-					PollInterval:   10 * time.Millisecond,
-					DefaultQueue:   "obs_postgres",
-					Observer:       collector,
-				})
-				if err != nil {
-					t.Fatalf("new postgres worker failed: %v", err)
-				}
-				return w
-			},
 		},
 		{
-			name:   "sqlite",
-			queue:  "obs_sqlite",
-			native: true,
+			name:    "sqlite",
+			queue:   "obs_sqlite",
+			native:  true,
+			workers: 2,
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				dsn := fmt.Sprintf("%s/obs-%d.db", t.TempDir(), time.Now().UnixNano())
 				q, err := New(Config{
@@ -128,27 +90,11 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T, collector *StatsCollector) Worker {
-				dsn := fmt.Sprintf("%s/obs-%d.db", t.TempDir(), time.Now().UnixNano())
-				// Keep sqlite fixture DSN shared per subtest by overriding in test body.
-				w, err := NewWorker(WorkerConfig{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "sqlite",
-					DatabaseDSN:    dsn,
-					Workers:        2,
-					PollInterval:   10 * time.Millisecond,
-					DefaultQueue:   "obs_sqlite",
-					Observer:       collector,
-				})
-				if err != nil {
-					t.Fatalf("new sqlite worker failed: %v", err)
-				}
-				return w
-			},
 		},
 		{
-			name:  "nats",
-			queue: "obs_nats",
+			name:    "nats",
+			queue:   "obs_nats",
+			workers: 2,
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				q, err := New(Config{
 					Driver:   DriverNATS,
@@ -160,21 +106,11 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T, collector *StatsCollector) Worker {
-				w, err := NewWorker(WorkerConfig{
-					Driver:   DriverNATS,
-					NATSURL:  integrationNATS.url,
-					Observer: collector,
-				})
-				if err != nil {
-					t.Fatalf("new nats worker failed: %v", err)
-				}
-				return w
-			},
 		},
 		{
-			name:  "sqs",
-			queue: "obs_sqs",
+			name:    "sqs",
+			queue:   "obs_sqs",
+			workers: 2,
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				q, err := New(Config{
 					Driver:       DriverSQS,
@@ -189,25 +125,11 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T, collector *StatsCollector) Worker {
-				w, err := NewWorker(WorkerConfig{
-					Driver:       DriverSQS,
-					SQSEndpoint:  integrationSQS.endpoint,
-					SQSRegion:    integrationSQS.region,
-					SQSAccessKey: integrationSQS.accessKey,
-					SQSSecretKey: integrationSQS.secretKey,
-					DefaultQueue: "obs_sqs",
-					Observer:     collector,
-				})
-				if err != nil {
-					t.Fatalf("new sqs worker failed: %v", err)
-				}
-				return w
-			},
 		},
 		{
-			name:  "rabbitmq",
-			queue: "obs_rabbitmq",
+			name:    "rabbitmq",
+			queue:   "obs_rabbitmq",
+			workers: 2,
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				q, err := New(Config{
 					Driver:      DriverRabbitMQ,
@@ -218,18 +140,6 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 					t.Fatalf("new rabbitmq queue failed: %v", err)
 				}
 				return q
-			},
-			newWorker: func(t *testing.T, collector *StatsCollector) Worker {
-				w, err := NewWorker(WorkerConfig{
-					Driver:       DriverRabbitMQ,
-					RabbitMQURL:  integrationRabbitMQ.url,
-					DefaultQueue: "obs_rabbitmq",
-					Observer:     collector,
-				})
-				if err != nil {
-					t.Fatalf("new rabbitmq worker failed: %v", err)
-				}
-				return w
 			},
 		},
 	}
@@ -242,41 +152,8 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			}
 
 			collector := NewStatsCollector()
-			if fx.name == "sqlite" {
-				dsn := fmt.Sprintf("%s/obs-%d.db", t.TempDir(), time.Now().UnixNano())
-				fx.newQueue = func(t *testing.T, collector *StatsCollector) Queue {
-					q, err := New(Config{
-						Driver:         DriverDatabase,
-						DatabaseDriver: "sqlite",
-						DatabaseDSN:    dsn,
-						Observer:       collector,
-					})
-					if err != nil {
-						t.Fatalf("new sqlite queue failed: %v", err)
-					}
-					return q
-				}
-				fx.newWorker = func(t *testing.T, collector *StatsCollector) Worker {
-					w, err := NewWorker(WorkerConfig{
-						Driver:         DriverDatabase,
-						DatabaseDriver: "sqlite",
-						DatabaseDSN:    dsn,
-						Workers:        2,
-						PollInterval:   10 * time.Millisecond,
-						DefaultQueue:   "obs_sqlite",
-						Observer:       collector,
-					})
-					if err != nil {
-						t.Fatalf("new sqlite worker failed: %v", err)
-					}
-					return w
-				}
-			}
-
 			q := fx.newQueue(t, collector)
-			w := fx.newWorker(t, collector)
 			t.Cleanup(func() { _ = q.Shutdown(context.Background()) })
-			t.Cleanup(func() { _ = w.Shutdown() })
 
 			okType := "job:obs:ok:" + fx.name
 			failType := "job:obs:fail:" + fx.name
@@ -284,28 +161,28 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			var failedCalls atomic.Int64
 
 			t.Run("scenario_register_handlers", func(t *testing.T) {
-				w.Register(okType, func(_ context.Context, _ Task) error {
+				q.Register(okType, func(_ context.Context, _ Task) error {
 					select {
 					case okDone <- struct{}{}:
 					default:
 					}
 					return nil
 				})
-				w.Register(failType, func(_ context.Context, _ Task) error {
+				q.Register(failType, func(_ context.Context, _ Task) error {
 					failedCalls.Add(1)
 					return errors.New("obs boom")
 				})
 			})
 
 			t.Run("scenario_start_worker", func(t *testing.T) {
-				requireScenarioNoErr(t, "start_worker", w.Start())
+				requireScenarioNoErr(t, "start_worker", q.Workers(fx.workers).StartWorkers(context.Background()))
 			})
 
-			t.Run("scenario_enqueue_success", func(t *testing.T) {
+			t.Run("scenario_dispatch_success", func(t *testing.T) {
 				okTask := NewTask(okType).
 					Payload(scenarioPayload{ID: 1, Name: "obs-ok"}).
 					OnQueue(fx.queue)
-				requireScenarioNoErr(t, "enqueue_success", q.Enqueue(context.Background(), okTask))
+				requireScenarioNoErr(t, "dispatch_success", q.DispatchCtx(context.Background(), okTask))
 				select {
 				case <-okDone:
 				case <-time.After(12 * time.Second):
@@ -313,25 +190,25 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 			})
 
-			t.Run("scenario_enqueue_retry_archive", func(t *testing.T) {
+			t.Run("scenario_dispatch_retry_archive", func(t *testing.T) {
 				failTask := NewTask(failType).
 					Payload(scenarioPayload{ID: 2, Name: "obs-fail"}).
 					OnQueue(fx.queue).
 					Retry(0)
-				requireScenarioNoErr(t, "enqueue_retry_archive", q.Enqueue(context.Background(), failTask))
+				requireScenarioNoErr(t, "dispatch_retry_archive", q.DispatchCtx(context.Background(), failTask))
 				waitForObservabilityScenario(t, "retry_archive_attempts", 12*time.Second, func() bool {
 					return failedCalls.Load() >= 1
 				})
 			})
 
 			if fx.name != "redis" {
-				t.Run("scenario_enqueue_retried_task", func(t *testing.T) {
+				t.Run("scenario_dispatch_retried_task", func(t *testing.T) {
 					retryTask := NewTask(failType).
 						Payload(scenarioPayload{ID: 3, Name: "obs-retry"}).
 						OnQueue(fx.queue).
 						Retry(1).
 						Backoff(20 * time.Millisecond)
-					requireScenarioNoErr(t, "enqueue_retried_task", q.Enqueue(context.Background(), retryTask))
+					requireScenarioNoErr(t, "dispatch_retried_task", q.DispatchCtx(context.Background(), retryTask))
 					waitForObservabilityScenario(t, "retried_task_attempts", 12*time.Second, func() bool {
 						return failedCalls.Load() >= 3
 					})
@@ -593,7 +470,12 @@ func waitForObservabilityScenario(t *testing.T, scenario string, timeout time.Du
 
 type noStatsQueue struct{}
 
-func (noStatsQueue) Start(context.Context) error         { return nil }
-func (noStatsQueue) Shutdown(context.Context) error      { return nil }
-func (noStatsQueue) Register(string, Handler)            {}
-func (noStatsQueue) Enqueue(context.Context, Task) error { return nil }
+func (noStatsQueue) Driver() Driver                     { return DriverSync }
+func (noStatsQueue) StartWorkers(context.Context) error { return nil }
+func (noStatsQueue) Workers(int) Queue                  { return noStatsQueue{} }
+func (noStatsQueue) Shutdown(context.Context) error     { return nil }
+func (noStatsQueue) Register(string, Handler)           {}
+func (noStatsQueue) Dispatch(any) error                 { return nil }
+func (noStatsQueue) DispatchCtx(context.Context, any) error {
+	return nil
+}

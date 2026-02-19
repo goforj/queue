@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+func startTestQueue(t *testing.T, q Queue) {
+	t.Helper()
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Shutdown(context.Background()) })
+}
+
 func TestStatsCollector_CapturesQueueProcessing(t *testing.T) {
 	collector := NewStatsCollector()
 	q, err := New(Config{
@@ -18,9 +26,10 @@ func TestStatsCollector_CapturesQueueProcessing(t *testing.T) {
 		t.Fatalf("new queue failed: %v", err)
 	}
 
+	startTestQueue(t, q)
 	q.Register("job:obs:ok", func(_ context.Context, _ Task) error { return nil })
-	if err := q.Enqueue(context.Background(), NewTask("job:obs:ok").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), NewTask("job:obs:ok").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	stats := collector.Snapshot()
@@ -46,8 +55,9 @@ func TestStatsCollector_CapturesProcessingFailure(t *testing.T) {
 		t.Fatalf("new queue failed: %v", err)
 	}
 
+	startTestQueue(t, q)
 	q.Register("job:obs:fail", func(_ context.Context, _ Task) error { return errors.New("boom") })
-	_ = q.Enqueue(context.Background(), NewTask("job:obs:fail").Payload([]byte(`{}`)).OnQueue("default").Retry(0))
+	_ = q.DispatchCtx(context.Background(), NewTask("job:obs:fail").Payload([]byte(`{}`)).OnQueue("default").Retry(0))
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -108,7 +118,7 @@ func TestStatsSnapshot_Getters(t *testing.T) {
 	}
 }
 
-func TestObserverPanic_DoesNotBreakEnqueue(t *testing.T) {
+func TestObserverPanic_DoesNotBreakDispatch(t *testing.T) {
 	q, err := New(Config{
 		Driver: DriverSync,
 		Observer: ObserverFunc(func(Event) {
@@ -118,9 +128,10 @@ func TestObserverPanic_DoesNotBreakEnqueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
+	startTestQueue(t, q)
 	q.Register("job:panic:enqueue", func(_ context.Context, _ Task) error { return nil })
-	if err := q.Enqueue(context.Background(), NewTask("job:panic:enqueue").OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), NewTask("job:panic:enqueue").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 }
 
@@ -135,12 +146,13 @@ func TestObserverPanic_DoesNotBreakHandlerExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
+	startTestQueue(t, q)
 	q.Register("job:panic:handler", func(_ context.Context, _ Task) error {
 		called.Add(1)
 		return nil
 	})
-	if err := q.Enqueue(context.Background(), NewTask("job:panic:handler").OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), NewTask("job:panic:handler").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 	if called.Load() != 1 {
 		t.Fatalf("expected handler to run once, got %d", called.Load())

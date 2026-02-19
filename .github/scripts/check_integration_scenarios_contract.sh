@@ -7,18 +7,18 @@ repo_root="$(cd -- "${script_dir}/../.." >/dev/null 2>&1 && pwd)"
 required_backends=(redis mysql postgres sqlite nats sqs rabbitmq)
 required_integration_scenarios=(
   scenario_register_handler
-  scenario_start_idempotent
-  scenario_enqueue_burst
+  scenario_startworkers_idempotent
+  scenario_dispatch_burst
   scenario_wait_all_processed
   scenario_poison_message_max_retry
   scenario_worker_restart_recovery
   scenario_bind_invalid_json
   scenario_unique_queue_scope
-  scenario_enqueue_context_cancellation
+  scenario_dispatch_context_cancellation
   scenario_shutdown_during_delay_retry
   scenario_multi_worker_contention
   scenario_duplicate_delivery_idempotency
-  scenario_enqueue_during_broker_fault
+  scenario_dispatch_during_broker_fault
   scenario_consume_after_broker_recovery
   scenario_ordering_contract
   scenario_backpressure_saturation
@@ -62,10 +62,6 @@ backend_pattern() {
 for backend in "${required_backends[@]}"; do
   if ! has_pattern "$(backend_pattern "${backend}")" "${repo_root}/contract_integration_test.go"; then
     echo "missing backend ${backend} in contract_integration_test.go"
-    exit 1
-  fi
-  if ! has_pattern "$(backend_pattern "${backend}")" "${repo_root}/worker_contract_integration_test.go"; then
-    echo "missing backend ${backend} in worker_contract_integration_test.go"
     exit 1
   fi
   if ! has_pattern "$(backend_pattern "${backend}")" "${repo_root}/observability_integration_test.go"; then

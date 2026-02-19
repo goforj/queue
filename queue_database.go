@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,12 +31,7 @@ type DatabaseConfig struct {
 }
 
 func (c DatabaseConfig) normalize() DatabaseConfig {
-	if c.Workers <= 0 {
-		c.Workers = runtime.NumCPU()
-	}
-	if c.Workers <= 0 {
-		c.Workers = 1
-	}
+	c.Workers = defaultWorkerCount(c.Workers)
 	if c.PollInterval <= 0 {
 		c.PollInterval = 50 * time.Millisecond
 	}
@@ -79,7 +73,7 @@ type dbJob struct {
 	attempt        int
 }
 
-func newDatabaseQueue(cfg DatabaseConfig) (Queue, error) {
+func newDatabaseQueue(cfg DatabaseConfig) (queueBackend, error) {
 	cfg = cfg.normalize()
 	if cfg.DB == nil {
 		if cfg.DriverName == "" {
@@ -124,7 +118,7 @@ func (d *databaseQueue) Register(taskType string, handler Handler) {
 	d.mu.Unlock()
 }
 
-func (d *databaseQueue) Start(ctx context.Context) error {
+func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -165,7 +159,7 @@ func (d *databaseQueue) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *databaseQueue) Enqueue(ctx context.Context, task Task) error {
+func (d *databaseQueue) Dispatch(ctx context.Context, task Task) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -176,7 +170,7 @@ func (d *databaseQueue) Enqueue(ctx context.Context, task Task) error {
 		return err
 	}
 	if !d.started.Load() && d.hasHandlers() {
-		if err := d.Start(context.Background()); err != nil {
+		if err := d.StartWorkers(context.Background()); err != nil {
 			return err
 		}
 	}

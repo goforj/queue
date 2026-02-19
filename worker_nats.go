@@ -20,7 +20,7 @@ type natsWorker struct {
 	start sync.Once
 }
 
-func newNATSWorker(url string) Worker {
+func newNATSWorker(url string) workerRuntime {
 	return &natsWorker{
 		url:      url,
 		handlers: make(map[string]Handler),

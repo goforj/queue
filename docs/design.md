@@ -28,7 +28,7 @@ Provide one stable queue API that can run across multiple backends without forci
 
 Primary objectives:
 
-- consistent enqueue/handler programming model
+- consistent dispatch/handler programming model
 - explicit task metadata (retry/delay/timeout/queue/uniqueness)
 - backend-specific durability/performance where available
 - strong reliability and scenario coverage across supported drivers
@@ -40,8 +40,9 @@ Primary objectives:
 
 `Queue` is the runtime abstraction:
 
-- `Start(ctx context.Context) error`
-- `Enqueue(ctx context.Context, task Task) error`
+- `StartWorkers(ctx context.Context) error`
+- `Dispatch(job any) error`
+- `DispatchCtx(ctx context.Context, task any) error`
 - `Register(taskType string, handler Handler)`
 - `Shutdown(ctx context.Context) error`
 
@@ -53,22 +54,24 @@ Constructor:
 
 ## Worker API
 
-`Worker` is separate from `Queue` for backends where producer/consumer lifecycle are split:
+`Worker` remains an internal runtime wrapper used by queue implementations:
 
 - `Driver() Driver`
 - `Register(taskType string, handler Handler)`
-- `Start() error`
+- `StartWorkers(context.Context) error`
 - `Shutdown() error`
 
-Constructor:
+Constructor path:
 
-- `NewWorker(cfg WorkerConfig) (Worker, error)`
+- `q, _ := New(cfg)`
+- `q.Register(...)`
+- `q.StartWorkers(ctx, n)`
 
-`WorkerConfig` is intentionally separate from `Config` so execution-side knobs and enqueue-side knobs are documented independently.
+Worker execution settings are configured from `Queue` via `Workers(n).StartWorkers(ctx)`; there is no separate public worker config surface.
 
 ## Task API (fluent value object)
 
-`Task` is immutable-ish via value receivers and explicit execution boundary (`Queue.Enqueue`):
+`Task` is immutable-ish via value receivers and explicit execution boundary (`Queue.DispatchCtx`):
 
 - `NewTask(taskType string) Task`
 - `Payload(any) Task`
@@ -85,7 +88,7 @@ Constructor:
 Important behavior:
 
 - Task contains data/metadata only.
-- No `Task.Enqueue()` or hidden dispatch paths.
+- No `Task.Dispatch()` or hidden dispatch paths.
 - `Bind` enforces pointer destination and uses JSON unmarshal.
 
 ## Driver architecture
@@ -110,13 +113,13 @@ Execution model summary:
 Implementation detail:
 
 - Constructors wrap queue/worker with observed wrappers when `Observer` is configured.
-- Observed wrappers emit normalized events around enqueue and processing lifecycle.
+- Observed wrappers emit normalized events around dispatch and processing lifecycle.
 
 ## Observability design
 
 Primary types:
 
-- `EventKind` (enqueue/process/pause lifecycle constants)
+- `EventKind` (dispatch/process/pause lifecycle constants)
 - `Event` (kind, driver, queue, task type/key, retry/attempt, timing, error)
 - `Observer` + `ObserverFunc`
 - `StatsCollector`
@@ -158,12 +161,12 @@ Core scenario test:
 Named scenario coverage includes:
 
 - lifecycle idempotency
-- burst enqueue + completion
+- burst dispatch + completion
 - poison/retry behavior
 - restart recovery
 - invalid bind payload handling
 - uniqueness scope
-- context-cancel enqueue behavior
+- context-cancel dispatch behavior
 - shutdown during delayed/retry load
 - contention and idempotency patterns
 - broker fault + recovery path

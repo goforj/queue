@@ -34,14 +34,14 @@ func (q *natsQueue) Driver() Driver {
 	return DriverNATS
 }
 
-func newNATSQueue(url string) Queue {
+func newNATSQueue(url string) queueBackend {
 	return &natsQueue{
 		url:    url,
 		unique: make(map[string]time.Time),
 	}
 }
 
-func (q *natsQueue) Start(_ context.Context) error {
+func (q *natsQueue) ensureConn() error {
 	if q.nc != nil {
 		return nil
 	}
@@ -62,11 +62,7 @@ func (q *natsQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (q *natsQueue) Register(_ string, _ Handler) {
-	// No-op for nats queue runtime; handlers are registered on Worker.
-}
-
-func (q *natsQueue) Enqueue(_ context.Context, task Task) error {
+func (q *natsQueue) Dispatch(_ context.Context, task Task) error {
 	if err := task.validate(); err != nil {
 		return err
 	}
@@ -75,7 +71,7 @@ func (q *natsQueue) Enqueue(_ context.Context, task Task) error {
 		return fmt.Errorf("task queue is required")
 	}
 	if q.nc == nil {
-		if err := q.Start(context.Background()); err != nil {
+		if err := q.ensureConn(); err != nil {
 			return err
 		}
 	}

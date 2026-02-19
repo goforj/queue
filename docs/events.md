@@ -10,12 +10,12 @@ This document defines the public observability event contract emitted through `O
 
 ## Event kinds
 
-Enqueue lifecycle:
+Dispatch lifecycle:
 
-- `EventEnqueueAccepted`: task accepted for enqueue.
-- `EventEnqueueRejected`: enqueue failed with error.
-- `EventEnqueueDuplicate`: enqueue rejected as duplicate (`UniqueFor`).
-- `EventEnqueueCanceled`: enqueue canceled by context.
+- `EventEnqueueAccepted`: task accepted for dispatch.
+- `EventEnqueueRejected`: dispatch failed with error.
+- `EventEnqueueDuplicate`: dispatch rejected as duplicate (`UniqueFor`).
+- `EventEnqueueCanceled`: dispatch canceled by context.
 
 Processing lifecycle:
 
@@ -63,7 +63,7 @@ Failure/cancel/reject events additionally include:
 
 Guaranteed across all drivers:
 
-- Enqueue lifecycle events
+- Dispatch lifecycle events
 - Processing lifecycle events (as supported by each runtime path)
 
 Driver-specific capabilities:

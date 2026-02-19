@@ -45,13 +45,17 @@ func BenchmarkEnqueueSync_NoObserver(b *testing.B) {
 		b.Fatalf("new queue failed: %v", err)
 	}
 	q.Register("job:bench:no-observer", func(context.Context, Task) error { return nil })
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		b.Fatalf("start workers failed: %v", err)
+	}
+	defer q.Shutdown(context.Background())
 	task := NewTask("job:bench:no-observer").OnQueue("default")
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := q.Enqueue(context.Background(), task); err != nil {
-			b.Fatalf("enqueue failed: %v", err)
+		if err := q.DispatchCtx(context.Background(), task); err != nil {
+			b.Fatalf("dispatch failed: %v", err)
 		}
 	}
 }
@@ -66,13 +70,17 @@ func BenchmarkEnqueueSync_WithObserver(b *testing.B) {
 		b.Fatalf("new queue failed: %v", err)
 	}
 	q.Register("job:bench:with-observer", func(context.Context, Task) error { return nil })
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		b.Fatalf("start workers failed: %v", err)
+	}
+	defer q.Shutdown(context.Background())
 	task := NewTask("job:bench:with-observer").OnQueue("default")
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := q.Enqueue(context.Background(), task); err != nil {
-			b.Fatalf("enqueue failed: %v", err)
+		if err := q.DispatchCtx(context.Background(), task); err != nil {
+			b.Fatalf("dispatch failed: %v", err)
 		}
 	}
 }

@@ -20,7 +20,7 @@ type sqsWorkerClient interface {
 }
 
 type sqsWorker struct {
-	cfg WorkerConfig
+	cfg workerConfig
 
 	mu       sync.RWMutex
 	handlers map[string]Handler
@@ -33,7 +33,7 @@ type sqsWorker struct {
 	startStop sync.Mutex
 }
 
-func newSQSWorker(cfg WorkerConfig) Worker {
+func newSQSWorker(cfg workerConfig) workerRuntime {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
 	}

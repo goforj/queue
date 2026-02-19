@@ -32,5 +32,5 @@ func main() {
 		Payload(EmailPayload{ID: 1}).
 		OnQueue("default").
 		Delay(10 * time.Millisecond)
-	_ = q.Enqueue(context.Background(), task)
+	_ = q.DispatchCtx(context.Background(), task)
 }

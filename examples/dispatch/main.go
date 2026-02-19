@@ -6,12 +6,13 @@ package main
 import (
 	"context"
 	"github.com/goforj/queue"
+	"time"
 )
 
 func main() {
-	// New creates a queue based on Config.Driver.
+	// Dispatch schedules or executes a task using the local driver.
 
-	// Example: new queue from config
+	// Example: local dispatch
 	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		return
@@ -27,12 +28,9 @@ func main() {
 		_ = payload
 		return nil
 	})
-	_ = q.Workers(1).StartWorkers(context.Background())
-	defer q.Shutdown(context.Background())
-	_ = q.DispatchCtx(
-		context.Background(),
-		queue.NewTask("emails:send").
-			Payload(EmailPayload{ID: 1}).
-			OnQueue("default"),
-	)
+	task := queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1}).
+		OnQueue("default").
+		Delay(10 * time.Millisecond)
+	_ = q.DispatchCtx(context.Background(), task)
 }

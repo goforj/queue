@@ -32,7 +32,7 @@ type redisQueue struct {
 
 const redisDefaultTaskTimeout = 30 * time.Second
 
-func newRedisQueue(client redisEnqueueClient, inspector redisInspector, ownsClient bool) Queue {
+func newRedisQueue(client redisEnqueueClient, inspector redisInspector, ownsClient bool) queueBackend {
 	return &redisQueue{client: client, inspector: inspector, ownsClient: ownsClient}
 }
 
@@ -56,14 +56,6 @@ func (d *redisQueue) Driver() Driver {
 	return DriverRedis
 }
 
-func (d *redisQueue) Register(_ string, _ Handler) {
-	// No-op for redis queue runtime; workers register handlers on server mux.
-}
-
-func (d *redisQueue) Start(_ context.Context) error {
-	return nil
-}
-
 func (d *redisQueue) Shutdown(_ context.Context) error {
 	if d.ownsClient && d.client != nil {
 		d.closeOnce.Do(func() {
@@ -73,7 +65,7 @@ func (d *redisQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (d *redisQueue) Enqueue(_ context.Context, task Task) error {
+func (d *redisQueue) Dispatch(_ context.Context, task Task) error {
 	if d.client == nil {
 		return fmt.Errorf("queue client unavailable for redis driver")
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 type rabbitMQWorker struct {
-	cfg WorkerConfig
+	cfg workerConfig
 
 	mu       sync.RWMutex
 	handlers map[string]Handler
@@ -27,7 +27,7 @@ type rabbitMQWorker struct {
 	pubMu sync.Mutex
 }
 
-func newRabbitMQWorker(cfg WorkerConfig) Worker {
+func newRabbitMQWorker(cfg workerConfig) workerRuntime {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
 	}
@@ -201,9 +201,9 @@ func (w *rabbitMQWorker) publish(message rabbitMQMessage) error {
 	if err != nil {
 		return err
 	}
-	queueName := message.Queue
+	queueName := w.cfg.DefaultQueue
 	if queueName == "" {
-		queueName = w.cfg.DefaultQueue
+		queueName = "default"
 	}
 	delay := time.Duration(0)
 	if message.AvailableAtMS > 0 {

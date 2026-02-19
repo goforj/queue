@@ -20,14 +20,6 @@ func newRabbitMQIntegrationConfig() Config {
 	}
 }
 
-func newRabbitMQWorkerIntegrationConfig() WorkerConfig {
-	return WorkerConfig{
-		Driver:       DriverRabbitMQ,
-		RabbitMQURL:  integrationRabbitMQ.url,
-		DefaultQueue: "default",
-	}
-}
-
 func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if !integrationBackendEnabled("rabbitmq") {
 		t.Skip("rabbitmq integration backend not selected")
@@ -37,11 +29,11 @@ func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 	}
 	received := make(chan payload, 1)
 
-	worker, err := NewWorker(newRabbitMQWorkerIntegrationConfig())
+	q, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new rabbitmq worker failed: %v", err)
+		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
-	worker.Register("job:rabbitmq:bind", func(_ context.Context, task Task) error {
+	q.Register("job:rabbitmq:bind", func(_ context.Context, task Task) error {
 		var in payload
 		if err := task.Bind(&in); err != nil {
 			return err
@@ -49,20 +41,14 @@ func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 		received <- in
 		return nil
 	})
-	if err := worker.Start(); err != nil {
-		t.Fatalf("rabbitmq worker start failed: %v", err)
-	}
-	t.Cleanup(func() { _ = worker.Shutdown() })
-
-	q, err := New(newRabbitMQIntegrationConfig())
-	if err != nil {
-		t.Fatalf("new rabbitmq queue failed: %v", err)
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 42}
-	if err := q.Enqueue(context.Background(), NewTask("job:rabbitmq:bind").Payload(want).OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), NewTask("job:rabbitmq:bind").Payload(want).OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {
@@ -87,11 +73,11 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 	var calls atomic.Int32
 	deadlineSeen := make(chan bool, 1)
 
-	worker, err := NewWorker(newRabbitMQWorkerIntegrationConfig())
+	q, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new rabbitmq worker failed: %v", err)
+		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
-	worker.Register("job:rabbitmq:opts", func(ctx context.Context, _ Task) error {
+	q.Register("job:rabbitmq:opts", func(ctx context.Context, _ Task) error {
 		if calls.Add(1) == 1 {
 			_, ok := ctx.Deadline()
 			deadlineSeen <- ok
@@ -102,14 +88,8 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 		done <- struct{}{}
 		return nil
 	})
-	if err := worker.Start(); err != nil {
-		t.Fatalf("rabbitmq worker start failed: %v", err)
-	}
-	t.Cleanup(func() { _ = worker.Shutdown() })
-
-	q, err := New(newRabbitMQIntegrationConfig())
-	if err != nil {
-		t.Fatalf("new rabbitmq queue failed: %v", err)
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
 
@@ -120,8 +100,8 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 		Timeout(timeout).
 		Retry(2).
 		Backoff(backoff)
-	if err := q.Enqueue(context.Background(), task); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), task); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {
@@ -159,17 +139,17 @@ func TestRabbitMQIntegration_UniqueDuplicate(t *testing.T) {
 	taskType := "job:rabbitmq:unique"
 	payload := []byte("same")
 	first := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
-	if err := q.Enqueue(context.Background(), first); err != nil {
-		t.Fatalf("first enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), first); err != nil {
+		t.Fatalf("first dispatch failed: %v", err)
 	}
 	second := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
-	err = q.Enqueue(context.Background(), second)
+	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
 	time.Sleep(600 * time.Millisecond)
-	if err := q.Enqueue(context.Background(), second); err != nil {
-		t.Fatalf("enqueue after ttl failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), second); err != nil {
+		t.Fatalf("dispatch after ttl failed: %v", err)
 	}
 }
 
@@ -183,62 +163,54 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	start := time.Now()
 	done := make(chan struct{}, 1)
 
-	newWorkerCfg := func() WorkerConfig {
-		return WorkerConfig{
-			Driver:       DriverRabbitMQ,
-			RabbitMQURL:  integrationRabbitMQ.url,
-			DefaultQueue: queueName,
-		}
-	}
-
-	worker, err := NewWorker(newWorkerCfg())
+	consumer1, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new rabbitmq worker failed: %v", err)
+		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	worker.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer1.Register(taskType, func(_ context.Context, _ Task) error {
 		select {
 		case done <- struct{}{}:
 		default:
 		}
 		return nil
 	})
-	if err := worker.Start(); err != nil {
-		t.Fatalf("rabbitmq worker start failed: %v", err)
+	if err := consumer1.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
 
-	q, err := New(newRabbitMQIntegrationConfig())
+	producer, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
-	defer q.Shutdown(context.Background())
+	defer producer.Shutdown(context.Background())
 
 	task := NewTask(taskType).
 		Payload(scenarioPayload{ID: 1, Name: "delay-restart"}).
 		OnQueue(queueName).
 		Delay(delay)
-	if err := q.Enqueue(context.Background(), task); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := producer.DispatchCtx(context.Background(), task); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
-	if err := worker.Shutdown(); err != nil {
-		t.Fatalf("rabbitmq worker shutdown failed: %v", err)
+	if err := consumer1.Shutdown(context.Background()); err != nil {
+		t.Fatalf("rabbitmq consumer queue shutdown failed: %v", err)
 	}
 
-	worker2, err := NewWorker(newWorkerCfg())
+	consumer2, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new rabbitmq worker 2 failed: %v", err)
+		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
-	worker2.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer2.Register(taskType, func(_ context.Context, _ Task) error {
 		select {
 		case done <- struct{}{}:
 		default:
 		}
 		return nil
 	})
-	if err := worker2.Start(); err != nil {
-		t.Fatalf("rabbitmq worker 2 start failed: %v", err)
+	if err := consumer2.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq consumer queue 2 start failed: %v", err)
 	}
-	defer worker2.Shutdown()
+	defer consumer2.Shutdown(context.Background())
 
 	select {
 	case <-done:
@@ -261,19 +233,11 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	done := make(chan struct{}, 1)
 	var calls atomic.Int32
 
-	newWorkerCfg := func() WorkerConfig {
-		return WorkerConfig{
-			Driver:       DriverRabbitMQ,
-			RabbitMQURL:  integrationRabbitMQ.url,
-			DefaultQueue: queueName,
-		}
-	}
-
-	worker, err := NewWorker(newWorkerCfg())
+	consumer1, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new rabbitmq worker failed: %v", err)
+		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	worker.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer1.Register(taskType, func(_ context.Context, _ Task) error {
 		if calls.Add(1) == 1 {
 			select {
 			case firstAttempt <- struct{}{}:
@@ -287,23 +251,23 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		}
 		return nil
 	})
-	if err := worker.Start(); err != nil {
-		t.Fatalf("rabbitmq worker start failed: %v", err)
+	if err := consumer1.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
 
-	q, err := New(newRabbitMQIntegrationConfig())
+	producer, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
-	defer q.Shutdown(context.Background())
+	defer producer.Shutdown(context.Background())
 
 	task := NewTask(taskType).
 		Payload(scenarioPayload{ID: 2, Name: "retry-restart"}).
 		OnQueue(queueName).
 		Retry(1).
 		Backoff(backoff)
-	if err := q.Enqueue(context.Background(), task); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := producer.DispatchCtx(context.Background(), task); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {
@@ -311,15 +275,15 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for first retry attempt")
 	}
-	if err := worker.Shutdown(); err != nil {
-		t.Fatalf("rabbitmq worker shutdown failed: %v", err)
+	if err := consumer1.Shutdown(context.Background()); err != nil {
+		t.Fatalf("rabbitmq consumer queue shutdown failed: %v", err)
 	}
 
-	worker2, err := NewWorker(newWorkerCfg())
+	consumer2, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new rabbitmq worker 2 failed: %v", err)
+		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
-	worker2.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer2.Register(taskType, func(_ context.Context, _ Task) error {
 		if calls.Add(1) == 1 {
 			return errors.New("retry once")
 		}
@@ -329,10 +293,10 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		}
 		return nil
 	})
-	if err := worker2.Start(); err != nil {
-		t.Fatalf("rabbitmq worker 2 start failed: %v", err)
+	if err := consumer2.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq consumer queue 2 start failed: %v", err)
 	}
-	defer worker2.Shutdown()
+	defer consumer2.Shutdown(context.Background())
 
 	select {
 	case <-done:
@@ -354,25 +318,21 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	start := time.Now()
 	done := make(chan struct{}, 1)
 
-	worker, err := NewWorker(WorkerConfig{
-		Driver:       DriverRabbitMQ,
-		RabbitMQURL:  integrationRabbitMQ.url,
-		DefaultQueue: queueName,
-	})
+	consumer, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new rabbitmq worker failed: %v", err)
+		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	worker.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer.Register(taskType, func(_ context.Context, _ Task) error {
 		select {
 		case done <- struct{}{}:
 		default:
 		}
 		return nil
 	})
-	if err := worker.Start(); err != nil {
-		t.Fatalf("rabbitmq worker start failed: %v", err)
+	if err := consumer.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
-	defer worker.Shutdown()
+	defer consumer.Shutdown(context.Background())
 
 	q, err := New(newRabbitMQIntegrationConfig())
 	if err != nil {
@@ -384,8 +344,8 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 		Payload(scenarioPayload{ID: 3, Name: "delay-queue"}).
 		OnQueue(queueName).
 		Delay(delay)
-	if err := q.Enqueue(context.Background(), task); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), task); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	conn, err := amqp.Dial(integrationRabbitMQ.url)
@@ -399,7 +359,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	}
 	defer ch.Close()
 
-	delayQueue := fmt.Sprintf("%s.delay", queueName)
+	delayQueue := fmt.Sprintf("%s.delay", "default")
 	deadline := time.Now().Add(5 * time.Second)
 	sawBuffered := false
 	for time.Now().Before(deadline) {

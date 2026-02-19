@@ -4,44 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/hibiken/asynq"
 )
 
-// Worker processes queued tasks using registered handlers.
-// @group Worker
-//
-// Example: worker lifecycle
-//
-//	worker, err := queue.NewWorker(queue.WorkerConfig{Driver: queue.DriverSync})
-//	if err != nil {
-//		return
-//	}
-//	type EmailPayload struct {
-//		ID int `json:"id"`
-//	}
-//	worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-//		var payload EmailPayload
-//		if err := task.Bind(&payload); err != nil {
-//			return err
-//		}
-//		_ = payload
-//		return nil
-//	})
-//	_ = worker.Start()
-//	_ = worker.Shutdown()
-type Worker interface {
+type workerRuntime interface {
 	Driver() Driver
 	Register(taskType string, handler Handler)
 	Start() error
 	Shutdown() error
 }
 
-// WorkerConfig configures worker creation for NewWorker.
+// workerConfig configures internal worker runtime creation.
 // @group Config
-type WorkerConfig struct {
+type workerConfig struct {
 	Driver   Driver
 	Observer Observer
 
@@ -71,51 +48,42 @@ type WorkerConfig struct {
 	RabbitMQURL string
 }
 
-// NewWorker creates a worker based on WorkerConfig.Driver.
-// @group Constructors
-//
-// Example: new sync worker
-//
-//	worker, err := queue.NewWorker(queue.WorkerConfig{
-//		Driver: queue.DriverSync,
-//	})
-//	if err != nil {
-//		return
-//	}
-//	type EmailPayload struct {
-//		ID int `json:"id"`
-//	}
-//	worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-//		var payload EmailPayload
-//		if err := task.Bind(&payload); err != nil {
-//			return err
-//		}
-//		_ = payload
-//		return nil
-//	})
-//	_ = worker.Start()
-//	_ = worker.Shutdown()
-func NewWorker(cfg WorkerConfig) (Worker, error) {
-	var worker Worker
+func newWorkerFromConfig(cfg workerConfig) (workerRuntime, error) {
+	var worker workerRuntime
 	var err error
 	switch cfg.Driver {
 	case DriverSync:
-		worker = &queueWorkerAdapter{q: newSyncQueue(), driver: DriverSync}
-	case DriverWorkerpool:
+		q := newSyncQueue()
 		worker = &queueWorkerAdapter{
-			q: newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{
-				Workers:            cfg.Workers,
-				QueueCapacity:      cfg.QueueCapacity,
-				DefaultTaskTimeout: cfg.DefaultTaskTimeout,
-			}.normalize()),
-			driver: DriverWorkerpool,
+			runtime: q.(interface {
+				Register(string, Handler)
+				StartWorkers(context.Context) error
+				Shutdown(context.Context) error
+			}),
+			driver: DriverSync,
+			dispatch: func(ctx context.Context, task Task) error {
+				return q.Dispatch(ctx, task)
+			},
+		}
+	case DriverWorkerpool:
+		q := newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{
+			Workers:            cfg.Workers,
+			QueueCapacity:      cfg.QueueCapacity,
+			DefaultTaskTimeout: cfg.DefaultTaskTimeout,
+		}.normalize())
+		worker = &queueWorkerAdapter{
+			runtime: q,
+			driver:  DriverWorkerpool,
+			dispatch: func(ctx context.Context, task Task) error {
+				return q.Dispatch(ctx, task)
+			},
 		}
 	case DriverDatabase:
 		autoMigrate := cfg.AutoMigrate
 		if !autoMigrate {
 			autoMigrate = true
 		}
-		var d Queue
+		var d queueBackend
 		d, err = newDatabaseQueue(DatabaseConfig{
 			DB:           cfg.Database,
 			DriverName:   cfg.DatabaseDriver,
@@ -128,18 +96,22 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 		if err != nil {
 			return nil, err
 		}
-		worker = &queueWorkerAdapter{q: d, driver: DriverDatabase}
+		worker = &queueWorkerAdapter{
+			runtime: d.(interface {
+				Register(string, Handler)
+				StartWorkers(context.Context) error
+				Shutdown(context.Context) error
+			}),
+			driver: DriverDatabase,
+			dispatch: func(ctx context.Context, task Task) error {
+				return d.Dispatch(ctx, task)
+			},
+		}
 	case DriverRedis:
 		if cfg.RedisAddr == "" {
 			return nil, fmt.Errorf("redis addr is required")
 		}
-		concurrency := cfg.Workers
-		if concurrency <= 0 {
-			concurrency = runtime.NumCPU()
-		}
-		if concurrency <= 0 {
-			concurrency = 1
-		}
+		concurrency := defaultWorkerCount(cfg.Workers)
 		worker = newRedisWorker(
 			asynq.NewServer(asynq.RedisClientOpt{
 				Addr:     cfg.RedisAddr,
@@ -170,8 +142,13 @@ func NewWorker(cfg WorkerConfig) (Worker, error) {
 }
 
 type queueWorkerAdapter struct {
-	q      Queue
-	driver Driver
+	runtime interface {
+		Register(taskType string, handler Handler)
+		StartWorkers(ctx context.Context) error
+		Shutdown(ctx context.Context) error
+	}
+	driver   Driver
+	dispatch func(ctx context.Context, task Task) error
 }
 
 func (w *queueWorkerAdapter) Driver() Driver {
@@ -179,13 +156,13 @@ func (w *queueWorkerAdapter) Driver() Driver {
 }
 
 func (w *queueWorkerAdapter) Register(taskType string, handler Handler) {
-	w.q.Register(taskType, handler)
+	w.runtime.Register(taskType, handler)
 }
 
 func (w *queueWorkerAdapter) Start() error {
-	return w.q.Start(context.Background())
+	return w.runtime.StartWorkers(context.Background())
 }
 
 func (w *queueWorkerAdapter) Shutdown() error {
-	return w.q.Shutdown(context.Background())
+	return w.runtime.Shutdown(context.Background())
 }

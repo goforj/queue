@@ -18,6 +18,6 @@ func main() {
 	if err != nil {
 		return
 	}
-	_ = q.Start(context.Background())
+	_ = q.StartWorkers(context.Background())
 	_ = q.Shutdown(context.Background())
 }

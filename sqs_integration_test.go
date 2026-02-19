@@ -20,17 +20,6 @@ func newSQSIntegrationConfig() Config {
 	}
 }
 
-func newSQSWorkerIntegrationConfig() WorkerConfig {
-	return WorkerConfig{
-		Driver:       DriverSQS,
-		SQSEndpoint:  integrationSQS.endpoint,
-		SQSRegion:    integrationSQS.region,
-		SQSAccessKey: integrationSQS.accessKey,
-		SQSSecretKey: integrationSQS.secretKey,
-		DefaultQueue: "default",
-	}
-}
-
 func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if !integrationBackendEnabled("sqs") {
 		t.Skip("sqs integration backend not selected")
@@ -40,11 +29,11 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	}
 	received := make(chan payload, 1)
 
-	worker, err := NewWorker(newSQSWorkerIntegrationConfig())
+	q, err := New(newSQSIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new sqs worker failed: %v", err)
+		t.Fatalf("new sqs queue failed: %v", err)
 	}
-	worker.Register("job:sqs:bind", func(_ context.Context, task Task) error {
+	q.Register("job:sqs:bind", func(_ context.Context, task Task) error {
 		var in payload
 		if err := task.Bind(&in); err != nil {
 			return err
@@ -52,20 +41,14 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 		received <- in
 		return nil
 	})
-	if err := worker.Start(); err != nil {
-		t.Fatalf("sqs worker start failed: %v", err)
-	}
-	t.Cleanup(func() { _ = worker.Shutdown() })
-
-	q, err := New(newSQSIntegrationConfig())
-	if err != nil {
-		t.Fatalf("new sqs queue failed: %v", err)
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("sqs queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 42}
-	if err := q.Enqueue(context.Background(), NewTask("job:sqs:bind").Payload(want).OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), NewTask("job:sqs:bind").Payload(want).OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {
@@ -90,11 +73,11 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 	var calls atomic.Int32
 	deadlineSeen := make(chan bool, 1)
 
-	worker, err := NewWorker(newSQSWorkerIntegrationConfig())
+	q, err := New(newSQSIntegrationConfig())
 	if err != nil {
-		t.Fatalf("new sqs worker failed: %v", err)
+		t.Fatalf("new sqs queue failed: %v", err)
 	}
-	worker.Register("job:sqs:opts", func(ctx context.Context, _ Task) error {
+	q.Register("job:sqs:opts", func(ctx context.Context, _ Task) error {
 		if calls.Add(1) == 1 {
 			_, ok := ctx.Deadline()
 			deadlineSeen <- ok
@@ -105,14 +88,8 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 		done <- struct{}{}
 		return nil
 	})
-	if err := worker.Start(); err != nil {
-		t.Fatalf("sqs worker start failed: %v", err)
-	}
-	t.Cleanup(func() { _ = worker.Shutdown() })
-
-	q, err := New(newSQSIntegrationConfig())
-	if err != nil {
-		t.Fatalf("new sqs queue failed: %v", err)
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("sqs queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
 
@@ -123,8 +100,8 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 		Timeout(timeout).
 		Retry(2).
 		Backoff(backoff)
-	if err := q.Enqueue(context.Background(), task); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), task); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {
@@ -162,16 +139,16 @@ func TestSQSIntegration_UniqueDuplicate(t *testing.T) {
 	taskType := "job:sqs:unique"
 	payload := []byte("same")
 	first := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
-	if err := q.Enqueue(context.Background(), first); err != nil {
-		t.Fatalf("first enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), first); err != nil {
+		t.Fatalf("first dispatch failed: %v", err)
 	}
 	second := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
-	err = q.Enqueue(context.Background(), second)
+	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
 	time.Sleep(600 * time.Millisecond)
-	if err := q.Enqueue(context.Background(), second); err != nil {
-		t.Fatalf("enqueue after ttl failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), second); err != nil {
+		t.Fatalf("dispatch after ttl failed: %v", err)
 	}
 }

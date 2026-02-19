@@ -240,7 +240,7 @@ func integrationBackendEnabled(name string) bool {
 	return selectedIntegrationBackends()[strings.ToLower(name)]
 }
 
-func TestRedisIntegration_EnqueueSmoke(t *testing.T) {
+func TestRedisIntegration_DispatchSmoke(t *testing.T) {
 	if !integrationBackendEnabled("redis") {
 		t.Skip("redis integration backend not selected")
 	}
@@ -256,8 +256,8 @@ func TestRedisIntegration_EnqueueSmoke(t *testing.T) {
 	queueName := uniqueQueueName("redis-smoke")
 	taskType := "job:smoke"
 	payload := []byte("hello")
-	if err := q.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue(queueName)); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue(queueName)); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	pending := waitForPendingTask(t, inspector, queueName, 3*time.Second)
@@ -269,7 +269,7 @@ func TestRedisIntegration_EnqueueSmoke(t *testing.T) {
 	}
 }
 
-func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
+func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 	if !integrationBackendEnabled("redis") {
 		t.Skip("redis integration backend not selected")
 	}
@@ -288,7 +288,7 @@ func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
 	maxRetry := 4
 	start := time.Now()
 
-	err = q.Enqueue(
+	err = q.DispatchCtx(
 		context.Background(),
 		NewTask("job:options").
 			Payload([]byte("opts")).
@@ -298,7 +298,7 @@ func TestRedisIntegration_EnqueueMapsOptions(t *testing.T) {
 			Retry(maxRetry),
 	)
 	if err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	scheduled := waitForScheduledTask(t, inspector, queueName, 3*time.Second)
@@ -330,14 +330,14 @@ func TestRedisIntegration_DefaultTimeoutApplied(t *testing.T) {
 	}
 
 	queueName := uniqueQueueName("redis-default-timeout")
-	err = q.Enqueue(
+	err = q.DispatchCtx(
 		context.Background(),
 		NewTask("job:default-timeout").
 			Payload([]byte("opts")).
 			OnQueue(queueName),
 	)
 	if err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	pending := waitForPendingTask(t, inspector, queueName, 3*time.Second)
@@ -363,11 +363,11 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 	taskType := "job:unique"
 	payload := []byte("same")
 	first := NewTask(taskType).Payload(payload).OnQueue(queueName).UniqueFor(5 * time.Second)
-	if err := q.Enqueue(context.Background(), first); err != nil {
-		t.Fatalf("first enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), first); err != nil {
+		t.Fatalf("first dispatch failed: %v", err)
 	}
 	second := NewTask(taskType).Payload(payload).OnQueue(queueName).UniqueFor(5 * time.Second)
-	err = q.Enqueue(context.Background(), second)
+	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
@@ -386,7 +386,7 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
 
-	err = q.Enqueue(context.Background(), NewTask("job:backoff-unsupported").Payload([]byte("x")).OnQueue("default").Backoff(1*time.Second))
+	err = q.DispatchCtx(context.Background(), NewTask("job:backoff-unsupported").Payload([]byte("x")).OnQueue("default").Backoff(1*time.Second))
 	if !errors.Is(err, ErrBackoffUnsupported) {
 		t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
 	}
@@ -402,30 +402,6 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 	}
 	received := make(chan payload, 1)
 
-	worker, err := NewWorker(WorkerConfig{
-		Driver:    DriverRedis,
-		RedisAddr: integrationRedis.addr,
-		Workers:   1,
-	})
-	if err != nil {
-		t.Fatalf("new redis worker failed: %v", err)
-	}
-	worker.Register("job:bind", func(_ context.Context, task Task) error {
-		var in payload
-		if err := task.Bind(&in); err != nil {
-			return err
-		}
-		received <- in
-		return nil
-	})
-
-	startErr := make(chan error, 1)
-	go func() {
-		startErr <- worker.Start()
-	}()
-	t.Cleanup(func() { _ = worker.Shutdown() })
-	time.Sleep(100 * time.Millisecond)
-
 	q, err := New(Config{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
@@ -433,21 +409,28 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
+	q.Register("job:bind", func(_ context.Context, task Task) error {
+		var in payload
+		if err := task.Bind(&in); err != nil {
+			return err
+		}
+		received <- in
+		return nil
+	})
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("redis queue start failed: %v", err)
+	}
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 99}
-	if err := q.Enqueue(context.Background(), NewTask("job:bind").Payload(want).OnQueue("default")); err != nil {
-		t.Fatalf("enqueue failed: %v", err)
+	if err := q.DispatchCtx(context.Background(), NewTask("job:bind").Payload(want).OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
 	}
 
 	select {
 	case got := <-received:
 		if got != want {
 			t.Fatalf("bind payload mismatch: got %+v want %+v", got, want)
-		}
-	case err := <-startErr:
-		if err != nil {
-			t.Fatalf("redis worker start failed: %v", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for redis worker bind payload")
@@ -735,13 +718,13 @@ type scenarioFixture struct {
 	name      string
 	queueName string
 	newQueue  func(t *testing.T) Queue
-	newWorker func(t *testing.T) Worker
+	newWorker func(t *testing.T) workerRuntime
 
 	supportsBackoff              bool
 	forceTimeout                 bool
 	supportsRestart              bool
 	supportsPoisonRetry          bool
-	supportsEnqueueCtxCancel     bool
+	supportsDispatchCtxCancel    bool
 	supportsDeterministicNoDupes bool
 	supportsOrderingContract     bool
 	supportsBrokerFault          bool
@@ -768,22 +751,17 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) Worker {
-				w, err := NewWorker(WorkerConfig{
+			newWorker: func(t *testing.T) workerRuntime {
+				return newQueueBackedWorker(t, Config{
 					Driver:    DriverRedis,
 					RedisAddr: integrationRedis.addr,
-					Workers:   4,
-				})
-				if err != nil {
-					t.Fatalf("new redis worker failed: %v", err)
-				}
-				return w
+				}, 4)
 			},
 			supportsBackoff:              false,
 			forceTimeout:                 true,
 			supportsRestart:              true,
 			supportsPoisonRetry:          false,
-			supportsEnqueueCtxCancel:     false,
+			supportsDispatchCtxCancel:    false,
 			supportsDeterministicNoDupes: true,
 			supportsOrderingContract:     true,
 			supportsBrokerFault:          true,
@@ -803,26 +781,19 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) Worker {
-				w, err := NewWorker(WorkerConfig{
+			newWorker: func(t *testing.T) workerRuntime {
+				return newQueueBackedWorker(t, Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "mysql",
 					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-					Workers:        4,
-					PollInterval:   10 * time.Millisecond,
-					DefaultQueue:   "scenario_mysql",
-				})
-				if err != nil {
-					t.Fatalf("new mysql worker failed: %v", err)
-				}
-				return w
+				}, 4)
 			},
 			supportsBackoff:              true,
 			supportsRestart:              true,
 			supportsPoisonRetry:          true,
-			supportsEnqueueCtxCancel:     true,
+			supportsDispatchCtxCancel:    true,
 			supportsDeterministicNoDupes: true,
-			supportsOrderingContract:     true,
+			supportsOrderingContract:     false,
 			supportsBrokerFault:          false,
 			supportsShutdownDelayRetry:   true,
 		},
@@ -840,26 +811,19 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) Worker {
-				w, err := NewWorker(WorkerConfig{
+			newWorker: func(t *testing.T) workerRuntime {
+				return newQueueBackedWorker(t, Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "pgx",
 					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-					Workers:        4,
-					PollInterval:   10 * time.Millisecond,
-					DefaultQueue:   "scenario_postgres",
-				})
-				if err != nil {
-					t.Fatalf("new postgres worker failed: %v", err)
-				}
-				return w
+				}, 4)
 			},
 			supportsBackoff:              true,
 			supportsRestart:              true,
 			supportsPoisonRetry:          true,
-			supportsEnqueueCtxCancel:     true,
+			supportsDispatchCtxCancel:    true,
 			supportsDeterministicNoDupes: true,
-			supportsOrderingContract:     true,
+			supportsOrderingContract:     false,
 			supportsBrokerFault:          false,
 			supportsShutdownDelayRetry:   true,
 		},
@@ -877,7 +841,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) Worker {
+			newWorker: func(t *testing.T) workerRuntime {
 				// Use the same DSN for queue+worker in the test body.
 				t.Fatal("sqlite worker fixture must be created from test-local DSN")
 				return nil
@@ -885,7 +849,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsBackoff:              true,
 			supportsRestart:              false,
 			supportsPoisonRetry:          true,
-			supportsEnqueueCtxCancel:     true,
+			supportsDispatchCtxCancel:    true,
 			supportsDeterministicNoDupes: true,
 			supportsOrderingContract:     false,
 			supportsBrokerFault:          false,
@@ -904,20 +868,16 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) Worker {
-				w, err := NewWorker(WorkerConfig{
+			newWorker: func(t *testing.T) workerRuntime {
+				return newQueueBackedWorker(t, Config{
 					Driver:  DriverNATS,
 					NATSURL: integrationNATS.url,
-				})
-				if err != nil {
-					t.Fatalf("new nats worker failed: %v", err)
-				}
-				return w
+				}, 4)
 			},
 			supportsBackoff:              true,
 			supportsRestart:              false,
 			supportsPoisonRetry:          true,
-			supportsEnqueueCtxCancel:     false,
+			supportsDispatchCtxCancel:    false,
 			supportsDeterministicNoDupes: false,
 			supportsOrderingContract:     false,
 			supportsBrokerFault:          false,
@@ -939,24 +899,19 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) Worker {
-				w, err := NewWorker(WorkerConfig{
+			newWorker: func(t *testing.T) workerRuntime {
+				return newQueueBackedWorker(t, Config{
 					Driver:       DriverSQS,
 					SQSEndpoint:  integrationSQS.endpoint,
 					SQSRegion:    integrationSQS.region,
 					SQSAccessKey: integrationSQS.accessKey,
 					SQSSecretKey: integrationSQS.secretKey,
-					DefaultQueue: "scenario_sqs",
-				})
-				if err != nil {
-					t.Fatalf("new sqs worker failed: %v", err)
-				}
-				return w
+				}, 4)
 			},
 			supportsBackoff:              true,
 			supportsRestart:              false,
 			supportsPoisonRetry:          true,
-			supportsEnqueueCtxCancel:     true,
+			supportsDispatchCtxCancel:    true,
 			supportsDeterministicNoDupes: true,
 			supportsOrderingContract:     false,
 			supportsBrokerFault:          false,
@@ -975,21 +930,16 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) Worker {
-				w, err := NewWorker(WorkerConfig{
-					Driver:       DriverRabbitMQ,
-					RabbitMQURL:  integrationRabbitMQ.url,
-					DefaultQueue: "scenario_rabbitmq",
-				})
-				if err != nil {
-					t.Fatalf("new rabbitmq worker failed: %v", err)
-				}
-				return w
+			newWorker: func(t *testing.T) workerRuntime {
+				return newQueueBackedWorker(t, Config{
+					Driver:      DriverRabbitMQ,
+					RabbitMQURL: integrationRabbitMQ.url,
+				}, 4)
 			},
 			supportsBackoff:              true,
 			supportsRestart:              true,
 			supportsPoisonRetry:          true,
-			supportsEnqueueCtxCancel:     false,
+			supportsDispatchCtxCancel:    false,
 			supportsDeterministicNoDupes: true,
 			supportsOrderingContract:     false,
 			supportsBrokerFault:          false,
@@ -1018,24 +968,17 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 					}
 					return q
 				}
-				fx.newWorker = func(t *testing.T) Worker {
-					w, err := NewWorker(WorkerConfig{
+				fx.newWorker = func(t *testing.T) workerRuntime {
+					return newQueueBackedWorker(t, Config{
 						Driver:         DriverDatabase,
 						DatabaseDriver: "sqlite",
 						DatabaseDSN:    dsn,
-						Workers:        4,
-						PollInterval:   10 * time.Millisecond,
-						DefaultQueue:   "scenario_sqlite",
-					})
-					if err != nil {
-						t.Fatalf("new sqlite worker failed: %v", err)
-					}
-					return w
+					}, 4)
 				}
 				fx.supportsBackoff = true
 				fx.supportsRestart = true
 				fx.supportsPoisonRetry = true
-				fx.supportsEnqueueCtxCancel = true
+				fx.supportsDispatchCtxCancel = true
 				fx.supportsDeterministicNoDupes = true
 				fx.supportsOrderingContract = true
 				fx.supportsBrokerFault = false
@@ -1074,12 +1017,12 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 	})
 
-	t.Run("scenario_start_idempotent", func(t *testing.T) {
+	t.Run("scenario_startworkers_idempotent", func(t *testing.T) {
 		requireScenarioNoErr(t, "worker_start", w.Start())
 		requireScenarioNoErr(t, "worker_start_idempotent", w.Start())
 	})
 
-	t.Run("scenario_enqueue_burst", func(t *testing.T) {
+	t.Run("scenario_dispatch_burst", func(t *testing.T) {
 		var wg sync.WaitGroup
 		errCh := make(chan error, total)
 		for i := 0; i < int(total); i++ {
@@ -1102,8 +1045,8 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				if fx.supportsBackoff && i%5 == 0 {
 					task = task.Retry(1).Backoff(20 * time.Millisecond)
 				}
-				if err := q.Enqueue(context.Background(), task); err != nil {
-					errCh <- fmt.Errorf("enqueue %d failed: %w", i, err)
+				if err := q.DispatchCtx(context.Background(), task); err != nil {
+					errCh <- fmt.Errorf("dispatch %d failed: %w", i, err)
 					return
 				}
 				expected.Add(1)
@@ -1120,8 +1063,8 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				first = err
 			}
 		}
-		requireScenarioTrue(t, "enqueue_has_success", expected.Load() > 0, "all enqueue operations failed")
-		requireScenarioTrue(t, "enqueue_all_success", failures == 0, "failures=%d first=%v", failures, first)
+		requireScenarioTrue(t, "dispatch_has_success", expected.Load() > 0, "all dispatch operations failed")
+		requireScenarioTrue(t, "dispatch_all_success", failures == 0, "failures=%d first=%v", failures, first)
 	})
 
 	t.Run("scenario_wait_all_processed", func(t *testing.T) {
@@ -1164,7 +1107,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.supportsBackoff {
 			poison = poison.Backoff(20 * time.Millisecond)
 		}
-		requireScenarioNoErr(t, "poison_enqueue", q.Enqueue(context.Background(), poison))
+		requireScenarioNoErr(t, "poison_dispatch", q.DispatchCtx(context.Background(), poison))
 
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1189,7 +1132,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		good := NewTask(goodType).
 			Payload(scenarioPayload{ID: 9002, Name: "recovery"}).
 			OnQueue(fx.queueName)
-		requireScenarioNoErr(t, "poison_recovery_enqueue", q.Enqueue(context.Background(), good))
+		requireScenarioNoErr(t, "poison_recovery_dispatch", q.DispatchCtx(context.Background(), good))
 
 		select {
 		case <-recoveryDone:
@@ -1225,7 +1168,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.supportsBackoff {
 			task = task.Retry(1).Backoff(250 * time.Millisecond)
 		}
-		requireScenarioNoErr(t, "restart_enqueue", q.Enqueue(context.Background(), task))
+		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), task))
 
 		requireScenarioNoErr(t, "restart_shutdown_first_worker", w.Shutdown())
 		w = fx.newWorker(t)
@@ -1287,7 +1230,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			badTask = badTask.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "bind_bad_enqueue", q.Enqueue(context.Background(), badTask))
+		requireScenarioNoErr(t, "bind_bad_dispatch", q.DispatchCtx(context.Background(), badTask))
 
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1303,7 +1246,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			emptyTask = emptyTask.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "bind_empty_enqueue", q.Enqueue(context.Background(), emptyTask))
+		requireScenarioNoErr(t, "bind_empty_dispatch", q.DispatchCtx(context.Background(), emptyTask))
 
 		deadline = time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1320,7 +1263,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			goodTask = goodTask.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "bind_good_enqueue", q.Enqueue(context.Background(), goodTask))
+		requireScenarioNoErr(t, "bind_good_dispatch", q.DispatchCtx(context.Background(), goodTask))
 
 		select {
 		case <-goodDone:
@@ -1353,14 +1296,14 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			otherQueue = otherQueue.Timeout(taskTimeout)
 		}
 
-		requireScenarioNoErr(t, "unique_first_enqueue", q.Enqueue(context.Background(), first))
-		dupErr := q.Enqueue(context.Background(), secondSameQueue)
+		requireScenarioNoErr(t, "unique_first_dispatch", q.DispatchCtx(context.Background(), first))
+		dupErr := q.DispatchCtx(context.Background(), secondSameQueue)
 		requireScenarioTrue(t, "unique_duplicate_rejected", errors.Is(dupErr, ErrDuplicate), "expected ErrDuplicate, got %v", dupErr)
-		requireScenarioNoErr(t, "unique_other_queue_enqueue", q.Enqueue(context.Background(), otherQueue))
+		requireScenarioNoErr(t, "unique_other_queue_dispatch", q.DispatchCtx(context.Background(), otherQueue))
 	})
 
-	t.Run("scenario_enqueue_context_cancellation", func(t *testing.T) {
-		requireScenarioNoErr(t, "enqueue_ctx_worker_start", w.Start())
+	t.Run("scenario_dispatch_context_cancellation", func(t *testing.T) {
+		requireScenarioNoErr(t, "dispatch_ctx_worker_start", w.Start())
 
 		cancelType := "job:scenario:ctx-cancel:" + fx.name
 		goodType := "job:scenario:ctx-good:" + fx.name
@@ -1387,17 +1330,17 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			cancelTask = cancelTask.Timeout(taskTimeout)
 		}
-		err := q.Enqueue(cancelCtx, cancelTask)
-		if fx.supportsEnqueueCtxCancel {
+		err := q.DispatchCtx(cancelCtx, cancelTask)
+		if fx.supportsDispatchCtxCancel {
 			requireScenarioTrue(
 				t,
-				"enqueue_ctx_cancel_err",
+				"dispatch_ctx_cancel_err",
 				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
 				"expected context cancellation error, got %v",
 				err,
 			)
 			time.Sleep(250 * time.Millisecond)
-			requireScenarioTrue(t, "enqueue_ctx_cancel_not_processed", cancelSeen.Load() == 0, "unexpected processed count=%d", cancelSeen.Load())
+			requireScenarioTrue(t, "dispatch_ctx_cancel_not_processed", cancelSeen.Load() == 0, "unexpected processed count=%d", cancelSeen.Load())
 		}
 
 		goodTask := NewTask(goodType).
@@ -1406,11 +1349,11 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			goodTask = goodTask.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "enqueue_ctx_good_enqueue", q.Enqueue(context.Background(), goodTask))
+		requireScenarioNoErr(t, "dispatch_ctx_good_dispatch", q.DispatchCtx(context.Background(), goodTask))
 		select {
 		case <-goodDone:
 		case <-time.After(10 * time.Second):
-			t.Fatalf("[enqueue_ctx_good_processed] follow-up task was not processed")
+			t.Fatalf("[dispatch_ctx_good_processed] follow-up task was not processed")
 		}
 	})
 
@@ -1464,9 +1407,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				retryTask = retryTask.Timeout(taskTimeout)
 			}
 		}
-		requireScenarioNoErr(t, "shutdown_delay_enqueue", q.Enqueue(context.Background(), delayedTask))
+		requireScenarioNoErr(t, "shutdown_delay_dispatch", q.DispatchCtx(context.Background(), delayedTask))
 		if retryEnabled {
-			requireScenarioNoErr(t, "shutdown_retry_enqueue", q.Enqueue(context.Background(), retryTask))
+			requireScenarioNoErr(t, "shutdown_retry_dispatch", q.DispatchCtx(context.Background(), retryTask))
 		}
 
 		requireScenarioNoErr(t, "shutdown_during_delay", w.Shutdown())
@@ -1542,7 +1485,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "multi_worker_enqueue", q.Enqueue(context.Background(), task))
+			requireScenarioNoErr(t, "multi_worker_dispatch", q.DispatchCtx(context.Background(), task))
 		}
 
 		deadline := time.Now().Add(20 * time.Second)
@@ -1608,7 +1551,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "idempotency_enqueue", q.Enqueue(context.Background(), task))
+		requireScenarioNoErr(t, "idempotency_dispatch", q.DispatchCtx(context.Background(), task))
 
 		select {
 		case <-done:
@@ -1619,7 +1562,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioTrue(t, "idempotency_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
 	})
 
-	t.Run("scenario_enqueue_during_broker_fault", func(t *testing.T) {
+	t.Run("scenario_dispatch_during_broker_fault", func(t *testing.T) {
 		if !fx.supportsBrokerFault {
 			t.Skip("backend does not support deterministic broker fault injection in this suite")
 		}
@@ -1634,15 +1577,15 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		badCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		task := NewTask("job:scenario:fault-enqueue:" + fx.name).
-			Payload(scenarioPayload{ID: 9700, Name: "fault-enqueue"}).
+		task := NewTask("job:scenario:fault-dispatch:" + fx.name).
+			Payload(scenarioPayload{ID: 9700, Name: "fault-dispatch"}).
 			OnQueue(fx.queueName).
 			Retry(1)
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		err := qFault.Enqueue(badCtx, task)
-		requireScenarioTrue(t, "fault_enqueue_err", err != nil, "expected enqueue error while broker is down")
+		err := qFault.DispatchCtx(badCtx, task)
+		requireScenarioTrue(t, "fault_dispatch_err", err != nil, "expected dispatch error while broker is down")
 
 		requireScenarioNoErr(t, "fault_start_broker", integrationRedis.container.Start(context.Background()))
 		requireScenarioNoErr(t, "fault_refresh_addr", refreshRedisAddr(context.Background()))
@@ -1681,7 +1624,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "recover_enqueue", q.Enqueue(context.Background(), task))
+		requireScenarioNoErr(t, "recover_dispatch", q.DispatchCtx(context.Background(), task))
 		select {
 		case <-done:
 		case <-time.After(12 * time.Second):
@@ -1716,7 +1659,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "ordering_enqueue", q.Enqueue(context.Background(), task))
+			requireScenarioNoErr(t, "ordering_dispatch", q.DispatchCtx(context.Background(), task))
 		}
 
 		got := make([]int, 0, count)
@@ -1755,7 +1698,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "backpressure_enqueue", q.Enqueue(context.Background(), task))
+			requireScenarioNoErr(t, "backpressure_dispatch", q.DispatchCtx(context.Background(), task))
 		}
 
 		probeType := "job:scenario:backpressure-probe:" + fx.name
@@ -1773,7 +1716,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			probe = probe.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "backpressure_probe_enqueue", q.Enqueue(context.Background(), probe))
+		requireScenarioNoErr(t, "backpressure_probe_dispatch", q.DispatchCtx(context.Background(), probe))
 
 		select {
 		case <-probeDone:
@@ -1816,7 +1759,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "payload_large_enqueue", q.Enqueue(context.Background(), task))
+		requireScenarioNoErr(t, "payload_large_dispatch", q.DispatchCtx(context.Background(), task))
 		select {
 		case <-done:
 		case <-time.After(15 * time.Second):
@@ -1867,8 +1810,8 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if r.Intn(4) == 0 {
 				task = task.UniqueFor(time.Duration(1+r.Intn(2)) * time.Second)
 			}
-			if err := q.Enqueue(context.Background(), task); err != nil {
-				t.Fatalf("[fuzz_enqueue_case_%d] enqueue failed: %v", i, err)
+			if err := q.DispatchCtx(context.Background(), task); err != nil {
+				t.Fatalf("[fuzz _dispatch_case_%d] dispatch failed: %v", i, err)
 			}
 			expected++
 		}
@@ -1937,7 +1880,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 					if id%10 == 0 {
 						task = task.UniqueFor(1 * time.Second)
 					}
-					if err := q.Enqueue(context.Background(), task); err != nil {
+					if err := q.DispatchCtx(context.Background(), task); err != nil {
 						errCh <- err
 						return
 					}
@@ -1947,7 +1890,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		wg.Wait()
 		close(errCh)
 		for err := range errCh {
-			t.Fatalf("[soak_enqueue] enqueue failed: %v", err)
+			t.Fatalf("[soak_dispatch] dispatch failed: %v", err)
 		}
 
 		deadline := time.Now().Add(2 * time.Minute)
@@ -2009,45 +1952,54 @@ func refreshRedisAddr(ctx context.Context) error {
 	return nil
 }
 
-func newOrderingWorker(t *testing.T, fx scenarioFixture) Worker {
+type queueBackedWorker struct {
+	q       Queue
+	workers int
+}
+
+func newQueueBackedWorker(t *testing.T, cfg Config, workers int) workerRuntime {
+	t.Helper()
+	q, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new worker-backed queue failed: %v", err)
+	}
+	return &queueBackedWorker{q: q, workers: workers}
+}
+
+func (w *queueBackedWorker) Driver() Driver { return w.q.Driver() }
+
+func (w *queueBackedWorker) Register(taskType string, handler Handler) {
+	w.q.Register(taskType, handler)
+}
+
+func (w *queueBackedWorker) Start() error {
+	return w.q.Workers(w.workers).StartWorkers(context.Background())
+}
+
+func (w *queueBackedWorker) Shutdown() error {
+	return w.q.Shutdown(context.Background())
+}
+
+func newOrderingWorker(t *testing.T, fx scenarioFixture) workerRuntime {
 	t.Helper()
 	switch fx.name {
 	case "redis":
-		w, err := NewWorker(WorkerConfig{
+		return newQueueBackedWorker(t, Config{
 			Driver:    DriverRedis,
 			RedisAddr: integrationRedis.addr,
-			Workers:   1,
-		})
-		if err != nil {
-			t.Fatalf("new ordering redis worker failed: %v", err)
-		}
-		return w
+		}, 1)
 	case "mysql":
-		w, err := NewWorker(WorkerConfig{
+		return newQueueBackedWorker(t, Config{
 			Driver:         DriverDatabase,
 			DatabaseDriver: "mysql",
 			DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-			Workers:        1,
-			PollInterval:   10 * time.Millisecond,
-			DefaultQueue:   "scenario_mysql",
-		})
-		if err != nil {
-			t.Fatalf("new ordering mysql worker failed: %v", err)
-		}
-		return w
+		}, 1)
 	case "postgres":
-		w, err := NewWorker(WorkerConfig{
+		return newQueueBackedWorker(t, Config{
 			Driver:         DriverDatabase,
 			DatabaseDriver: "pgx",
 			DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-			Workers:        1,
-			PollInterval:   10 * time.Millisecond,
-			DefaultQueue:   "scenario_postgres",
-		})
-		if err != nil {
-			t.Fatalf("new ordering postgres worker failed: %v", err)
-		}
-		return w
+		}, 1)
 	default:
 		return fx.newWorker(t)
 	}

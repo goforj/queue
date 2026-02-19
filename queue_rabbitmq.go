@@ -26,6 +26,7 @@ type rabbitMQMessage struct {
 
 type rabbitMQQueue struct {
 	url string
+	defaultQueue string
 
 	mu     sync.Mutex
 	conn   *amqp.Connection
@@ -33,21 +34,19 @@ type rabbitMQQueue struct {
 	unique map[string]time.Time
 }
 
-func newRabbitMQQueue(url string) Queue {
+func newRabbitMQQueue(url string, defaultQueue string) queueBackend {
+	if defaultQueue == "" {
+		defaultQueue = "default"
+	}
 	return &rabbitMQQueue{
-		url:    url,
-		unique: make(map[string]time.Time),
+		url:          url,
+		defaultQueue: defaultQueue,
+		unique:       make(map[string]time.Time),
 	}
 }
 
 func (q *rabbitMQQueue) Driver() Driver {
 	return DriverRabbitMQ
-}
-
-func (q *rabbitMQQueue) Start(_ context.Context) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.ensureConnectedLocked()
 }
 
 func (q *rabbitMQQueue) Shutdown(_ context.Context) error {
@@ -57,11 +56,7 @@ func (q *rabbitMQQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (q *rabbitMQQueue) Register(_ string, _ Handler) {
-	// No-op for rabbitmq queue runtime; handlers are registered on Worker.
-}
-
-func (q *rabbitMQQueue) Enqueue(ctx context.Context, task Task) error {
+func (q *rabbitMQQueue) Dispatch(ctx context.Context, task Task) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -104,7 +99,7 @@ func (q *rabbitMQQueue) Enqueue(ctx context.Context, task Task) error {
 	if err := q.ensureConnectedLocked(); err != nil {
 		return err
 	}
-	if err := q.enqueueLocked(ctx, parsed.queueName, body); err != nil {
+	if err := q.enqueueLocked(ctx, q.defaultQueue, body); err != nil {
 		if !isRabbitConnectionClosed(err) {
 			return err
 		}
@@ -112,7 +107,7 @@ func (q *rabbitMQQueue) Enqueue(ctx context.Context, task Task) error {
 		if reconnectErr := q.ensureConnectedLocked(); reconnectErr != nil {
 			return reconnectErr
 		}
-		return q.enqueueLocked(ctx, parsed.queueName, body)
+		return q.enqueueLocked(ctx, q.defaultQueue, body)
 	}
 	return nil
 }

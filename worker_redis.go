@@ -21,7 +21,7 @@ type redisWorker struct {
 	started bool
 }
 
-func newRedisWorker(server asynqServer, mux *asynq.ServeMux) Worker {
+func newRedisWorker(server asynqServer, mux *asynq.ServeMux) workerRuntime {
 	return &redisWorker{server: server, mux: mux}
 }
 

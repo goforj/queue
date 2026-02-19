@@ -33,24 +33,24 @@ func newDatabaseQueueIntegration(t *testing.T, cfg DatabaseConfig) Queue {
 }
 
 func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) {
-	t.Run(name+"_enqueue_and_process", func(t *testing.T) {
+	t.Run(name+"_dispatch_and_process", func(t *testing.T) {
 		d := newDatabaseQueueIntegration(t, cfg)
 		triggered := make(chan struct{}, 1)
 		d.Register("job:db:basic", func(_ context.Context, _ Task) error {
 			triggered <- struct{}{}
 			return nil
 		})
-		if err := d.Start(context.Background()); err != nil {
+		if err := d.StartWorkers(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := d.Enqueue(context.Background(), NewTask("job:db:basic").Payload([]byte("hello")).OnQueue("default")); err != nil {
-			t.Fatalf("enqueue failed: %v", err)
+		if err := d.DispatchCtx(context.Background(), NewTask("job:db:basic").Payload([]byte("hello")).OnQueue("default")); err != nil {
+			t.Fatalf("dispatch failed: %v", err)
 		}
 		select {
 		case <-triggered:
 		case <-time.After(15 * time.Second):
-			logDatabaseQueueState(t, cfg, "enqueue_and_process timeout")
+			logDatabaseQueueState(t, cfg, "dispatch_and_process timeout")
 			t.Fatal("expected task to be processed")
 		}
 	})
@@ -62,14 +62,14 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			triggered <- time.Now()
 			return nil
 		})
-		if err := d.Start(context.Background()); err != nil {
+		if err := d.StartWorkers(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
 		start := time.Now()
 		delay := 300 * time.Millisecond
-		if err := d.Enqueue(context.Background(), NewTask("job:db:delay").OnQueue("default").Delay(delay)); err != nil {
-			t.Fatalf("enqueue failed: %v", err)
+		if err := d.DispatchCtx(context.Background(), NewTask("job:db:delay").OnQueue("default").Delay(delay)); err != nil {
+			t.Fatalf("dispatch failed: %v", err)
 		}
 		select {
 		case at := <-triggered:
@@ -85,17 +85,17 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 	t.Run(name+"_unique", func(t *testing.T) {
 		d := newDatabaseQueueIntegration(t, cfg)
 		d.Register("job:db:unique", func(_ context.Context, _ Task) error { return nil })
-		if err := d.Start(context.Background()); err != nil {
+		if err := d.StartWorkers(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
 		taskType := "job:db:unique"
 		payload := []byte("same")
-		err := d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
+		err := d.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
 		if err != nil {
-			t.Fatalf("first enqueue failed: %v", err)
+			t.Fatalf("first dispatch failed: %v", err)
 		}
-		err = d.Enqueue(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
+		err = d.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
 		if !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
@@ -112,12 +112,12 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			triggered <- struct{}{}
 			return nil
 		})
-		if err := d.Start(context.Background()); err != nil {
+		if err := d.StartWorkers(context.Background()); err != nil {
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := d.Enqueue(context.Background(), NewTask("job:db:retry").OnQueue("default").Retry(2).Backoff(50*time.Millisecond)); err != nil {
-			t.Fatalf("enqueue failed: %v", err)
+		if err := d.DispatchCtx(context.Background(), NewTask("job:db:retry").OnQueue("default").Retry(2).Backoff(50*time.Millisecond)); err != nil {
+			t.Fatalf("dispatch failed: %v", err)
 		}
 		select {
 		case <-triggered:

@@ -44,7 +44,14 @@ type sqsQueue struct {
 	unique    map[string]time.Time
 }
 
-func newSQSQueue(cfg Config) Queue {
+func (q *sqsQueue) physicalQueueName() string {
+	if q.cfg.DefaultQueue != "" {
+		return q.cfg.DefaultQueue
+	}
+	return "default"
+}
+
+func newSQSQueue(cfg Config) queueBackend {
 	return &sqsQueue{
 		cfg:       cfg,
 		queueURLs: make(map[string]string),
@@ -56,7 +63,7 @@ func (q *sqsQueue) Driver() Driver {
 	return DriverSQS
 }
 
-func (q *sqsQueue) Start(ctx context.Context) error {
+func (q *sqsQueue) ensureClient(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -81,11 +88,7 @@ func (q *sqsQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (q *sqsQueue) Register(_ string, _ Handler) {
-	// No-op for sqs queue runtime; handlers are registered on Worker.
-}
-
-func (q *sqsQueue) Enqueue(ctx context.Context, task Task) error {
+func (q *sqsQueue) Dispatch(ctx context.Context, task Task) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -96,7 +99,7 @@ func (q *sqsQueue) Enqueue(ctx context.Context, task Task) error {
 	if parsed.queueName == "" {
 		return fmt.Errorf("task queue is required")
 	}
-	if err := q.Start(ctx); err != nil {
+	if err := q.ensureClient(ctx); err != nil {
 		return err
 	}
 	if parsed.uniqueTTL > 0 && !q.claimUnique(task, parsed.queueName, parsed.uniqueTTL) {
@@ -125,7 +128,7 @@ func (q *sqsQueue) Enqueue(ctx context.Context, task Task) error {
 	if err != nil {
 		return err
 	}
-	queueURL, err := q.ensureQueue(ctx, parsed.queueName)
+	queueURL, err := q.ensureQueue(ctx, q.physicalQueueName())
 	if err != nil {
 		return err
 	}

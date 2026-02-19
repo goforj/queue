@@ -666,12 +666,12 @@ func countSince(in []time.Time, cutoff time.Time) int64 {
 }
 
 type observedQueue struct {
-	inner    Queue
+	inner    queueBackend
 	driver   Driver
 	observer Observer
 }
 
-func newObservedQueue(inner Queue, observer Observer) Queue {
+func newObservedQueue(inner queueBackend, observer Observer) queueBackend {
 	if observer == nil {
 		return inner
 	}
@@ -682,8 +682,14 @@ func newObservedQueue(inner Queue, observer Observer) Queue {
 	}
 }
 
-func (q *observedQueue) Start(ctx context.Context) error {
-	return q.inner.Start(ctx)
+func (q *observedQueue) StartWorkers(ctx context.Context) error {
+	runtime, ok := q.inner.(interface {
+		StartWorkers(context.Context) error
+	})
+	if !ok {
+		return nil
+	}
+	return runtime.StartWorkers(ctx)
 }
 
 func (q *observedQueue) Shutdown(ctx context.Context) error {
@@ -732,8 +738,8 @@ func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
 	return nil
 }
 
-func (q *observedQueue) Enqueue(ctx context.Context, task Task) error {
-	err := q.inner.Enqueue(ctx, task)
+func (q *observedQueue) Dispatch(ctx context.Context, task Task) error {
+	err := q.inner.Dispatch(ctx, task)
 	opts := task.enqueueOptions()
 	base := Event{
 		Driver:    q.driver,
@@ -765,11 +771,17 @@ func (q *observedQueue) Enqueue(ctx context.Context, task Task) error {
 }
 
 func (q *observedQueue) Register(taskType string, handler Handler) {
-	if handler == nil {
-		q.inner.Register(taskType, handler)
+	runtime, ok := q.inner.(interface {
+		Register(string, Handler)
+	})
+	if !ok {
 		return
 	}
-	q.inner.Register(taskType, wrapObservedHandler(q.observer, q.driver, "", taskType, handler))
+	if handler == nil {
+		runtime.Register(taskType, handler)
+		return
+	}
+	runtime.Register(taskType, wrapObservedHandler(q.observer, q.driver, "", taskType, handler))
 }
 
 func (q *observedQueue) Driver() Driver {
@@ -777,12 +789,12 @@ func (q *observedQueue) Driver() Driver {
 }
 
 type observedWorker struct {
-	inner    Worker
+	inner    workerRuntime
 	driver   Driver
 	observer Observer
 }
 
-func newObservedWorker(inner Worker, observer Observer) Worker {
+func newObservedWorker(inner workerRuntime, observer Observer) workerRuntime {
 	if observer == nil {
 		return inner
 	}
@@ -872,7 +884,7 @@ func safeObserve(observer Observer, event Event) {
 	observer.Observe(event)
 }
 
-func detectQueueDriver(q Queue) Driver {
+func detectQueueDriver(q queueBackend) Driver {
 	if driverAware, ok := q.(interface{ Driver() Driver }); ok {
 		return driverAware.Driver()
 	}

@@ -44,12 +44,12 @@ func newLocalQueue(driver Driver) *localQueue {
 
 func newLocalQueueWithConfig(driver Driver, cfg WorkerpoolConfig) *localQueue {
 	q := &localQueue{
-		driver:     driver,
-		cfg:        cfg.normalize(),
-		handlers:   make(map[string]Handler),
-		unique:     make(map[string]time.Time),
+		driver:       driver,
+		cfg:          cfg.normalize(),
+		handlers:     make(map[string]Handler),
+		unique:       make(map[string]time.Time),
 		pausedQueues: make(map[string]bool),
-		shutdownCh: make(chan struct{}),
+		shutdownCh:   make(chan struct{}),
 	}
 	return q
 }
@@ -102,10 +102,10 @@ func (d *localQueue) Register(taskType string, handler Handler) {
 	d.mu.Unlock()
 }
 
-// Start initializes worker goroutines for workerpool mode.
+// StartWorkers initializes worker goroutines for workerpool mode.
 // @group Queue
 //
-// Example: local start
+// Example: local start workers
 //
 //	q, err := queue.New(queue.Config{
 //		Driver: queue.DriverWorkerpool,
@@ -113,8 +113,8 @@ func (d *localQueue) Register(taskType string, handler Handler) {
 //	if err != nil {
 //		return
 //	}
-//	_ = q.Start(context.Background())
-func (d *localQueue) Start(_ context.Context) error {
+//	_ = q.StartWorkers(context.Background())
+func (d *localQueue) StartWorkers(_ context.Context) error {
 	if d.driver != DriverWorkerpool {
 		return nil
 	}
@@ -133,7 +133,7 @@ func (d *localQueue) Start(_ context.Context) error {
 //	if err != nil {
 //		return
 //	}
-//	_ = q.Start(context.Background())
+//	_ = q.StartWorkers(context.Background())
 //	_ = q.Shutdown(context.Background())
 func (d *localQueue) Shutdown(ctx context.Context) error {
 	if d.driver != DriverWorkerpool {
@@ -162,10 +162,10 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// Enqueue schedules or executes a task using the local driver.
+// Dispatch schedules or executes a task using the local driver.
 // @group Queue
 //
-// Example: local enqueue
+// Example: local dispatch
 //
 //	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
 //	if err != nil {
@@ -186,8 +186,8 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //		Payload(EmailPayload{ID: 1}).
 //		OnQueue("default").
 //		Delay(10 * time.Millisecond)
-//	_ = q.Enqueue(context.Background(), task)
-func (d *localQueue) Enqueue(ctx context.Context, task Task) error {
+//	_ = q.DispatchCtx(context.Background(), task)
+func (d *localQueue) Dispatch(ctx context.Context, task Task) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}

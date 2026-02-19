@@ -147,7 +147,7 @@ func TestNew_UnknownDriverFails(t *testing.T) {
 	}
 }
 
-func TestRedisQueue_EnqueueWithoutClientFails(t *testing.T) {
+func TestRedisQueue_DispatchWithoutClientFails(t *testing.T) {
 	q, err := New(Config{Driver: DriverRedis})
 	if err == nil {
 		t.Fatal("expected constructor error for missing redis addr")
@@ -160,7 +160,7 @@ func TestRedisQueue_EnqueueWithoutClientFails(t *testing.T) {
 	}
 }
 
-func TestNATSQueue_EnqueueWithoutURLFails(t *testing.T) {
+func TestNATSQueue_DispatchWithoutURLFails(t *testing.T) {
 	q, err := New(Config{Driver: DriverNATS})
 	if err == nil {
 		t.Fatal("expected constructor error for missing nats url")
@@ -173,7 +173,7 @@ func TestNATSQueue_EnqueueWithoutURLFails(t *testing.T) {
 	}
 }
 
-func TestRabbitMQQueue_EnqueueWithoutURLFails(t *testing.T) {
+func TestRabbitMQQueue_DispatchWithoutURLFails(t *testing.T) {
 	q, err := New(Config{Driver: DriverRabbitMQ})
 	if err == nil {
 		t.Fatal("expected constructor error for missing rabbitmq url")
@@ -188,7 +188,7 @@ func TestRabbitMQQueue_EnqueueWithoutURLFails(t *testing.T) {
 
 func TestRedisQueue_BackoffUnsupported(t *testing.T) {
 	q := newRedisQueue(fakeEnqueuer{}, nil, false)
-	err := q.Enqueue(context.Background(), NewTask("job:test").Payload([]byte("{}")).OnQueue("default").Backoff(time.Second))
+	err := q.Dispatch(context.Background(), NewTask("job:test").Payload([]byte("{}")).OnQueue("default").Backoff(time.Second))
 	if !errors.Is(err, ErrBackoffUnsupported) {
 		t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
 	}
@@ -212,5 +212,55 @@ func TestQueue_ShutdownNoopForSyncAndRedis(t *testing.T) {
 	}
 	if err := redisQueue.Shutdown(context.Background()); err != nil {
 		t.Fatalf("redis shutdown failed: %v", err)
+	}
+}
+
+func TestQueueRuntime_StartWorkersFromQueueConfig(t *testing.T) {
+	q, err := New(Config{
+		Driver:    DriverRedis,
+		RedisAddr: "127.0.0.1:6379",
+	})
+	if err != nil {
+		t.Fatalf("new queue failed: %v", err)
+	}
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers from queue failed: %v", err)
+	}
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown failed: %v", err)
+	}
+}
+
+func TestQueueRuntime_StartWorkers_Idempotent(t *testing.T) {
+	q, err := New(Config{Driver: DriverSync})
+	if err != nil {
+		t.Fatalf("new queue failed: %v", err)
+	}
+	if err := q.Workers(2).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+	if err := q.Workers(3).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("second start workers failed: %v", err)
+	}
+}
+
+func TestQueueRuntime_StartWorkersSharesInProcessRuntime(t *testing.T) {
+	q, err := New(Config{Driver: DriverSync})
+	if err != nil {
+		t.Fatalf("new queue failed: %v", err)
+	}
+	handled := false
+	q.Register("job:shared", func(_ context.Context, _ Task) error {
+		handled = true
+		return nil
+	})
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+	if err := q.DispatchCtx(context.Background(), NewTask("job:shared").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected handler to run on shared runtime")
 	}
 }
