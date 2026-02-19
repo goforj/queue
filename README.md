@@ -141,6 +141,137 @@ q, _ := queue.New(queue.Config{
 | **Delay(d)** | `0` | Schedules future execution; `0` means run immediately. |
 | **UniqueFor(ttl)** | `0` | Deduplicates by `Type + Payload` for the TTL window. |
 
+## Observability quick guide
+
+Attach an observer when creating a queue or worker. Use `StatsCollector` for in-memory counters and throughput windows.
+
+```go
+collector := queue.NewStatsCollector()
+q, _ := queue.New(queue.Config{
+	Driver:    queue.DriverRedis,
+	RedisAddr: "127.0.0.1:6379",
+	Observer:  collector,
+})
+
+snapshot, _ := queue.SnapshotQueue(context.Background(), q, collector)
+counters, _ := snapshot.Queue("default")
+throughput, _ := snapshot.Throughput("default")
+
+fmt.Printf("%+v\n", counters)
+fmt.Printf("hour=%+v\n", throughput.Hour)
+```
+
+`SnapshotQueue` prefers native driver stats when available and falls back to the collector snapshot when a driver does not expose native stats.
+Use `queue.SupportsNativeStats(q)` and `queue.SupportsPause(q)` to branch runtime behavior safely.
+
+### Logging middleware hook
+
+Use `Observer` as your middleware hook for structured logging.
+Observers receive events for the entire runtime (all queues and task types).
+To observe only specific tasks, filter by `event.TaskType` (and/or `event.Queue`) inside your observer.
+This example logs every event kind with human-readable messages.
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+observer := queue.ObserverFunc(func(event queue.Event) {
+	attemptInfo := fmt.Sprintf("attempt=%d/%d", event.Attempt, event.MaxRetry+1)
+	taskInfo := fmt.Sprintf("task=%s key=%s queue=%s driver=%s", event.TaskType, event.TaskKey, event.Queue, event.Driver)
+
+	switch event.Kind {
+	case queue.EventEnqueueAccepted:
+		logger.Info("Enqueued job", "msg", fmt.Sprintf("Accepted %s", taskInfo), "scheduled", event.Scheduled, "at", event.Time.Format(time.RFC3339Nano))
+	case queue.EventEnqueueRejected:
+		logger.Error("Failed to enqueue job", "msg", fmt.Sprintf("Rejected %s", taskInfo), "error", event.Err)
+	case queue.EventEnqueueDuplicate:
+		logger.Warn("Skipped duplicate job", "msg", fmt.Sprintf("Duplicate %s", taskInfo))
+	case queue.EventEnqueueCanceled:
+		logger.Warn("Canceled enqueue", "msg", fmt.Sprintf("Canceled %s", taskInfo), "error", event.Err)
+	case queue.EventProcessStarted:
+		logger.Info("Started processing job", "msg", fmt.Sprintf("Started %s (%s)", taskInfo, attemptInfo), "at", event.Time.Format(time.RFC3339Nano))
+	case queue.EventProcessSucceeded:
+		logger.Info("Processed job", "msg", fmt.Sprintf("Processed %s in %s (%s)", taskInfo, event.Duration, attemptInfo))
+	case queue.EventProcessFailed:
+		logger.Error("Processing failed", "msg", fmt.Sprintf("Failed %s after %s (%s)", taskInfo, event.Duration, attemptInfo), "error", event.Err)
+	case queue.EventProcessRetried:
+		logger.Warn("Retrying job", "msg", fmt.Sprintf("Retry scheduled for %s (%s)", taskInfo, attemptInfo), "error", event.Err)
+	case queue.EventProcessArchived:
+		logger.Error("Archived failed job", "msg", fmt.Sprintf("Archived %s after final failure (%s)", taskInfo, attemptInfo), "error", event.Err)
+	case queue.EventQueuePaused:
+		logger.Info("Paused queue", "msg", fmt.Sprintf("Paused queue=%s driver=%s", event.Queue, event.Driver))
+	case queue.EventQueueResumed:
+		logger.Info("Resumed queue", "msg", fmt.Sprintf("Resumed queue=%s driver=%s", event.Queue, event.Driver))
+	default:
+		logger.Info("Queue event", "msg", fmt.Sprintf("kind=%s %s", event.Kind, taskInfo))
+	}
+})
+
+q, _ := queue.New(queue.Config{
+	Driver:    queue.DriverRedis,
+	RedisAddr: "127.0.0.1:6379",
+	Observer:  observer,
+})
+```
+
+Example: only log one task type.
+
+```go
+observer := queue.ObserverFunc(func(event queue.Event) {
+	if event.TaskType != "emails:send" {
+		return
+	}
+	// log event...
+})
+```
+
+Example: hook only specific event kinds.
+
+```go
+observer := queue.ObserverFunc(func(event queue.Event) {
+	switch event.Kind {
+	case queue.EventProcessFailed, queue.EventProcessRetried, queue.EventProcessArchived:
+		// alerting / error logs
+	case queue.EventProcessSucceeded:
+		// success metrics
+	default:
+		return
+	}
+})
+```
+
+If you prefer zerolog, implement the same `Observer` interface in a small adapter and set it on `Config.Observer` / `WorkerConfig.Observer`.
+
+### Observability capabilities by driver
+
+Legend: `✓` supported, `-` unsupported/fallback.
+
+| Driver | Native `Stats` | `PauseQueue`/`ResumeQueue` | Collector counters | Throughput windows |
+|:--|:--:|:--:|:--:|:--:|
+| Sync | ✓ | ✓ | ✓ | ✓ |
+| Workerpool | ✓ | ✓ | ✓ | ✓ |
+| Database (sqlite/mysql/postgres) | ✓ | - | ✓ | ✓ |
+| Redis | ✓ | ✓ | ✓ | ✓ |
+| NATS | - | - | ✓ | ✓ |
+| SQS | - | - | ✓ | ✓ |
+| RabbitMQ | - | - | ✓ | ✓ |
+
+### Observability events reference
+
+| Event | Meaning |
+|:--|:--|
+| EventEnqueueAccepted | Task was accepted by enqueue. |
+| EventEnqueueRejected | Task enqueue failed with an error. |
+| EventEnqueueDuplicate | Task enqueue was rejected as duplicate (`UniqueFor`). |
+| EventEnqueueCanceled | Enqueue was canceled by context timeout/cancelation. |
+| EventProcessStarted | Worker started handling a task. |
+| EventProcessSucceeded | Worker completed a task successfully. |
+| EventProcessFailed | Worker attempt failed. |
+| EventProcessRetried | Failed attempt was requeued for another attempt. |
+| EventProcessArchived | Failed task reached terminal failure (no retries left). |
+| EventQueuePaused | Queue consumption was paused. |
+| EventQueueResumed | Queue consumption was resumed. |
+
+For full field-level semantics and guarantees, see [`docs/events.md`](docs/events.md).
+
 ## How workers attach
 
 ### Sync driver
