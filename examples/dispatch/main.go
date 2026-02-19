@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	// Dispatch records a dispatch using background context.
+	// Dispatch schedules or executes a task using the local driver.
 
 	// Example: local dispatch
 	q, err := queue.NewSync()

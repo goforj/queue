@@ -42,7 +42,6 @@ func TestRenderBenchmarks(t *testing.T) {
 			"test", "./...",
 			"-run=^$",
 			"-bench", "BenchmarkDriverDispatch_Local",
-			"-benchtime=100x",
 		},
 		env: map[string]string{
 			"GOCACHE": "/tmp/queue-gocache",
@@ -58,7 +57,6 @@ func TestRenderBenchmarks(t *testing.T) {
 				"-tags", "integration",
 				"-run=^$",
 				"-bench", "BenchmarkDriverDispatch_Integration",
-				"-benchtime=20x",
 			},
 			env: map[string]string{
 				"RUN_INTEGRATION": "1",

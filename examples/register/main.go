@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	// Register is a no-op for fake queue.
+	// Register adds a task handler to the local queue runtime.
 
 	// Example: local register
 	q, err := queue.NewSync()

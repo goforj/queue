@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	// StartWorkers is a no-op for fake queue.
+	// StartWorkers initializes worker goroutines for workerpool mode.
 
 	// Example: local start workers
 	q, err := queue.NewWorkerpool()
