@@ -35,13 +35,13 @@ Current matrix trust status and known integration gaps are tracked in `docs/inte
 
 | Driver | Mode | Durable | Async | Delay | Unique | Backoff | Timeout | Notes |
 | ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> **Redis** | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ | Production Redis backend; backoff maps to Asynq limitations (`ErrBackoffUnsupported`). |
-| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> **Database** | SQL (pg/mysql/sqlite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Works with `sqlite`, `mysql`, `pgx`; good local/prod parity option. |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> **Workerpool** | In-process pool | - | ✓ | ✓ | ✓ | ✓ | ✓ | Fast local async testing without external infra. |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> **Sync** | Inline (caller) | - | - | - | ✓ | - | ✓ | Simplest deterministic test mode; effectively the "no external queue" option. |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> **RabbitMQ** | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | Uses RabbitMQ for transport and worker consumption. |
-| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> **SQS** | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | AWS SQS transport; supports endpoint override for localstack/testcontainers. |
-| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> **NATS** | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | NATS transport with queue-subject routing. |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ | Production Redis backend; backoff maps to Asynq limitations (`ErrBackoffUnsupported`). |
+| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Works with `sqlite`, `mysql`, `pgx`; good local/prod parity option. |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | - | ✓ | ✓ | ✓ | ✓ | ✓ | Fast local async testing without external infra. |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | - | - | - | ✓ | - | ✓ | Simplest deterministic test mode; effectively the "no external queue" option. |
+| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | Uses RabbitMQ for transport and worker consumption. |
+| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | AWS SQS transport; supports endpoint override for localstack/testcontainers. |
+| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | NATS transport with queue-subject routing. |
 
 Note: a dedicated `null` driver is not implemented; use `sync` when you want queue API calls without broker/runtime setup.
 
