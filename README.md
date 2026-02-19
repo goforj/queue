@@ -279,6 +279,29 @@ fmt.Printf("hour=%+v\n", throughput.Hour)
 `SnapshotQueue` prefers native driver stats when available and falls back to the collector snapshot when a driver does not expose native stats.
 Use `queue.SupportsNativeStats(q)` and `queue.SupportsPause(q)` to branch runtime behavior safely.
 
+### Compose observers
+
+Use `queue.MultiObserver(...)` when you want multiple observer behaviors at once, such as logging plus stats collection.
+
+```go
+collector := queue.NewStatsCollector()
+
+loggerObserver := queue.ObserverFunc(func(event queue.Event) {
+	// send to your logger here
+	_ = event
+})
+
+q, _ := queue.New(queue.Config{
+	Driver:    queue.DriverRedis,
+	RedisAddr: "127.0.0.1:6379",
+	Observer:  queue.MultiObserver(loggerObserver, collector),
+})
+
+// SnapshotQueue can still use the same collector instance.
+snapshot, _ := queue.SnapshotQueue(context.Background(), q, collector)
+_, _ = snapshot.Queue("default")
+```
+
 ### Logging middleware hook
 
 Use `Observer` as your middleware hook for structured logging.
