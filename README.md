@@ -10,7 +10,6 @@
     <a href="https://pkg.go.dev/github.com/goforj/queue"><img src="https://pkg.go.dev/badge/github.com/goforj/queue.svg" alt="Go Reference"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
     <a href="https://github.com/goforj/queue/actions/workflows/test.yml"><img src="https://github.com/goforj/queue/actions/workflows/test.yml/badge.svg?branch=main" alt="CI: unit+race+integration matrix"></a>
-    <a href="https://github.com/goforj/queue/actions/workflows/soak.yml"><img src="https://github.com/goforj/queue/actions/workflows/soak.yml/badge.svg?branch=main" alt="Reliability: soak+chaos"></a>
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/branch/main/graph/badge.svg" alt="Coverage"></a>
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
@@ -20,7 +19,7 @@
 <p align="center">
   <a href="https://github.com/goforj/queue/actions/workflows/test.yml"><img src="https://img.shields.io/badge/integration%20matrix-7%2F7%20backends-brightgreen" alt="Integration matrix backends"></a>
   <a href="https://github.com/goforj/queue/actions/workflows/soak.yml"><img src="https://img.shields.io/badge/soak%2Fchaos-7%2F7%20backends-brightgreen" alt="Soak & chaos backends"></a>
-  <img src="https://img.shields.io/badge/drivers-redis%20%7C%20mysql%20%7C%20postgres%20%7C%20sqlite%20%7C%20nats%20%7C%20sqs%20%7C%20rabbitmq-blue" alt="Supported drivers">
+  <img src="https://img.shields.io/badge/drivers-redis%20%7C%20mysql%20%7C%20postgres%20%7C%20sqlite%20%7C%20nats%20%7C%20sqs%20%7C%20rabbitmq%20%7C%20database%20%7C%20workerpool%20%7C%20sync-blue" alt="Supported drivers">
   <img src="https://img.shields.io/badge/tests-unit%20%E2%9C%85%20|%20race%20%E2%9C%85%20|%20integration%20%E2%9C%85%20|%20scenarios%20%E2%9C%85-brightgreen" alt="Test suites">
   <img src="https://img.shields.io/badge/options-delay%20|%20backoff%20|%20timeout%20|%20retry%20|%20unique%20|%20queue-brightgreen" alt="Options covered">
 </p>
