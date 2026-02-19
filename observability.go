@@ -879,7 +879,7 @@ func normalizeQueueName(name string) string {
 //
 // Example: pause queue
 //
-//	q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, _ := queue.NewSync()
 //	_ = queue.PauseQueue(context.Background(), q, "default")
 //	snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
 //	fmt.Println(snapshot.Paused("default"))
@@ -897,7 +897,7 @@ func PauseQueue(ctx context.Context, q Queue, queueName string) error {
 //
 // Example: check pause support
 //
-//	q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, _ := queue.NewSync()
 //	fmt.Println(queue.SupportsPause(q))
 //	// Output: true
 func SupportsPause(q Queue) bool {
@@ -913,7 +913,7 @@ func SupportsPause(q Queue) bool {
 //
 // Example: check native stats support
 //
-//	q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, _ := queue.NewSync()
 //	fmt.Println(queue.SupportsNativeStats(q))
 //	// Output: true
 func SupportsNativeStats(q Queue) bool {
@@ -929,7 +929,7 @@ func SupportsNativeStats(q Queue) bool {
 //
 // Example: resume queue
 //
-//	q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, _ := queue.NewSync()
 //	_ = queue.PauseQueue(context.Background(), q, "default")
 //	_ = queue.ResumeQueue(context.Background(), q, "default")
 //	snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
@@ -948,7 +948,7 @@ func ResumeQueue(ctx context.Context, q Queue, queueName string) error {
 //
 // Example: snapshot from queue runtime
 //
-//	q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, _ := queue.NewSync()
 //	snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
 //	_, ok := snapshot.Queue("default")
 //	fmt.Println(ok)

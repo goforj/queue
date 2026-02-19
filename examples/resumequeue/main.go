@@ -13,7 +13,7 @@ func main() {
 	// ResumeQueue resumes queue consumption for drivers that support it.
 
 	// Example: resume queue
-	q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+	q, _ := queue.NewSync()
 	_ = queue.PauseQueue(context.Background(), q, "default")
 	_ = queue.ResumeQueue(context.Background(), q, "default")
 	snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)

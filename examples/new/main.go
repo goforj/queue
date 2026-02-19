@@ -12,7 +12,7 @@ func main() {
 	// New creates a queue based on Config.Driver.
 
 	// Example: new queue from config
-	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+	q, err := queue.NewSync()
 	if err != nil {
 		return
 	}

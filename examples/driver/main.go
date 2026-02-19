@@ -12,7 +12,7 @@ func main() {
 	// Driver returns the local queue runtime's driver mode.
 
 	// Example: local driver
-	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+	q, err := queue.NewSync()
 	if err != nil {
 		return
 	}

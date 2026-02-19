@@ -59,7 +59,7 @@ func newLocalQueueWithConfig(driver Driver, cfg WorkerpoolConfig) *localQueue {
 //
 // Example: local driver
 //
-//	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, err := queue.NewSync()
 //	if err != nil {
 //		return
 //	}
@@ -78,7 +78,7 @@ func (d *localQueue) Driver() Driver {
 //
 // Example: local register
 //
-//	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, err := queue.NewSync()
 //	if err != nil {
 //		return
 //	}
@@ -107,9 +107,7 @@ func (d *localQueue) Register(taskType string, handler Handler) {
 //
 // Example: local start workers
 //
-//	q, err := queue.New(queue.Config{
-//		Driver: queue.DriverWorkerpool,
-//	})
+//	q, err := queue.NewWorkerpool()
 //	if err != nil {
 //		return
 //	}
@@ -127,9 +125,7 @@ func (d *localQueue) StartWorkers(_ context.Context) error {
 //
 // Example: local shutdown
 //
-//	q, err := queue.New(queue.Config{
-//		Driver: queue.DriverWorkerpool,
-//	})
+//	q, err := queue.NewWorkerpool()
 //	if err != nil {
 //		return
 //	}
@@ -167,7 +163,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //
 // Example: local dispatch
 //
-//	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, err := queue.NewSync()
 //	if err != nil {
 //		return
 //	}

@@ -12,7 +12,7 @@ func main() {
 	// SupportsNativeStats reports whether a queue runtime exposes native stats snapshots.
 
 	// Example: check native stats support
-	q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+	q, _ := queue.NewSync()
 	fmt.Println(queue.SupportsNativeStats(q))
 	// Output: true
 }

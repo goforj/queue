@@ -108,7 +108,7 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //
 // Example: new queue from config
 //
-//	q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+//	q, err := queue.NewSync()
 //	if err != nil {
 //		return
 //	}
@@ -188,6 +188,134 @@ func New(cfg Config) (Queue, error) {
 		common:     common,
 		registered: make(map[string]Handler),
 	}, nil
+}
+
+// NewNull creates a drop-only queue runtime.
+// @group Constructors
+//
+// Example: new null queue
+//
+//	q, err := queue.NewNull()
+//	if err != nil {
+//		return
+//	}
+//	_ = q.Dispatch(queue.NewTask("emails:send").Payload(map[string]int{"id": 1}).OnQueue("default"))
+func NewNull() (Queue, error) {
+	return New(Config{Driver: DriverNull})
+}
+
+// NewSync creates a synchronous in-process queue runtime.
+// @group Constructors
+//
+// Example: new sync queue
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func NewSync() (Queue, error) {
+	return New(Config{Driver: DriverSync})
+}
+
+// NewWorkerpool creates an in-process workerpool queue runtime.
+// @group Constructors
+//
+// Example: new workerpool queue
+//
+//	q, err := queue.NewWorkerpool()
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func NewWorkerpool() (Queue, error) {
+	return New(Config{Driver: DriverWorkerpool})
+}
+
+// NewDatabase creates a SQL-backed queue runtime.
+// @group Constructors
+//
+// Example: new database queue
+//
+//	q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func NewDatabase(driverName, dsn string) (Queue, error) {
+	return New(Config{
+		Driver:         DriverDatabase,
+		DatabaseDriver: driverName,
+		DatabaseDSN:    dsn,
+	})
+}
+
+// NewRedis creates a Redis-backed queue runtime.
+// @group Constructors
+//
+// Example: new redis queue
+//
+//	q, err := queue.NewRedis("127.0.0.1:6379")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func NewRedis(addr string) (Queue, error) {
+	return New(Config{
+		Driver:    DriverRedis,
+		RedisAddr: addr,
+	})
+}
+
+// NewNATS creates a NATS-backed queue runtime.
+// @group Constructors
+//
+// Example: new nats queue
+//
+//	q, err := queue.NewNATS("nats://127.0.0.1:4222")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func NewNATS(url string) (Queue, error) {
+	return New(Config{
+		Driver:  DriverNATS,
+		NATSURL: url,
+	})
+}
+
+// NewSQS creates an SQS-backed queue runtime.
+// @group Constructors
+//
+// Example: new sqs queue
+//
+//	q, err := queue.NewSQS("us-east-1")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func NewSQS(region string) (Queue, error) {
+	return New(Config{
+		Driver:    DriverSQS,
+		SQSRegion: region,
+	})
+}
+
+// NewRabbitMQ creates a RabbitMQ-backed queue runtime.
+// @group Constructors
+//
+// Example: new rabbitmq queue
+//
+//	q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func NewRabbitMQ(url string) (Queue, error) {
+	return New(Config{
+		Driver:      DriverRabbitMQ,
+		RabbitMQURL: url,
+	})
 }
 
 func (cfg Config) normalize() Config {
