@@ -21,12 +21,8 @@ type redisWorker struct {
 	started bool
 }
 
-func newRedisWorker(server asynqServer, mux *asynq.ServeMux) workerRuntime {
+func newRedisWorker(server asynqServer, mux *asynq.ServeMux) runtimeWorkerBackend {
 	return &redisWorker{server: server, mux: mux}
-}
-
-func (w *redisWorker) Driver() Driver {
-	return DriverRedis
 }
 
 func (w *redisWorker) Register(taskType string, handler Handler) {
@@ -38,7 +34,10 @@ func (w *redisWorker) Register(taskType string, handler Handler) {
 	})
 }
 
-func (w *redisWorker) Start() error {
+func (w *redisWorker) StartWorkers(ctx context.Context) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.started {
@@ -51,7 +50,7 @@ func (w *redisWorker) Start() error {
 	return nil
 }
 
-func (w *redisWorker) Shutdown() error {
+func (w *redisWorker) Shutdown(_ context.Context) error {
 	w.mu.Lock()
 	started := w.started
 	w.started = false

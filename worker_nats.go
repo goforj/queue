@@ -20,15 +20,11 @@ type natsWorker struct {
 	start sync.Once
 }
 
-func newNATSWorker(url string) workerRuntime {
+func newNATSWorker(url string) runtimeWorkerBackend {
 	return &natsWorker{
 		url:      url,
 		handlers: make(map[string]Handler),
 	}
-}
-
-func (w *natsWorker) Driver() Driver {
-	return DriverNATS
 }
 
 func (w *natsWorker) Register(taskType string, handler Handler) {
@@ -40,7 +36,10 @@ func (w *natsWorker) Register(taskType string, handler Handler) {
 	w.mu.Unlock()
 }
 
-func (w *natsWorker) Start() error {
+func (w *natsWorker) StartWorkers(ctx context.Context) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	var startErr error
 	w.start.Do(func() {
 		nc, err := nats.Connect(w.url)
@@ -62,7 +61,7 @@ func (w *natsWorker) Start() error {
 	return startErr
 }
 
-func (w *natsWorker) Shutdown() error {
+func (w *natsWorker) Shutdown(_ context.Context) error {
 	if w.sub != nil {
 		_ = w.sub.Drain()
 	}

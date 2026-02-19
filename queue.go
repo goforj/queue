@@ -84,6 +84,12 @@ type queueBackend interface {
 	Shutdown(ctx context.Context) error
 }
 
+type runtimeQueueBackend interface {
+	queueBackend
+	Register(taskType string, handler Handler)
+	StartWorkers(ctx context.Context) error
+}
+
 func newSyncQueue() queueBackend {
 	return newLocalQueueWithConfig(DriverSync, WorkerpoolConfig{})
 }
@@ -126,6 +132,8 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //			OnQueue("default"),
 //	)
 func New(cfg Config) (Queue, error) {
+	cfg = cfg.normalize()
+
 	var q queueBackend
 	var err error
 	switch cfg.Driver {
@@ -146,9 +154,6 @@ func New(cfg Config) (Queue, error) {
 		}
 		q = newNATSQueue(cfg.NATSURL)
 	case DriverSQS:
-		if cfg.SQSRegion == "" {
-			cfg.SQSRegion = "us-east-1"
-		}
 		q = newSQSQueue(cfg)
 	case DriverRabbitMQ:
 		if cfg.RabbitMQURL == "" {
@@ -161,25 +166,43 @@ func New(cfg Config) (Queue, error) {
 	if err != nil {
 		return nil, err
 	}
+	var runtime runtimeQueueBackend
+	if native, ok := q.(runtimeQueueBackend); ok {
+		runtime = native
+	}
 	return &queueRuntime{
 		inner:      newObservedQueue(q, cfg.Observer),
+		runtime:    runtime,
 		cfg:        cfg,
 		registered: make(map[string]Handler),
 	}, nil
 }
 
+func (cfg Config) normalize() Config {
+	if cfg.DefaultQueue == "" {
+		cfg.DefaultQueue = "default"
+	}
+	if cfg.SQSRegion == "" {
+		cfg.SQSRegion = "us-east-1"
+	}
+	return cfg
+}
+
 type queueRuntime struct {
 	inner queueBackend
-	cfg   Config
-	mu    sync.Mutex
+	// runtime is non-nil when the selected queue backend natively supports
+	// registration + worker lifecycle.
+	runtime runtimeQueueBackend
+	cfg     Config
+	mu      sync.Mutex
 	// registered tracks handlers for queue-centric registration + worker start.
 	registered map[string]Handler
-	worker     workerRuntime
+	worker     runtimeWorkerBackend
 	started    bool
 	workers    int
 }
 
-type registerStartShutdown interface {
+type runtimeWorkerBackend interface {
 	Register(taskType string, handler Handler)
 	StartWorkers(ctx context.Context) error
 	Shutdown(ctx context.Context) error
@@ -214,14 +237,14 @@ func (q *queueRuntime) Register(taskType string, handler Handler) {
 	started := q.started
 	q.mu.Unlock()
 
-	// Runtime-capable backends register directly on the backend.
-	if runtime, ok := q.runtimeBackend(); ok {
-		runtime.Register(taskType, handler)
+	// Native runtime backends register directly on the queue backend.
+	if q.runtime != nil {
+		q.runtime.Register(taskType, q.wrapRegisteredHandler(taskType, handler))
 		return
 	}
 	// External worker backends register on active worker after start.
 	if started && w != nil {
-		w.Register(taskType, handler)
+		w.Register(taskType, q.wrapRegisteredHandler(taskType, handler))
 	}
 }
 
@@ -241,11 +264,11 @@ func (q *queueRuntime) StartWorkers(ctx context.Context) error {
 	}
 	q.mu.Unlock()
 
-	if runtime, ok := q.runtimeBackend(); ok {
+	if q.runtime != nil {
 		for taskType, handler := range registered {
-			runtime.Register(taskType, handler)
+			q.runtime.Register(taskType, q.wrapRegisteredHandler(taskType, handler))
 		}
-		if err := runtime.StartWorkers(ctx); err != nil {
+		if err := q.runtime.StartWorkers(ctx); err != nil {
 			return err
 		}
 		q.mu.Lock()
@@ -259,9 +282,9 @@ func (q *queueRuntime) StartWorkers(ctx context.Context) error {
 		return err
 	}
 	for taskType, handler := range registered {
-		w.Register(taskType, handler)
+		w.Register(taskType, q.wrapRegisteredHandler(taskType, handler))
 	}
-	if err := w.Start(); err != nil {
+	if err := w.StartWorkers(ctx); err != nil {
 		return err
 	}
 	q.mu.Lock()
@@ -292,14 +315,14 @@ func (q *queueRuntime) Shutdown(ctx context.Context) error {
 	q.mu.Unlock()
 
 	if wasStarted {
-		if runtime, ok := q.runtimeBackend(); ok {
-			if err := runtime.Shutdown(ctx); err != nil {
+		if q.runtime != nil {
+			if err := q.runtime.Shutdown(ctx); err != nil {
 				return err
 			}
 			return nil
 		}
 		if w != nil {
-			if err := w.Shutdown(); err != nil {
+			if err := w.Shutdown(ctx); err != nil {
 				return err
 			}
 		}
@@ -331,60 +354,41 @@ func (q *queueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
 	return provider.Stats(ctx)
 }
 
-func (q *queueRuntime) runtimeBackend() (registerStartShutdown, bool) {
-	// Observability wrappers always expose StartWorkers/Register methods, but
-	// only some underlying backends are true runtime backends.
-	if observed, ok := q.inner.(*observedQueue); ok {
-		if _, ok := observed.inner.(registerStartShutdown); ok {
-			return observed, true
-		}
-		return nil, false
+func (q *queueRuntime) wrapRegisteredHandler(taskType string, handler Handler) Handler {
+	if handler == nil || q.cfg.Observer == nil {
+		return handler
 	}
-	runtime, ok := q.inner.(registerStartShutdown)
-	return runtime, ok
+	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", taskType, handler)
 }
 
-func (q *queueRuntime) newExternalWorker(concurrency int) (workerRuntime, error) {
+func (q *queueRuntime) newExternalWorker(concurrency int) (runtimeWorkerBackend, error) {
 	switch q.cfg.Driver {
 	case DriverRedis:
 		workers := concurrency
 		workers = defaultWorkerCount(workers)
-		return newObservedWorker(
-			newRedisWorker(
-				asynq.NewServer(asynq.RedisClientOpt{
-					Addr:     q.cfg.RedisAddr,
-					Password: q.cfg.RedisPassword,
-					DB:       q.cfg.RedisDB,
-				}, asynq.Config{Concurrency: workers}),
-				asynq.NewServeMux(),
-			),
-			q.cfg.Observer,
+		return newRedisWorker(
+			asynq.NewServer(asynq.RedisClientOpt{
+				Addr:     q.cfg.RedisAddr,
+				Password: q.cfg.RedisPassword,
+				DB:       q.cfg.RedisDB,
+			}, asynq.Config{Concurrency: workers}),
+			asynq.NewServeMux(),
 		), nil
 	case DriverNATS:
-		return newObservedWorker(newNATSWorker(q.cfg.NATSURL), q.cfg.Observer), nil
+		return newNATSWorker(q.cfg.NATSURL), nil
 	case DriverSQS:
-		cfg := q.cfg
-		if cfg.SQSRegion == "" {
-			cfg.SQSRegion = "us-east-1"
-		}
-		return newObservedWorker(newSQSWorker(workerConfig{
-			Driver:       DriverSQS,
-			Observer:     cfg.Observer,
-			Workers:      concurrency,
-			DefaultQueue: cfg.DefaultQueue,
-			SQSRegion:    cfg.SQSRegion,
-			SQSEndpoint:  cfg.SQSEndpoint,
-			SQSAccessKey: cfg.SQSAccessKey,
-			SQSSecretKey: cfg.SQSSecretKey,
-		}), q.cfg.Observer), nil
+		return newSQSWorker(sqsWorkerConfig{
+			DefaultQueue: q.cfg.DefaultQueue,
+			SQSRegion:    q.cfg.SQSRegion,
+			SQSEndpoint:  q.cfg.SQSEndpoint,
+			SQSAccessKey: q.cfg.SQSAccessKey,
+			SQSSecretKey: q.cfg.SQSSecretKey,
+		}), nil
 	case DriverRabbitMQ:
-		return newObservedWorker(newRabbitMQWorker(workerConfig{
-			Driver:       DriverRabbitMQ,
-			Observer:     q.cfg.Observer,
-			Workers:      concurrency,
+		return newRabbitMQWorker(rabbitMQWorkerConfig{
 			DefaultQueue: q.cfg.DefaultQueue,
 			RabbitMQURL:  q.cfg.RabbitMQURL,
-		}), q.cfg.Observer), nil
+		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", q.cfg.Driver)
 	}

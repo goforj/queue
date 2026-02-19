@@ -11,7 +11,7 @@ import (
 )
 
 type rabbitMQWorker struct {
-	cfg workerConfig
+	cfg rabbitMQWorkerConfig
 
 	mu       sync.RWMutex
 	handlers map[string]Handler
@@ -27,7 +27,12 @@ type rabbitMQWorker struct {
 	pubMu sync.Mutex
 }
 
-func newRabbitMQWorker(cfg workerConfig) workerRuntime {
+type rabbitMQWorkerConfig struct {
+	DefaultQueue string
+	RabbitMQURL  string
+}
+
+func newRabbitMQWorker(cfg rabbitMQWorkerConfig) runtimeWorkerBackend {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
 	}
@@ -35,10 +40,6 @@ func newRabbitMQWorker(cfg workerConfig) workerRuntime {
 		cfg:      cfg,
 		handlers: make(map[string]Handler),
 	}
-}
-
-func (w *rabbitMQWorker) Driver() Driver {
-	return DriverRabbitMQ
 }
 
 func (w *rabbitMQWorker) Register(taskType string, handler Handler) {
@@ -50,11 +51,17 @@ func (w *rabbitMQWorker) Register(taskType string, handler Handler) {
 	w.mu.Unlock()
 }
 
-func (w *rabbitMQWorker) Start() error {
+func (w *rabbitMQWorker) StartWorkers(ctx context.Context) error {
 	w.startStop.Lock()
 	defer w.startStop.Unlock()
 	if w.started {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	conn, err := amqp.Dial(w.cfg.RabbitMQURL)
 	if err != nil {
@@ -76,7 +83,7 @@ func (w *rabbitMQWorker) Start() error {
 		_ = conn.Close()
 		return err
 	}
-	loopCtx, cancel := context.WithCancel(context.Background())
+	loopCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
 	w.conn = conn
 	w.ch = ch
@@ -87,7 +94,7 @@ func (w *rabbitMQWorker) Start() error {
 	return nil
 }
 
-func (w *rabbitMQWorker) Shutdown() error {
+func (w *rabbitMQWorker) Shutdown(_ context.Context) error {
 	w.startStop.Lock()
 	if !w.started {
 		w.startStop.Unlock()

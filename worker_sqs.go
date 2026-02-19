@@ -19,8 +19,16 @@ type sqsWorkerClient interface {
 	SendMessage(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
 }
 
+type sqsWorkerConfig struct {
+	DefaultQueue string
+	SQSRegion    string
+	SQSEndpoint  string
+	SQSAccessKey string
+	SQSSecretKey string
+}
+
 type sqsWorker struct {
-	cfg workerConfig
+	cfg sqsWorkerConfig
 
 	mu       sync.RWMutex
 	handlers map[string]Handler
@@ -33,7 +41,7 @@ type sqsWorker struct {
 	startStop sync.Mutex
 }
 
-func newSQSWorker(cfg workerConfig) workerRuntime {
+func newSQSWorker(cfg sqsWorkerConfig) runtimeWorkerBackend {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
 	}
@@ -41,10 +49,6 @@ func newSQSWorker(cfg workerConfig) workerRuntime {
 		cfg:      cfg,
 		handlers: make(map[string]Handler),
 	}
-}
-
-func (w *sqsWorker) Driver() Driver {
-	return DriverSQS
 }
 
 func (w *sqsWorker) Register(taskType string, handler Handler) {
@@ -56,13 +60,18 @@ func (w *sqsWorker) Register(taskType string, handler Handler) {
 	w.mu.Unlock()
 }
 
-func (w *sqsWorker) Start() error {
+func (w *sqsWorker) StartWorkers(ctx context.Context) error {
 	w.startStop.Lock()
 	defer w.startStop.Unlock()
 	if w.started {
 		return nil
 	}
-	ctx := context.Background()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	cfg := Config{
 		SQSRegion:    w.cfg.SQSRegion,
 		SQSEndpoint:  w.cfg.SQSEndpoint,
@@ -82,7 +91,7 @@ func (w *sqsWorker) Start() error {
 	}
 	w.client = client
 	w.queueURL = queueURL
-	loopCtx, cancel := context.WithCancel(context.Background())
+	loopCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
 	w.started = true
 	w.wg.Add(1)
@@ -90,7 +99,7 @@ func (w *sqsWorker) Start() error {
 	return nil
 }
 
-func (w *sqsWorker) Shutdown() error {
+func (w *sqsWorker) Shutdown(_ context.Context) error {
 	w.startStop.Lock()
 	if !w.started {
 		w.startStop.Unlock()

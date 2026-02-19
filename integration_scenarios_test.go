@@ -718,7 +718,7 @@ type scenarioFixture struct {
 	name      string
 	queueName string
 	newQueue  func(t *testing.T) Queue
-	newWorker func(t *testing.T) workerRuntime
+	newWorker func(t *testing.T) runtimeWorkerBackend
 
 	supportsBackoff              bool
 	forceTimeout                 bool
@@ -751,7 +751,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) workerRuntime {
+			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				return newQueueBackedWorker(t, Config{
 					Driver:    DriverRedis,
 					RedisAddr: integrationRedis.addr,
@@ -781,7 +781,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) workerRuntime {
+			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				return newQueueBackedWorker(t, Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "mysql",
@@ -811,7 +811,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) workerRuntime {
+			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				return newQueueBackedWorker(t, Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "pgx",
@@ -841,7 +841,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) workerRuntime {
+			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				// Use the same DSN for queue+worker in the test body.
 				t.Fatal("sqlite worker fixture must be created from test-local DSN")
 				return nil
@@ -868,7 +868,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) workerRuntime {
+			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				return newQueueBackedWorker(t, Config{
 					Driver:  DriverNATS,
 					NATSURL: integrationNATS.url,
@@ -899,7 +899,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) workerRuntime {
+			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				return newQueueBackedWorker(t, Config{
 					Driver:       DriverSQS,
 					SQSEndpoint:  integrationSQS.endpoint,
@@ -930,7 +930,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				return q
 			},
-			newWorker: func(t *testing.T) workerRuntime {
+			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				return newQueueBackedWorker(t, Config{
 					Driver:      DriverRabbitMQ,
 					RabbitMQURL: integrationRabbitMQ.url,
@@ -968,7 +968,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 					}
 					return q
 				}
-				fx.newWorker = func(t *testing.T) workerRuntime {
+				fx.newWorker = func(t *testing.T) runtimeWorkerBackend {
 					return newQueueBackedWorker(t, Config{
 						Driver:         DriverDatabase,
 						DatabaseDriver: "sqlite",
@@ -995,7 +995,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	q := fx.newQueue(t)
 	w := fx.newWorker(t)
 	t.Cleanup(func() { _ = q.Shutdown(context.Background()) })
-	t.Cleanup(func() { _ = w.Shutdown() })
+	t.Cleanup(func() { _ = (w).Shutdown(context.Background()) })
 
 	taskType := "job:scenario:" + fx.name
 	total := int32(40)
@@ -1018,8 +1018,8 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_startworkers_idempotent", func(t *testing.T) {
-		requireScenarioNoErr(t, "worker_start", w.Start())
-		requireScenarioNoErr(t, "worker_start_idempotent", w.Start())
+		requireScenarioNoErr(t, "worker_start", (w).StartWorkers(context.Background()))
+		requireScenarioNoErr(t, "worker_start_idempotent", (w).StartWorkers(context.Background()))
 	})
 
 	t.Run("scenario_dispatch_burst", func(t *testing.T) {
@@ -1145,7 +1145,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if !fx.supportsRestart {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
-		requireScenarioNoErr(t, "restart_scenario_worker_start", w.Start())
+		requireScenarioNoErr(t, "restart_scenario_worker_start", (w).StartWorkers(context.Background()))
 
 		restartType := "job:scenario:restart:" + fx.name
 		done := make(chan struct{}, 1)
@@ -1170,7 +1170,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		}
 		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), task))
 
-		requireScenarioNoErr(t, "restart_shutdown_first_worker", w.Shutdown())
+		requireScenarioNoErr(t, "restart_shutdown_first_worker", (w).Shutdown(context.Background()))
 		w = fx.newWorker(t)
 		w.Register(restartType, func(_ context.Context, _ Task) error {
 			select {
@@ -1179,7 +1179,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			}
 			return nil
 		})
-		requireScenarioNoErr(t, "restart_start_second_worker", w.Start())
+		requireScenarioNoErr(t, "restart_start_second_worker", (w).StartWorkers(context.Background()))
 
 		select {
 		case <-done:
@@ -1189,7 +1189,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_bind_invalid_json", func(t *testing.T) {
-		requireScenarioNoErr(t, "bind_scenario_worker_start", w.Start())
+		requireScenarioNoErr(t, "bind_scenario_worker_start", (w).StartWorkers(context.Background()))
 
 		badType := "job:scenario:bind-bad:" + fx.name
 		emptyType := "job:scenario:bind-empty:" + fx.name
@@ -1303,7 +1303,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_dispatch_context_cancellation", func(t *testing.T) {
-		requireScenarioNoErr(t, "dispatch_ctx_worker_start", w.Start())
+		requireScenarioNoErr(t, "dispatch_ctx_worker_start", (w).StartWorkers(context.Background()))
 
 		cancelType := "job:scenario:ctx-cancel:" + fx.name
 		goodType := "job:scenario:ctx-good:" + fx.name
@@ -1361,7 +1361,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if !fx.supportsRestart || !fx.supportsShutdownDelayRetry {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
-		requireScenarioNoErr(t, "shutdown_delay_worker_start", w.Start())
+		requireScenarioNoErr(t, "shutdown_delay_worker_start", (w).StartWorkers(context.Background()))
 
 		delayedType := "job:scenario:shutdown-delay:" + fx.name
 		retryType := "job:scenario:shutdown-retry:" + fx.name
@@ -1412,7 +1412,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			requireScenarioNoErr(t, "shutdown_retry_dispatch", q.DispatchCtx(context.Background(), retryTask))
 		}
 
-		requireScenarioNoErr(t, "shutdown_during_delay", w.Shutdown())
+		requireScenarioNoErr(t, "shutdown_during_delay", (w).Shutdown(context.Background()))
 
 		w = fx.newWorker(t)
 		w.Register(delayedType, func(_ context.Context, _ Task) error {
@@ -1432,7 +1432,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			}
 			return nil
 		})
-		requireScenarioNoErr(t, "shutdown_delay_restart_worker", w.Start())
+		requireScenarioNoErr(t, "shutdown_delay_restart_worker", (w).StartWorkers(context.Background()))
 
 		select {
 		case <-delayedDone:
@@ -1452,10 +1452,10 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if !fx.supportsDeterministicNoDupes {
 			t.Skip("backend does not provide deterministic no-duplication guarantees for this scenario")
 		}
-		requireScenarioNoErr(t, "multi_worker_primary_start", w.Start())
+		requireScenarioNoErr(t, "multi_worker_primary_start", (w).StartWorkers(context.Background()))
 
 		worker2 := fx.newWorker(t)
-		t.Cleanup(func() { _ = worker2.Shutdown() })
+		t.Cleanup(func() { _ = (worker2).Shutdown(context.Background()) })
 
 		taskType := "job:scenario:multi-worker:" + fx.name
 		var mu sync.Mutex
@@ -1476,7 +1476,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		}
 		w.Register(taskType, handler)
 		worker2.Register(taskType, handler)
-		requireScenarioNoErr(t, "multi_worker_secondary_start", worker2.Start())
+		requireScenarioNoErr(t, "multi_worker_secondary_start", (worker2).StartWorkers(context.Background()))
 
 		for i := 0; i < totalTasks; i++ {
 			task := NewTask(taskType).
@@ -1508,7 +1508,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_duplicate_delivery_idempotency", func(t *testing.T) {
-		requireScenarioNoErr(t, "idempotency_worker_start", w.Start())
+		requireScenarioNoErr(t, "idempotency_worker_start", (w).StartWorkers(context.Background()))
 
 		taskType := "job:scenario:idempotency:" + fx.name
 		var attempts atomic.Int32
@@ -1567,7 +1567,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			t.Skip("backend does not support deterministic broker fault injection in this suite")
 		}
 
-		requireScenarioNoErr(t, "fault_worker_shutdown", w.Shutdown())
+		requireScenarioNoErr(t, "fault_worker_shutdown", (w).Shutdown(context.Background()))
 		requireScenarioNoErr(t, "fault_queue_shutdown", q.Shutdown(context.Background()))
 
 		qFault := fx.newQueue(t)
@@ -1597,7 +1597,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			t.Skip("backend does not support deterministic broker fault injection in this suite")
 		}
 
-		requireScenarioNoErr(t, "recover_shutdown_worker", w.Shutdown())
+		requireScenarioNoErr(t, "recover_shutdown_worker", (w).Shutdown(context.Background()))
 		requireScenarioNoErr(t, "recover_shutdown_queue", q.Shutdown(context.Background()))
 
 		q = fx.newQueue(t)
@@ -1616,7 +1616,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			}
 			return nil
 		})
-		requireScenarioNoErr(t, "recover_worker_start", w.Start())
+		requireScenarioNoErr(t, "recover_worker_start", (w).StartWorkers(context.Background()))
 
 		task := NewTask(taskType).
 			Payload(scenarioPayload{ID: 9701, Name: "fault-recovery"}).
@@ -1636,9 +1636,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if !fx.supportsOrderingContract {
 			t.Skip("backend does not expose strict ordering guarantees in this suite")
 		}
-		requireScenarioNoErr(t, "ordering_shutdown_previous_worker", w.Shutdown())
+		requireScenarioNoErr(t, "ordering_shutdown_previous_worker", (w).Shutdown(context.Background()))
 		w = newOrderingWorker(t, fx)
-		requireScenarioNoErr(t, "ordering_worker_start", w.Start())
+		requireScenarioNoErr(t, "ordering_worker_start", (w).StartWorkers(context.Background()))
 
 		taskType := "job:scenario:ordering:" + fx.name
 		const count = 20
@@ -1680,7 +1680,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_backpressure_saturation", func(t *testing.T) {
-		requireScenarioNoErr(t, "backpressure_worker_start", w.Start())
+		requireScenarioNoErr(t, "backpressure_worker_start", (w).StartWorkers(context.Background()))
 
 		taskType := "job:scenario:backpressure:" + fx.name
 		var processed atomic.Int32
@@ -1727,7 +1727,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_payload_large", func(t *testing.T) {
-		requireScenarioNoErr(t, "payload_large_worker_start", w.Start())
+		requireScenarioNoErr(t, "payload_large_worker_start", (w).StartWorkers(context.Background()))
 
 		taskType := "job:scenario:payload-large:" + fx.name
 		done := make(chan struct{}, 1)
@@ -1768,7 +1768,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_config_option_fuzz", func(t *testing.T) {
-		requireScenarioNoErr(t, "fuzz_worker_start", w.Start())
+		requireScenarioNoErr(t, "fuzz_worker_start", (w).StartWorkers(context.Background()))
 
 		taskType := "job:scenario:fuzz:" + fx.name
 		var processed atomic.Int32
@@ -1830,7 +1830,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if os.Getenv("RUN_SOAK") != "1" {
 			t.Skip("set RUN_SOAK=1 to enable long-running soak step")
 		}
-		requireScenarioNoErr(t, "soak_worker_start", w.Start())
+		requireScenarioNoErr(t, "soak_worker_start", (w).StartWorkers(context.Background()))
 
 		taskType := "job:scenario:soak:" + fx.name
 		var processed atomic.Int32
@@ -1904,8 +1904,8 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_shutdown_idempotent", func(t *testing.T) {
-		requireScenarioNoErr(t, "worker_shutdown", w.Shutdown())
-		requireScenarioNoErr(t, "worker_shutdown_idempotent", w.Shutdown())
+		requireScenarioNoErr(t, "worker_shutdown", (w).Shutdown(context.Background()))
+		requireScenarioNoErr(t, "worker_shutdown_idempotent", (w).Shutdown(context.Background()))
 	})
 }
 
@@ -1957,7 +1957,7 @@ type queueBackedWorker struct {
 	workers int
 }
 
-func newQueueBackedWorker(t *testing.T, cfg Config, workers int) workerRuntime {
+func newQueueBackedWorker(t *testing.T, cfg Config, workers int) runtimeWorkerBackend {
 	t.Helper()
 	q, err := New(cfg)
 	if err != nil {
@@ -1966,21 +1966,25 @@ func newQueueBackedWorker(t *testing.T, cfg Config, workers int) workerRuntime {
 	return &queueBackedWorker{q: q, workers: workers}
 }
 
-func (w *queueBackedWorker) Driver() Driver { return w.q.Driver() }
-
 func (w *queueBackedWorker) Register(taskType string, handler Handler) {
 	w.q.Register(taskType, handler)
 }
 
-func (w *queueBackedWorker) Start() error {
-	return w.q.Workers(w.workers).StartWorkers(context.Background())
+func (w *queueBackedWorker) StartWorkers(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return w.q.Workers(w.workers).StartWorkers(ctx)
 }
 
-func (w *queueBackedWorker) Shutdown() error {
-	return w.q.Shutdown(context.Background())
+func (w *queueBackedWorker) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return w.q.Shutdown(ctx)
 }
 
-func newOrderingWorker(t *testing.T, fx scenarioFixture) workerRuntime {
+func newOrderingWorker(t *testing.T, fx scenarioFixture) runtimeWorkerBackend {
 	t.Helper()
 	switch fx.name {
 	case "redis":

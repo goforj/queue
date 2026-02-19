@@ -788,43 +788,6 @@ func (q *observedQueue) Driver() Driver {
 	return q.driver
 }
 
-type observedWorker struct {
-	inner    workerRuntime
-	driver   Driver
-	observer Observer
-}
-
-func newObservedWorker(inner workerRuntime, observer Observer) workerRuntime {
-	if observer == nil {
-		return inner
-	}
-	return &observedWorker{
-		inner:    inner,
-		driver:   inner.Driver(),
-		observer: observer,
-	}
-}
-
-func (w *observedWorker) Driver() Driver {
-	return w.driver
-}
-
-func (w *observedWorker) Register(taskType string, handler Handler) {
-	if handler == nil {
-		w.inner.Register(taskType, handler)
-		return
-	}
-	w.inner.Register(taskType, wrapObservedHandler(w.observer, w.driver, "", taskType, handler))
-}
-
-func (w *observedWorker) Start() error {
-	return w.inner.Start()
-}
-
-func (w *observedWorker) Shutdown() error {
-	return w.inner.Shutdown()
-}
-
 func wrapObservedHandler(observer Observer, driver Driver, queueName string, taskType string, handler Handler) Handler {
 	return func(ctx context.Context, task Task) error {
 		opts := task.enqueueOptions()
