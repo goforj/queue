@@ -274,137 +274,45 @@ For full field-level semantics and guarantees, see [`docs/events.md`](docs/event
 
 ## How workers attach
 
-### Sync driver
+Two attachment patterns:
 
-No separate worker exists. The handler runs inline during `Enqueue`.
+- In-process drivers (`sync`, `workerpool`, `database`): register on `Queue`.
+- Broker-backed drivers (`redis`, `nats`, `sqs`, `rabbitmq`): register on `Worker`, enqueue on `Queue`.
 
-```go
-q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
-q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.PayloadBytes())
-})
-_ = q.Enqueue(context.Background(), queue.NewTask("emails:send").Payload([]byte("hello")).OnQueue("default"))
-```
-
-### Workerpool driver
-
-The worker is in-process. Attach by registering handlers and starting the queue runtime.
+In-process example:
 
 ```go
-q, _ := queue.New(queue.Config{
-    Driver: queue.DriverWorkerpool,
-})
+q, _ := queue.New(queue.Config{Driver: queue.DriverDatabase, DatabaseDriver: "sqlite", DatabaseDSN: "file:queue.db"})
 q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.PayloadBytes())
+	return sendEmail(ctx, task.PayloadBytes())
 })
 _ = q.Start(context.Background())
 defer q.Shutdown(context.Background())
-
-task := queue.NewTask("emails:send").
-    Payload(map[string]any{"id": 456}).
-    OnQueue("default").
-    Retry(2).
-    Backoff(250 * time.Millisecond)
-
-_ = q.Enqueue(context.Background(), task)
 ```
 
-### Database driver
-
-Same attachment model as workerpool, but jobs are durable in SQL.
+Broker-backed example:
 
 ```go
-q, _ := queue.New(queue.Config{
-    Driver: queue.DriverDatabase,
-    DatabaseDriver: "sqlite",
-    DatabaseDSN: "file:queue.db?_busy_timeout=5000",
-})
-q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.PayloadBytes())
-})
-_ = q.Start(context.Background())
-defer q.Shutdown(context.Background())
-
-task := queue.NewTask("emails:send").
-    Payload(map[string]any{"id": 789}).
-    OnQueue("critical").
-    Delay(300 * time.Millisecond).
-    Timeout(10 * time.Second).
-    Retry(4).
-    Backoff(500 * time.Millisecond).
-    UniqueFor(45 * time.Second)
-
-_ = q.Enqueue(context.Background(), task)
-```
-
-### Redis driver
-
-Attach workers through `queue.Worker` so handlers stay on the queue abstraction.
-
-```go
-worker, _ := queue.NewWorker(queue.WorkerConfig{
-    Driver: queue.DriverRedis,
-    RedisAddr: "127.0.0.1:6379",
-    Workers: 10,
-})
+q, _ := queue.New(queue.Config{Driver: queue.DriverRedis, RedisAddr: "127.0.0.1:6379"})
+worker, _ := queue.NewWorker(queue.WorkerConfig{Driver: queue.DriverRedis, RedisAddr: "127.0.0.1:6379", Workers: 10})
 worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.PayloadBytes())
+	return sendEmail(ctx, task.PayloadBytes())
 })
 _ = worker.Start()
 defer worker.Shutdown()
 ```
 
-### NATS driver
+Driver quick map:
 
-Attach workers through `queue.Worker` and publish with `queue.Queue`.
-
-```go
-worker, _ := queue.NewWorker(queue.WorkerConfig{
-    Driver: queue.DriverNATS,
-    NATSURL: "nats://127.0.0.1:4222",
-})
-worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.PayloadBytes())
-})
-_ = worker.Start()
-defer worker.Shutdown()
-```
-
-### SQS driver
-
-Attach workers through `queue.Worker` and publish with `queue.Queue`.
-
-```go
-worker, _ := queue.NewWorker(queue.WorkerConfig{
-    Driver: queue.DriverSQS,
-    SQSRegion: "us-east-1",
-    SQSEndpoint: "http://127.0.0.1:4566",
-    SQSAccessKey: "test",
-    SQSSecretKey: "test",
-})
-worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.PayloadBytes())
-})
-_ = worker.Start()
-defer worker.Shutdown()
-```
-
-### RabbitMQ driver
-
-Attach workers through `queue.Worker` and publish with `queue.Queue`.
-
-```go
-worker, _ := queue.NewWorker(queue.WorkerConfig{
-    Driver: queue.DriverRabbitMQ,
-    RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/",
-    DefaultQueue: "default",
-})
-worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    return sendEmail(ctx, task.PayloadBytes())
-})
-_ = worker.Start()
-defer worker.Shutdown()
-```
+| Driver | Register handlers on |
+|:--|:--|
+| sync | `Queue` |
+| workerpool | `Queue` |
+| database | `Queue` |
+| redis | `Worker` |
+| nats | `Worker` |
+| sqs | `Worker` |
+| rabbitmq | `Worker` |
 
 ## Running workers and shutdown
 
