@@ -3,41 +3,56 @@
 </p>
 
 <p align="center">
-    queue gives your services one queue API with Redis, SQL, and in-process drivers.
+    queue gives your services one queue API with Redis, SQL, NATS, SQS, RabbitMQ, and in-process drivers.
 </p>
 
 <p align="center">
-  <a href="https://pkg.go.dev/github.com/goforj/queue"><img src="https://pkg.go.dev/badge/github.com/goforj/queue.svg" alt="Go Reference"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://github.com/goforj/queue/actions/workflows/test.yml"><img src="https://github.com/goforj/queue/actions/workflows/test.yml/badge.svg?branch=main" alt="CI: unit+race+integration matrix"></a>
-  <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/branch/main/graph/badge.svg" alt="Coverage"></a>
-  <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
-    <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
+    <a href="https://pkg.go.dev/github.com/goforj/queue"><img src="https://pkg.go.dev/badge/github.com/goforj/queue.svg" alt="Go Reference"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+    <a href="https://github.com/goforj/queue/actions"><img src="https://github.com/goforj/queue/actions/workflows/test.yml/badge.svg" alt="Go Test"></a>
     <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.23+-blue?logo=go" alt="Go version"></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/goforj/queue/actions/workflows/test.yml"><img src="https://img.shields.io/badge/integration%20matrix-7%2F7%20backends-brightgreen" alt="Integration matrix backends"></a>
-  <a href="https://github.com/goforj/queue/actions/workflows/soak.yml"><img src="https://img.shields.io/badge/soak%2Fchaos-7%2F7%20backends-brightgreen" alt="Soak & chaos backends"></a>
-  <img src="https://img.shields.io/badge/tests-unit%20%E2%9C%85%20|%20race%20%E2%9C%85%20|%20integration%20%E2%9C%85%20|%20scenarios%20%E2%9C%85-brightgreen" alt="Test suites">
-  <img src="https://img.shields.io/badge/options-delay%20|%20backoff%20|%20timeout%20|%20retry%20|%20unique%20|%20queue-brightgreen" alt="Options covered">
+    <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
+    <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
+<!-- test-count:embed:start -->
+    <img src="https://img.shields.io/badge/tests-133-brightgreen" alt="Tests">
+<!-- test-count:embed:end -->
 </p>
 
 ## What queue is
 
-queue is a backend-agnostic job dispatcher. Your application code only depends on `queue.Dispatcher`, `queue.Task`, and fluent enqueue options. The driver decides whether work runs via Redis/Asynq, a SQL table, an in-process worker pool, or synchronously in the caller.
+queue is a backend-agnostic job queue runtime. Your application code depends on `queue.Queue` and fluent `queue.Task` values. The driver decides whether work runs via Redis/Asynq, a SQL table, NATS, SQS, RabbitMQ, an in-process worker pool, or synchronously in the caller.
 
 ## Drivers
 
-| Driver | Mode | Durable | Async | Delay | Unique | Backoff | Timeout |
-| ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ |
-| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | - | - | - | ✓ | - | ✓ |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+### Redis (production)
+- Uses Asynq for durable queues, retries, delays, and uniqueness.
+- Best for production or any place you already run Redis.
+
+### Database (PostgreSQL, MySQL, SQLite)
+- Persists jobs in a lightweight `queue_jobs` table and polls for work.
+- Auto-migrates schema by default in worker/database execution paths.
+- Supports retries, per-task timeouts, backoff, delays, and uniqueness.
+
+### NATS
+- Publishes tasks over NATS subjects with queue-based routing.
+- Use `queue.Worker` to consume and run handlers.
+
+### SQS
+- Publishes tasks to AWS SQS queues (or localstack for local integration).
+- Use `queue.Worker` to poll and process handlers.
+
+### RabbitMQ
+- Publishes tasks to RabbitMQ queues.
+- Use `queue.Worker` to consume and process handlers.
+
+### Workerpool (in-process async)
+- Runs tasks on background goroutines with a bounded channel.
+- Call `Start` once per process and `Shutdown` on exit to drain work.
+- Honors task metadata such as `Delay`, `Timeout`, `Retry`, `Backoff`, and `UniqueFor`.
+
+### Sync (in-process inline)
+- Executes handlers immediately in the caller goroutine.
+- Useful for tests or very small services without background workers.
 
 ## Installation
 
@@ -55,269 +70,588 @@ import (
     "github.com/goforj/queue"
 )
 
-func main() {
-    dispatcher, _ := queue.NewDispatcher(queue.Config{
-        Driver: queue.DriverWorkerpool,
-        Workerpool: queue.WorkerpoolConfig{Workers: 4, Buffer: 128, TaskTimeout: 30 * time.Second},
-    }, nil)
+type EmailPayload struct {
+    ID int `json:"id"`
+    To string `json:"to"`
+}
 
-    dispatcher.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-        return sendEmail(ctx, task.Payload)
+func emailHandler(ctx context.Context, task queue.Task) error {
+    _ = ctx
+    var payload EmailPayload
+    if err := task.Bind(&payload); err != nil {
+        return err
+    }
+    _ = payload
+    return nil
+}
+
+func main() {
+    // Create a queue runtime (workerpool driver for in-process async execution).
+    q, _ := queue.New(queue.Config{
+        Driver: queue.DriverWorkerpool,
     })
 
-    _ = dispatcher.Start(context.Background())
-    defer dispatcher.Shutdown(context.Background())
+    // Register a handler for the task type.
+    q.Register("emails:send", emailHandler)
+    
+    // Alternate inline style:
+    // q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    //     var payload EmailPayload
+    //     if err := task.Bind(&payload); err != nil {
+    //         return err
+    //     }
+    //     _ = payload
+    //     return nil
+    // })
 
-    _ = dispatcher.Enqueue(context.Background(), queue.Task{
-        Type:    "emails:send",
-        Payload: []byte("hello"),
-    },
-        queue.WithQueue("critical"),
-        queue.WithDelay(5*time.Second),
-        queue.WithTimeout(20*time.Second),
-        queue.WithMaxRetry(3),
-    )
+    // Start workers and ensure graceful shutdown.
+    _ = q.Start(context.Background())
+    defer q.Shutdown(context.Background())
+
+    // Build a task with payload and enqueue behavior.
+    task := queue.NewTask("emails:send").
+        Payload(EmailPayload{
+            ID: 123,
+            To: "user@example.com",
+        }).
+        OnQueue("critical").
+        Delay(5 * time.Second).
+        Timeout(20 * time.Second).
+        Retry(3)
+
+    // Enqueue the task for execution.
+    _ = q.Enqueue(context.Background(), task)
 }
 ```
 
 Switch to Redis without changing job code:
 
 ```go
-redis := asynq.NewClient(asynq.RedisClientOpt{Addr: "127.0.0.1:6379"})
-dispatcher := queue.NewRedisDispatcher(redis)
+q, _ := queue.New(queue.Config{
+    Driver: queue.DriverRedis,
+    RedisAddr: "127.0.0.1:6379",
+})
 ```
 
-Use SQL for durable local queues:
+Use SQL for durable local queue runtimeueues:
 
 ```go
-dispatcher, _ := queue.NewDispatcher(queue.Config{
+q, _ := queue.New(queue.Config{
     Driver: queue.DriverDatabase,
-    Database: queue.DatabaseConfig{
-        DriverName: "sqlite",
-        DSN:        "file:queue.db?_busy_timeout=5000",
-        Workers:    4,
-    },
-}, nil)
+    DatabaseDriver: "sqlite",
+    DatabaseDSN: "file:queue.db?_busy_timeout=5000",
+})
 ```
 
-## Enqueue options
+## Task builder options
 
-- `WithQueue(name)` sets a queue name (Redis: Asynq queue; Database: column; Workerpool/Sync: in-memory grouping).
-- `WithTimeout(d)` applies a per-task timeout; respected by all drivers.
-- `WithMaxRetry(n)` sets max retries (attempts = 1 + n).
-- `WithBackoff(d)` waits between retries; unsupported on Redis dispatcher (returns `ErrBackoffUnsupported`).
-- `WithDelay(d)` schedules future execution.
-- `WithUnique(ttl)` deduplicates by `Type + Payload` for the TTL window.
+| Method | Default | Behavior |
+|--:|:--|:--|
+| **OnQueue(name)** | Empty | Sets target queue name. For Redis/Database/NATS/SQS/RabbitMQ, enqueue requires an explicit queue. Sync/Workerpool do not use queue routing semantics. |
+| **Timeout(d)** | Unset | Applies per-task timeout. Workerpool may still apply `WorkerConfig.DefaultTaskTimeout` when task timeout is not set. |
+| **Retry(n)** | `0` | Sets max retries (attempts = `1 + n`). |
+| **Backoff(d)** | Unset | Wait duration between retries. Redis enqueue returns `ErrBackoffUnsupported`. |
+| **Delay(d)** | `0` | Schedules future execution; `0` means run immediately. |
+| **UniqueFor(ttl)** | `0` | Deduplicates by `Type + Payload` for the TTL window. |
+
+## How workers attach
+
+### Sync driver
+
+No separate worker exists. The handler runs inline during `Enqueue`.
+
+```go
+q, _ := queue.New(queue.Config{Driver: queue.DriverSync})
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = q.Enqueue(context.Background(), queue.NewTask("emails:send").Payload([]byte("hello")).OnQueue("default"))
+```
+
+### Workerpool driver
+
+The worker is in-process. Attach by registering handlers and starting the queue runtime.
+
+```go
+q, _ := queue.New(queue.Config{
+    Driver: queue.DriverWorkerpool,
+})
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = q.Start(context.Background())
+defer q.Shutdown(context.Background())
+
+task := queue.NewTask("emails:send").
+    Payload(map[string]any{"id": 456}).
+    OnQueue("default").
+    Retry(2).
+    Backoff(250 * time.Millisecond)
+
+_ = q.Enqueue(context.Background(), task)
+```
+
+### Database driver
+
+Same attachment model as workerpool, but jobs are durable in SQL.
+
+```go
+q, _ := queue.New(queue.Config{
+    Driver: queue.DriverDatabase,
+    DatabaseDriver: "sqlite",
+    DatabaseDSN: "file:queue.db?_busy_timeout=5000",
+})
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = q.Start(context.Background())
+defer q.Shutdown(context.Background())
+
+task := queue.NewTask("emails:send").
+    Payload(map[string]any{"id": 789}).
+    OnQueue("critical").
+    Delay(300 * time.Millisecond).
+    Timeout(10 * time.Second).
+    Retry(4).
+    Backoff(500 * time.Millisecond).
+    UniqueFor(45 * time.Second)
+
+_ = q.Enqueue(context.Background(), task)
+```
+
+### Redis driver
+
+Attach workers through `queue.Worker` so handlers stay on the queue abstraction.
+
+```go
+worker, _ := queue.NewWorker(queue.WorkerConfig{
+    Driver: queue.DriverRedis,
+    RedisAddr: "127.0.0.1:6379",
+    Workers: 10,
+})
+worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = worker.Start()
+defer worker.Shutdown()
+```
+
+### NATS driver
+
+Attach workers through `queue.Worker` and publish with `queue.Queue`.
+
+```go
+worker, _ := queue.NewWorker(queue.WorkerConfig{
+    Driver: queue.DriverNATS,
+    NATSURL: "nats://127.0.0.1:4222",
+})
+worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = worker.Start()
+defer worker.Shutdown()
+```
+
+### SQS driver
+
+Attach workers through `queue.Worker` and publish with `queue.Queue`.
+
+```go
+worker, _ := queue.NewWorker(queue.WorkerConfig{
+    Driver: queue.DriverSQS,
+    SQSRegion: "us-east-1",
+    SQSEndpoint: "http://127.0.0.1:4566",
+    SQSAccessKey: "test",
+    SQSSecretKey: "test",
+})
+worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = worker.Start()
+defer worker.Shutdown()
+```
+
+### RabbitMQ driver
+
+Attach workers through `queue.Worker` and publish with `queue.Queue`.
+
+```go
+worker, _ := queue.NewWorker(queue.WorkerConfig{
+    Driver: queue.DriverRabbitMQ,
+    RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/",
+    DefaultQueue: "default",
+})
+worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return sendEmail(ctx, task.PayloadBytes())
+})
+_ = worker.Start()
+defer worker.Shutdown()
+```
 
 ## Running workers and shutdown
 
 - Workerpool: call `Start` once; `Shutdown` drains in-flight and delayed tasks with context timeouts respected.
 - Database: `Start` spins worker goroutines; `Enqueue` will auto-start if needed. `Shutdown` waits for workers and closes owned DB handles.
-- Redis: dispatcher only enqueues; run your Asynq server separately and register handlers on its mux.
+- Redis: call `worker.Start()` to begin consuming and `worker.Shutdown()` for graceful stop.
+- NATS: call `worker.Start()` to subscribe and `worker.Shutdown()` to drain/close.
+- SQS: call `worker.Start()` to poll queues and `worker.Shutdown()` for graceful stop.
+- RabbitMQ: call `worker.Start()` to consume queues and `worker.Shutdown()` for graceful stop.
 
 ## Driver selection via config
 
-`queue.Config` pairs the selected driver with driver-specific settings. The same application code can switch drivers by changing config or environment wiring; handler registration stays identical.
+Use `queue.Config` with `New` and `queue.WorkerConfig` with `NewWorker`.  
+These are intentionally separate so enqueue-side settings and worker execution settings are documented independently.
+
+### Config support matrix
+
+Legend: `✓` supported, `-` ignored, `o` optional.
+
+| Config field | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ | Notes |
+|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
+| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| **DefaultQueue** | - | - | ✓ | - | - | - | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
+| **Database** | - | - | o | - | - | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
+| **DatabaseDriver** | - | - | ✓ | - | - | - | `sqlite`, `mysql`, or `pgx`. |
+| **DatabaseDSN** | - | - | ✓ | - | - | - | Connection string for database driver. |
+| **RedisAddr** | - | - | - | ✓ | - | - | Required for Redis queue enqueueing. |
+| **RedisPassword** | - | - | - | o | - | - | Redis auth password. |
+| **RedisDB** | - | - | - | o | - | - | Redis logical DB index. |
+| **NATSURL** | - | - | - | - | ✓ | - | Required for NATS queue enqueueing. |
+| **SQSRegion** | - | - | - | - | - | o | AWS region (defaults to `us-east-1`). |
+| **SQSEndpoint** | - | - | - | - | - | o | Override endpoint (localstack/testing). |
+| **SQSAccessKey** | - | - | - | - | - | o | Static access key (optional). |
+| **SQSSecretKey** | - | - | - | - | - | o | - | Static secret key (optional). |
+| **RabbitMQURL** | - | - | - | - | - | - | ✓ | Required for RabbitMQ queue enqueueing. |
+
+### WorkerConfig support matrix
+
+Legend: `✓` supported, `-` ignored, `o` optional.
+
+| WorkerConfig field | Sync | Workerpool | Database | Redis | NATS | SQS | RabbitMQ | Notes |
+|--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--|
+| **Driver** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Selects backend. |
+| **Workers** | - | ✓ | ✓ | ✓ | - | - | Redis uses this for Asynq worker concurrency. |
+| **QueueCapacity** | - | ✓ | - | - | - | - | In-memory pending queue capacity for workerpool workers. |
+| **DefaultTaskTimeout** | - | ✓ | - | - | - | - | Workerpool default task timeout unless task overrides with `Timeout(...)`. |
+| **PollInterval** | - | - | ✓ | - | - | - | Job polling interval for database worker loop. |
+| **DefaultQueue** | - | - | ✓ | - | - | ✓ | Queue runtime config field; task-level `OnQueue(...)` controls enqueue target. |
+| **AutoMigrate** | - | - | ✓ | - | - | - | Creates/updates DB schema on start. |
+| **Database** | - | - | o | - | - | - | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
+| **DatabaseDriver** | - | - | ✓ | - | - | - | `sqlite`, `mysql`, or `pgx`. |
+| **DatabaseDSN** | - | - | ✓ | - | - | - | Connection string for database worker. |
+| **RedisAddr** | - | - | - | ✓ | - | - | Required for Redis worker startup. |
+| **RedisPassword** | - | - | - | o | - | - | Redis auth password. |
+| **RedisDB** | - | - | - | o | - | - | Redis logical DB index. |
+| **NATSURL** | - | - | - | - | ✓ | - | Required for NATS worker startup. |
+| **SQSRegion** | - | - | - | - | - | o | AWS region (defaults to `us-east-1`). |
+| **SQSEndpoint** | - | - | - | - | - | o | Override endpoint (localstack/testing). |
+| **SQSAccessKey** | - | - | - | - | - | o | Static access key (optional). |
+| **SQSSecretKey** | - | - | - | - | - | o | - | Static secret key (optional). |
+| **RabbitMQURL** | - | - | - | - | - | - | ✓ | Required for RabbitMQ worker startup. |
 
 ## API reference
 
 The API section below is autogenerated; do not edit between the markers.
+
 <!-- api:embed:start -->
 
 ## API Index
 
 | Group | Functions |
 |------:|:-----------|
-| **Arguments** | [Arg](#arg) |
-| **Construction** | [Command](#command) |
-| **Context** | [WithContext](#withcontext) [WithDeadline](#withdeadline) [WithTimeout](#withtimeout) |
-| **Debugging** | [Args](#args) [ShellEscaped](#shellescaped) [String](#string) |
-| **Decoding** | [Decode](#decode) [DecodeJSON](#decodejson) [DecodeWith](#decodewith) [DecodeYAML](#decodeyaml) [FromCombined](#fromcombined) [FromStderr](#fromstderr) [FromStdout](#fromstdout) [Into](#into) [Trim](#trim) |
-| **Environment** | [Env](#env) [EnvAppend](#envappend) [EnvInherit](#envinherit) [EnvList](#envlist) [EnvOnly](#envonly) |
-| **Errors** | [Error](#error) [Unwrap](#unwrap) |
-| **Execution** | [CombinedOutput](#combinedoutput) [Output](#output) [OutputBytes](#outputbytes) [OutputTrimmed](#outputtrimmed) [Run](#run) [Start](#start) [OnExecCmd](#onexeccmd) |
-| **Input** | [StdinBytes](#stdinbytes) [StdinFile](#stdinfile) [StdinReader](#stdinreader) [StdinString](#stdinstring) |
-| **OS Controls** | [CreationFlags](#creationflags) [HideWindow](#hidewindow) [Pdeathsig](#pdeathsig) [Setpgid](#setpgid) [Setsid](#setsid) |
-| **Pipelining** | [Pipe](#pipe) [PipeBestEffort](#pipebesteffort) [PipeStrict](#pipestrict) [PipelineResults](#pipelineresults) |
-| **Process** | [GracefulShutdown](#gracefulshutdown) [Interrupt](#interrupt) [KillAfter](#killafter) [Send](#send) [Terminate](#terminate) [Wait](#wait) |
-| **Results** | [IsExitCode](#isexitcode) [IsSignal](#issignal) [OK](#ok) |
-| **Shadow Print** | [ShadowOff](#shadowoff) [ShadowOn](#shadowon) [ShadowPrint](#shadowprint) [WithFormatter](#withformatter) [WithMask](#withmask) [WithPrefix](#withprefix) |
-| **Streaming** | [OnStderr](#onstderr) [OnStdout](#onstdout) [StderrWriter](#stderrwriter) [StdoutWriter](#stdoutwriter) |
-| **WorkingDir** | [Dir](#dir) |
+| **Constructors** | [New](#new) [NewWorker](#newworker) |
+| **Queue** | [Driver](#driver) [Enqueue](#enqueue) [Register](#register) [Shutdown](#shutdown) [Start](#start) |
+| **Task** | [Backoff](#backoff) [Bind](#bind) [Delay](#delay) [NewTask](#newtask) [OnQueue](#onqueue) [Payload](#payload) [PayloadBytes](#payloadbytes) [PayloadJSON](#payloadjson) [Retry](#retry) [Timeout](#timeout) [UniqueFor](#uniquefor) |
 
 
-## Arguments
+## Constructors
 
-### <a id="arg"></a>Arg
+### <a id="new"></a>New
 
-Arg appends arguments to the command.
+New creates a queue based on Config.Driver.
 
 ```go
-cmd := execx.Command("printf").Arg("hello")
-out, _ := cmd.Output()
-fmt.Print(out)
-// hello
-```
-
-## Construction
-
-### <a id="command"></a>Command
-
-Command constructs a new command without executing it.
-
-```go
-cmd := execx.Command("printf", "hello")
-out, _ := cmd.Output()
-fmt.Print(out)
-// hello
-```
-
-## Context
-
-### <a id="withcontext"></a>WithContext
-
-WithContext binds the command to a context.
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-defer cancel()
-res, _ := execx.Command("go", "env", "GOOS").WithContext(ctx).Run()
-fmt.Println(res.ExitCode == 0)
-// #bool true
-```
-
-### <a id="withdeadline"></a>WithDeadline
-
-WithDeadline binds the command to a deadline.
-
-```go
-res, _ := execx.Command("go", "env", "GOOS").WithDeadline(time.Now().Add(2 * time.Second)).Run()
-fmt.Println(res.ExitCode == 0)
-// #bool true
-```
-
-### <a id="withtimeout"></a>WithTimeout
-
-WithTimeout binds the command to a timeout.
-
-```go
-res, _ := execx.Command("go", "env", "GOOS").WithTimeout(2 * time.Second).Run()
-fmt.Println(res.ExitCode == 0)
-// #bool true
-```
-
-## Debugging
-
-### <a id="args"></a>Args
-
-Args returns the argv slice used for execution.
-
-```go
-cmd := execx.Command("go", "env", "GOOS")
-fmt.Println(strings.Join(cmd.Args(), " "))
-// #string go env GOOS
-```
-
-### <a id="shellescaped"></a>ShellEscaped
-
-ShellEscaped returns a shell-escaped string for logging only.
-
-```go
-cmd := execx.Command("echo", "hello world", "it's")
-fmt.Println(cmd.ShellEscaped())
-// #string echo 'hello world' "it's"
-```
-
-### <a id="string"></a>String
-
-String returns a human-readable representation of the command.
-
-```go
-cmd := execx.Command("echo", "hello world", "it's")
-fmt.Println(cmd.String())
-// #string echo "hello world" it's
-```
-
-## Decoding
-
-### <a id="decode"></a>Decode
-
-Decode configures a custom decoder for this command.
-Decoding reads from stdout by default; use FromStdout, FromStderr, or FromCombined to select a source.
-
-```go
-type payload struct {
-    Name string
+q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+if err != nil {
+	return
 }
-decoder := execx.DecoderFunc(func(data []byte, dst any) error {
-    out, ok := dst.(*payload)
-    if !ok {
-        return fmt.Errorf("expected *payload")
-    }
-    _, val, ok := strings.Cut(string(data), "=")
-    if !ok {
-        return fmt.Errorf("invalid payload")
-    }
-    out.Name = val
-    return nil
+type EmailPayload struct {
+	ID int `json:"id"`
+}
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	var payload EmailPayload
+	if err := task.Bind(&payload); err != nil {
+		return err
+	}
+	_ = payload
+	return nil
 })
-var out payload
-_ = execx.Command("printf", "name=gopher").
-    Decode(decoder).
-    Into(&out)
-fmt.Println(out.Name)
-// #string gopher
+_ = q.Enqueue(
+	context.Background(),
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1}).
+		OnQueue("default"),
+)
 ```
 
-### <a id="decodejson"></a>DecodeJSON
+### <a id="newworker"></a>NewWorker
 
-DecodeJSON configures JSON decoding for this command.
-Decoding reads from stdout by default; use FromStdout, FromStderr, or FromCombined to select a source.
+NewWorker creates a worker based on WorkerConfig.Driver.
 
 ```go
-type payload struct {
-    Name string `json:"name"`
+worker, err := queue.NewWorker(queue.WorkerConfig{
+	Driver: queue.DriverSync,
+})
+if err != nil {
+	return
 }
-var out payload
-_ = execx.Command("printf", `{"name":"gopher"}`).
-    DecodeJSON().
-    Into(&out)
-fmt.Println(out.Name)
-// #string gopher
+type EmailPayload struct {
+	ID int `json:"id"`
+}
+worker.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	var payload EmailPayload
+	if err := task.Bind(&payload); err != nil {
+		return err
+	}
+	_ = payload
+	return nil
+})
+_ = worker.Start()
+_ = worker.Shutdown()
 ```
 
-### <a id="decodewith"></a>DecodeWith
+## Queue
 
-DecodeWith executes the command and decodes stdout into dst.
+### <a id="driver"></a>Driver
+
+Driver returns the local queue runtime's driver mode.
 
 ```go
-type payload struct {
-    Name string `json:"name"`
+q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+if err != nil {
+	return
 }
-var out payload
-_ = execx.Command("printf", `{"name":"gopher"}`).
-    DecodeWith(&out, execx.DecoderFunc(json.Unmarshal))
-fmt.Println(out.Name)
-// #string gopher
+driverAware, ok := q.(interface{ Driver() queue.Driver })
+if !ok {
+	return
+}
+fmt.Println(driverAware.Driver())
+// Output: sync
 ```
 
-### <a id="decodeyaml"></a>DecodeYAML
+### <a id="enqueue"></a>Enqueue
 
-DecodeYAML configures YAML decoding for this command.
-Decoding reads from stdout by default; use FromStdout, FromStderr, or FromCombined to select a source.
+Enqueue schedules or executes a task using the local driver.
 
 ```go
-type payload struct {
-    Name string `yaml:"name"`
+q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+if err != nil {
+	return
 }
-var out payload
-_ = execx.Command("printf", "name: gopher").
-    DecodeYAML().
-    Into(&out)
-fmt.Println(out.Name)
-// #string gopher
+type EmailPayload struct {
+	ID int `json:"id"`
+}
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	var payload EmailPayload
+	if err := task.Bind(&payload); err != nil {
+		return err
+	}
+	_ = payload
+	return nil
+})
+task := queue.NewTask("emails:send").
+	Payload(EmailPayload{ID: 1}).
+	OnQueue("default").
+	Delay(10 * time.Millisecond)
+_ = q.Enqueue(context.Background(), task)
 ```
 
-### <a id="fromcombined"></a>FromCombined
+### <a id="register"></a>Register
 
-FromCombined decodes from combined stdout+stderr.
+Register adds a task handler to the local queue runtime.
+
+```go
+q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+if err != nil {
+	return
+}
+type EmailPayload struct {
+	ID int `json:"id"`
+}
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	var payload EmailPayload
+	if err := task.Bind(&payload); err != nil {
+		return err
+	}
+	_ = payload
+	return nil
+})
+```
+
+### <a id="shutdown"></a>Shutdown
+
+Shutdown drains delayed and active local workerpool tasks.
+
+```go
+q, err := queue.New(queue.Config{
+	Driver: queue.DriverWorkerpool,
+})
+if err != nil {
+	return
+}
+_ = q.Start(context.Background())
+_ = q.Shutdown(context.Background())
+```
+
+### <a id="start"></a>Start
+
+Start initializes worker goroutines for workerpool mode.
+
+```go
+q, err := queue.New(queue.Config{
+	Driver: queue.DriverWorkerpool,
+})
+if err != nil {
+	return
+}
+_ = q.Start(context.Background())
+```
+
+## Task
+
+### <a id="backoff"></a>Backoff
+
+Backoff sets delay between retries.
+
+```go
+task := queue.NewTask("emails:send").Backoff(500 * time.Millisecond)
+_ = task
+```
+
+### <a id="bind"></a>Bind
+
+Bind unmarshals task payload JSON into dst.
+
+```go
+type EmailPayload struct {
+	ID int `json:"id"`
+}
+task := queue.NewTask("emails:send").Payload(EmailPayload{ID: 1})
+var payload EmailPayload
+_ = task.Bind(&payload)
+```
+
+### <a id="delay"></a>Delay
+
+Delay defers execution by duration.
+
+```go
+task := queue.NewTask("emails:send").Delay(300 * time.Millisecond)
+_ = task
+```
+
+### <a id="newtask"></a>NewTask
+
+NewTask creates a task value with a required task type.
+
+```go
+task := queue.NewTask("emails:send")
+_ = task
+```
+
+### <a id="onqueue"></a>OnQueue
+
+OnQueue sets the target queue name.
+
+```go
+task := queue.NewTask("emails:send").OnQueue("critical")
+_ = task
+```
+
+### <a id="payload"></a>Payload
+
+Payload sets task payload from common value types.
+
+_Example: payload bytes_
+
+```go
+taskBytes := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+_ = taskBytes
+```
+
+_Example: payload struct_
+
+```go
+type Meta struct {
+	Nested bool `json:"nested"`
+}
+type EmailPayload struct {
+	ID   int    `json:"id"`
+	To   string `json:"to"`
+	Meta Meta   `json:"meta"`
+}
+taskStruct := queue.NewTask("emails:send").Payload(EmailPayload{
+	ID:   1,
+	To:   "user@example.com",
+	Meta: Meta{Nested: true},
+})
+_ = taskStruct
+```
+
+_Example: payload map_
+
+```go
+taskMap := queue.NewTask("emails:send").Payload(map[string]any{
+	"id":  1,
+	"to":  "user@example.com",
+	"meta": map[string]any{"nested": true},
+})
+_ = taskMap
+```
+
+### <a id="payloadbytes"></a>PayloadBytes
+
+PayloadBytes returns a copy of task payload bytes.
+
+```go
+task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+payload := task.PayloadBytes()
+_ = payload
+```
+
+### <a id="payloadjson"></a>PayloadJSON
+
+PayloadJSON marshals payload as JSON.
+
+```go
+task := queue.NewTask("emails:send").PayloadJSON(map[string]int{"id": 1})
+_ = task
+```
+
+### <a id="retry"></a>Retry
+
+Retry sets max retry attempts.
+
+```go
+task := queue.NewTask("emails:send").Retry(4)
+_ = task
+```
+
+### <a id="timeout"></a>Timeout
+
+Timeout sets per-task execution timeout.
+
+```go
+task := queue.NewTask("emails:send").Timeout(10 * time.Second)
+_ = task
+```
+
+### <a id="uniquefor"></a>UniqueFor
+
+UniqueFor enables uniqueness dedupe within the given TTL.
+
+```go
+task := queue.NewTask("emails:send").UniqueFor(45 * time.Second)
+_ = task
+```
+<!-- api:embed:end -->
