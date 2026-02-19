@@ -270,19 +270,19 @@ Legend: `✓` supported, `-` unsupported/fallback.
 
 ### Observability events reference
 
-| Event kind | Meaning |
+| Event | Meaning |
 |:--|:--|
-| `EventEnqueueAccepted` | Task was accepted by enqueue. |
-| `EventEnqueueRejected` | Task enqueue failed with an error. |
-| `EventEnqueueDuplicate` | Task enqueue was rejected as duplicate (`UniqueFor`). |
-| `EventEnqueueCanceled` | Enqueue was canceled by context timeout/cancelation. |
-| `EventProcessStarted` | Worker started handling a task. |
-| `EventProcessSucceeded` | Worker completed a task successfully. |
-| `EventProcessFailed` | Worker attempt failed. |
-| `EventProcessRetried` | Failed attempt was requeued for another attempt. |
-| `EventProcessArchived` | Failed task reached terminal failure (no retries left). |
-| `EventQueuePaused` | Queue consumption was paused. |
-| `EventQueueResumed` | Queue consumption was resumed. |
+| EventEnqueueAccepted | Task was accepted by enqueue. |
+| EventEnqueueRejected | Task enqueue failed with an error. |
+| EventEnqueueDuplicate | Task enqueue was rejected as duplicate (`UniqueFor`). |
+| EventEnqueueCanceled | Enqueue was canceled by context timeout/cancelation. |
+| EventProcessStarted | Worker started handling a task. |
+| EventProcessSucceeded | Worker completed a task successfully. |
+| EventProcessFailed | Worker attempt failed. |
+| EventProcessRetried | Failed attempt was requeued for another attempt. |
+| EventProcessArchived | Failed task reached terminal failure (no retries left). |
+| EventQueuePaused | Queue consumption was paused. |
+| EventQueueResumed | Queue consumption was resumed. |
 
 For full field-level semantics and guarantees, see [`docs/events.md`](docs/events.md).
 
