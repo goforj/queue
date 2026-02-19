@@ -69,16 +69,3 @@ What these prove:
 - Config/task-option fuzz coverage validates mixed option combinations across backends for stability.
 - End-to-end completion for all successfully dispatched tasks.
 
-## Migration notes
-
-- Runtime API is queue-first: register handlers on `Queue`, then start processing with `q.Workers(n).StartWorkers(ctx)`.
-- Dispatch naming is canonical: use `Dispatch(...)` and `DispatchCtx(...)`.
-- Public worker-contract test files were removed; integration and contract coverage now validate behavior via the queue runtime surface.
-
-## Benchmarks
-
-Local benchmark suite (no containers):
-- `GOCACHE=/tmp/queue-gocache go test -run=^$ -bench BenchmarkDriverDispatch_Local -benchtime=100x ./...`
-
-Integration benchmark suite (testcontainers-backed):
-- `RUN_INTEGRATION=1 GOCACHE=/tmp/queue-gocache go test -tags integration -run=^$ -bench BenchmarkDriverDispatch_Integration -benchtime=20x ./...`
