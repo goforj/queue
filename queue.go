@@ -171,9 +171,10 @@ func New(cfg Config) (Queue, error) {
 		runtime = native
 	}
 	return &queueRuntime{
-		inner:      newObservedQueue(q, cfg.Observer),
+		inner:      newObservedQueue(q, cfg.Driver, cfg.Observer),
 		runtime:    runtime,
 		cfg:        cfg,
+		driver:     cfg.Driver,
 		registered: make(map[string]Handler),
 	}, nil
 }
@@ -194,6 +195,7 @@ type queueRuntime struct {
 	// registration + worker lifecycle.
 	runtime runtimeQueueBackend
 	cfg     Config
+	driver  Driver
 	mu      sync.Mutex
 	// registered tracks handlers for queue-centric registration + worker start.
 	registered map[string]Handler
@@ -209,10 +211,7 @@ type runtimeWorkerBackend interface {
 }
 
 func (q *queueRuntime) Driver() Driver {
-	if driverAware, ok := q.inner.(interface{ Driver() Driver }); ok {
-		return driverAware.Driver()
-	}
-	return q.cfg.Driver
+	return q.driver
 }
 
 func (q *queueRuntime) Dispatch(job any) error {
@@ -425,11 +424,7 @@ func (q *queueRuntime) taskFromJob(job any) (Task, error) {
 	if err != nil {
 		return Task{}, fmt.Errorf("marshal dispatch job: %w", err)
 	}
-	queueName := q.cfg.DefaultQueue
-	if queueName == "" {
-		queueName = "default"
-	}
-	return NewTask(taskType).Payload(payload).OnQueue(queueName), nil
+	return NewTask(taskType).Payload(payload).OnQueue(q.cfg.DefaultQueue), nil
 }
 
 func taskTypeFromValue(v any) string {

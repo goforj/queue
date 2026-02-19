@@ -671,13 +671,13 @@ type observedQueue struct {
 	observer Observer
 }
 
-func newObservedQueue(inner queueBackend, observer Observer) queueBackend {
+func newObservedQueue(inner queueBackend, driver Driver, observer Observer) queueBackend {
 	if observer == nil {
 		return inner
 	}
 	return &observedQueue{
 		inner:    inner,
-		driver:   detectQueueDriver(inner),
+		driver:   driver,
 		observer: observer,
 	}
 }
@@ -845,13 +845,6 @@ func safeObserve(observer Observer, event Event) {
 		_ = recover()
 	}()
 	observer.Observe(event)
-}
-
-func detectQueueDriver(q queueBackend) Driver {
-	if driverAware, ok := q.(interface{ Driver() Driver }); ok {
-		return driverAware.Driver()
-	}
-	return Driver("")
 }
 
 func taskQueueName(task Task) string {
