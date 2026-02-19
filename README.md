@@ -33,7 +33,7 @@ Current matrix trust status and known integration gaps are tracked in `docs/inte
 
 ## Drivers
 
-| Driver | Mode | Durable | Async | Delay | Unique | Backoff | Timeout | Notes |
+| Driver / Backend | Mode | Durable | Async | Delay | Unique | Backoff | Timeout | Notes |
 | ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ | Production Redis backend; backoff maps to Asynq limitations (`ErrBackoffUnsupported`). |
 | <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Works with `sqlite`, `mysql`, `pgx`; good local/prod parity option. |
