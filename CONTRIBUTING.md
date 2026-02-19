@@ -8,12 +8,8 @@ Queue contract mapping
 - Update `TestOptionContractCoverage_AllDriversAccountedFor` in `contract_test.go`.
 - Ensure `runQueueContractSuite(...)` runs for the driver in local and/or integration suites.
 
-Worker contract mapping
-- Update `TestWorkerContractCoverage_AllDriversAccountedFor` in `worker_contract_test.go`.
-- Ensure `runWorkerContractSuite(...)` runs for the driver in local and/or integration suites.
-
 Interoperability coverage
-- Add or update tests that enqueue via `Queue` and consume via `Worker` using separate runtimes for the driver.
+- Add or update tests that dispatch via `Queue` and consume via queue-managed workers for the driver.
 - Durable drivers must validate this explicitly.
 
 Integration backend wiring
@@ -24,3 +20,65 @@ Integration backend wiring
 CI matrix
 - Ensure the integration backend matrix in `.github/workflows/test.yml` includes the backend.
 - The `integration-matrix-guard` job enforces required backend entries.
+- Nightly/manual soak scenario runs are defined in `.github/workflows/soak.yml` with `RUN_SOAK=1`.
+
+## Integration scenarios
+
+The integration scenarios suite runs for every enabled backend in `integration_scenarios_test.go` under `TestIntegrationScenarios_AllBackends`.
+
+Named scenarios currently enforced:
+- `scenario_register_handler`
+- `scenario_startworkers_idempotent`
+- `scenario_dispatch_burst`
+- `scenario_wait_all_processed`
+- `scenario_poison_message_max_retry`
+- `scenario_worker_restart_recovery`
+- `scenario_bind_invalid_json`
+- `scenario_unique_queue_scope`
+- `scenario_dispatch_context_cancellation`
+- `scenario_shutdown_during_delay_retry`
+- `scenario_multi_worker_contention`
+- `scenario_duplicate_delivery_idempotency`
+- `scenario_dispatch_during_broker_fault`
+- `scenario_consume_after_broker_recovery`
+- `scenario_ordering_contract`
+- `scenario_backpressure_saturation`
+- `scenario_payload_large`
+- `scenario_config_option_fuzz`
+- `scenario_shutdown_idempotent`
+
+Optional long-run scenario (enabled with `RUN_SOAK=1`):
+- `scenario_soak_mixed_load`
+
+What these prove:
+- Worker lifecycle idempotency (`StartWorkers` and `Shutdown` can be called twice safely).
+- Concurrent dispatch pressure with mixed task options (`Delay`, `Timeout`, `Retry`, `Backoff` where supported).
+- Payload decode path via `Task.Bind(...)`.
+- Poison task behavior by backend capability (retry ceiling where supported) and healthy-task recovery.
+- Restart recovery only for backends that support deterministic restart durability in integration.
+- Invalid JSON payload behavior through `Task.Bind(...)` does not wedge workers; valid payloads still process.
+- Uniqueness is enforced per queue (duplicate rejected in same queue, allowed across queues).
+- Dispatch context cancellation behavior is verified per backend capability, with healthy follow-up processing.
+- Worker shutdown during delayed/retry workloads is exercised with restart and recovery assertions where supported.
+- Multiple workers on one queue are validated against duplicate successful processing in deterministic backends.
+- Duplicate-delivery idempotency patterns are exercised under forced retry to validate single side-effect commit.
+- Broker fault injection/recovery is exercised on supported backends.
+- FIFO ordering contract is asserted for backends marked ordering-capable.
+- Backpressure saturation scenarios prove continued forward progress.
+- Large payload processing is validated end-to-end.
+- Config/task-option fuzz coverage validates mixed option combinations across backends for stability.
+- End-to-end completion for all successfully dispatched tasks.
+
+## Migration notes
+
+- Runtime API is queue-first: register handlers on `Queue`, then start processing with `q.Workers(n).StartWorkers(ctx)`.
+- Dispatch naming is canonical: use `Dispatch(...)` and `DispatchCtx(...)`.
+- Public worker-contract test files were removed; integration and contract coverage now validate behavior via the queue runtime surface.
+
+## Benchmarks
+
+Local benchmark suite (no containers):
+- `GOCACHE=/tmp/queue-gocache go test -run=^$ -bench BenchmarkDriverDispatch_Local -benchtime=100x ./...`
+
+Integration benchmark suite (testcontainers-backed):
+- `RUN_INTEGRATION=1 GOCACHE=/tmp/queue-gocache go test -tags integration -run=^$ -bench BenchmarkDriverDispatch_Integration -benchtime=20x ./...`
