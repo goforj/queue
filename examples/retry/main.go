@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	// Retry sets max retry attempts.
+	// Retry returns retry count for a queue.
 
 	// Example: retry
 	task := queue.NewTask("emails:send").Retry(4)

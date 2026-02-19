@@ -10,9 +10,10 @@ import (
 	"time"
 )
 
-func newSQSIntegrationConfig() Config {
+func newSQSIntegrationConfig(defaultQueue string) Config {
 	return Config{
 		Driver:       DriverSQS,
+		DefaultQueue: defaultQueue,
 		SQSEndpoint:  integrationSQS.endpoint,
 		SQSRegion:    integrationSQS.region,
 		SQSAccessKey: integrationSQS.accessKey,
@@ -28,8 +29,9 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 		ID int `json:"id"`
 	}
 	received := make(chan payload, 1)
+	queueName := uniqueQueueName("sqs-bind")
 
-	q, err := New(newSQSIntegrationConfig())
+	q, err := New(newSQSIntegrationConfig(queueName))
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}
@@ -47,7 +49,7 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 42}
-	if err := q.DispatchCtx(context.Background(), NewTask("job:sqs:bind").Payload(want).OnQueue("default")); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewTask("job:sqs:bind").Payload(want).OnQueue(queueName)); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -72,8 +74,9 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 	done := make(chan struct{}, 1)
 	var calls atomic.Int32
 	deadlineSeen := make(chan bool, 1)
+	queueName := uniqueQueueName("sqs-opts")
 
-	q, err := New(newSQSIntegrationConfig())
+	q, err := New(newSQSIntegrationConfig(queueName))
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}
@@ -95,7 +98,7 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 
 	task := NewTask("job:sqs:opts").
 		Payload([]byte("opts")).
-		OnQueue("default").
+		OnQueue(queueName).
 		Delay(delay).
 		Timeout(timeout).
 		Retry(2).
@@ -130,7 +133,8 @@ func TestSQSIntegration_UniqueDuplicate(t *testing.T) {
 	if !integrationBackendEnabled("sqs") {
 		t.Skip("sqs integration backend not selected")
 	}
-	q, err := New(newSQSIntegrationConfig())
+	queueName := uniqueQueueName("sqs-unique")
+	q, err := New(newSQSIntegrationConfig(queueName))
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}
@@ -138,11 +142,11 @@ func TestSQSIntegration_UniqueDuplicate(t *testing.T) {
 
 	taskType := "job:sqs:unique"
 	payload := []byte("same")
-	first := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	first := NewTask(taskType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
 	if err := q.DispatchCtx(context.Background(), first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	second := NewTask(taskType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
 	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)

@@ -371,6 +371,7 @@ func (q *queueRuntime) newExternalWorker(concurrency int) (workerRuntime, error)
 			Driver:       DriverSQS,
 			Observer:     cfg.Observer,
 			Workers:      concurrency,
+			DefaultQueue: cfg.DefaultQueue,
 			SQSRegion:    cfg.SQSRegion,
 			SQSEndpoint:  cfg.SQSEndpoint,
 			SQSAccessKey: cfg.SQSAccessKey,
@@ -378,10 +379,11 @@ func (q *queueRuntime) newExternalWorker(concurrency int) (workerRuntime, error)
 		}), q.cfg.Observer), nil
 	case DriverRabbitMQ:
 		return newObservedWorker(newRabbitMQWorker(workerConfig{
-			Driver:      DriverRabbitMQ,
-			Observer:    q.cfg.Observer,
-			Workers:     concurrency,
-			RabbitMQURL: q.cfg.RabbitMQURL,
+			Driver:       DriverRabbitMQ,
+			Observer:     q.cfg.Observer,
+			Workers:      concurrency,
+			DefaultQueue: q.cfg.DefaultQueue,
+			RabbitMQURL:  q.cfg.RabbitMQURL,
 		}), q.cfg.Observer), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", q.cfg.Driver)

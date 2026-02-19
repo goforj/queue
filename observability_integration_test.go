@@ -114,6 +114,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				q, err := New(Config{
 					Driver:       DriverSQS,
+					DefaultQueue: "obs_sqs",
 					SQSEndpoint:  integrationSQS.endpoint,
 					SQSRegion:    integrationSQS.region,
 					SQSAccessKey: integrationSQS.accessKey,
@@ -132,9 +133,10 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
 				q, err := New(Config{
-					Driver:      DriverRabbitMQ,
-					RabbitMQURL: integrationRabbitMQ.url,
-					Observer:    collector,
+					Driver:       DriverRabbitMQ,
+					DefaultQueue: "obs_rabbitmq",
+					RabbitMQURL:  integrationRabbitMQ.url,
+					Observer:     collector,
 				})
 				if err != nil {
 					t.Fatalf("new rabbitmq queue failed: %v", err)
