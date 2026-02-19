@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	// Driver returns the local queue runtime's driver mode.
+	// Driver returns fake queue driver identity.
 
 	// Example: local driver
 	q, err := queue.NewSync()

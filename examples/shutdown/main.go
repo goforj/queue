@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	// Shutdown drains delayed and active local workerpool tasks.
+	// Shutdown is a no-op for fake queue.
 
 	// Example: local shutdown
 	q, err := queue.NewWorkerpool()
