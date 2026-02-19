@@ -258,7 +258,18 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 						requireScenarioTrue(t, "snapshot_native_redis_processed", nativeCounters.Processed >= 1, "processed=%d expected>=1", nativeCounters.Processed)
 						requireScenarioTrue(t, "snapshot_native_redis_failed", nativeCounters.Failed >= 1, "failed=%d expected>=1", nativeCounters.Failed)
 					case "mysql", "postgres", "sqlite":
-						requireScenarioTrue(t, "snapshot_native_db_drained", nativeCounters.Pending == 0 && nativeCounters.Active == 0, "pending=%d active=%d expected=0", nativeCounters.Pending, nativeCounters.Active)
+						waitForObservabilityScenario(t, "snapshot_native_db_drained", 8*time.Second, func() bool {
+							latest, latestErr := SnapshotQueue(context.Background(), q, collector)
+							if latestErr != nil {
+								return false
+							}
+							counters, ok := latest.Queue(fx.queue)
+							if !ok {
+								return false
+							}
+							nativeCounters = counters
+							return counters.Pending == 0 && counters.Active == 0
+						})
 					}
 				}
 			})

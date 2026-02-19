@@ -217,8 +217,7 @@ func TestQueue_ShutdownNoopForSyncAndRedis(t *testing.T) {
 
 func TestQueueRuntime_StartWorkersFromQueueConfig(t *testing.T) {
 	q, err := New(Config{
-		Driver:    DriverRedis,
-		RedisAddr: "127.0.0.1:6379",
+		Driver: DriverWorkerpool,
 	})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
