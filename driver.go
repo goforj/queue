@@ -5,18 +5,20 @@ package queue
 //
 // Example: driver values
 //
-//	fmt.Println(queue.DriverSync, queue.DriverWorkerpool, queue.DriverRedis, queue.DriverDatabase, queue.DriverNATS, queue.DriverSQS, queue.DriverRabbitMQ)
+//	fmt.Println(queue.DriverNull, queue.DriverSync, queue.DriverWorkerpool, queue.DriverDatabase, queue.DriverRedis, queue.DriverNATS, queue.DriverSQS, queue.DriverRabbitMQ)
 type Driver string
 
 const (
-	// DriverDatabase selects the SQL-backed queue backend.
-	DriverDatabase Driver = "database"
-	// DriverRedis selects the Redis (asynq) backend.
-	DriverRedis Driver = "redis"
+	// DriverNull drops dispatched tasks and performs no execution.
+	DriverNull Driver = "null"
 	// DriverSync runs handlers inline in the caller goroutine.
 	DriverSync Driver = "sync"
 	// DriverWorkerpool runs handlers on an in-memory workerpool.
 	DriverWorkerpool Driver = "workerpool"
+	// DriverDatabase selects the SQL-backed queue backend.
+	DriverDatabase Driver = "database"
+	// DriverRedis selects the Redis (asynq) backend.
+	DriverRedis Driver = "redis"
 	// DriverNATS selects the NATS backend.
 	DriverNATS Driver = "nats"
 	// DriverSQS selects the AWS SQS backend.

@@ -37,6 +37,16 @@ func TestNewSyncQueue(t *testing.T) {
 	}
 }
 
+func TestNewNullQueue(t *testing.T) {
+	q, err := New(Config{Driver: DriverNull})
+	if err != nil {
+		t.Fatalf("new q failed: %v", err)
+	}
+	if queueDriver(q) != DriverNull {
+		t.Fatalf("expected null driver, got %q", queueDriver(q))
+	}
+}
+
 func TestNewWorkerpoolQueue(t *testing.T) {
 	q, err := New(Config{
 		Driver: DriverWorkerpool,
@@ -107,12 +117,9 @@ func TestNew_SelectsByConfig(t *testing.T) {
 		cfg    Config
 		driver Driver
 	}{
+		{name: "null", cfg: Config{Driver: DriverNull}, driver: DriverNull},
 		{name: "sync", cfg: Config{Driver: DriverSync}, driver: DriverSync},
 		{name: "workerpool", cfg: Config{Driver: DriverWorkerpool}, driver: DriverWorkerpool},
-		{name: "redis", cfg: Config{Driver: DriverRedis, RedisAddr: "127.0.0.1:6379"}, driver: DriverRedis},
-		{name: "nats", cfg: Config{Driver: DriverNATS, NATSURL: "nats://127.0.0.1:4222"}, driver: DriverNATS},
-		{name: "sqs", cfg: Config{Driver: DriverSQS, SQSRegion: "us-east-1"}, driver: DriverSQS},
-		{name: "rabbitmq", cfg: Config{Driver: DriverRabbitMQ, RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/"}, driver: DriverRabbitMQ},
 		{
 			name: "database",
 			cfg: Config{
@@ -122,6 +129,10 @@ func TestNew_SelectsByConfig(t *testing.T) {
 			},
 			driver: DriverDatabase,
 		},
+		{name: "redis", cfg: Config{Driver: DriverRedis, RedisAddr: "127.0.0.1:6379"}, driver: DriverRedis},
+		{name: "nats", cfg: Config{Driver: DriverNATS, NATSURL: "nats://127.0.0.1:4222"}, driver: DriverNATS},
+		{name: "sqs", cfg: Config{Driver: DriverSQS, SQSRegion: "us-east-1"}, driver: DriverSQS},
+		{name: "rabbitmq", cfg: Config{Driver: DriverRabbitMQ, RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/"}, driver: DriverRabbitMQ},
 	}
 
 	for _, tc := range testCases {

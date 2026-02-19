@@ -137,17 +137,19 @@ func New(cfg Config) (Queue, error) {
 	var q queueBackend
 	var err error
 	switch cfg.Driver {
+	case DriverNull:
+		q = newNullQueue()
 	case DriverSync:
 		q = newSyncQueue()
 	case DriverWorkerpool:
 		q = newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{})
+	case DriverDatabase:
+		q, err = newDatabaseQueue(cfg.databaseConfig())
 	case DriverRedis:
 		if cfg.RedisAddr == "" {
 			return nil, fmt.Errorf("redis addr is required")
 		}
 		q = newRedisQueue(newAsynqClient(cfg), newAsynqInspector(cfg), true)
-	case DriverDatabase:
-		q, err = newDatabaseQueue(cfg.databaseConfig())
 	case DriverNATS:
 		if cfg.NATSURL == "" {
 			return nil, fmt.Errorf("nats url is required")

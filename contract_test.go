@@ -444,6 +444,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 func TestOptionContractCoverage_AllDriversAccountedFor(t *testing.T) {
 	declared := declaredDriversFromSource(t)
 	accounted := map[Driver]string{
+		DriverNull:       "local contract suite",
 		DriverSync:       "local contract suite",
 		DriverWorkerpool: "local contract suite",
 		DriverDatabase:   "local/integration database contract suites",
@@ -503,6 +504,19 @@ func declaredDriversFromSource(t *testing.T) []Driver {
 
 func TestQueueContract_LocalAndSQLite(t *testing.T) {
 	factories := []contractFactory{
+		{
+			name: "null",
+			newQueue: func(_ *testing.T) Queue {
+				q, err := New(Config{Driver: DriverNull})
+				if err != nil {
+					t.Fatalf("new null q failed: %v", err)
+				}
+				return q
+			},
+			requiresRegisteredHandle: false,
+			requiresQueueName:        true,
+			assertMissingHandlerErr:  false,
+		},
 		{
 			name: "sync",
 			newQueue: func(_ *testing.T) Queue {

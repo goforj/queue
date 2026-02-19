@@ -3,7 +3,7 @@ package queue
 import "testing"
 
 func TestDriverConstants(t *testing.T) {
-	drivers := []Driver{DriverSync, DriverWorkerpool, DriverRedis, DriverDatabase, DriverNATS, DriverSQS, DriverRabbitMQ}
+	drivers := []Driver{DriverNull, DriverSync, DriverWorkerpool, DriverDatabase, DriverRedis, DriverNATS, DriverSQS, DriverRabbitMQ}
 	seen := map[Driver]bool{}
 	for _, d := range drivers {
 		if d == "" {
