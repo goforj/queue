@@ -33,16 +33,16 @@ Current matrix trust status and known integration gaps are tracked in `docs/inte
 
 ## Drivers
 
-| Driver / Backend | Mode | Durable | Async | Delay | Unique | Backoff | Timeout | Notes |
-| ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | - | - | - | - | - | - | Discards all dispatched tasks; useful for testing/disabled queue modes. |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | - | - | - | ✓ | - | ✓ | Simplest deterministic test mode; effectively the "no external queue" option. |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | - | ✓ | ✓ | ✓ | ✓ | ✓ | Fast local async testing without external infra. |
-| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Works with `sqlite`, `mysql`, `pgx`; good local/prod parity option. |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ | Production Redis backend; backoff maps to Asynq limitations (`ErrBackoffUnsupported`). |
-| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | NATS transport with queue-subject routing. |
-| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | AWS SQS transport; supports endpoint override for localstack/testcontainers. |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | Uses RabbitMQ for transport and worker consumption. |
+| Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout |
+| ---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards all dispatched tasks; useful for testing/disabled queue modes. | - | - | - | - | - | - |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Simplest deterministic test mode; effectively the "no external queue" option. | - | - | - | ✓ | - | ✓ |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Fast local async testing without external infra. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | Works with `sqlite`, `mysql`, `pgx`; good local/prod parity option. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend; backoff maps to Asynq limitations (`ErrBackoffUnsupported`). | ✓ | ✓ | ✓ | ✓ | - | ✓ |
+| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | NATS transport with queue-subject routing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport; supports endpoint override for localstack/testcontainers. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | Uses RabbitMQ for transport and worker consumption. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Installation
 
@@ -275,21 +275,21 @@ For full field-level semantics and guarantees, see [`docs/events.md`](docs/event
 ## Runtime lifecycle
 
 ```go
-// 1) Register handlers before starting workers.
+// Register handlers before starting workers.
 q.Register("emails:send", emailHandler)
 
-// 2) Start workers with explicit concurrency.
+// Start workers with explicit concurrency.
 ctx := context.Background()
 _ = q.Workers(2).StartWorkers(ctx)
 
-// 3) Dispatch jobs using either Dispatch(...) or DispatchCtx(...).
+// Dispatch jobs using either Dispatch(...) or DispatchCtx(...).
 _ = q.Dispatch(
     queue.NewTask("emails:send").
         Payload(EmailPayload{ID: 123, To: "user@example.com"}).
         OnQueue("default"),
 )
 
-// 4) Shutdown gracefully drains in-flight work (where supported).
+// Shutdown gracefully drains in-flight work (where supported).
 shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 _ = q.Shutdown(shutdownCtx)
