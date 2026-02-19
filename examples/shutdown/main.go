@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	// Shutdown drains delayed and active local workerpool tasks.
+	// Shutdown drains running work and releases resources.
 
 	// Example: local shutdown
 	q, err := queue.NewWorkerpool()

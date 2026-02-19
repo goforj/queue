@@ -10,14 +10,14 @@ import (
 )
 
 // DispatchRecord captures one dispatch observed by FakeQueue.
-// @group Queue
+// @group Testing
 type DispatchRecord struct {
 	Task  Task
 	Queue string
 }
 
 // FakeQueue is an in-memory queue fake for tests.
-// @group Queue
+// @group Testing
 type FakeQueue struct {
 	defaultQueue string
 
@@ -26,7 +26,7 @@ type FakeQueue struct {
 }
 
 // NewFake creates a queue fake that records dispatches and provides assertions.
-// @group Constructors
+// @group Testing
 //
 // Example: fake queue assertions
 //
@@ -46,15 +46,24 @@ func NewFake() *FakeQueue {
 	}
 }
 
-// Driver returns fake queue driver identity.
+// Driver returns the active queue driver.
 func (f *FakeQueue) Driver() Driver { return DriverNull }
 
-// Dispatch records a dispatch using background context.
+// Dispatch submits a typed job payload using the default queue.
 func (f *FakeQueue) Dispatch(job any) error {
 	return f.DispatchCtx(context.Background(), job)
 }
 
-// DispatchCtx records a dispatch or returns context error.
+// DispatchCtx submits a typed job payload using the provided context.
+// @group Testing
+//
+// Example: dispatch with context
+//
+//	fake := queue.NewFake()
+//	ctx := context.Background()
+//	err := fake.DispatchCtx(ctx, queue.NewTask("emails:send").OnQueue("default"))
+//	fmt.Println(err == nil)
+//	// Output: true
 func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -78,19 +87,39 @@ func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 	return nil
 }
 
-// Register is a no-op for fake queue.
+// Register associates a handler with a task type.
 func (f *FakeQueue) Register(string, Handler) {}
 
-// StartWorkers is a no-op for fake queue.
+// StartWorkers starts worker execution.
 func (f *FakeQueue) StartWorkers(context.Context) error { return nil }
 
-// Workers is a no-op for fake queue.
+// Workers sets desired worker concurrency before StartWorkers.
+// @group Testing
+//
+// Example: set worker count
+//
+//	fake := queue.NewFake()
+//	q := fake.Workers(4)
+//	fmt.Println(q != nil)
+//	// Output: true
 func (f *FakeQueue) Workers(int) Queue { return f }
 
-// Shutdown is a no-op for fake queue.
+// Shutdown drains running work and releases resources.
 func (f *FakeQueue) Shutdown(context.Context) error { return nil }
 
 // Reset clears all recorded dispatches.
+// @group Testing
+//
+// Example: reset records
+//
+//	fake := queue.NewFake()
+//	_ = fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+//	fmt.Println(len(fake.Records()))
+//	fake.Reset()
+//	fmt.Println(len(fake.Records()))
+//	// Output:
+//	// 1
+//	// 0
 func (f *FakeQueue) Reset() {
 	f.mu.Lock()
 	f.records = f.records[:0]
@@ -98,6 +127,15 @@ func (f *FakeQueue) Reset() {
 }
 
 // Records returns a copy of all dispatch records.
+// @group Testing
+//
+// Example: read records
+//
+//	fake := queue.NewFake()
+//	_ = fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+//	records := fake.Records()
+//	fmt.Println(len(records), records[0].Task.Type)
+//	// Output: 1 emails:send
 func (f *FakeQueue) Records() []DispatchRecord {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -107,7 +145,7 @@ func (f *FakeQueue) Records() []DispatchRecord {
 }
 
 // AssertNothingDispatched fails when any dispatch was recorded.
-// @group Queue
+// @group Testing
 //
 // Example: assert nothing dispatched
 //
@@ -121,7 +159,7 @@ func (f *FakeQueue) AssertNothingDispatched(t testing.TB) {
 }
 
 // AssertCount fails when dispatch count is not expected.
-// @group Queue
+// @group Testing
 //
 // Example: assert dispatch count
 //
@@ -136,7 +174,7 @@ func (f *FakeQueue) AssertCount(t testing.TB, expected int) {
 }
 
 // AssertDispatched fails when taskType was not dispatched.
-// @group Queue
+// @group Testing
 //
 // Example: assert task type dispatched
 //
@@ -154,7 +192,7 @@ func (f *FakeQueue) AssertDispatched(t testing.TB, taskType string) {
 }
 
 // AssertDispatchedOn fails when taskType was not dispatched on queueName.
-// @group Queue
+// @group Testing
 //
 // Example: assert task type dispatched on queue
 //
@@ -175,7 +213,7 @@ func (f *FakeQueue) AssertDispatchedOn(t testing.TB, queueName, taskType string)
 }
 
 // AssertDispatchedTimes fails when taskType dispatch count does not match expected.
-// @group Queue
+// @group Testing
 //
 // Example: assert task type dispatched times
 //
@@ -197,7 +235,7 @@ func (f *FakeQueue) AssertDispatchedTimes(t testing.TB, taskType string, expecte
 }
 
 // AssertNotDispatched fails when taskType was dispatched.
-// @group Queue
+// @group Testing
 //
 // Example: assert task type not dispatched
 //

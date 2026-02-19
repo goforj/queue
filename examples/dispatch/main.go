@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	// Dispatch schedules or executes a task using the local driver.
+	// Dispatch submits a typed job payload using the default queue.
 
 	// Example: local dispatch
 	q, err := queue.NewSync()

@@ -54,7 +54,7 @@ func newLocalQueueWithConfig(driver Driver, cfg WorkerpoolConfig) *localQueue {
 	return q
 }
 
-// Driver returns the local queue runtime's driver mode.
+// Driver returns the active queue driver.
 // @group Queue
 //
 // Example: local driver
@@ -73,7 +73,7 @@ func (d *localQueue) Driver() Driver {
 	return d.driver
 }
 
-// Register adds a task handler to the local queue runtime.
+// Register associates a handler with a task type.
 // @group Queue
 //
 // Example: local register
@@ -102,7 +102,7 @@ func (d *localQueue) Register(taskType string, handler Handler) {
 	d.mu.Unlock()
 }
 
-// StartWorkers initializes worker goroutines for workerpool mode.
+// StartWorkers starts worker execution.
 // @group Queue
 //
 // Example: local start workers
@@ -120,7 +120,7 @@ func (d *localQueue) StartWorkers(_ context.Context) error {
 	return nil
 }
 
-// Shutdown drains delayed and active local workerpool tasks.
+// Shutdown drains running work and releases resources.
 // @group Queue
 //
 // Example: local shutdown
@@ -158,7 +158,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// Dispatch schedules or executes a task using the local driver.
+// Dispatch submits a typed job payload using the default queue.
 // @group Queue
 //
 // Example: local dispatch
