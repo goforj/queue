@@ -170,11 +170,20 @@ func New(cfg Config) (Queue, error) {
 	if native, ok := q.(runtimeQueueBackend); ok {
 		runtime = native
 	}
-	return &queueRuntime{
-		inner:      newObservedQueue(q, cfg.Driver, cfg.Observer),
-		runtime:    runtime,
-		cfg:        cfg,
-		driver:     cfg.Driver,
+	common := &queueCommon{
+		inner:  newObservedQueue(q, cfg.Driver, cfg.Observer),
+		cfg:    cfg,
+		driver: cfg.Driver,
+	}
+	if runtime != nil {
+		return &nativeQueueRuntime{
+			common:     common,
+			runtime:    runtime,
+			registered: make(map[string]Handler),
+		}, nil
+	}
+	return &externalQueueRuntime{
+		common:     common,
 		registered: make(map[string]Handler),
 	}, nil
 }
@@ -189,15 +198,26 @@ func (cfg Config) normalize() Config {
 	return cfg
 }
 
-type queueRuntime struct {
-	inner queueBackend
-	// runtime is non-nil when the selected queue backend natively supports
-	// registration + worker lifecycle.
+type queueCommon struct {
+	inner  queueBackend
+	cfg    Config
+	driver Driver
+}
+
+type nativeQueueRuntime struct {
+	common  *queueCommon
 	runtime runtimeQueueBackend
-	cfg     Config
-	driver  Driver
-	mu      sync.Mutex
-	// registered tracks handlers for queue-centric registration + worker start.
+
+	mu         sync.Mutex
+	registered map[string]Handler
+	started    bool
+	workers    int
+}
+
+type externalQueueRuntime struct {
+	common *queueCommon
+
+	mu         sync.Mutex
 	registered map[string]Handler
 	worker     runtimeWorkerBackend
 	started    bool
@@ -210,15 +230,15 @@ type runtimeWorkerBackend interface {
 	Shutdown(ctx context.Context) error
 }
 
-func (q *queueRuntime) Driver() Driver {
+func (q *queueCommon) Driver() Driver {
 	return q.driver
 }
 
-func (q *queueRuntime) Dispatch(job any) error {
+func (q *queueCommon) Dispatch(job any) error {
 	return q.DispatchCtx(context.Background(), job)
 }
 
-func (q *queueRuntime) DispatchCtx(ctx context.Context, job any) error {
+func (q *queueCommon) DispatchCtx(ctx context.Context, job any) error {
 	task, err := q.taskFromJob(job)
 	if err != nil {
 		return err
@@ -226,7 +246,33 @@ func (q *queueRuntime) DispatchCtx(ctx context.Context, job any) error {
 	return q.inner.Dispatch(ctx, task)
 }
 
-func (q *queueRuntime) Register(taskType string, handler Handler) {
+func (q *nativeQueueRuntime) Driver() Driver         { return q.common.Driver() }
+func (q *nativeQueueRuntime) Dispatch(job any) error { return q.common.Dispatch(job) }
+func (q *nativeQueueRuntime) DispatchCtx(ctx context.Context, job any) error {
+	return q.common.DispatchCtx(ctx, job)
+}
+
+func (q *externalQueueRuntime) Driver() Driver         { return q.common.Driver() }
+func (q *externalQueueRuntime) Dispatch(job any) error { return q.common.Dispatch(job) }
+func (q *externalQueueRuntime) DispatchCtx(ctx context.Context, job any) error {
+	return q.common.DispatchCtx(ctx, job)
+}
+
+func (q *nativeQueueRuntime) Register(taskType string, handler Handler) {
+	q.mu.Lock()
+	if q.registered == nil {
+		q.registered = make(map[string]Handler)
+	}
+	q.registered[taskType] = handler
+	started := q.started
+	q.mu.Unlock()
+
+	if started {
+		q.runtime.Register(taskType, q.common.wrapRegisteredHandler(taskType, handler))
+	}
+}
+
+func (q *externalQueueRuntime) Register(taskType string, handler Handler) {
 	q.mu.Lock()
 	if q.registered == nil {
 		q.registered = make(map[string]Handler)
@@ -236,18 +282,39 @@ func (q *queueRuntime) Register(taskType string, handler Handler) {
 	started := q.started
 	q.mu.Unlock()
 
-	// Native runtime backends register directly on the queue backend.
-	if q.runtime != nil {
-		q.runtime.Register(taskType, q.wrapRegisteredHandler(taskType, handler))
-		return
-	}
-	// External worker backends register on active worker after start.
 	if started && w != nil {
-		w.Register(taskType, q.wrapRegisteredHandler(taskType, handler))
+		w.Register(taskType, q.common.wrapRegisteredHandler(taskType, handler))
 	}
 }
 
-func (q *queueRuntime) StartWorkers(ctx context.Context) error {
+func (q *nativeQueueRuntime) StartWorkers(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	q.mu.Lock()
+	if q.started {
+		q.mu.Unlock()
+		return nil
+	}
+	registered := make(map[string]Handler, len(q.registered))
+	for taskType, handler := range q.registered {
+		registered[taskType] = handler
+	}
+	q.mu.Unlock()
+
+	for taskType, handler := range registered {
+		q.runtime.Register(taskType, q.common.wrapRegisteredHandler(taskType, handler))
+	}
+	if err := q.runtime.StartWorkers(ctx); err != nil {
+		return err
+	}
+	q.mu.Lock()
+	q.started = true
+	q.mu.Unlock()
+	return nil
+}
+
+func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -263,25 +330,12 @@ func (q *queueRuntime) StartWorkers(ctx context.Context) error {
 	}
 	q.mu.Unlock()
 
-	if q.runtime != nil {
-		for taskType, handler := range registered {
-			q.runtime.Register(taskType, q.wrapRegisteredHandler(taskType, handler))
-		}
-		if err := q.runtime.StartWorkers(ctx); err != nil {
-			return err
-		}
-		q.mu.Lock()
-		q.started = true
-		q.mu.Unlock()
-		return nil
-	}
-
-	w, err := q.newExternalWorker(workers)
+	w, err := newExternalWorker(q.common.cfg, workers)
 	if err != nil {
 		return err
 	}
 	for taskType, handler := range registered {
-		w.Register(taskType, q.wrapRegisteredHandler(taskType, handler))
+		w.Register(taskType, q.common.wrapRegisteredHandler(taskType, handler))
 	}
 	if err := w.StartWorkers(ctx); err != nil {
 		return err
@@ -293,7 +347,7 @@ func (q *queueRuntime) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
-func (q *queueRuntime) Workers(count int) Queue {
+func (q *nativeQueueRuntime) Workers(count int) Queue {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started && count > 0 {
@@ -302,7 +356,31 @@ func (q *queueRuntime) Workers(count int) Queue {
 	return q
 }
 
-func (q *queueRuntime) Shutdown(ctx context.Context) error {
+func (q *externalQueueRuntime) Workers(count int) Queue {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.started && count > 0 {
+		q.workers = count
+	}
+	return q
+}
+
+func (q *nativeQueueRuntime) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	q.mu.Lock()
+	wasStarted := q.started
+	q.started = false
+	q.mu.Unlock()
+
+	if wasStarted {
+		return q.runtime.Shutdown(ctx)
+	}
+	return nil
+}
+
+func (q *externalQueueRuntime) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -314,22 +392,16 @@ func (q *queueRuntime) Shutdown(ctx context.Context) error {
 	q.mu.Unlock()
 
 	if wasStarted {
-		if q.runtime != nil {
-			if err := q.runtime.Shutdown(ctx); err != nil {
-				return err
-			}
-			return nil
-		}
 		if w != nil {
 			if err := w.Shutdown(ctx); err != nil {
 				return err
 			}
 		}
 	}
-	return q.inner.Shutdown(ctx)
+	return q.common.inner.Shutdown(ctx)
 }
 
-func (q *queueRuntime) Pause(ctx context.Context, queueName string) error {
+func (q *queueCommon) Pause(ctx context.Context, queueName string) error {
 	controller, ok := q.inner.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
@@ -337,7 +409,7 @@ func (q *queueRuntime) Pause(ctx context.Context, queueName string) error {
 	return controller.Pause(ctx, queueName)
 }
 
-func (q *queueRuntime) Resume(ctx context.Context, queueName string) error {
+func (q *queueCommon) Resume(ctx context.Context, queueName string) error {
 	controller, ok := q.inner.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
@@ -345,7 +417,7 @@ func (q *queueRuntime) Resume(ctx context.Context, queueName string) error {
 	return controller.Resume(ctx, queueName)
 }
 
-func (q *queueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
+func (q *queueCommon) Stats(ctx context.Context) (StatsSnapshot, error) {
 	provider, ok := q.inner.(StatsProvider)
 	if !ok {
 		return StatsSnapshot{}, fmt.Errorf("stats provider is not available for driver %q", q.Driver())
@@ -353,43 +425,62 @@ func (q *queueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
 	return provider.Stats(ctx)
 }
 
-func (q *queueRuntime) wrapRegisteredHandler(taskType string, handler Handler) Handler {
+func (q *nativeQueueRuntime) Pause(ctx context.Context, queueName string) error {
+	return q.common.Pause(ctx, queueName)
+}
+func (q *nativeQueueRuntime) Resume(ctx context.Context, queueName string) error {
+	return q.common.Resume(ctx, queueName)
+}
+func (q *nativeQueueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
+	return q.common.Stats(ctx)
+}
+func (q *externalQueueRuntime) Pause(ctx context.Context, queueName string) error {
+	return q.common.Pause(ctx, queueName)
+}
+func (q *externalQueueRuntime) Resume(ctx context.Context, queueName string) error {
+	return q.common.Resume(ctx, queueName)
+}
+func (q *externalQueueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
+	return q.common.Stats(ctx)
+}
+
+func (q *queueCommon) wrapRegisteredHandler(taskType string, handler Handler) Handler {
 	if handler == nil || q.cfg.Observer == nil {
 		return handler
 	}
 	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", taskType, handler)
 }
 
-func (q *queueRuntime) newExternalWorker(concurrency int) (runtimeWorkerBackend, error) {
-	switch q.cfg.Driver {
+func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error) {
+	switch cfg.Driver {
 	case DriverRedis:
 		workers := concurrency
 		workers = defaultWorkerCount(workers)
 		return newRedisWorker(
 			asynq.NewServer(asynq.RedisClientOpt{
-				Addr:     q.cfg.RedisAddr,
-				Password: q.cfg.RedisPassword,
-				DB:       q.cfg.RedisDB,
+				Addr:     cfg.RedisAddr,
+				Password: cfg.RedisPassword,
+				DB:       cfg.RedisDB,
 			}, asynq.Config{Concurrency: workers}),
 			asynq.NewServeMux(),
 		), nil
 	case DriverNATS:
-		return newNATSWorker(q.cfg.NATSURL), nil
+		return newNATSWorker(cfg.NATSURL), nil
 	case DriverSQS:
 		return newSQSWorker(sqsWorkerConfig{
-			DefaultQueue: q.cfg.DefaultQueue,
-			SQSRegion:    q.cfg.SQSRegion,
-			SQSEndpoint:  q.cfg.SQSEndpoint,
-			SQSAccessKey: q.cfg.SQSAccessKey,
-			SQSSecretKey: q.cfg.SQSSecretKey,
+			DefaultQueue: cfg.DefaultQueue,
+			SQSRegion:    cfg.SQSRegion,
+			SQSEndpoint:  cfg.SQSEndpoint,
+			SQSAccessKey: cfg.SQSAccessKey,
+			SQSSecretKey: cfg.SQSSecretKey,
 		}), nil
 	case DriverRabbitMQ:
 		return newRabbitMQWorker(rabbitMQWorkerConfig{
-			DefaultQueue: q.cfg.DefaultQueue,
-			RabbitMQURL:  q.cfg.RabbitMQURL,
+			DefaultQueue: cfg.DefaultQueue,
+			RabbitMQURL:  cfg.RabbitMQURL,
 		}), nil
 	default:
-		return nil, fmt.Errorf("unsupported queue driver %q", q.cfg.Driver)
+		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}
 }
 
@@ -401,7 +492,7 @@ func NewQueueWithDefaults(defaultQueue string, cfg Config) (Queue, error) {
 	return New(cfg)
 }
 
-func (q *queueRuntime) taskFromJob(job any) (Task, error) {
+func (q *queueCommon) taskFromJob(job any) (Task, error) {
 	if task, ok := job.(Task); ok {
 		if task.Type == "" {
 			return Task{}, fmt.Errorf("dispatch task type is required")

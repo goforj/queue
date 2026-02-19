@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-143-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-145-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
@@ -33,15 +33,17 @@ Current matrix trust status and known integration gaps are tracked in `docs/inte
 
 ## Drivers
 
-| Driver | Mode | Durable | Async | Delay | Unique | Backoff | Timeout |
-| ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ |
-| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | - | - | - | ✓ | - | ✓ |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Driver | Mode | Durable | Async | Delay | Unique | Backoff | Timeout | Notes |
+| ---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | ✓ | ✓ | ✓ | ✓ | - | ✓ | Production Redis backend; backoff maps to Asynq limitations (`ErrBackoffUnsupported`). |
+| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Works with `sqlite`, `mysql`, `pgx`; good local/prod parity option. |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | - | ✓ | ✓ | ✓ | ✓ | ✓ | Fast local async testing without external infra. |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | - | - | - | ✓ | - | ✓ | Simplest deterministic test mode; effectively the "no external queue" option. |
+| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | Uses RabbitMQ for transport and worker consumption. |
+| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | AWS SQS transport; supports endpoint override for localstack/testcontainers. |
+| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | - | ✓ | ✓ | ✓ | ✓ | ✓ | NATS transport with queue-subject routing. |
+
+Note: a dedicated `null` driver is not implemented; use `sync` when you want queue API calls without broker/runtime setup.
 
 ## Installation
 
@@ -121,6 +123,12 @@ q, _ := queue.New(queue.Config{
     DatabaseDSN: "file:queue.db?_busy_timeout=5000",
 })
 ```
+
+## Testing modes
+
+- `sync`: deterministic unit tests with inline execution and no external broker.
+- `workerpool`: async local behavior tests without external infrastructure.
+- `integration` tag + backend matrix: full broker/database realism (Redis, SQL, NATS, SQS, RabbitMQ).
 
 ## Task builder options
 

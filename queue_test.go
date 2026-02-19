@@ -263,3 +263,51 @@ func TestQueueRuntime_StartWorkersSharesInProcessRuntime(t *testing.T) {
 		t.Fatal("expected handler to run on shared runtime")
 	}
 }
+
+func TestQueueRuntime_PathInvariant_NativeRuntimeSelected(t *testing.T) {
+	q, err := New(Config{Driver: DriverSync})
+	if err != nil {
+		t.Fatalf("new queue failed: %v", err)
+	}
+
+	native, ok := q.(*nativeQueueRuntime)
+	if !ok {
+		t.Fatalf("expected *nativeQueueRuntime, got %T", q)
+	}
+	if native.runtime == nil {
+		t.Fatal("expected native runtime backend to be set")
+	}
+	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+	if !native.started {
+		t.Fatal("expected native runtime to be marked started")
+	}
+}
+
+func TestQueueRuntime_PathInvariant_ExternalRuntimeSelected(t *testing.T) {
+	q, err := New(Config{
+		Driver:    DriverRedis,
+		RedisAddr: "127.0.0.1:6379",
+	})
+	if err != nil {
+		t.Fatalf("new queue failed: %v", err)
+	}
+
+	external, ok := q.(*externalQueueRuntime)
+	if !ok {
+		t.Fatalf("expected *externalQueueRuntime, got %T", q)
+	}
+	if external.worker != nil {
+		t.Fatal("expected external worker to be nil before StartWorkers")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := q.StartWorkers(ctx); err == nil {
+		t.Fatal("expected canceled StartWorkers to fail for external runtime")
+	}
+	if external.worker != nil {
+		t.Fatal("expected external worker to remain nil after canceled StartWorkers")
+	}
+}
