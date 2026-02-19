@@ -14,7 +14,7 @@ Captured from current workspace state before writing this file:
   - `M CONTRIBUTING.md`
 - Key docs currently in `docs/`:
   - `docs/events.md`
-  - `docs/hardening.md`
+  - `docs/integration-scenarios.md`
 
 Notes:
 
@@ -31,7 +31,7 @@ Primary objectives:
 - consistent enqueue/handler programming model
 - explicit task metadata (retry/delay/timeout/queue/uniqueness)
 - backend-specific durability/performance where available
-- strong reliability and hardening coverage across supported drivers
+- strong reliability and scenario coverage across supported drivers
 - useful observability hooks independent of backend
 
 ## Public API model
@@ -149,13 +149,13 @@ In this snapshot:
 
 This distinction is important for UX/design decisions going forward.
 
-## Reliability and hardening
+## Reliability and scenario
 
-Core hardening test:
+Core scenario test:
 
-- `TestIntegrationHardening_AllBackends` in `integration_backends_integration_test.go`
+- `TestIntegrationScenarios_AllBackends` in `integration_scenarios_test.go`
 
-Named step coverage includes:
+Named scenario coverage includes:
 
 - lifecycle idempotency
 - burst enqueue + completion
@@ -171,11 +171,11 @@ Named step coverage includes:
 - backpressure saturation
 - large payload coverage
 - config/option fuzz
-- optional soak step (`RUN_SOAK=1`)
+- optional soak scenario (`RUN_SOAK=1`)
 
 Roadmap doc:
 
-- `docs/hardening.md` (baseline, planned extensions, execution model)
+- `docs/integration-scenarios.md` (baseline, planned extensions, execution model)
 
 Observability integration contracts:
 
@@ -190,14 +190,14 @@ Primary CI workflow:
   - unit tests
   - race tests
   - backend integration matrix
-  - integration hardening matrix
-  - hardening contract guard job
+  - integration scenario matrix
+  - scenario contract guard job
 
 Guard script:
 
-- `.github/scripts/check_hardening_contract.sh`
-  - verifies required hardening steps exist
-  - verifies docs list baseline steps
+- `.github/scripts/check_integration_scenarios_contract.sh`
+  - verifies required integration scenarios exist
+  - verifies docs list baseline scenarios
   - verifies backend coverage references in integration contract suites
   - verifies required observability integration tests exist
   - supports `rg` fallback to `grep`
@@ -224,7 +224,7 @@ README has:
 Docs moved into `docs/` to keep root cleaner:
 
 - `docs/events.md`
-- `docs/hardening.md`
+- `docs/integration-scenarios.md`
 - `docs/laravel.md`
 - `docs/readme-ref.md`
 
@@ -239,13 +239,13 @@ Examples:
 - Queue and worker remain separate constructs for clarity and backend parity.
 - Task builder is fluent and data-only; execution side effects stay on queue/worker.
 - Observability is additive and wrapper-based rather than per-driver bespoke APIs.
-- Reliability posture is enforced through contract + hardening matrices, not ad-hoc tests.
+- Reliability posture is enforced through contract + scenario matrices, not ad-hoc tests.
 
 ## Known limitations / future work candidates
 
 - Worker-level pause/resume ergonomics may still be desired as first-class API.
 - Queue-level pause is backend-capability dependent.
-- Some hardening extension items in `docs/hardening.md` are still planned.
+- Some scenario extension items in `docs/integration-scenarios.md` are still planned.
 - Long-run soak is scheduled/opt-in, not part of every PR run.
 
 ## Practical handoff checklist for next implementer
@@ -255,14 +255,14 @@ If continuing work, start here:
 1. Read:
    - `README.md`
    - `docs/events.md`
-   - `docs/hardening.md`
+   - `docs/integration-scenarios.md`
 2. Validate baseline locally:
    - `go test ./...`
    - `RUN_INTEGRATION=1 go test -tags integration ./...`
 3. For reliability changes:
-   - update hardening steps in `integration_backends_integration_test.go`
-   - update `docs/hardening.md`
-   - ensure `.github/scripts/check_hardening_contract.sh` still passes
+   - update integration scenarios in `integration_scenarios_test.go`
+   - update `docs/integration-scenarios.md`
+   - ensure `.github/scripts/check_integration_scenarios_contract.sh` still passes
 4. For observability changes:
    - preserve event compatibility or document contract changes in `docs/events.md`
    - update integration observability tests
@@ -298,7 +298,7 @@ Observability:
 
 Reliability/integration:
 
-- `integration_backends_integration_test.go`
+- `integration_scenarios_test.go`
 - `contract_test.go`
 - `contract_integration_test.go`
 - `worker_contract_test.go`

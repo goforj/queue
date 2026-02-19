@@ -731,7 +731,7 @@ func waitForScheduledTask(t *testing.T, inspector *asynq.Inspector, queueName st
 	return nil
 }
 
-type hardeningFixture struct {
+type scenarioFixture struct {
 	name      string
 	queueName string
 	newQueue  func(t *testing.T) Queue
@@ -748,13 +748,13 @@ type hardeningFixture struct {
 	supportsShutdownDelayRetry   bool
 }
 
-type hardeningPayload struct {
+type scenarioPayload struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 }
 
-func TestIntegrationHardening_AllBackends(t *testing.T) {
-	fixtures := []hardeningFixture{
+func TestIntegrationScenarios_AllBackends(t *testing.T) {
+	fixtures := []scenarioFixture{
 		{
 			name:      "redis",
 			queueName: "default",
@@ -791,7 +791,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 		},
 		{
 			name:      "mysql",
-			queueName: "hardening_mysql",
+			queueName: "scenario_mysql",
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
 					Driver:         DriverDatabase,
@@ -810,7 +810,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
 					Workers:        4,
 					PollInterval:   10 * time.Millisecond,
-					DefaultQueue:   "hardening_mysql",
+					DefaultQueue:   "scenario_mysql",
 				})
 				if err != nil {
 					t.Fatalf("new mysql worker failed: %v", err)
@@ -828,7 +828,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 		},
 		{
 			name:      "postgres",
-			queueName: "hardening_postgres",
+			queueName: "scenario_postgres",
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
 					Driver:         DriverDatabase,
@@ -847,7 +847,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
 					Workers:        4,
 					PollInterval:   10 * time.Millisecond,
-					DefaultQueue:   "hardening_postgres",
+					DefaultQueue:   "scenario_postgres",
 				})
 				if err != nil {
 					t.Fatalf("new postgres worker failed: %v", err)
@@ -865,12 +865,12 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 		},
 		{
 			name:      "sqlite",
-			queueName: "hardening_sqlite",
+			queueName: "scenario_sqlite",
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "sqlite",
-					DatabaseDSN:    fmt.Sprintf("%s/hardening-%d.db", t.TempDir(), time.Now().UnixNano()),
+					DatabaseDSN:    fmt.Sprintf("%s/scenario-%d.db", t.TempDir(), time.Now().UnixNano()),
 				})
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
@@ -893,7 +893,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 		},
 		{
 			name:      "nats",
-			queueName: "hardening_nats",
+			queueName: "scenario_nats",
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
 					Driver:  DriverNATS,
@@ -925,7 +925,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 		},
 		{
 			name:      "sqs",
-			queueName: "hardening_sqs",
+			queueName: "scenario_sqs",
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
 					Driver:       DriverSQS,
@@ -946,7 +946,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 					SQSRegion:    integrationSQS.region,
 					SQSAccessKey: integrationSQS.accessKey,
 					SQSSecretKey: integrationSQS.secretKey,
-					DefaultQueue: "hardening_sqs",
+					DefaultQueue: "scenario_sqs",
 				})
 				if err != nil {
 					t.Fatalf("new sqs worker failed: %v", err)
@@ -964,7 +964,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 		},
 		{
 			name:      "rabbitmq",
-			queueName: "hardening_rabbitmq",
+			queueName: "scenario_rabbitmq",
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
 					Driver:      DriverRabbitMQ,
@@ -979,7 +979,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				w, err := NewWorker(WorkerConfig{
 					Driver:       DriverRabbitMQ,
 					RabbitMQURL:  integrationRabbitMQ.url,
-					DefaultQueue: "hardening_rabbitmq",
+					DefaultQueue: "scenario_rabbitmq",
 				})
 				if err != nil {
 					t.Fatalf("new rabbitmq worker failed: %v", err)
@@ -1006,7 +1006,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 
 			// SQLite needs a shared DSN between producer and worker; build it inline.
 			if fx.name == "sqlite" {
-				dsn := fmt.Sprintf("%s/hardening-%d.db", t.TempDir(), time.Now().UnixNano())
+				dsn := fmt.Sprintf("%s/scenario-%d.db", t.TempDir(), time.Now().UnixNano())
 				fx.newQueue = func(t *testing.T) Queue {
 					q, err := New(Config{
 						Driver:         DriverDatabase,
@@ -1025,7 +1025,7 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 						DatabaseDSN:    dsn,
 						Workers:        4,
 						PollInterval:   10 * time.Millisecond,
-						DefaultQueue:   "hardening_sqlite",
+						DefaultQueue:   "scenario_sqlite",
 					})
 					if err != nil {
 						t.Fatalf("new sqlite worker failed: %v", err)
@@ -1042,19 +1042,19 @@ func TestIntegrationHardening_AllBackends(t *testing.T) {
 				fx.supportsShutdownDelayRetry = true
 			}
 
-			runIntegrationHardeningSuite(t, fx)
+			runIntegrationScenariosSuite(t, fx)
 		})
 	}
 }
 
-func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
+func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	t.Helper()
 	q := fx.newQueue(t)
 	w := fx.newWorker(t)
 	t.Cleanup(func() { _ = q.Shutdown(context.Background()) })
 	t.Cleanup(func() { _ = w.Shutdown() })
 
-	taskType := "job:hardening:" + fx.name
+	taskType := "job:scenario:" + fx.name
 	total := int32(40)
 	taskTimeout := 250 * time.Millisecond
 	if fx.forceTimeout {
@@ -1063,9 +1063,9 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 	var seen atomic.Int32
 	var expected atomic.Int32
 
-	t.Run("step_register_handler", func(t *testing.T) {
+	t.Run("scenario_register_handler", func(t *testing.T) {
 		w.Register(taskType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
 			}
@@ -1074,12 +1074,12 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		})
 	})
 
-	t.Run("step_start_idempotent", func(t *testing.T) {
-		requireStepNoErr(t, "worker_start", w.Start())
-		requireStepNoErr(t, "worker_start_idempotent", w.Start())
+	t.Run("scenario_start_idempotent", func(t *testing.T) {
+		requireScenarioNoErr(t, "worker_start", w.Start())
+		requireScenarioNoErr(t, "worker_start_idempotent", w.Start())
 	})
 
-	t.Run("step_enqueue_burst", func(t *testing.T) {
+	t.Run("scenario_enqueue_burst", func(t *testing.T) {
 		var wg sync.WaitGroup
 		errCh := make(chan error, total)
 		for i := 0; i < int(total); i++ {
@@ -1088,7 +1088,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			go func() {
 				defer wg.Done()
 				task := NewTask(taskType).
-					Payload(hardeningPayload{ID: i, Name: fx.name}).
+					Payload(scenarioPayload{ID: i, Name: fx.name}).
 					OnQueue(fx.queueName)
 				if i%3 == 0 {
 					task = task.Delay(50 * time.Millisecond)
@@ -1120,11 +1120,11 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 				first = err
 			}
 		}
-		requireStepTrue(t, "enqueue_has_success", expected.Load() > 0, "all enqueue operations failed")
-		requireStepTrue(t, "enqueue_all_success", failures == 0, "failures=%d first=%v", failures, first)
+		requireScenarioTrue(t, "enqueue_has_success", expected.Load() > 0, "all enqueue operations failed")
+		requireScenarioTrue(t, "enqueue_all_success", failures == 0, "failures=%d first=%v", failures, first)
 	})
 
-	t.Run("step_wait_all_processed", func(t *testing.T) {
+	t.Run("scenario_wait_all_processed", func(t *testing.T) {
 		want := expected.Load()
 		deadline := time.Now().Add(25 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1133,12 +1133,12 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		requireStepTrue(t, "all_processed", seen.Load() == want, "processed=%d expected=%d", seen.Load(), want)
+		requireScenarioTrue(t, "all_processed", seen.Load() == want, "processed=%d expected=%d", seen.Load(), want)
 	})
 
-	t.Run("step_poison_message_max_retry", func(t *testing.T) {
-		poisonType := "job:hardening:poison:" + fx.name
-		goodType := "job:hardening:poison-recovery:" + fx.name
+	t.Run("scenario_poison_message_max_retry", func(t *testing.T) {
+		poisonType := "job:scenario:poison:" + fx.name
+		goodType := "job:scenario:poison-recovery:" + fx.name
 		var poisonCalls atomic.Int32
 		recoveryDone := make(chan struct{}, 1)
 
@@ -1155,7 +1155,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		})
 
 		poison := NewTask(poisonType).
-			Payload(hardeningPayload{ID: 9001, Name: "poison"}).
+			Payload(scenarioPayload{ID: 9001, Name: "poison"}).
 			OnQueue(fx.queueName).
 			Retry(2)
 		if fx.forceTimeout {
@@ -1164,7 +1164,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		if fx.supportsBackoff {
 			poison = poison.Backoff(20 * time.Millisecond)
 		}
-		requireStepNoErr(t, "poison_enqueue", q.Enqueue(context.Background(), poison))
+		requireScenarioNoErr(t, "poison_enqueue", q.Enqueue(context.Background(), poison))
 
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1177,7 +1177,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		if !fx.supportsPoisonRetry {
 			expectedPoisonCalls = 1
 		}
-		requireStepTrue(
+		requireScenarioTrue(
 			t,
 			"poison_retry_limit",
 			poisonCalls.Load() == expectedPoisonCalls,
@@ -1187,9 +1187,9 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		)
 
 		good := NewTask(goodType).
-			Payload(hardeningPayload{ID: 9002, Name: "recovery"}).
+			Payload(scenarioPayload{ID: 9002, Name: "recovery"}).
 			OnQueue(fx.queueName)
-		requireStepNoErr(t, "poison_recovery_enqueue", q.Enqueue(context.Background(), good))
+		requireScenarioNoErr(t, "poison_recovery_enqueue", q.Enqueue(context.Background(), good))
 
 		select {
 		case <-recoveryDone:
@@ -1198,13 +1198,13 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_worker_restart_recovery", func(t *testing.T) {
+	t.Run("scenario_worker_restart_recovery", func(t *testing.T) {
 		if !fx.supportsRestart {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
-		requireStepNoErr(t, "restart_step_worker_start", w.Start())
+		requireScenarioNoErr(t, "restart_scenario_worker_start", w.Start())
 
-		restartType := "job:hardening:restart:" + fx.name
+		restartType := "job:scenario:restart:" + fx.name
 		done := make(chan struct{}, 1)
 
 		w.Register(restartType, func(_ context.Context, _ Task) error {
@@ -1216,7 +1216,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		})
 
 		task := NewTask(restartType).
-			Payload(hardeningPayload{ID: 9100, Name: "restart"}).
+			Payload(scenarioPayload{ID: 9100, Name: "restart"}).
 			OnQueue(fx.queueName).
 			Delay(750 * time.Millisecond)
 		if fx.forceTimeout {
@@ -1225,9 +1225,9 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		if fx.supportsBackoff {
 			task = task.Retry(1).Backoff(250 * time.Millisecond)
 		}
-		requireStepNoErr(t, "restart_enqueue", q.Enqueue(context.Background(), task))
+		requireScenarioNoErr(t, "restart_enqueue", q.Enqueue(context.Background(), task))
 
-		requireStepNoErr(t, "restart_shutdown_first_worker", w.Shutdown())
+		requireScenarioNoErr(t, "restart_shutdown_first_worker", w.Shutdown())
 		w = fx.newWorker(t)
 		w.Register(restartType, func(_ context.Context, _ Task) error {
 			select {
@@ -1236,7 +1236,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			return nil
 		})
-		requireStepNoErr(t, "restart_start_second_worker", w.Start())
+		requireScenarioNoErr(t, "restart_start_second_worker", w.Start())
 
 		select {
 		case <-done:
@@ -1245,32 +1245,32 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_bind_invalid_json", func(t *testing.T) {
-		requireStepNoErr(t, "bind_step_worker_start", w.Start())
+	t.Run("scenario_bind_invalid_json", func(t *testing.T) {
+		requireScenarioNoErr(t, "bind_scenario_worker_start", w.Start())
 
-		badType := "job:hardening:bind-bad:" + fx.name
-		emptyType := "job:hardening:bind-empty:" + fx.name
-		goodType := "job:hardening:bind-good:" + fx.name
+		badType := "job:scenario:bind-bad:" + fx.name
+		emptyType := "job:scenario:bind-empty:" + fx.name
+		goodType := "job:scenario:bind-good:" + fx.name
 		var badBindErrs atomic.Int32
 		var emptyBindErrs atomic.Int32
 		goodDone := make(chan struct{}, 1)
 
 		w.Register(badType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				badBindErrs.Add(1)
 			}
 			return nil
 		})
 		w.Register(emptyType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				emptyBindErrs.Add(1)
 			}
 			return nil
 		})
 		w.Register(goodType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
 			}
@@ -1287,7 +1287,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		if fx.forceTimeout {
 			badTask = badTask.Timeout(taskTimeout)
 		}
-		requireStepNoErr(t, "bind_bad_enqueue", q.Enqueue(context.Background(), badTask))
+		requireScenarioNoErr(t, "bind_bad_enqueue", q.Enqueue(context.Background(), badTask))
 
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1296,14 +1296,14 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		requireStepTrue(t, "bind_bad_seen", badBindErrs.Load() == 1, "bind_errors=%d expected=1", badBindErrs.Load())
+		requireScenarioTrue(t, "bind_bad_seen", badBindErrs.Load() == 1, "bind_errors=%d expected=1", badBindErrs.Load())
 
 		emptyTask := NewTask(emptyType).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
 			emptyTask = emptyTask.Timeout(taskTimeout)
 		}
-		requireStepNoErr(t, "bind_empty_enqueue", q.Enqueue(context.Background(), emptyTask))
+		requireScenarioNoErr(t, "bind_empty_enqueue", q.Enqueue(context.Background(), emptyTask))
 
 		deadline = time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1312,15 +1312,15 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		requireStepTrue(t, "bind_empty_seen", emptyBindErrs.Load() == 1, "bind_errors=%d expected=1", emptyBindErrs.Load())
+		requireScenarioTrue(t, "bind_empty_seen", emptyBindErrs.Load() == 1, "bind_errors=%d expected=1", emptyBindErrs.Load())
 
 		goodTask := NewTask(goodType).
-			Payload(hardeningPayload{ID: 9200, Name: "bind-good"}).
+			Payload(scenarioPayload{ID: 9200, Name: "bind-good"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
 			goodTask = goodTask.Timeout(taskTimeout)
 		}
-		requireStepNoErr(t, "bind_good_enqueue", q.Enqueue(context.Background(), goodTask))
+		requireScenarioNoErr(t, "bind_good_enqueue", q.Enqueue(context.Background(), goodTask))
 
 		select {
 		case <-goodDone:
@@ -1329,9 +1329,9 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_unique_queue_scope", func(t *testing.T) {
-		uniqueType := "job:hardening:unique-scope:" + fx.name
-		payload := hardeningPayload{ID: 9300, Name: "unique-scope"}
+	t.Run("scenario_unique_queue_scope", func(t *testing.T) {
+		uniqueType := "job:scenario:unique-scope:" + fx.name
+		payload := scenarioPayload{ID: 9300, Name: "unique-scope"}
 		primary := fx.queueName
 		secondary := fx.queueName + "_other"
 
@@ -1353,17 +1353,17 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			otherQueue = otherQueue.Timeout(taskTimeout)
 		}
 
-		requireStepNoErr(t, "unique_first_enqueue", q.Enqueue(context.Background(), first))
+		requireScenarioNoErr(t, "unique_first_enqueue", q.Enqueue(context.Background(), first))
 		dupErr := q.Enqueue(context.Background(), secondSameQueue)
-		requireStepTrue(t, "unique_duplicate_rejected", errors.Is(dupErr, ErrDuplicate), "expected ErrDuplicate, got %v", dupErr)
-		requireStepNoErr(t, "unique_other_queue_enqueue", q.Enqueue(context.Background(), otherQueue))
+		requireScenarioTrue(t, "unique_duplicate_rejected", errors.Is(dupErr, ErrDuplicate), "expected ErrDuplicate, got %v", dupErr)
+		requireScenarioNoErr(t, "unique_other_queue_enqueue", q.Enqueue(context.Background(), otherQueue))
 	})
 
-	t.Run("step_enqueue_context_cancellation", func(t *testing.T) {
-		requireStepNoErr(t, "enqueue_ctx_worker_start", w.Start())
+	t.Run("scenario_enqueue_context_cancellation", func(t *testing.T) {
+		requireScenarioNoErr(t, "enqueue_ctx_worker_start", w.Start())
 
-		cancelType := "job:hardening:ctx-cancel:" + fx.name
-		goodType := "job:hardening:ctx-good:" + fx.name
+		cancelType := "job:scenario:ctx-cancel:" + fx.name
+		goodType := "job:scenario:ctx-good:" + fx.name
 		var cancelSeen atomic.Int32
 		goodDone := make(chan struct{}, 1)
 
@@ -1382,14 +1382,14 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		cancelCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 		cancelTask := NewTask(cancelType).
-			Payload(hardeningPayload{ID: 9400, Name: "ctx-cancel"}).
+			Payload(scenarioPayload{ID: 9400, Name: "ctx-cancel"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
 			cancelTask = cancelTask.Timeout(taskTimeout)
 		}
 		err := q.Enqueue(cancelCtx, cancelTask)
 		if fx.supportsEnqueueCtxCancel {
-			requireStepTrue(
+			requireScenarioTrue(
 				t,
 				"enqueue_ctx_cancel_err",
 				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
@@ -1397,16 +1397,16 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 				err,
 			)
 			time.Sleep(250 * time.Millisecond)
-			requireStepTrue(t, "enqueue_ctx_cancel_not_processed", cancelSeen.Load() == 0, "unexpected processed count=%d", cancelSeen.Load())
+			requireScenarioTrue(t, "enqueue_ctx_cancel_not_processed", cancelSeen.Load() == 0, "unexpected processed count=%d", cancelSeen.Load())
 		}
 
 		goodTask := NewTask(goodType).
-			Payload(hardeningPayload{ID: 9401, Name: "ctx-good"}).
+			Payload(scenarioPayload{ID: 9401, Name: "ctx-good"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
 			goodTask = goodTask.Timeout(taskTimeout)
 		}
-		requireStepNoErr(t, "enqueue_ctx_good_enqueue", q.Enqueue(context.Background(), goodTask))
+		requireScenarioNoErr(t, "enqueue_ctx_good_enqueue", q.Enqueue(context.Background(), goodTask))
 		select {
 		case <-goodDone:
 		case <-time.After(10 * time.Second):
@@ -1414,14 +1414,14 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_shutdown_during_delay_retry", func(t *testing.T) {
+	t.Run("scenario_shutdown_during_delay_retry", func(t *testing.T) {
 		if !fx.supportsRestart || !fx.supportsShutdownDelayRetry {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
-		requireStepNoErr(t, "shutdown_delay_worker_start", w.Start())
+		requireScenarioNoErr(t, "shutdown_delay_worker_start", w.Start())
 
-		delayedType := "job:hardening:shutdown-delay:" + fx.name
-		retryType := "job:hardening:shutdown-retry:" + fx.name
+		delayedType := "job:scenario:shutdown-delay:" + fx.name
+		retryType := "job:scenario:shutdown-retry:" + fx.name
 		delayedDone := make(chan struct{}, 1)
 		retryDone := make(chan struct{}, 1)
 		var retryCalls atomic.Int32
@@ -1445,14 +1445,14 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		})
 
 		delayedTask := NewTask(delayedType).
-			Payload(hardeningPayload{ID: 9500, Name: "shutdown-delay"}).
+			Payload(scenarioPayload{ID: 9500, Name: "shutdown-delay"}).
 			OnQueue(fx.queueName).
 			Delay(1200 * time.Millisecond)
 		var retryTask Task
 		retryEnabled := fx.supportsBackoff
 		if retryEnabled {
 			retryTask = NewTask(retryType).
-				Payload(hardeningPayload{ID: 9501, Name: "shutdown-retry"}).
+				Payload(scenarioPayload{ID: 9501, Name: "shutdown-retry"}).
 				OnQueue(fx.queueName).
 				Delay(900 * time.Millisecond).
 				Retry(1)
@@ -1464,12 +1464,12 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 				retryTask = retryTask.Timeout(taskTimeout)
 			}
 		}
-		requireStepNoErr(t, "shutdown_delay_enqueue", q.Enqueue(context.Background(), delayedTask))
+		requireScenarioNoErr(t, "shutdown_delay_enqueue", q.Enqueue(context.Background(), delayedTask))
 		if retryEnabled {
-			requireStepNoErr(t, "shutdown_retry_enqueue", q.Enqueue(context.Background(), retryTask))
+			requireScenarioNoErr(t, "shutdown_retry_enqueue", q.Enqueue(context.Background(), retryTask))
 		}
 
-		requireStepNoErr(t, "shutdown_during_delay", w.Shutdown())
+		requireScenarioNoErr(t, "shutdown_during_delay", w.Shutdown())
 
 		w = fx.newWorker(t)
 		w.Register(delayedType, func(_ context.Context, _ Task) error {
@@ -1489,7 +1489,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			return nil
 		})
-		requireStepNoErr(t, "shutdown_delay_restart_worker", w.Start())
+		requireScenarioNoErr(t, "shutdown_delay_restart_worker", w.Start())
 
 		select {
 		case <-delayedDone:
@@ -1505,23 +1505,23 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_multi_worker_contention", func(t *testing.T) {
+	t.Run("scenario_multi_worker_contention", func(t *testing.T) {
 		if !fx.supportsDeterministicNoDupes {
 			t.Skip("backend does not provide deterministic no-duplication guarantees for this scenario")
 		}
-		requireStepNoErr(t, "multi_worker_primary_start", w.Start())
+		requireScenarioNoErr(t, "multi_worker_primary_start", w.Start())
 
 		worker2 := fx.newWorker(t)
 		t.Cleanup(func() { _ = worker2.Shutdown() })
 
-		taskType := "job:hardening:multi-worker:" + fx.name
+		taskType := "job:scenario:multi-worker:" + fx.name
 		var mu sync.Mutex
 		seenByID := make(map[int]int)
 		var processed atomic.Int32
 		const totalTasks = 30
 
 		handler := func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
 			}
@@ -1533,16 +1533,16 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 		w.Register(taskType, handler)
 		worker2.Register(taskType, handler)
-		requireStepNoErr(t, "multi_worker_secondary_start", worker2.Start())
+		requireScenarioNoErr(t, "multi_worker_secondary_start", worker2.Start())
 
 		for i := 0; i < totalTasks; i++ {
 			task := NewTask(taskType).
-				Payload(hardeningPayload{ID: i, Name: "multi-worker"}).
+				Payload(scenarioPayload{ID: i, Name: "multi-worker"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireStepNoErr(t, "multi_worker_enqueue", q.Enqueue(context.Background(), task))
+			requireScenarioNoErr(t, "multi_worker_enqueue", q.Enqueue(context.Background(), task))
 		}
 
 		deadline := time.Now().Add(20 * time.Second)
@@ -1552,7 +1552,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		requireStepTrue(t, "multi_worker_processed_all", processed.Load() >= totalTasks, "processed=%d expected>=%d", processed.Load(), totalTasks)
+		requireScenarioTrue(t, "multi_worker_processed_all", processed.Load() >= totalTasks, "processed=%d expected>=%d", processed.Load(), totalTasks)
 
 		time.Sleep(300 * time.Millisecond)
 		mu.Lock()
@@ -1564,10 +1564,10 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_duplicate_delivery_idempotency", func(t *testing.T) {
-		requireStepNoErr(t, "idempotency_worker_start", w.Start())
+	t.Run("scenario_duplicate_delivery_idempotency", func(t *testing.T) {
+		requireScenarioNoErr(t, "idempotency_worker_start", w.Start())
 
-		taskType := "job:hardening:idempotency:" + fx.name
+		taskType := "job:scenario:idempotency:" + fx.name
 		var attempts atomic.Int32
 		var committed atomic.Int32
 		done := make(chan struct{}, 1)
@@ -1575,7 +1575,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		seen := make(map[int]struct{})
 
 		w.Register(taskType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
 			}
@@ -1599,7 +1599,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		})
 
 		task := NewTask(taskType).
-			Payload(hardeningPayload{ID: 9600, Name: "idempotency"}).
+			Payload(scenarioPayload{ID: 9600, Name: "idempotency"}).
 			OnQueue(fx.queueName).
 			Retry(2)
 		if fx.supportsBackoff {
@@ -1608,62 +1608,62 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireStepNoErr(t, "idempotency_enqueue", q.Enqueue(context.Background(), task))
+		requireScenarioNoErr(t, "idempotency_enqueue", q.Enqueue(context.Background(), task))
 
 		select {
 		case <-done:
 		case <-time.After(45 * time.Second):
 			t.Fatalf("[idempotency_done] task did not complete after forced retry")
 		}
-		requireStepTrue(t, "idempotency_attempts", attempts.Load() >= 2, "attempts=%d expected>=2", attempts.Load())
-		requireStepTrue(t, "idempotency_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
+		requireScenarioTrue(t, "idempotency_attempts", attempts.Load() >= 2, "attempts=%d expected>=2", attempts.Load())
+		requireScenarioTrue(t, "idempotency_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
 	})
 
-	t.Run("step_enqueue_during_broker_fault", func(t *testing.T) {
+	t.Run("scenario_enqueue_during_broker_fault", func(t *testing.T) {
 		if !fx.supportsBrokerFault {
 			t.Skip("backend does not support deterministic broker fault injection in this suite")
 		}
 
-		requireStepNoErr(t, "fault_worker_shutdown", w.Shutdown())
-		requireStepNoErr(t, "fault_queue_shutdown", q.Shutdown(context.Background()))
+		requireScenarioNoErr(t, "fault_worker_shutdown", w.Shutdown())
+		requireScenarioNoErr(t, "fault_queue_shutdown", q.Shutdown(context.Background()))
 
 		qFault := fx.newQueue(t)
 		defer func() { _ = qFault.Shutdown(context.Background()) }()
 		stopTimeout := 10 * time.Second
-		requireStepNoErr(t, "fault_stop_broker", integrationRedis.container.Stop(context.Background(), &stopTimeout))
+		requireScenarioNoErr(t, "fault_stop_broker", integrationRedis.container.Stop(context.Background(), &stopTimeout))
 
 		badCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		task := NewTask("job:hardening:fault-enqueue:" + fx.name).
-			Payload(hardeningPayload{ID: 9700, Name: "fault-enqueue"}).
+		task := NewTask("job:scenario:fault-enqueue:" + fx.name).
+			Payload(scenarioPayload{ID: 9700, Name: "fault-enqueue"}).
 			OnQueue(fx.queueName).
 			Retry(1)
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
 		err := qFault.Enqueue(badCtx, task)
-		requireStepTrue(t, "fault_enqueue_err", err != nil, "expected enqueue error while broker is down")
+		requireScenarioTrue(t, "fault_enqueue_err", err != nil, "expected enqueue error while broker is down")
 
-		requireStepNoErr(t, "fault_start_broker", integrationRedis.container.Start(context.Background()))
-		requireStepNoErr(t, "fault_refresh_addr", refreshRedisAddr(context.Background()))
-		requireStepNoErr(t, "fault_wait_broker", waitForTCP(integrationRedis.addr, 10*time.Second))
+		requireScenarioNoErr(t, "fault_start_broker", integrationRedis.container.Start(context.Background()))
+		requireScenarioNoErr(t, "fault_refresh_addr", refreshRedisAddr(context.Background()))
+		requireScenarioNoErr(t, "fault_wait_broker", waitForTCP(integrationRedis.addr, 10*time.Second))
 	})
 
-	t.Run("step_consume_after_broker_recovery", func(t *testing.T) {
+	t.Run("scenario_consume_after_broker_recovery", func(t *testing.T) {
 		if !fx.supportsBrokerFault {
 			t.Skip("backend does not support deterministic broker fault injection in this suite")
 		}
 
-		requireStepNoErr(t, "recover_shutdown_worker", w.Shutdown())
-		requireStepNoErr(t, "recover_shutdown_queue", q.Shutdown(context.Background()))
+		requireScenarioNoErr(t, "recover_shutdown_worker", w.Shutdown())
+		requireScenarioNoErr(t, "recover_shutdown_queue", q.Shutdown(context.Background()))
 
 		q = fx.newQueue(t)
 		w = fx.newWorker(t)
 
-		taskType := "job:hardening:fault-recovery:" + fx.name
+		taskType := "job:scenario:fault-recovery:" + fx.name
 		done := make(chan struct{}, 1)
 		w.Register(taskType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
 			}
@@ -1673,15 +1673,15 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			return nil
 		})
-		requireStepNoErr(t, "recover_worker_start", w.Start())
+		requireScenarioNoErr(t, "recover_worker_start", w.Start())
 
 		task := NewTask(taskType).
-			Payload(hardeningPayload{ID: 9701, Name: "fault-recovery"}).
+			Payload(scenarioPayload{ID: 9701, Name: "fault-recovery"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireStepNoErr(t, "recover_enqueue", q.Enqueue(context.Background(), task))
+		requireScenarioNoErr(t, "recover_enqueue", q.Enqueue(context.Background(), task))
 		select {
 		case <-done:
 		case <-time.After(12 * time.Second):
@@ -1689,19 +1689,19 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_ordering_contract", func(t *testing.T) {
+	t.Run("scenario_ordering_contract", func(t *testing.T) {
 		if !fx.supportsOrderingContract {
 			t.Skip("backend does not expose strict ordering guarantees in this suite")
 		}
-		requireStepNoErr(t, "ordering_shutdown_previous_worker", w.Shutdown())
+		requireScenarioNoErr(t, "ordering_shutdown_previous_worker", w.Shutdown())
 		w = newOrderingWorker(t, fx)
-		requireStepNoErr(t, "ordering_worker_start", w.Start())
+		requireScenarioNoErr(t, "ordering_worker_start", w.Start())
 
-		taskType := "job:hardening:ordering:" + fx.name
+		taskType := "job:scenario:ordering:" + fx.name
 		const count = 20
 		orderCh := make(chan int, count)
 		w.Register(taskType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
 			}
@@ -1711,12 +1711,12 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 
 		for i := 0; i < count; i++ {
 			task := NewTask(taskType).
-				Payload(hardeningPayload{ID: i, Name: "ordering"}).
+				Payload(scenarioPayload{ID: i, Name: "ordering"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireStepNoErr(t, "ordering_enqueue", q.Enqueue(context.Background(), task))
+			requireScenarioNoErr(t, "ordering_enqueue", q.Enqueue(context.Background(), task))
 		}
 
 		got := make([]int, 0, count)
@@ -1736,10 +1736,10 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_backpressure_saturation", func(t *testing.T) {
-		requireStepNoErr(t, "backpressure_worker_start", w.Start())
+	t.Run("scenario_backpressure_saturation", func(t *testing.T) {
+		requireScenarioNoErr(t, "backpressure_worker_start", w.Start())
 
-		taskType := "job:hardening:backpressure:" + fx.name
+		taskType := "job:scenario:backpressure:" + fx.name
 		var processed atomic.Int32
 		w.Register(taskType, func(_ context.Context, _ Task) error {
 			time.Sleep(40 * time.Millisecond)
@@ -1750,15 +1750,15 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		const total = 80
 		for i := 0; i < total; i++ {
 			task := NewTask(taskType).
-				Payload(hardeningPayload{ID: i, Name: "backpressure"}).
+				Payload(scenarioPayload{ID: i, Name: "backpressure"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireStepNoErr(t, "backpressure_enqueue", q.Enqueue(context.Background(), task))
+			requireScenarioNoErr(t, "backpressure_enqueue", q.Enqueue(context.Background(), task))
 		}
 
-		probeType := "job:hardening:backpressure-probe:" + fx.name
+		probeType := "job:scenario:backpressure-probe:" + fx.name
 		probeDone := make(chan struct{}, 1)
 		w.Register(probeType, func(_ context.Context, _ Task) error {
 			select {
@@ -1768,25 +1768,25 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			return nil
 		})
 		probe := NewTask(probeType).
-			Payload(hardeningPayload{ID: 9800, Name: "probe"}).
+			Payload(scenarioPayload{ID: 9800, Name: "probe"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
 			probe = probe.Timeout(taskTimeout)
 		}
-		requireStepNoErr(t, "backpressure_probe_enqueue", q.Enqueue(context.Background(), probe))
+		requireScenarioNoErr(t, "backpressure_probe_enqueue", q.Enqueue(context.Background(), probe))
 
 		select {
 		case <-probeDone:
 		case <-time.After(20 * time.Second):
 			t.Fatalf("[backpressure_probe_processed] probe task was not processed under saturation")
 		}
-		requireStepTrue(t, "backpressure_progress", processed.Load() > 0, "processed=%d expected>0", processed.Load())
+		requireScenarioTrue(t, "backpressure_progress", processed.Load() > 0, "processed=%d expected>0", processed.Load())
 	})
 
-	t.Run("step_payload_large", func(t *testing.T) {
-		requireStepNoErr(t, "payload_large_worker_start", w.Start())
+	t.Run("scenario_payload_large", func(t *testing.T) {
+		requireScenarioNoErr(t, "payload_large_worker_start", w.Start())
 
-		taskType := "job:hardening:payload-large:" + fx.name
+		taskType := "job:scenario:payload-large:" + fx.name
 		done := make(chan struct{}, 1)
 		expectedLen := 128 * 1024
 		w.Register(taskType, func(_ context.Context, task Task) error {
@@ -1816,7 +1816,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireStepNoErr(t, "payload_large_enqueue", q.Enqueue(context.Background(), task))
+		requireScenarioNoErr(t, "payload_large_enqueue", q.Enqueue(context.Background(), task))
 		select {
 		case <-done:
 		case <-time.After(15 * time.Second):
@@ -1824,13 +1824,13 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		}
 	})
 
-	t.Run("step_config_option_fuzz", func(t *testing.T) {
-		requireStepNoErr(t, "fuzz_worker_start", w.Start())
+	t.Run("scenario_config_option_fuzz", func(t *testing.T) {
+		requireScenarioNoErr(t, "fuzz_worker_start", w.Start())
 
-		taskType := "job:hardening:fuzz:" + fx.name
+		taskType := "job:scenario:fuzz:" + fx.name
 		var processed atomic.Int32
 		w.Register(taskType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
 			}
@@ -1844,7 +1844,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 		const cases = 80
 		for i := 0; i < cases; i++ {
 			task := NewTask(taskType).
-				Payload(hardeningPayload{ID: 10000 + i, Name: "fuzz"}).
+				Payload(scenarioPayload{ID: 10000 + i, Name: "fuzz"}).
 				OnQueue(fx.queueName)
 			if r.Intn(2) == 0 {
 				task = task.Delay(time.Duration(20+r.Intn(120)) * time.Millisecond)
@@ -1880,19 +1880,19 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		requireStepTrue(t, "fuzz_all_processed", processed.Load() == expected, "processed=%d expected=%d", processed.Load(), expected)
+		requireScenarioTrue(t, "fuzz_all_processed", processed.Load() == expected, "processed=%d expected=%d", processed.Load(), expected)
 	})
 
-	t.Run("step_soak_mixed_load", func(t *testing.T) {
+	t.Run("scenario_soak_mixed_load", func(t *testing.T) {
 		if os.Getenv("RUN_SOAK") != "1" {
 			t.Skip("set RUN_SOAK=1 to enable long-running soak step")
 		}
-		requireStepNoErr(t, "soak_worker_start", w.Start())
+		requireScenarioNoErr(t, "soak_worker_start", w.Start())
 
-		taskType := "job:hardening:soak:" + fx.name
+		taskType := "job:scenario:soak:" + fx.name
 		var processed atomic.Int32
 		w.Register(taskType, func(_ context.Context, task Task) error {
-			var payload hardeningPayload
+			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
 			}
@@ -1916,7 +1916,7 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 				for i := 0; i < perProducer; i++ {
 					id := startID + i
 					task := NewTask(taskType).
-						Payload(hardeningPayload{ID: id, Name: "soak"}).
+						Payload(scenarioPayload{ID: id, Name: "soak"}).
 						OnQueue(fx.queueName)
 					if id%5 == 0 {
 						task = task.Delay(30 * time.Millisecond)
@@ -1957,23 +1957,23 @@ func runIntegrationHardeningSuite(t *testing.T, fx hardeningFixture) {
 			}
 			time.Sleep(30 * time.Millisecond)
 		}
-		requireStepTrue(t, "soak_processed", processed.Load() >= total, "processed=%d expected>=%d", processed.Load(), total)
+		requireScenarioTrue(t, "soak_processed", processed.Load() >= total, "processed=%d expected>=%d", processed.Load(), total)
 	})
 
-	t.Run("step_shutdown_idempotent", func(t *testing.T) {
-		requireStepNoErr(t, "worker_shutdown", w.Shutdown())
-		requireStepNoErr(t, "worker_shutdown_idempotent", w.Shutdown())
+	t.Run("scenario_shutdown_idempotent", func(t *testing.T) {
+		requireScenarioNoErr(t, "worker_shutdown", w.Shutdown())
+		requireScenarioNoErr(t, "worker_shutdown_idempotent", w.Shutdown())
 	})
 }
 
-func requireStepNoErr(t *testing.T, step string, err error) {
+func requireScenarioNoErr(t *testing.T, step string, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("[%s] %v", step, err)
 	}
 }
 
-func requireStepTrue(t *testing.T, step string, ok bool, format string, args ...any) {
+func requireScenarioTrue(t *testing.T, step string, ok bool, format string, args ...any) {
 	t.Helper()
 	if !ok {
 		t.Fatalf("[%s] "+format, append([]any{step}, args...)...)
@@ -2009,7 +2009,7 @@ func refreshRedisAddr(ctx context.Context) error {
 	return nil
 }
 
-func newOrderingWorker(t *testing.T, fx hardeningFixture) Worker {
+func newOrderingWorker(t *testing.T, fx scenarioFixture) Worker {
 	t.Helper()
 	switch fx.name {
 	case "redis":
@@ -2029,7 +2029,7 @@ func newOrderingWorker(t *testing.T, fx hardeningFixture) Worker {
 			DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
 			Workers:        1,
 			PollInterval:   10 * time.Millisecond,
-			DefaultQueue:   "hardening_mysql",
+			DefaultQueue:   "scenario_mysql",
 		})
 		if err != nil {
 			t.Fatalf("new ordering mysql worker failed: %v", err)
@@ -2042,7 +2042,7 @@ func newOrderingWorker(t *testing.T, fx hardeningFixture) Worker {
 			DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
 			Workers:        1,
 			PollInterval:   10 * time.Millisecond,
-			DefaultQueue:   "hardening_postgres",
+			DefaultQueue:   "scenario_postgres",
 		})
 		if err != nil {
 			t.Fatalf("new ordering postgres worker failed: %v", err)

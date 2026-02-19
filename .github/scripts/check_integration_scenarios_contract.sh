@@ -5,26 +5,26 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." >/dev/null 2>&1 && pwd)"
 
 required_backends=(redis mysql postgres sqlite nats sqs rabbitmq)
-required_hardening_steps=(
-  step_register_handler
-  step_start_idempotent
-  step_enqueue_burst
-  step_wait_all_processed
-  step_poison_message_max_retry
-  step_worker_restart_recovery
-  step_bind_invalid_json
-  step_unique_queue_scope
-  step_enqueue_context_cancellation
-  step_shutdown_during_delay_retry
-  step_multi_worker_contention
-  step_duplicate_delivery_idempotency
-  step_enqueue_during_broker_fault
-  step_consume_after_broker_recovery
-  step_ordering_contract
-  step_backpressure_saturation
-  step_payload_large
-  step_config_option_fuzz
-  step_shutdown_idempotent
+required_integration_scenarios=(
+  scenario_register_handler
+  scenario_start_idempotent
+  scenario_enqueue_burst
+  scenario_wait_all_processed
+  scenario_poison_message_max_retry
+  scenario_worker_restart_recovery
+  scenario_bind_invalid_json
+  scenario_unique_queue_scope
+  scenario_enqueue_context_cancellation
+  scenario_shutdown_during_delay_retry
+  scenario_multi_worker_contention
+  scenario_duplicate_delivery_idempotency
+  scenario_enqueue_during_broker_fault
+  scenario_consume_after_broker_recovery
+  scenario_ordering_contract
+  scenario_backpressure_saturation
+  scenario_payload_large
+  scenario_config_option_fuzz
+  scenario_shutdown_idempotent
 )
 
 has_pattern() {
@@ -37,18 +37,18 @@ has_pattern() {
   grep -Eq -- "${pattern}" "${file}"
 }
 
-echo "Checking required hardening steps exist in integration suite..."
-for step in "${required_hardening_steps[@]}"; do
-  if ! has_pattern "t\\.Run\\(\"${step}\"" "${repo_root}/integration_backends_integration_test.go"; then
-    echo "missing hardening step in integration_backends_integration_test.go: ${step}"
+echo "Checking required integration scenarios exist in integration suite..."
+for scenario in "${required_integration_scenarios[@]}"; do
+  if ! has_pattern "t\\.Run\\(\"${scenario}\"" "${repo_root}/integration_scenarios_test.go"; then
+    echo "missing integration scenario in integration_scenarios_test.go: ${scenario}"
     exit 1
   fi
 done
 
-echo "Checking hardening document lists required baseline steps..."
-for step in "${required_hardening_steps[@]}"; do
-  if ! has_pattern "- \`${step}\`" "${repo_root}/docs/hardening.md"; then
-    echo "missing hardening step in docs/hardening.md: ${step}"
+echo "Checking scenarios document lists required baseline scenarios..."
+for scenario in "${required_integration_scenarios[@]}"; do
+  if ! has_pattern "- \`${scenario}\`" "${repo_root}/docs/integration-scenarios.md"; then
+    echo "missing integration scenario in docs/integration-scenarios.md: ${scenario}"
     exit 1
   fi
 done
@@ -84,4 +84,4 @@ if ! has_pattern "func TestObservabilityIntegration_PauseResumeSupport_AllBacken
   exit 1
 fi
 
-echo "Hardening contract checks passed."
+echo "Scenarios contract checks passed."

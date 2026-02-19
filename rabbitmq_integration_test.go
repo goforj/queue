@@ -213,7 +213,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	task := NewTask(taskType).
-		Payload(hardeningPayload{ID: 1, Name: "delay-restart"}).
+		Payload(scenarioPayload{ID: 1, Name: "delay-restart"}).
 		OnQueue(queueName).
 		Delay(delay)
 	if err := q.Enqueue(context.Background(), task); err != nil {
@@ -298,7 +298,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	task := NewTask(taskType).
-		Payload(hardeningPayload{ID: 2, Name: "retry-restart"}).
+		Payload(scenarioPayload{ID: 2, Name: "retry-restart"}).
 		OnQueue(queueName).
 		Retry(1).
 		Backoff(backoff)
@@ -381,7 +381,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	task := NewTask(taskType).
-		Payload(hardeningPayload{ID: 3, Name: "delay-queue"}).
+		Payload(scenarioPayload{ID: 3, Name: "delay-queue"}).
 		OnQueue(queueName).
 		Delay(delay)
 	if err := q.Enqueue(context.Background(), task); err != nil {

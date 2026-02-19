@@ -283,7 +283,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			okDone := make(chan struct{}, 1)
 			var failedCalls atomic.Int64
 
-			t.Run("step_register_handlers", func(t *testing.T) {
+			t.Run("scenario_register_handlers", func(t *testing.T) {
 				w.Register(okType, func(_ context.Context, _ Task) error {
 					select {
 					case okDone <- struct{}{}:
@@ -297,15 +297,15 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				})
 			})
 
-			t.Run("step_start_worker", func(t *testing.T) {
-				requireStepNoErr(t, "start_worker", w.Start())
+			t.Run("scenario_start_worker", func(t *testing.T) {
+				requireScenarioNoErr(t, "start_worker", w.Start())
 			})
 
-			t.Run("step_enqueue_success", func(t *testing.T) {
+			t.Run("scenario_enqueue_success", func(t *testing.T) {
 				okTask := NewTask(okType).
-					Payload(hardeningPayload{ID: 1, Name: "obs-ok"}).
+					Payload(scenarioPayload{ID: 1, Name: "obs-ok"}).
 					OnQueue(fx.queue)
-				requireStepNoErr(t, "enqueue_success", q.Enqueue(context.Background(), okTask))
+				requireScenarioNoErr(t, "enqueue_success", q.Enqueue(context.Background(), okTask))
 				select {
 				case <-okDone:
 				case <-time.After(12 * time.Second):
@@ -313,73 +313,73 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 			})
 
-			t.Run("step_enqueue_retry_archive", func(t *testing.T) {
+			t.Run("scenario_enqueue_retry_archive", func(t *testing.T) {
 				failTask := NewTask(failType).
-					Payload(hardeningPayload{ID: 2, Name: "obs-fail"}).
+					Payload(scenarioPayload{ID: 2, Name: "obs-fail"}).
 					OnQueue(fx.queue).
 					Retry(0)
-				requireStepNoErr(t, "enqueue_retry_archive", q.Enqueue(context.Background(), failTask))
-				waitForObservabilityStep(t, "retry_archive_attempts", 12*time.Second, func() bool {
+				requireScenarioNoErr(t, "enqueue_retry_archive", q.Enqueue(context.Background(), failTask))
+				waitForObservabilityScenario(t, "retry_archive_attempts", 12*time.Second, func() bool {
 					return failedCalls.Load() >= 1
 				})
 			})
 
 			if fx.name != "redis" {
-				t.Run("step_enqueue_retried_task", func(t *testing.T) {
+				t.Run("scenario_enqueue_retried_task", func(t *testing.T) {
 					retryTask := NewTask(failType).
-						Payload(hardeningPayload{ID: 3, Name: "obs-retry"}).
+						Payload(scenarioPayload{ID: 3, Name: "obs-retry"}).
 						OnQueue(fx.queue).
 						Retry(1).
 						Backoff(20 * time.Millisecond)
-					requireStepNoErr(t, "enqueue_retried_task", q.Enqueue(context.Background(), retryTask))
-					waitForObservabilityStep(t, "retried_task_attempts", 12*time.Second, func() bool {
+					requireScenarioNoErr(t, "enqueue_retried_task", q.Enqueue(context.Background(), retryTask))
+					waitForObservabilityScenario(t, "retried_task_attempts", 12*time.Second, func() bool {
 						return failedCalls.Load() >= 3
 					})
 				})
 			}
 
-			t.Run("step_assert_collector_values", func(t *testing.T) {
+			t.Run("scenario_assert_collector_values", func(t *testing.T) {
 				var counters QueueCounters
-				waitForObservabilityStep(t, "collector_counters_available", 10*time.Second, func() bool {
+				waitForObservabilityScenario(t, "collector_counters_available", 10*time.Second, func() bool {
 					snapshot := collector.Snapshot()
 					var ok bool
 					counters, ok = snapshot.Queue(fx.queue)
 					return ok
 				})
-				requireStepTrue(t, "collector_processed", counters.Processed >= 1, "processed=%d expected>=1", counters.Processed)
-				requireStepTrue(t, "collector_failed", counters.Failed >= 1, "failed=%d expected>=1", counters.Failed)
-				requireStepTrue(t, "collector_archived", counters.Archived >= 1, "archived=%d expected>=1", counters.Archived)
+				requireScenarioTrue(t, "collector_processed", counters.Processed >= 1, "processed=%d expected>=1", counters.Processed)
+				requireScenarioTrue(t, "collector_failed", counters.Failed >= 1, "failed=%d expected>=1", counters.Failed)
+				requireScenarioTrue(t, "collector_archived", counters.Archived >= 1, "archived=%d expected>=1", counters.Archived)
 				if fx.name != "redis" {
-					requireStepTrue(t, "collector_retried", counters.Retry >= 1, "retry=%d expected>=1", counters.Retry)
+					requireScenarioTrue(t, "collector_retried", counters.Retry >= 1, "retry=%d expected>=1", counters.Retry)
 				}
-				waitForObservabilityStep(t, "collector_drained", 8*time.Second, func() bool {
+				waitForObservabilityScenario(t, "collector_drained", 8*time.Second, func() bool {
 					snapshot := collector.Snapshot()
 					return snapshot.Pending(fx.queue) == 0 && snapshot.Active(fx.queue) == 0
 				})
 				snapshot := collector.Snapshot()
 				throughput, ok := snapshot.Throughput(fx.queue)
-				requireStepTrue(t, "collector_throughput_present", ok, "throughput missing for queue=%q", fx.queue)
-				requireStepTrue(t, "collector_hour_processed", throughput.Hour.Processed >= 1, "hour_processed=%d expected>=1", throughput.Hour.Processed)
-				requireStepTrue(t, "collector_hour_failed", throughput.Hour.Failed >= 1, "hour_failed=%d expected>=1", throughput.Hour.Failed)
-				requireStepTrue(t, "collector_getter_processed", snapshot.Processed(fx.queue) == counters.Processed, "getter_processed=%d counters_processed=%d", snapshot.Processed(fx.queue), counters.Processed)
-				requireStepTrue(t, "collector_getter_failed", snapshot.Failed(fx.queue) == counters.Failed, "getter_failed=%d counters_failed=%d", snapshot.Failed(fx.queue), counters.Failed)
+				requireScenarioTrue(t, "collector_throughput_present", ok, "throughput missing for queue=%q", fx.queue)
+				requireScenarioTrue(t, "collector_hour_processed", throughput.Hour.Processed >= 1, "hour_processed=%d expected>=1", throughput.Hour.Processed)
+				requireScenarioTrue(t, "collector_hour_failed", throughput.Hour.Failed >= 1, "hour_failed=%d expected>=1", throughput.Hour.Failed)
+				requireScenarioTrue(t, "collector_getter_processed", snapshot.Processed(fx.queue) == counters.Processed, "getter_processed=%d counters_processed=%d", snapshot.Processed(fx.queue), counters.Processed)
+				requireScenarioTrue(t, "collector_getter_failed", snapshot.Failed(fx.queue) == counters.Failed, "getter_failed=%d counters_failed=%d", snapshot.Failed(fx.queue), counters.Failed)
 				if fx.name != "redis" {
-					requireStepTrue(t, "collector_getter_retry", snapshot.Retry(fx.queue) == counters.Retry, "getter_retry=%d counters_retry=%d", snapshot.Retry(fx.queue), counters.Retry)
+					requireScenarioTrue(t, "collector_getter_retry", snapshot.Retry(fx.queue) == counters.Retry, "getter_retry=%d counters_retry=%d", snapshot.Retry(fx.queue), counters.Retry)
 				}
 			})
 
-			t.Run("step_assert_snapshotqueue", func(t *testing.T) {
+			t.Run("scenario_assert_snapshotqueue", func(t *testing.T) {
 				snapFromQueue, err := SnapshotQueue(context.Background(), q, collector)
-				requireStepNoErr(t, "snapshot_queue", err)
+				requireScenarioNoErr(t, "snapshot_queue", err)
 				nativeCounters, queueOK := snapFromQueue.Queue(fx.queue)
-				requireStepTrue(t, "snapshot_queue_present", queueOK, "queue=%q not found in snapshot", fx.queue)
+				requireScenarioTrue(t, "snapshot_queue_present", queueOK, "queue=%q not found in snapshot", fx.queue)
 				if fx.native {
 					switch fx.name {
 					case "redis":
-						requireStepTrue(t, "snapshot_native_redis_processed", nativeCounters.Processed >= 1, "processed=%d expected>=1", nativeCounters.Processed)
-						requireStepTrue(t, "snapshot_native_redis_failed", nativeCounters.Failed >= 1, "failed=%d expected>=1", nativeCounters.Failed)
+						requireScenarioTrue(t, "snapshot_native_redis_processed", nativeCounters.Processed >= 1, "processed=%d expected>=1", nativeCounters.Processed)
+						requireScenarioTrue(t, "snapshot_native_redis_failed", nativeCounters.Failed >= 1, "failed=%d expected>=1", nativeCounters.Failed)
 					case "mysql", "postgres", "sqlite":
-						requireStepTrue(t, "snapshot_native_db_drained", nativeCounters.Pending == 0 && nativeCounters.Active == 0, "pending=%d active=%d expected=0", nativeCounters.Pending, nativeCounters.Active)
+						requireScenarioTrue(t, "snapshot_native_db_drained", nativeCounters.Pending == 0 && nativeCounters.Active == 0, "pending=%d active=%d expected=0", nativeCounters.Pending, nativeCounters.Active)
 					}
 				}
 			})
@@ -564,22 +564,22 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			resumeErr := ResumeQueue(context.Background(), q, queueName)
 
 			if fx.supports {
-				requireStepNoErr(t, "pause_supported", pauseErr)
-				requireStepNoErr(t, "resume_supported", resumeErr)
+				requireScenarioNoErr(t, "pause_supported", pauseErr)
+				requireScenarioNoErr(t, "resume_supported", resumeErr)
 				snapshot := collector.Snapshot()
 				counters, ok := snapshot.Queue(queueName)
-				requireStepTrue(t, "pause_events_observed", ok, "queue %q not found in collector snapshot", queueName)
-				requireStepTrue(t, "pause_back_to_zero", counters.Paused == 0, "paused=%d expected=0", counters.Paused)
+				requireScenarioTrue(t, "pause_events_observed", ok, "queue %q not found in collector snapshot", queueName)
+				requireScenarioTrue(t, "pause_back_to_zero", counters.Paused == 0, "paused=%d expected=0", counters.Paused)
 				return
 			}
 
-			requireStepTrue(t, "pause_unsupported", errors.Is(pauseErr, ErrPauseUnsupported), "expected ErrPauseUnsupported, got %v", pauseErr)
-			requireStepTrue(t, "resume_unsupported", errors.Is(resumeErr, ErrPauseUnsupported), "expected ErrPauseUnsupported, got %v", resumeErr)
+			requireScenarioTrue(t, "pause_unsupported", errors.Is(pauseErr, ErrPauseUnsupported), "expected ErrPauseUnsupported, got %v", pauseErr)
+			requireScenarioTrue(t, "resume_unsupported", errors.Is(resumeErr, ErrPauseUnsupported), "expected ErrPauseUnsupported, got %v", resumeErr)
 		})
 	}
 }
 
-func waitForObservabilityStep(t *testing.T, step string, timeout time.Duration, check func() bool) {
+func waitForObservabilityScenario(t *testing.T, scenario string, timeout time.Duration, check func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -588,7 +588,7 @@ func waitForObservabilityStep(t *testing.T, step string, timeout time.Duration, 
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	requireStepTrue(t, step, false, "timed out after %s", timeout)
+	requireScenarioTrue(t, scenario, false, "timed out after %s", timeout)
 }
 
 type noStatsQueue struct{}

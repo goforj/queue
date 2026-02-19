@@ -1,35 +1,35 @@
-# Hardening Roadmap
+# Integration Scenarios Roadmap
 
-This document tracks queue-runtime reliability hardening across all enabled integration backends.
+This document tracks queue-runtime reliability integration scenarios across all enabled backends.
 
 ## Current baseline
 
-Implemented in `integration_backends_integration_test.go` via `TestIntegrationHardening_AllBackends` for enabled backends (`redis`, `mysql`, `postgres`, `sqlite`, `nats`, `sqs`, `rabbitmq`).
+Implemented in `integration_scenarios_test.go` via `TestIntegrationScenarios_AllBackends` for enabled backends (`redis`, `mysql`, `postgres`, `sqlite`, `nats`, `sqs`, `rabbitmq`).
 
-Named steps currently enforced:
+Named scenarios currently enforced:
 
-- `step_register_handler`
-- `step_start_idempotent`
-- `step_enqueue_burst`
-- `step_wait_all_processed`
-- `step_poison_message_max_retry`
-- `step_worker_restart_recovery`
-- `step_bind_invalid_json`
-- `step_unique_queue_scope`
-- `step_enqueue_context_cancellation`
-- `step_shutdown_during_delay_retry`
-- `step_multi_worker_contention`
-- `step_duplicate_delivery_idempotency`
-- `step_enqueue_during_broker_fault`
-- `step_consume_after_broker_recovery`
-- `step_ordering_contract`
-- `step_backpressure_saturation`
-- `step_payload_large`
-- `step_config_option_fuzz`
-- `step_shutdown_idempotent`
+- `scenario_register_handler`
+- `scenario_start_idempotent`
+- `scenario_enqueue_burst`
+- `scenario_wait_all_processed`
+- `scenario_poison_message_max_retry`
+- `scenario_worker_restart_recovery`
+- `scenario_bind_invalid_json`
+- `scenario_unique_queue_scope`
+- `scenario_enqueue_context_cancellation`
+- `scenario_shutdown_during_delay_retry`
+- `scenario_multi_worker_contention`
+- `scenario_duplicate_delivery_idempotency`
+- `scenario_enqueue_during_broker_fault`
+- `scenario_consume_after_broker_recovery`
+- `scenario_ordering_contract`
+- `scenario_backpressure_saturation`
+- `scenario_payload_large`
+- `scenario_config_option_fuzz`
+- `scenario_shutdown_idempotent`
 
-Optional long-run step (enabled with `RUN_SOAK=1`):
-- `step_soak_mixed_load`
+Optional long-run scenario (enabled with `RUN_SOAK=1`):
+- `scenario_soak_mixed_load`
 
 What this proves today:
 
@@ -57,42 +57,42 @@ What this proves today:
 ## Next scenarios
 
 High-concurrency soak (long-running)
-- Candidate step: `step_soak_mixed_load` extensions.
+- Candidate scenario: `scenario_soak_mixed_load` extensions.
 - Goal: extend with longer durations and tighter throughput/latency assertions.
 - Status: planned (tag-gated).
 
 Large and edge payload behavior
-- Candidate step: `step_payload_bind_invalid_json`.
+- Candidate scenario: `scenario_payload_bind_invalid_json`.
 - Goal: verify near-limit payloads, empty payloads, malformed payload decode handling.
 - Status: planned.
 
 Backpressure and queue saturation
-- Candidate step: `step_backpressure_saturation` extensions.
+- Candidate scenario: `scenario_backpressure_saturation` extensions.
 - Goal: extend with stricter queue-depth and latency threshold assertions.
 - Status: planned.
 
 Context cancellation and shutdown races
-- Candidate step: `step_shutdown_during_delay_retry` extensions.
+- Candidate scenario: `scenario_shutdown_during_delay_retry` extensions.
 - Goal: add stricter timing and race invariants under heavy mixed traffic.
 - Status: planned.
 
 Multi-worker contention
-- Candidate step: `step_multi_worker_contention` extensions.
+- Candidate scenario: `scenario_multi_worker_contention` extensions.
 - Goal: extend with larger fan-out and churn (workers joining/leaving mid-run).
 - Status: planned.
 
 Config/task-option fuzzing
-- Candidate step: `step_config_option_fuzz` extensions.
+- Candidate scenario: `scenario_config_option_fuzz` extensions.
 - Goal: extend with invalid-combination mutation buckets and error-shape assertions.
 - Status: planned.
 
 Observability contract
-- Candidate step: `step_observability_contract`.
+- Candidate scenario: `scenario_observability_contract`.
 - Goal: once hooks exist, assert emitted counters/events for enqueue, success, retry, fail, duplicate.
 - Status: complete (implemented in `observability_integration_test.go` via `TestObservabilityIntegration_AllBackends` and `TestObservabilityIntegration_PauseResumeSupport_AllBackends`).
 
 ## Execution model
 
-- `smoke`: always-on integration hardening steps (current baseline).
-- `chaos`: scheduled fault-injection scenarios (`step_enqueue_during_broker_fault`, `step_consume_after_broker_recovery`, and race-heavy steps).
+- `smoke`: always-on integration scenarios (current baseline).
+- `chaos`: scheduled fault-injection scenarios (`scenario_enqueue_during_broker_fault`, `scenario_consume_after_broker_recovery`, and race-heavy scenarios).
 - `soak`: extended runtime scenarios; isolated from normal CI when needed.
