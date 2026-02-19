@@ -21,11 +21,11 @@ func main() {
 		Time:   time.Now(),
 	})
 	collector.Observe(queue.Event{
-		Kind:    queue.EventProcessStarted,
-		Driver:  queue.DriverSync,
-		Queue:   "default",
+		Kind:   queue.EventProcessStarted,
+		Driver: queue.DriverSync,
+		Queue:  "default",
 		TaskKey: "task-1",
-		Time:    time.Now(),
+		Time:   time.Now(),
 	})
 	collector.Observe(queue.Event{
 		Kind:     queue.EventProcessSucceeded,

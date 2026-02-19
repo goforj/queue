@@ -415,12 +415,9 @@ q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 	if err := task.Bind(&payload); err != nil {
 		return err
 	}
-	_ = payload
 	return nil
 })
-_ = q.Workers(1).StartWorkers(context.Background())
 defer q.Shutdown(context.Background())
-_ = q.DispatchCtx(
 	context.Background(),
 	queue.NewTask("emails:send").
 		Payload(EmailPayload{ID: 1}).
@@ -437,7 +434,6 @@ q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
 if err != nil {
 	return
 }
-_ = q
 ```
 
 ### <a id="newnats"></a>NewNATS
@@ -449,7 +445,6 @@ q, err := queue.NewNATS("nats://127.0.0.1:4222")
 if err != nil {
 	return
 }
-_ = q
 ```
 
 ### <a id="newnull"></a>NewNull
@@ -461,7 +456,6 @@ q, err := queue.NewNull()
 if err != nil {
 	return
 }
-_ = q.Dispatch(queue.NewTask("emails:send").Payload(map[string]int{"id": 1}).OnQueue("default"))
 ```
 
 ### <a id="newrabbitmq"></a>NewRabbitMQ
@@ -473,7 +467,6 @@ q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
 if err != nil {
 	return
 }
-_ = q
 ```
 
 ### <a id="newredis"></a>NewRedis
@@ -485,7 +478,6 @@ q, err := queue.NewRedis("127.0.0.1:6379")
 if err != nil {
 	return
 }
-_ = q
 ```
 
 ### <a id="newsqs"></a>NewSQS
@@ -497,7 +489,6 @@ q, err := queue.NewSQS("us-east-1")
 if err != nil {
 	return
 }
-_ = q
 ```
 
 ### <a id="newstatscollector"></a>NewStatsCollector
@@ -506,7 +497,6 @@ NewStatsCollector creates an event collector for queue counters.
 
 ```go
 collector := queue.NewStatsCollector()
-_ = collector
 ```
 
 ### <a id="newsync"></a>NewSync
@@ -518,7 +508,6 @@ q, err := queue.NewSync()
 if err != nil {
 	return
 }
-_ = q
 ```
 
 ### <a id="newworkerpool"></a>NewWorkerpool
@@ -530,7 +519,6 @@ q, err := queue.NewWorkerpool()
 if err != nil {
 	return
 }
-_ = q
 ```
 
 ## Observability
@@ -638,7 +626,6 @@ PauseQueue pauses queue consumption for drivers that support it.
 
 ```go
 q, _ := queue.NewSync()
-_ = queue.PauseQueue(context.Background(), q, "default")
 snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
 fmt.Println(snapshot.Paused("default"))
 // Output: 1
@@ -731,8 +718,6 @@ ResumeQueue resumes queue consumption for drivers that support it.
 
 ```go
 q, _ := queue.NewSync()
-_ = queue.PauseQueue(context.Background(), q, "default")
-_ = queue.ResumeQueue(context.Background(), q, "default")
 snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
 fmt.Println(snapshot.Paused("default"))
 // Output: 0
@@ -866,14 +851,12 @@ q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 	if err := task.Bind(&payload); err != nil {
 		return err
 	}
-	_ = payload
 	return nil
 })
 task := queue.NewTask("emails:send").
 	Payload(EmailPayload{ID: 1}).
 	OnQueue("default").
 	Delay(10 * time.Millisecond)
-_ = q.DispatchCtx(context.Background(), task)
 ```
 
 ### <a id="driver"></a>Driver
@@ -910,7 +893,6 @@ q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
 	if err := task.Bind(&payload); err != nil {
 		return err
 	}
-	_ = payload
 	return nil
 })
 ```
@@ -924,8 +906,6 @@ q, err := queue.NewWorkerpool()
 if err != nil {
 	return
 }
-_ = q.StartWorkers(context.Background())
-_ = q.Shutdown(context.Background())
 ```
 
 ### <a id="startworkers"></a>StartWorkers
@@ -937,7 +917,6 @@ q, err := queue.NewWorkerpool()
 if err != nil {
 	return
 }
-_ = q.StartWorkers(context.Background())
 ```
 
 ## Task
@@ -948,7 +927,6 @@ Backoff sets delay between retries.
 
 ```go
 task := queue.NewTask("emails:send").Backoff(500 * time.Millisecond)
-_ = task
 ```
 
 ### <a id="bind"></a>Bind
@@ -961,7 +939,6 @@ type EmailPayload struct {
 }
 task := queue.NewTask("emails:send").Payload(EmailPayload{ID: 1})
 var payload EmailPayload
-_ = task.Bind(&payload)
 ```
 
 ### <a id="delay"></a>Delay
@@ -970,7 +947,6 @@ Delay defers execution by duration.
 
 ```go
 task := queue.NewTask("emails:send").Delay(300 * time.Millisecond)
-_ = task
 ```
 
 ### <a id="newtask"></a>NewTask
@@ -979,7 +955,6 @@ NewTask creates a task value with a required task type.
 
 ```go
 task := queue.NewTask("emails:send")
-_ = task
 ```
 
 ### <a id="onqueue"></a>OnQueue
@@ -988,7 +963,6 @@ OnQueue sets the target queue name.
 
 ```go
 task := queue.NewTask("emails:send").OnQueue("critical")
-_ = task
 ```
 
 ### <a id="payload"></a>Payload
@@ -999,7 +973,6 @@ _Example: payload bytes_
 
 ```go
 taskBytes := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
-_ = taskBytes
 ```
 
 _Example: payload struct_
@@ -1018,7 +991,6 @@ taskStruct := queue.NewTask("emails:send").Payload(EmailPayload{
 	To:   "user@example.com",
 	Meta: Meta{Nested: true},
 })
-_ = taskStruct
 ```
 
 _Example: payload map_
@@ -1029,7 +1001,6 @@ taskMap := queue.NewTask("emails:send").Payload(map[string]any{
 	"to":  "user@example.com",
 	"meta": map[string]any{"nested": true},
 })
-_ = taskMap
 ```
 
 ### <a id="payloadbytes"></a>PayloadBytes
@@ -1039,7 +1010,6 @@ PayloadBytes returns a copy of task payload bytes.
 ```go
 task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
 payload := task.PayloadBytes()
-_ = payload
 ```
 
 ### <a id="payloadjson"></a>PayloadJSON
@@ -1048,7 +1018,6 @@ PayloadJSON marshals payload as JSON.
 
 ```go
 task := queue.NewTask("emails:send").PayloadJSON(map[string]int{"id": 1})
-_ = task
 ```
 
 ### <a id="retry"></a>Retry
@@ -1059,7 +1028,6 @@ _Example: retry_
 
 ```go
 task := queue.NewTask("emails:send").Retry(4)
-_ = task
 ```
 
 _Example: retry count getter_
@@ -1080,7 +1048,6 @@ Timeout sets per-task execution timeout.
 
 ```go
 task := queue.NewTask("emails:send").Timeout(10 * time.Second)
-_ = task
 ```
 
 ### <a id="uniquefor"></a>UniqueFor
@@ -1089,6 +1056,5 @@ UniqueFor enables uniqueness dedupe within the given TTL.
 
 ```go
 task := queue.NewTask("emails:send").UniqueFor(45 * time.Second)
-_ = task
 ```
 <!-- api:embed:end -->

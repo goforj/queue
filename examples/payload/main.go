@@ -30,8 +30,8 @@ func main() {
 
 	// Example: payload map
 	taskMap := queue.NewTask("emails:send").Payload(map[string]any{
-		"id":   1,
-		"to":   "user@example.com",
+		"id":  1,
+		"to":  "user@example.com",
 		"meta": map[string]any{"nested": true},
 	})
 	_ = taskMap
