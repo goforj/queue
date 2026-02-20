@@ -167,10 +167,41 @@ func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error)
 	return DispatchResult{DispatchID: dispatchID}, nil
 }
 
+// Chain creates a sequential workflow where each job runs only after the prior job succeeds.
+// @group Chaining
+//
+// Example: dispatch chain
+//
+//	chainID, _ := b.Chain(
+//		bus.NewJob("monitor:poll", map[string]string{"url": "https://goforj.dev/health"}),
+//		bus.NewJob("monitor:downsample", map[string]any{"window": "5m"}),
+//		bus.NewJob("monitor:alert", map[string]any{"severity": "critical"}),
+//	).OnQueue("monitor-critical").
+//		Catch(func(context.Context, bus.ChainState, error) error { return nil }).
+//		Finally(func(context.Context, bus.ChainState) error { return nil }).
+//		Dispatch(context.Background())
+//	_ = chainID
 func (r *runtime) Chain(jobs ...Job) ChainBuilder {
 	return &chainBuilder{r: r, jobs: append([]Job(nil), jobs...)}
 }
 
+// Batch creates a parallel workflow and tracks aggregate completion state.
+// @group Batching
+//
+// Example: dispatch batch
+//
+//	batchID, _ := b.Batch(
+//		bus.NewJob("monitor:poll", map[string]string{"url": "https://a"}),
+//		bus.NewJob("monitor:poll", map[string]string{"url": "https://b"}),
+//	).Name("monitor sweep").
+//		OnQueue("monitor-scan").
+//		AllowFailures().
+//		Progress(func(context.Context, bus.BatchState) error { return nil }).
+//		Then(func(context.Context, bus.BatchState) error { return nil }).
+//		Catch(func(context.Context, bus.BatchState, error) error { return nil }).
+//		Finally(func(context.Context, bus.BatchState) error { return nil }).
+//		Dispatch(context.Background())
+//	_ = batchID
 func (r *runtime) Batch(jobs ...Job) BatchBuilder {
 	return &batchBuilder{r: r, jobs: append([]Job(nil), jobs...)}
 }
