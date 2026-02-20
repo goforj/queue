@@ -1,6 +1,15 @@
 package queue
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+type goodMarshaler struct{}
+type badMarshaler struct{}
+
+func (goodMarshaler) MarshalJSON() ([]byte, error) { return []byte(`{"ok":true}`), nil }
+func (badMarshaler) MarshalJSON() ([]byte, error)  { return nil, errors.New("boom") }
 
 func TestTaskBind_Success(t *testing.T) {
 	type Meta struct {
@@ -50,5 +59,21 @@ func TestTaskBind_InvalidJSON(t *testing.T) {
 	var out map[string]any
 	if err := task.Bind(&out); err == nil {
 		t.Fatal("expected bind error for invalid json payload")
+	}
+}
+
+func TestTaskPayloadJSON_UsesMarshalerAndCapturesError(t *testing.T) {
+	task := NewTask("job:json").PayloadJSON(goodMarshaler{})
+	var out map[string]bool
+	if err := task.Bind(&out); err != nil {
+		t.Fatalf("bind marshaled payload failed: %v", err)
+	}
+	if !out["ok"] {
+		t.Fatalf("expected marshaled payload to include ok=true, got %#v", out)
+	}
+
+	errTask := NewTask("job:json").PayloadJSON(badMarshaler{})
+	if err := errTask.validate(); err == nil {
+		t.Fatal("expected payload marshaling error")
 	}
 }

@@ -14,7 +14,8 @@ func TestQueueContract_Redis(t *testing.T) {
 	}
 
 	factory := contractFactory{
-		name: "redis",
+		name:           "redis",
+		expectedDriver: DriverRedis,
 		newQueue: func(t *testing.T) Queue {
 			q, err := New(Config{
 				Driver:    DriverRedis,
@@ -29,6 +30,8 @@ func TestQueueContract_Redis(t *testing.T) {
 		requiresQueueName:        true,
 		assertMissingHandlerErr:  false,
 		backoffUnsupported:       true,
+		supportsPause:            true,
+		supportsNativeStats:      true,
 		uniqueTTL:                time.Second,
 		uniqueExpiryWait:         1200 * time.Millisecond,
 	}
@@ -46,7 +49,8 @@ func TestQueueContract_DatabaseMySQL(t *testing.T) {
 		PollInterval: 10 * time.Millisecond,
 	}
 	factory := contractFactory{
-		name: "database-mysql",
+		name:           "database-mysql",
+		expectedDriver: DriverDatabase,
 		newQueue: func(_ *testing.T) Queue {
 			q, err := New(Config{
 				Driver:         DriverDatabase,
@@ -61,6 +65,8 @@ func TestQueueContract_DatabaseMySQL(t *testing.T) {
 		requiresRegisteredHandle: true,
 		requiresQueueName:        true,
 		assertMissingHandlerErr:  false,
+		supportsPause:            false,
+		supportsNativeStats:      true,
 		beforeEach: func(t *testing.T) {
 			resetQueueTables(t, cfg)
 		},
@@ -79,7 +85,8 @@ func TestQueueContract_DatabasePostgres(t *testing.T) {
 		PollInterval: 10 * time.Millisecond,
 	}
 	factory := contractFactory{
-		name: "database-postgres",
+		name:           "database-postgres",
+		expectedDriver: DriverDatabase,
 		newQueue: func(_ *testing.T) Queue {
 			q, err := New(Config{
 				Driver:         DriverDatabase,
@@ -94,6 +101,8 @@ func TestQueueContract_DatabasePostgres(t *testing.T) {
 		requiresRegisteredHandle: true,
 		requiresQueueName:        true,
 		assertMissingHandlerErr:  false,
+		supportsPause:            false,
+		supportsNativeStats:      true,
 		beforeEach: func(t *testing.T) {
 			resetQueueTables(t, cfg)
 		},
@@ -106,7 +115,8 @@ func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 		t.Skip("sqlite integration backend not selected")
 	}
 	factory := contractFactory{
-		name: "database-sqlite",
+		name:           "database-sqlite",
+		expectedDriver: DriverDatabase,
 		newQueue: func(t *testing.T) Queue {
 			cfg := DatabaseConfig{
 				DriverName:   "sqlite",
@@ -127,6 +137,8 @@ func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 		requiresRegisteredHandle: true,
 		requiresQueueName:        true,
 		assertMissingHandlerErr:  false,
+		supportsPause:            false,
+		supportsNativeStats:      true,
 	}
 	runQueueContractSuite(t, factory)
 }
@@ -136,7 +148,8 @@ func TestQueueContract_NATS(t *testing.T) {
 		t.Skip("nats integration backend not selected")
 	}
 	factory := contractFactory{
-		name: "nats",
+		name:           "nats",
+		expectedDriver: DriverNATS,
 		newQueue: func(_ *testing.T) Queue {
 			q, err := New(Config{
 				Driver:  DriverNATS,
@@ -150,6 +163,8 @@ func TestQueueContract_NATS(t *testing.T) {
 		requiresRegisteredHandle: false,
 		requiresQueueName:        true,
 		assertMissingHandlerErr:  false,
+		supportsPause:            false,
+		supportsNativeStats:      false,
 	}
 	runQueueContractSuite(t, factory)
 }
@@ -159,7 +174,8 @@ func TestQueueContract_SQS(t *testing.T) {
 		t.Skip("sqs integration backend not selected")
 	}
 	factory := contractFactory{
-		name: "sqs",
+		name:           "sqs",
+		expectedDriver: DriverSQS,
 		newQueue: func(_ *testing.T) Queue {
 			q, err := New(Config{
 				Driver:       DriverSQS,
@@ -176,6 +192,8 @@ func TestQueueContract_SQS(t *testing.T) {
 		requiresRegisteredHandle: false,
 		requiresQueueName:        true,
 		assertMissingHandlerErr:  false,
+		supportsPause:            false,
+		supportsNativeStats:      false,
 	}
 	runQueueContractSuite(t, factory)
 }
@@ -185,7 +203,8 @@ func TestQueueContract_RabbitMQ(t *testing.T) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	factory := contractFactory{
-		name: "rabbitmq",
+		name:           "rabbitmq",
+		expectedDriver: DriverRabbitMQ,
 		newQueue: func(_ *testing.T) Queue {
 			q, err := New(Config{
 				Driver:      DriverRabbitMQ,
@@ -199,6 +218,8 @@ func TestQueueContract_RabbitMQ(t *testing.T) {
 		requiresRegisteredHandle: false,
 		requiresQueueName:        true,
 		assertMissingHandlerErr:  false,
+		supportsPause:            false,
+		supportsNativeStats:      false,
 	}
 	runQueueContractSuite(t, factory)
 }

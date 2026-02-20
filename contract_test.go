@@ -17,11 +17,14 @@ import (
 
 type contractFactory struct {
 	name                     string
+	expectedDriver           Driver
 	newQueue                 func(t *testing.T) Queue
 	requiresRegisteredHandle bool
 	requiresQueueName        bool
 	assertMissingHandlerErr  bool
 	backoffUnsupported       bool
+	supportsPause            bool
+	supportsNativeStats      bool
 	uniqueTTL                time.Duration
 	uniqueExpiryWait         time.Duration
 	beforeEach               func(t *testing.T)
@@ -44,6 +47,9 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 	t.Run("lifecycle_start_shutdown", func(t *testing.T) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+		if factory.expectedDriver != "" && d.Driver() != factory.expectedDriver {
+			t.Fatalf("expected driver %q, got %q", factory.expectedDriver, d.Driver())
+		}
 		if err := d.Workers(1).StartWorkers(context.Background()); err != nil {
 			t.Fatalf("worker start failed: %v", err)
 		}
@@ -52,6 +58,50 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 		if err := d.Shutdown(context.Background()); err != nil {
 			t.Fatalf("worker shutdown failed: %v", err)
+		}
+	})
+
+	t.Run("runtime_capabilities", func(t *testing.T) {
+		d := factory.newQueue(t)
+		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+
+		if !SupportsPause(d) {
+			t.Fatal("queue runtime should expose QueueController surface")
+		}
+		if !SupportsNativeStats(d) {
+			t.Fatal("queue runtime should expose StatsProvider surface")
+		}
+
+		pauseErr := PauseQueue(context.Background(), d, "default")
+		resumeErr := ResumeQueue(context.Background(), d, "default")
+		if factory.supportsPause {
+			if pauseErr != nil {
+				t.Fatalf("expected pause to succeed, got %v", pauseErr)
+			}
+			if resumeErr != nil {
+				t.Fatalf("expected resume to succeed, got %v", resumeErr)
+			}
+		} else {
+			if !errors.Is(pauseErr, ErrPauseUnsupported) {
+				t.Fatalf("expected ErrPauseUnsupported for pause, got %v", pauseErr)
+			}
+			if !errors.Is(resumeErr, ErrPauseUnsupported) {
+				t.Fatalf("expected ErrPauseUnsupported for resume, got %v", resumeErr)
+			}
+		}
+
+		_, err := SnapshotQueue(context.Background(), d, nil)
+		if factory.supportsNativeStats && err != nil {
+			if startErr := d.Workers(1).StartWorkers(context.Background()); startErr != nil {
+				t.Fatalf("expected native stats support; bootstrap start workers failed: %v", startErr)
+			}
+			_, err = SnapshotQueue(context.Background(), d, nil)
+			if err != nil {
+				t.Fatalf("expected native stats support after bootstrap, got error: %v", err)
+			}
+		}
+		if !factory.supportsNativeStats && err == nil {
+			t.Fatal("expected native stats to be unsupported")
 		}
 	})
 
@@ -505,7 +555,8 @@ func declaredDriversFromSource(t *testing.T) []Driver {
 func TestQueueContract_LocalAndSQLite(t *testing.T) {
 	factories := []contractFactory{
 		{
-			name: "null",
+			name:           "null",
+			expectedDriver: DriverNull,
 			newQueue: func(_ *testing.T) Queue {
 				q, err := New(Config{Driver: DriverNull})
 				if err != nil {
@@ -516,9 +567,12 @@ func TestQueueContract_LocalAndSQLite(t *testing.T) {
 			requiresRegisteredHandle: false,
 			requiresQueueName:        true,
 			assertMissingHandlerErr:  false,
+			supportsPause:            false,
+			supportsNativeStats:      false,
 		},
 		{
-			name: "sync",
+			name:           "sync",
+			expectedDriver: DriverSync,
 			newQueue: func(_ *testing.T) Queue {
 				q, err := New(Config{Driver: DriverSync})
 				if err != nil {
@@ -529,9 +583,12 @@ func TestQueueContract_LocalAndSQLite(t *testing.T) {
 			requiresRegisteredHandle: true,
 			requiresQueueName:        false,
 			assertMissingHandlerErr:  true,
+			supportsPause:            true,
+			supportsNativeStats:      true,
 		},
 		{
-			name: "workerpool",
+			name:           "workerpool",
+			expectedDriver: DriverWorkerpool,
 			newQueue: func(_ *testing.T) Queue {
 				q, err := New(Config{
 					Driver: DriverWorkerpool,
@@ -544,9 +601,12 @@ func TestQueueContract_LocalAndSQLite(t *testing.T) {
 			requiresRegisteredHandle: true,
 			requiresQueueName:        false,
 			assertMissingHandlerErr:  true,
+			supportsPause:            true,
+			supportsNativeStats:      true,
 		},
 		{
-			name: "database-sqlite",
+			name:           "database-sqlite",
+			expectedDriver: DriverDatabase,
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
 					Driver:         DriverDatabase,
@@ -561,6 +621,8 @@ func TestQueueContract_LocalAndSQLite(t *testing.T) {
 			requiresRegisteredHandle: true,
 			requiresQueueName:        true,
 			assertMissingHandlerErr:  false,
+			supportsPause:            false,
+			supportsNativeStats:      true,
 		},
 	}
 

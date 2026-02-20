@@ -53,7 +53,7 @@ jobs:
         run: go test ./... -v
 
       - name: Run unit tests with coverage
-        run: go test -coverprofile=coverage.txt ./...
+        run: ./scripts/coverage-codecov.sh
 
       - name: Upload results to Codecov
         uses: codecov/codecov-action@v5
