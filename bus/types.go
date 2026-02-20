@@ -19,8 +19,11 @@ type Job struct {
 //
 // Example: new bus job
 //
-//	job := bus.NewJob("monitor:poll", map[string]string{
-//		"url": "https://goforj.dev/health",
+//	type PollPayload struct {
+//		URL string `json:"url"`
+//	}
+//	job := bus.NewJob("monitor:poll", PollPayload{
+//		URL: "https://goforj.dev/health",
 //	}).
 //		OnQueue("monitor-critical").
 //		Retry(3).
