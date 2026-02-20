@@ -63,7 +63,7 @@ func (w *rabbitMQWorker) StartWorkers(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	conn, err := amqp.Dial(w.cfg.RabbitMQURL)
+	conn, err := dialRabbitMQWithRetry(w.cfg.RabbitMQURL, 15*time.Second)
 	if err != nil {
 		return err
 	}

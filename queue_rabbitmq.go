@@ -135,7 +135,7 @@ func (q *rabbitMQQueue) ensureConnectedLocked() error {
 		return nil
 	}
 	q.closeLocked()
-	conn, err := amqp.Dial(q.url)
+	conn, err := dialRabbitMQWithRetry(q.url, 10*time.Second)
 	if err != nil {
 		return err
 	}

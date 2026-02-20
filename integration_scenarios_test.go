@@ -18,6 +18,7 @@ import (
 
 	"github.com/docker/go-connections/nat"
 	"github.com/hibiken/asynq"
+	amqp "github.com/rabbitmq/amqp091-go"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -602,7 +603,10 @@ func startRabbitMQContainer(ctx context.Context) (testcontainers.Container, stri
 	req := testcontainers.ContainerRequest{
 		Image:        "rabbitmq:3-alpine",
 		ExposedPorts: []string{"5672/tcp"},
-		WaitingFor:   wait.ForListeningPort("5672/tcp").WithStartupTimeout(60 * time.Second),
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("5672/tcp"),
+			wait.ForLog("Server startup complete"),
+		).WithStartupTimeout(60 * time.Second),
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -621,7 +625,12 @@ func startRabbitMQContainer(ctx context.Context) (testcontainers.Container, stri
 		_ = container.Terminate(ctx)
 		return nil, "", err
 	}
-	return container, "amqp://guest:guest@" + net.JoinHostPort(host, port.Port()) + "/", nil
+	url := "amqp://guest:guest@" + net.JoinHostPort(host, port.Port()) + "/"
+	if err := waitForRabbitMQReady(url, 30*time.Second); err != nil {
+		_ = container.Terminate(ctx)
+		return nil, "", err
+	}
+	return container, url, nil
 }
 
 func waitForMySQLReady(addr string, timeout time.Duration) error {
@@ -664,6 +673,33 @@ func waitForPostgresReady(addr string, timeout time.Duration) error {
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("postgres not ready: %w", lastErr)
+}
+
+func waitForRabbitMQReady(url string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, err := amqp.Dial(url)
+		if err == nil {
+			ch, chErr := conn.Channel()
+			if chErr == nil {
+				_, qErr := ch.QueueDeclare("healthcheck", false, true, false, false, nil)
+				_ = ch.Close()
+				_ = conn.Close()
+				if qErr == nil {
+					return nil
+				}
+				lastErr = qErr
+			} else {
+				lastErr = chErr
+				_ = conn.Close()
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("rabbitmq not ready: %w", lastErr)
 }
 
 func newRedisInspector(t *testing.T) *asynq.Inspector {
