@@ -56,10 +56,9 @@ jobs:
         run: go test -coverprofile=coverage.txt ./...
 
       - name: Upload results to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
 
   race:
     runs-on: ubuntu-latest
