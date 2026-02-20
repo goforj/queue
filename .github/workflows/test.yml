@@ -70,7 +70,6 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
           verbose: true
-          flags: unit
           name: unit-coverage
           slug: goforj/queue
           override_commit: ${{ github.sha }}
