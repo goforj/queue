@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// localQueue is an in-memory queue implementation supporting sync and workerpool drivers.
 type localQueue struct {
 	driver       Driver
 	cfg          WorkerpoolConfig
