@@ -4,6 +4,10 @@ codecov:
     # Publish the head report without waiting for every matrix leg to upload.
     after_n_builds: 1
     wait_for_ci: false
+  # Go coverprofiles include module import paths; map them to repo paths.
+  fixes:
+    - "github.com/goforj/queue/::"
+    - "/home/runner/work/queue/queue/::"
 
 coverage:
   status:
