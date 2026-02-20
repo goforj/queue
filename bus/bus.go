@@ -81,8 +81,11 @@ func WithMiddleware(middlewares ...Middleware) Option {
 //	b.Register("monitor:poll", func(context.Context, bus.Context) error { return nil })
 //	_ = b.StartWorkers(context.Background())
 //	defer b.Shutdown(context.Background())
-//	_, _ = b.Dispatch(context.Background(), bus.NewJob("monitor:poll", map[string]string{
-//		"url": "https://goforj.dev/health",
+//	type PollPayload struct {
+//		URL string `json:"url"`
+//	}
+//	_, _ = b.Dispatch(context.Background(), bus.NewJob("monitor:poll", PollPayload{
+//		URL: "https://goforj.dev/health",
 //	}))
 func New(q queue.Queue, opts ...Option) (Bus, error) {
 	return NewWithStore(q, NewMemoryStore(), opts...)
@@ -172,10 +175,19 @@ func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error)
 //
 // Example: dispatch chain
 //
+//	type PollPayload struct {
+//		URL string `json:"url"`
+//	}
+//	type DownsamplePayload struct {
+//		Window string `json:"window"`
+//	}
+//	type AlertPayload struct {
+//		Severity string `json:"severity"`
+//	}
 //	chainID, _ := b.Chain(
-//		bus.NewJob("monitor:poll", map[string]string{"url": "https://goforj.dev/health"}),
-//		bus.NewJob("monitor:downsample", map[string]any{"window": "5m"}),
-//		bus.NewJob("monitor:alert", map[string]any{"severity": "critical"}),
+//		bus.NewJob("monitor:poll", PollPayload{URL: "https://goforj.dev/health"}),
+//		bus.NewJob("monitor:downsample", DownsamplePayload{Window: "5m"}),
+//		bus.NewJob("monitor:alert", AlertPayload{Severity: "critical"}),
 //	).OnQueue("monitor-critical").
 //		Catch(func(context.Context, bus.ChainState, error) error { return nil }).
 //		Finally(func(context.Context, bus.ChainState) error { return nil }).
@@ -190,9 +202,12 @@ func (r *runtime) Chain(jobs ...Job) ChainBuilder {
 //
 // Example: dispatch batch
 //
+//	type PollPayload struct {
+//		URL string `json:"url"`
+//	}
 //	batchID, _ := b.Batch(
-//		bus.NewJob("monitor:poll", map[string]string{"url": "https://a"}),
-//		bus.NewJob("monitor:poll", map[string]string{"url": "https://b"}),
+//		bus.NewJob("monitor:poll", PollPayload{URL: "https://a"}),
+//		bus.NewJob("monitor:poll", PollPayload{URL: "https://b"}),
 //	).Name("monitor sweep").
 //		OnQueue("monitor-scan").
 //		AllowFailures().
