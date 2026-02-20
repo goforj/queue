@@ -349,85 +349,106 @@ func selectPackage(pkgs map[string]*ast.Package) (string, error) {
 //
 
 func renderAPI(funcs []*FuncDoc) string {
-	byGroup := map[string][]*FuncDoc{}
-
+	byPackageGroup := map[string]map[string][]*FuncDoc{}
 	for _, fd := range funcs {
-		byGroup[fd.Group] = append(byGroup[fd.Group], fd)
+		if byPackageGroup[fd.Package] == nil {
+			byPackageGroup[fd.Package] = map[string][]*FuncDoc{}
+		}
+		byPackageGroup[fd.Package][fd.Group] = append(byPackageGroup[fd.Package][fd.Group], fd)
 	}
 
-	groupNames := make([]string, 0, len(byGroup))
-	for g := range byGroup {
-		groupNames = append(groupNames, g)
+	packages := make([]string, 0, len(byPackageGroup))
+	for p := range byPackageGroup {
+		packages = append(packages, p)
 	}
-	sort.Strings(groupNames)
+	sort.Strings(packages)
 
 	var buf bytes.Buffer
 
 	// ---------------- Index ----------------
 	buf.WriteString("## API Index\n\n")
-	buf.WriteString("| Group | Functions |\n")
-	buf.WriteString("|------:|:-----------|\n")
+	for _, pkg := range packages {
+		buf.WriteString("### " + pkg + "\n\n")
+		buf.WriteString("| Group | Functions |\n")
+		buf.WriteString("|------:|:-----------|\n")
 
-	for _, group := range groupNames {
-		sort.Slice(byGroup[group], func(i, j int) bool {
-			return byGroup[group][i].Name < byGroup[group][j].Name
-		})
-
-		var links []string
-		for _, fn := range byGroup[group] {
-			anchor := strings.ToLower(fn.Package + "-" + fn.Name)
-			label := fn.Package + "." + fn.Name
-			links = append(links, fmt.Sprintf("[%s](#%s)", label, anchor))
+		groupNames := make([]string, 0, len(byPackageGroup[pkg]))
+		for g := range byPackageGroup[pkg] {
+			groupNames = append(groupNames, g)
 		}
+		sort.Strings(groupNames)
 
-		buf.WriteString(fmt.Sprintf("| **%s** | %s |\n",
-			group,
-			strings.Join(links, " "),
-		))
+		for _, group := range groupNames {
+			sort.Slice(byPackageGroup[pkg][group], func(i, j int) bool {
+				return byPackageGroup[pkg][group][i].Name < byPackageGroup[pkg][group][j].Name
+			})
+
+			var links []string
+			for _, fn := range byPackageGroup[pkg][group] {
+				anchor := strings.ToLower(fn.Package + "-" + fn.Name)
+				label := fn.Package + "." + fn.Name
+				links = append(links, fmt.Sprintf("[%s](#%s)", label, anchor))
+			}
+
+			buf.WriteString(fmt.Sprintf("| **%s** | %s |\n",
+				group,
+				strings.Join(links, " "),
+			))
+		}
+		buf.WriteString("\n")
 	}
 
 	buf.WriteString("\n\n")
 
 	// ---------------- Details ----------------
-	for _, group := range groupNames {
-		buf.WriteString("## " + group + "\n\n")
+	for _, pkg := range packages {
+		buf.WriteString("## " + pkg + " API\n\n")
+		groupNames := make([]string, 0, len(byPackageGroup[pkg]))
+		for g := range byPackageGroup[pkg] {
+			groupNames = append(groupNames, g)
+		}
+		sort.Strings(groupNames)
 
-		for _, fn := range byGroup[group] {
-			anchor := strings.ToLower(fn.Package + "-" + fn.Name)
+		for _, group := range groupNames {
+			buf.WriteString("### " + group + "\n\n")
+			for _, fn := range byPackageGroup[pkg][group] {
+				anchor := strings.ToLower(fn.Package + "-" + fn.Name)
 
-			header := fn.Package + "." + fn.Name
-			if fn.Behavior != "" {
-				header += " · " + fn.Behavior
-			}
-			if fn.Fluent == "true" {
-				header += " · fluent"
-			}
-
-			buf.WriteString(fmt.Sprintf("### <a id=\"%s\"></a>%s\n\n", anchor, header))
-
-			if fn.Description != "" {
-				buf.WriteString(fn.Description + "\n\n")
-			}
-
-			for _, ex := range fn.Examples {
-				if ex.Label != "" && len(fn.Examples) > 1 {
-					buf.WriteString(fmt.Sprintf("_Example: %s_\n\n", ex.Label))
+				header := fn.Package + "." + fn.Name
+				if fn.Behavior != "" {
+					header += " · " + fn.Behavior
+				}
+				if fn.Fluent == "true" {
+					header += " · fluent"
 				}
 
-				buf.WriteString("```go\n")
-				for _, line := range strings.Split(ex.Code, "\n") {
-					trimmed := strings.TrimSpace(line)
-					if trimmed == "" {
-						continue
-					}
-					if strings.HasPrefix(trimmed, "_ =") {
-						continue
-					}
-					buf.WriteString(line + "\n")
+				buf.WriteString(fmt.Sprintf("#### <a id=\"%s\"></a>%s\n\n", anchor, header))
+
+				if fn.Description != "" {
+					buf.WriteString(fn.Description + "\n\n")
 				}
-				buf.WriteString("```\n\n")
+
+				for _, ex := range fn.Examples {
+					if ex.Label != "" && len(fn.Examples) > 1 {
+						buf.WriteString(fmt.Sprintf("_Example: %s_\n\n", ex.Label))
+					}
+
+					buf.WriteString("```go\n")
+					for _, line := range strings.Split(ex.Code, "\n") {
+						trimmed := strings.TrimSpace(line)
+						if trimmed == "" {
+							continue
+						}
+						if strings.HasPrefix(trimmed, "_ =") {
+							continue
+						}
+						buf.WriteString(line + "\n")
+					}
+					buf.WriteString("```\n\n")
+				}
 			}
 		}
+		buf.WriteString("\n")
 	}
 
 	return strings.TrimRight(buf.String(), "\n")
