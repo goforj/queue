@@ -65,7 +65,6 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.txt
-          flags: unit
           name: unit-coverage
           disable_search: true
           verbose: true
@@ -126,7 +125,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage-integration-${{ matrix.backend }}.txt
-          flags: integration,${{ matrix.backend }}
+          flags: integration
           name: integration-${{ matrix.backend }}
           disable_search: true
           verbose: true
