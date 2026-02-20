@@ -55,12 +55,20 @@ jobs:
       - name: Run unit tests with coverage
         run: go test ./... -covermode=atomic -coverprofile=coverage.txt
 
+      - name: Verify unit coverage profile
+        run: |
+          test -s coverage.txt
+          echo "unit coverage lines: $(wc -l < coverage.txt)"
+          head -n 5 coverage.txt
+
       - name: Upload results to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.txt
           flags: unit
           name: unit-coverage
+          disable_search: true
+          verbose: true
           fail_ci_if_error: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -107,12 +115,21 @@ jobs:
           INTEGRATION_BACKEND: ${{ matrix.backend }}
         run: go test -tags integration ./... -covermode=atomic -coverprofile=coverage-integration-${{ matrix.backend }}.txt
 
+      - name: Verify integration coverage profile
+        run: |
+          file="coverage-integration-${{ matrix.backend }}.txt"
+          test -s "$file"
+          echo "integration (${{ matrix.backend }}) coverage lines: $(wc -l < "$file")"
+          head -n 5 "$file"
+
       - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage-integration-${{ matrix.backend }}.txt
           flags: integration,${{ matrix.backend }}
           name: integration-${{ matrix.backend }}
+          disable_search: true
+          verbose: true
           fail_ci_if_error: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
