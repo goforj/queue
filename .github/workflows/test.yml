@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Verify integration scenarios contract coverage
         run: .github/scripts/check_integration_scenarios_contract.sh
@@ -53,20 +55,28 @@ jobs:
         run: go test ./... -v
 
       - name: Run unit tests with coverage
-        run: go test -coverprofile=coverage.txt ./...
+        run: go test -coverprofile=coverage.raw.txt ./...
+
+      - name: Normalize Go coverage paths
+        run: |
+          sed -E 's#^github.com/goforj/queue/##' coverage.raw.txt > coverage.txt
+          test -s coverage.txt
+          head -n 5 coverage.txt
 
       - name: Upload results to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v4
         with:
           files: ./coverage.txt
           disable_search: true
           fail_ci_if_error: true
           verbose: true
+          flags: unit
           name: unit-coverage
+          slug: goforj/queue
           override_commit: ${{ github.sha }}
           override_branch: ${{ github.ref_name }}
+          token: ${{ secrets.CODECOV_TOKEN }}
         env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
 
   race:
