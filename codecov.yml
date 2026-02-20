@@ -1,5 +1,9 @@
 codecov:
   require_ci_to_pass: true
+  notify:
+    # Publish the head report without waiting for every matrix leg to upload.
+    after_n_builds: 1
+    wait_for_ci: false
 
 coverage:
   status:
