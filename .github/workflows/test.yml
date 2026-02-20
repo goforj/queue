@@ -57,8 +57,17 @@ jobs:
 
       - name: Upload results to Codecov
         uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.txt
+          disable_search: true
+          fail_ci_if_error: true
+          verbose: true
+          name: unit-coverage
+          override_commit: ${{ github.sha }}
+          override_branch: ${{ github.ref_name }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   race:
     runs-on: ubuntu-latest
