@@ -77,6 +77,7 @@ func run() error {
 //
 
 type FuncDoc struct {
+	Package     string
 	Name        string
 	Group       string
 	Behavior    string
@@ -105,11 +106,36 @@ var (
 )
 
 func parseFuncs(root string) ([]*FuncDoc, error) {
+	dirs := []string{
+		root,
+		filepath.Join(root, "bus"),
+	}
+
+	var out []*FuncDoc
+	for _, dir := range dirs {
+		funcs, err := parseFuncsInDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, funcs...)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Package == out[j].Package {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Package < out[j].Package
+	})
+
+	return out, nil
+}
+
+func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
 	fset := token.NewFileSet()
 
 	pkgs, err := parser.ParseDir(
 		fset,
-		root,
+		dir,
 		func(info os.FileInfo) bool {
 			return !strings.HasSuffix(info.Name(), "_test.go")
 		},
@@ -143,6 +169,7 @@ func parseFuncs(root string) ([]*FuncDoc, error) {
 			}
 
 			fd := &FuncDoc{
+				Package:     pkgName,
 				Name:        fn.Name.Name,
 				Group:       extractGroup(fn.Doc),
 				Behavior:    extractBehavior(fn.Doc),
@@ -151,10 +178,11 @@ func parseFuncs(root string) ([]*FuncDoc, error) {
 				Examples:    extractExamples(fset, fn),
 			}
 
-			if existing, ok := funcs[fd.Name]; ok {
+			key := fd.Package + "." + fd.Name
+			if existing, ok := funcs[key]; ok {
 				existing.Examples = append(existing.Examples, fd.Examples...)
 			} else {
-				funcs[fd.Name] = fd
+				funcs[key] = fd
 			}
 		}
 	}
@@ -347,7 +375,9 @@ func renderAPI(funcs []*FuncDoc) string {
 
 		var links []string
 		for _, fn := range byGroup[group] {
-			links = append(links, fmt.Sprintf("[%s](#%s)", fn.Name, strings.ToLower(fn.Name)))
+			anchor := strings.ToLower(fn.Package + "-" + fn.Name)
+			label := fn.Package + "." + fn.Name
+			links = append(links, fmt.Sprintf("[%s](#%s)", label, anchor))
 		}
 
 		buf.WriteString(fmt.Sprintf("| **%s** | %s |\n",
@@ -363,9 +393,9 @@ func renderAPI(funcs []*FuncDoc) string {
 		buf.WriteString("## " + group + "\n\n")
 
 		for _, fn := range byGroup[group] {
-			anchor := strings.ToLower(fn.Name)
+			anchor := strings.ToLower(fn.Package + "-" + fn.Name)
 
-			header := fn.Name
+			header := fn.Package + "." + fn.Name
 			if fn.Behavior != "" {
 				header += " · " + fn.Behavior
 			}
