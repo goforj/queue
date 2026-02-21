@@ -440,7 +440,7 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 
 func startRedisContainer(ctx context.Context) (testcontainers.Container, string, error) {
 	req := testcontainers.ContainerRequest{
-		Image:        "redis:7-alpine",
+		Image:        "redis:7",
 		ExposedPorts: []string{"6379/tcp"},
 		WaitingFor:   wait.ForListeningPort("6379/tcp").WithStartupTimeout(30 * time.Second),
 	}
@@ -506,7 +506,7 @@ func startMySQLContainer(ctx context.Context) (testcontainers.Container, string,
 
 func startPostgresContainer(ctx context.Context) (testcontainers.Container, string, error) {
 	req := testcontainers.ContainerRequest{
-		Image:        "postgres:16-alpine",
+		Image:        "postgres:16",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "queue",
@@ -545,7 +545,7 @@ func startPostgresContainer(ctx context.Context) (testcontainers.Container, stri
 
 func startNATSContainer(ctx context.Context) (testcontainers.Container, string, error) {
 	req := testcontainers.ContainerRequest{
-		Image:        "nats:2-alpine",
+		Image:        "nats:2",
 		ExposedPorts: []string{"4222/tcp"},
 		WaitingFor:   wait.ForListeningPort("4222/tcp").WithStartupTimeout(30 * time.Second),
 	}
@@ -601,7 +601,7 @@ func startSQSContainer(ctx context.Context) (testcontainers.Container, string, e
 
 func startRabbitMQContainer(ctx context.Context) (testcontainers.Container, string, error) {
 	req := testcontainers.ContainerRequest{
-		Image:        "rabbitmq:3-alpine",
+		Image:        "rabbitmq:3",
 		ExposedPorts: []string{"5672/tcp"},
 		WaitingFor: wait.ForAll(
 			wait.ForListeningPort("5672/tcp"),
