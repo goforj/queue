@@ -26,555 +26,239 @@
   <img src="https://img.shields.io/badge/options-delay%20|%20backoff%20|%20timeout%20|%20retry%20|%20unique%20|%20queue-brightgreen" alt="Options covered">
 </p>
 
-## What queue is
-
-queue is a backend-agnostic job queue runtime. Your application code depends on `queue.Queue` and fluent `queue.Task` values. The driver decides whether work runs via Redis/Asynq, a SQL table, NATS, SQS, RabbitMQ, an in-process worker pool, or synchronously in the caller.
-
-Current matrix trust status and known integration gaps are tracked in `docs/integration-scenarios.md`.
-
-## Drivers
-
-| Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout |
-| ---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards all dispatched tasks; useful for testing/disabled queue modes. | - | - | - | - | - | - |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Simplest deterministic test mode; effectively the "no external queue" option. | - | - | - | ✓ | - | ✓ |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Fast local async testing without external infra. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | Works with `sqlite`, `mysql`, `pgx`; good local/prod parity option. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend; backoff maps to Asynq limitations (`ErrBackoffUnsupported`). | ✓ | ✓ | ✓ | ✓ | - | ✓ |
-| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | NATS transport with queue-subject routing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport; supports endpoint override for localstack/testcontainers. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | Uses RabbitMQ for transport and worker consumption. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-
 ## Installation
 
 ```bash
 go get github.com/goforj/queue
 ```
 
-## Quick Start
+## Start Here (Bus)
+
+For most applications, use `bus` as the primary API and treat `queue` as the backend runtime abstraction.
 
 ```go
 import (
     "context"
-    "time"
 
     "github.com/goforj/queue"
+    "github.com/goforj/queue/bus"
 )
 
 type EmailPayload struct {
     ID int `json:"id"`
-    To string `json:"to"`
-}
-
-func emailHandler(ctx context.Context, task queue.Task) error {
-    _ = ctx
-    var payload EmailPayload
-    if err := task.Bind(&payload); err != nil {
-        return err
-    }
-    _ = payload
-    return nil
 }
 
 func main() {
-    // Create queue runtime.
     q, _ := queue.NewWorkerpool()
+    b, _ := bus.New(q)
 
-    // Register handler on queue runtime.
-    q.Register("emails:send", emailHandler)
+    b.Register("emails:send", func(ctx context.Context, jc bus.Context) error {
+        var payload EmailPayload
+        if err := jc.Bind(&payload); err != nil {
+            return err
+        }
+        return nil
+    })
 
-    // Start workers (2 concurrent workers).
-    _ = q.Workers(2).StartWorkers(context.Background())
-    defer q.Shutdown(context.Background())
+    _ = b.StartWorkers(context.Background())
+    defer b.Shutdown(context.Background())
 
-    // Build a task with payload and dispatch behavior.
-    task := queue.NewTask("emails:send").
-        Payload(EmailPayload{
-            ID: 123,
-            To: "user@example.com",
-        }).
-        OnQueue("critical").
-        Delay(5 * time.Second).
-        Timeout(20 * time.Second).
-        Retry(3)
-
-    // Dispatch the task.
-    _ = q.Dispatch(task)
+    _, _ = b.Dispatch(context.Background(),
+        bus.NewJob("emails:send", EmailPayload{ID: 123}),
+    )
 }
 ```
 
-Switch to Redis without changing job code:
+### When To Use Bus vs Queue
+
+| Use case | Recommendation |
+| --- | --- |
+| Application workflows, chain/batch orchestration, middleware, callbacks | Use `bus` |
+| Low-level queue runtime control only (`Task`, raw dispatch/register lifecycle) | Use `queue` directly |
+| Unsure which one to pick | Start with `bus` and swap queue backends underneath |
+
+## Drivers
+
+| Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout |
+| ---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched tasks; useful for disabled queue modes and smoke tests. | - | - | - | - | - | - |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | ✓ | - | ✓ |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | Durable queue with SQL storage. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend (Asynq semantics). | ✓ | ✓ | ✓ | ✓ | - | ✓ |
+| <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | NATS transport with queue-subject routing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+## Bus Quickstart
+
+`bus` is the app-level workflow layer.
+
+1. `Register` handlers by job type.
+2. `Dispatch` one job, or compose `Chain(...)` / `Batch(...)`.
+3. Add options like `WithMiddleware`, `WithObserver`, and `WithStore`.
+
+### Chaining middleware
 
 ```go
-q, _ := queue.NewRedis("127.0.0.1:6379")
-```
+audit := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
+    return next(ctx, jc)
+})
 
-Use SQL for a durable local queue runtime:
+skipHealth := bus.SkipWhen{
+    Predicate: func(_ context.Context, jc bus.Context) bool { return jc.JobType == "health:ping" },
+}
 
-```go
-q, _ := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
-```
+fatalize := bus.FailOnError{
+    When: func(err error) bool { return err != nil },
+}
 
-## Testing modes
-
-- `null`: drop-only dispatch path when you want queue calls to no-op in tests/dev.
-- `sync`: deterministic unit tests with inline execution and no external broker.
-- `workerpool`: async local behavior tests without external infrastructure.
-- `integration` tag + backend matrix: full broker/database realism (Redis, SQL, NATS, SQS, RabbitMQ).
-
-Use `null` when you only need to exercise dispatch call paths without execution.
-Use `sync` when you need handler logic to run in the same test/process deterministically.
-
-### Fake queue assertions
-
-```go
-fake := queue.NewFake()
-fake.AssertNothingDispatched(t)
-
-// exercise code that dispatches jobs against fake
-_ = fake.Dispatch(
-	queue.NewTask("orders:ship").
-		Payload(map[string]any{"id": 42}).
-		OnQueue("orders"),
-)
-
-fake.AssertDispatched(t, "orders:ship")
-fake.AssertDispatchedOn(t, "orders", "orders:ship")
-fake.AssertDispatchedTimes(t, "orders:ship", 1)
-fake.AssertNotDispatched(t, "orders:cancel")
-fake.AssertCount(t, 1)
-```
-
-## Backend end-to-end snippets
-
-```go
-// Null: dispatch is accepted and dropped.
-q, _ := queue.NewNull()
-_ = q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(map[string]any{"id": 1}).
-		OnQueue("default"),
-)
-```
-
-```go
-// Sync: register handler and execute inline on dispatch.
-q, _ := queue.NewSync()
-q.Register("emails:send", emailHandler)
-_ = q.Workers(1).StartWorkers(context.Background())
-defer q.Shutdown(context.Background())
-_ = q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
-		OnQueue("default"),
-)
-```
-
-```go
-// Workerpool: async local workers.
 q, _ := queue.NewWorkerpool()
-q.Register("emails:send", emailHandler)
-_ = q.Workers(2).StartWorkers(context.Background())
-defer q.Shutdown(context.Background())
-_ = q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
-		OnQueue("default"),
-)
+b, _ := bus.New(q, bus.WithMiddleware(audit, skipHealth, fatalize))
+_ = b
 ```
 
-```go
-// Database: durable SQL-backed queue.
-q, _ := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
-q.Register("emails:send", emailHandler)
-_ = q.Workers(2).StartWorkers(context.Background())
-defer q.Shutdown(context.Background())
-_ = q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
-		OnQueue("default"),
-)
-```
+## Core Concepts
 
-```go
-// Redis: broker-backed async queue.
-q, _ := queue.NewRedis("127.0.0.1:6379")
-q.Register("emails:send", emailHandler)
-_ = q.Workers(2).StartWorkers(context.Background())
-defer q.Shutdown(context.Background())
-_ = q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
-		OnQueue("default"),
-)
-```
+| Concept | Purpose | Primary API |
+| --- | --- | --- |
+| Job | Typed work unit for app handlers | `bus.NewJob`, `Dispatch` |
+| Chain | Ordered workflow (A then B then C) | `Chain(...).Dispatch(...)` |
+| Batch | Parallel workflow with callbacks | `Batch(...).Then/Catch/Finally` |
+| Middleware | Cross-cutting execution policy | `WithMiddleware(...)` |
+| Events | Lifecycle hooks and observability | `WithObserver(...)` |
+| Backends | Driver/runtime transport | `queue.New*` constructors |
 
-```go
-// NATS: broker-backed async queue.
-q, _ := queue.NewNATS("nats://127.0.0.1:4222")
-q.Register("emails:send", emailHandler)
-_ = q.Workers(2).StartWorkers(context.Background())
-defer q.Shutdown(context.Background())
-_ = q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
-		OnQueue("default"),
-)
-```
+## Queue Backends
 
-```go
-// SQS: broker-backed async queue.
-q, _ := queue.NewSQS("us-east-1")
-q.Register("emails:send", emailHandler)
-_ = q.Workers(2).StartWorkers(context.Background())
-defer q.Shutdown(context.Background())
-_ = q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
-		OnQueue("default"),
-)
-```
+Use `queue` constructors to choose transport/runtime. Your bus handlers and jobs remain unchanged.
 
-```go
-// RabbitMQ: broker-backed async queue.
-q, _ := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
-q.Register("emails:send", emailHandler)
-_ = q.Workers(2).StartWorkers(context.Background())
-defer q.Shutdown(context.Background())
-_ = q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(EmailPayload{ID: 1, To: "user@example.com"}).
-		OnQueue("default"),
-)
-```
+| Backend | Constructor |
+| --- | --- |
+| In-process sync | `queue.NewSync()` |
+| In-process worker pool | `queue.NewWorkerpool()` |
+| SQL durable queue | `queue.NewDatabase(driver, dsn)` |
+| Redis/Asynq | `queue.NewRedis(addr)` |
+| NATS | `queue.NewNATS(url)` |
+| SQS | `queue.NewSQS(region)` |
+| RabbitMQ | `queue.NewRabbitMQ(url)` |
+| Drop-only (disabled mode) | `queue.NewNull()` |
 
-## Task builder options
+## Observability
 
-```go
-task := queue.NewTask("emails:send").
-	// Payload can be bytes, structs, maps, or JSON-marshalable values.
-	// Default payload is empty.
-	Payload(map[string]any{"id": 123, "to": "user@example.com"}).
-	// OnQueue sets the queue name.
-	// Default is empty; broker-style drivers expect an explicit queue.
-	OnQueue("default").
-	// Timeout sets per-task execution timeout.
-	// Default is unset; some drivers may apply driver/runtime defaults.
-	Timeout(20 * time.Second).
-	// Retry sets max retries.
-	// Default is 0, which means one total attempt.
-	Retry(3).
-	// Backoff sets retry delay.
-	// Default is unset; Redis dispatch returns ErrBackoffUnsupported.
-	Backoff(500 * time.Millisecond).
-	// Delay schedules first execution in the future.
-	// Default is 0 (run immediately).
-	Delay(2 * time.Second).
-	// UniqueFor deduplicates Type+Payload for a TTL window.
-	// Default is 0 (no dedupe).
-	UniqueFor(45 * time.Second)
-
-_ = q.Dispatch(task)
-```
-
-## Benchmarks
-
-```go
-go test ./docs/bench -tags benchrender
-```
-
-<!-- bench:embed:start -->
-
-### Integration
-
-| Driver | N | ns/op | B/op | allocs/op |
-|:------|---:|-----:|-----:|---------:|
-| mysql | 579 | 1959891 | 9295 | 151 |
-| nats | 1631804 | 727.8 | 1293 | 14 |
-| postgres | 1227 | 1107497 | 16162 | 239 |
-| rabbitmq | 8144 | 143554 | 4575 | 112 |
-| redis | 13513 | 87141 | 2112 | 33 |
-| sqs | 1143 | 1019487 | 65594 | 758 |
-
-### Local
-
-| Driver | N | ns/op | B/op | allocs/op |
-|:------|---:|-----:|-----:|---------:|
-| database-sqlite | 6452 | 395034 | 3345 | 87 |
-| null | 26300509 | 47.63 | 128 | 1 |
-| sync | 3980317 | 299.3 | 408 | 6 |
-| workerpool | 1829486 | 635.2 | 456 | 7 |
-
-<!-- bench:embed:end -->
-
-## Observability quick guide
-
-Attach an observer when creating a queue. Use `StatsCollector` for in-memory counters and throughput windows.
+Use `queue.Observer` implementations to capture normalized runtime events across drivers.
 
 ```go
 collector := queue.NewStatsCollector()
-q, _ := queue.New(queue.Config{
-	Driver:    queue.DriverRedis,
-	RedisAddr: "127.0.0.1:6379",
-	Observer:  collector,
-})
+observer := queue.MultiObserver(
+    collector,
+    queue.ObserverFunc(func(event queue.Event) {
+        _ = event.Kind
+    }),
+)
 
-snapshot, _ := queue.SnapshotQueue(context.Background(), q, collector)
-counters, _ := snapshot.Queue("default")
-throughput, _ := snapshot.Throughput("default")
-
-fmt.Printf("%+v\n", counters)
-fmt.Printf("hour=%+v\n", throughput.Hour)
+q, _ := queue.NewWorkerpool()
+b, _ := bus.New(q, bus.WithObserver(observer))
+_ = b
 ```
-
-`SnapshotQueue` prefers native driver stats when available and falls back to the collector snapshot when a driver does not expose native stats.
-Use `queue.SupportsNativeStats(q)` and `queue.SupportsPause(q)` to branch runtime behavior safely.
 
 ### Distributed counters and source of truth
 
-In distributed systems, `Observer` + `StatsCollector` counters are process-local and in-memory.
-They are useful for local insight and per-worker telemetry, but they are not a globally consistent source of truth by themselves.
-
-Use this rule:
-
-- Drivers with native stats (`Sync`, `Workerpool`, `Database`, `Redis`): use `SnapshotQueue(...)` and treat driver-native stats as authoritative.
-- Drivers without native stats (`NATS`, `SQS`, `RabbitMQ`, `Null`): treat observer events as telemetry signals and aggregate them centrally (metrics/log pipeline) for cluster-wide numbers.
-
-Practical guidance:
-
-- Always keep an observer attached for eventing/alerting.
-- For cluster dashboards, prefer backend-native stats when available.
-- For non-native backends, publish observer events to centralized metrics/logging and compute totals there.
+1. `StatsCollector` counters are process-local and event-driven.
+2. In multi-process deployments, aggregate metrics externally (OTel/Prometheus/etc.).
+3. Prefer backend-native stats when available.
+4. `queue.SupportsNativeStats(q)` indicates native driver snapshot support.
+5. `queue.SnapshotQueue(ctx, q, collector, queueName)` merges native + collector where possible.
 
 ### Compose observers
 
-Use `queue.MultiObserver(...)` when you want multiple observer behaviors at once, such as logging plus stats collection.
-
 ```go
+events := make(chan queue.Event, 100)
 collector := queue.NewStatsCollector()
-
-loggerObserver := queue.ObserverFunc(func(event queue.Event) {
-	// send to your logger here
-	_ = event
-})
-
-q, _ := queue.New(queue.Config{
-	Driver:    queue.DriverRedis,
-	RedisAddr: "127.0.0.1:6379",
-	Observer:  queue.MultiObserver(loggerObserver, collector),
-})
-
-// SnapshotQueue can still use the same collector instance.
-snapshot, _ := queue.SnapshotQueue(context.Background(), q, collector)
-_, _ = snapshot.Queue("default")
-```
-
-### Logging middleware hook
-
-Use `Observer` as your middleware hook for structured logging.
-Observers receive events for the entire runtime (all queues and task types).
-To observe only specific tasks, filter by `event.TaskType` (and/or `event.Queue`) inside your observer.
-This example logs every event kind with human-readable messages.
-
-```go
-logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-observer := queue.ObserverFunc(func(event queue.Event) {
-	attemptInfo := fmt.Sprintf("attempt=%d/%d", event.Attempt, event.MaxRetry+1)
-	taskInfo := fmt.Sprintf("task=%s key=%s queue=%s driver=%s", event.TaskType, event.TaskKey, event.Queue, event.Driver)
-
-	switch event.Kind {
-	case queue.EventEnqueueAccepted:
-		logger.Info("Accepted dispatch", "msg", fmt.Sprintf("Accepted %s", taskInfo), "scheduled", event.Scheduled, "at", event.Time.Format(time.RFC3339Nano))
-	case queue.EventEnqueueRejected:
-		logger.Error("Dispatch failed", "msg", fmt.Sprintf("Rejected %s", taskInfo), "error", event.Err)
-	case queue.EventEnqueueDuplicate:
-		logger.Warn("Skipped duplicate job", "msg", fmt.Sprintf("Duplicate %s", taskInfo))
-	case queue.EventEnqueueCanceled:
-		logger.Warn("Canceled dispatch", "msg", fmt.Sprintf("Canceled %s", taskInfo), "error", event.Err)
-	case queue.EventProcessStarted:
-		logger.Info("Started processing job", "msg", fmt.Sprintf("Started %s (%s)", taskInfo, attemptInfo), "at", event.Time.Format(time.RFC3339Nano))
-	case queue.EventProcessSucceeded:
-		logger.Info("Processed job", "msg", fmt.Sprintf("Processed %s in %s (%s)", taskInfo, event.Duration, attemptInfo))
-	case queue.EventProcessFailed:
-		logger.Error("Processing failed", "msg", fmt.Sprintf("Failed %s after %s (%s)", taskInfo, event.Duration, attemptInfo), "error", event.Err)
-	case queue.EventProcessRetried:
-		logger.Warn("Retrying job", "msg", fmt.Sprintf("Retry scheduled for %s (%s)", taskInfo, attemptInfo), "error", event.Err)
-	case queue.EventProcessArchived:
-		logger.Error("Archived failed job", "msg", fmt.Sprintf("Archived %s after final failure (%s)", taskInfo, attemptInfo), "error", event.Err)
-	case queue.EventQueuePaused:
-		logger.Info("Paused queue", "msg", fmt.Sprintf("Paused queue=%s driver=%s", event.Queue, event.Driver))
-	case queue.EventQueueResumed:
-		logger.Info("Resumed queue", "msg", fmt.Sprintf("Resumed queue=%s driver=%s", event.Queue, event.Driver))
-	default:
-		logger.Info("Queue event", "msg", fmt.Sprintf("kind=%s %s", event.Kind, taskInfo))
-	}
-})
+observer := queue.MultiObserver(
+    collector,
+    queue.ChannelObserver{
+        Events:     events,
+        DropIfFull: true,
+    },
+    queue.ObserverFunc(func(e queue.Event) {
+        _ = e
+    }),
+)
 
 q, _ := queue.New(queue.Config{
-	Driver:    queue.DriverRedis,
-	RedisAddr: "127.0.0.1:6379",
-	Observer:  observer,
+    Driver:   queue.DriverWorkerpool,
+    Observer: observer,
 })
+_ = q
 ```
-
-Example: only log one task type.
-
-```go
-observer := queue.ObserverFunc(func(event queue.Event) {
-	if event.TaskType != "emails:send" {
-		return
-	}
-	// log event...
-})
-```
-
-Example: hook only specific event kinds.
-
-```go
-observer := queue.ObserverFunc(func(event queue.Event) {
-	switch event.Kind {
-	case queue.EventProcessFailed, queue.EventProcessRetried, queue.EventProcessArchived:
-		// alerting / error logs
-	case queue.EventProcessSucceeded:
-		// success metrics
-	default:
-		return
-	}
-})
-```
-
-If you prefer zerolog, implement the same `Observer` interface in a small adapter and set it on `Config.Observer`.
 
 ### Observability capabilities by driver
 
-Legend: `✓` supported, `-` unsupported/fallback.
-
-| Driver | Native `Stats` | `PauseQueue`/`ResumeQueue` | Collector counters | Throughput windows |
-|:--|:--:|:--:|:--:|:--:|
-| Sync | ✓ | ✓ | ✓ | ✓ |
-| Workerpool | ✓ | ✓ | ✓ | ✓ |
-| Database (sqlite/mysql/postgres) | ✓ | - | ✓ | ✓ |
-| Redis | ✓ | ✓ | ✓ | ✓ |
-| NATS | - | - | ✓ | ✓ |
-| SQS | - | - | ✓ | ✓ |
-| RabbitMQ | - | - | ✓ | ✓ |
+| Driver | Native Stats | Pause/Resume |
+| --- | :---: | :---: |
+| null | - | - |
+| sync | - | - |
+| workerpool | - | - |
+| database | ✓ | - |
+| redis | ✓ | ✓ |
+| nats | - | - |
+| sqs | - | - |
+| rabbitmq | - | - |
 
 ### Observability events reference
 
-| Event | Meaning |
-|:--|:--|
-| EventEnqueueAccepted | Task was accepted by dispatch. |
-| EventEnqueueRejected | Task dispatch failed with an error. |
-| EventEnqueueDuplicate | Task dispatch was rejected as duplicate (`UniqueFor`). |
-| EventEnqueueCanceled | Dispatch was canceled by context timeout/cancelation. |
-| EventProcessStarted | Worker started handling a task. |
-| EventProcessSucceeded | Worker completed a task successfully. |
-| EventProcessFailed | Worker attempt failed. |
-| EventProcessRetried | Failed attempt was requeued for another attempt. |
-| EventProcessArchived | Failed task reached terminal failure (no retries left). |
-| EventQueuePaused | Queue consumption was paused. |
-| EventQueueResumed | Queue consumption was resumed. |
+| EventKind | Meaning |
+| --- | --- |
+| `enqueue_accepted` | Task accepted by driver for enqueue. |
+| `enqueue_rejected` | Task enqueue failed. |
+| `enqueue_duplicate` | Duplicate task rejected due to uniqueness key. |
+| `enqueue_canceled` | Context cancellation prevented enqueue. |
+| `process_started` | Worker began processing task. |
+| `process_succeeded` | Handler returned success. |
+| `process_failed` | Handler returned error. |
+| `process_retried` | Driver scheduled retry attempt. |
+| `process_archived` | Task moved to terminal failure state. |
+| `queue_paused` | Queue was paused (driver supports pause). |
+| `queue_resumed` | Queue was resumed. |
 
-For full field-level semantics and guarantees, see [`docs/events.md`](docs/events.md).
+## Testing By Audience
 
-## Runtime lifecycle
+### Application tests
+
+Use `bus.NewFake()` when testing app behavior around dispatch/chain/batch.
 
 ```go
-// Register handlers before starting workers.
-q.Register("emails:send", emailHandler)
-
-// Start workers with explicit concurrency.
-ctx := context.Background()
-_ = q.Workers(2).StartWorkers(ctx)
-
-// Dispatch jobs using either Dispatch(...) or DispatchCtx(...).
-_ = q.Dispatch(
-    queue.NewTask("emails:send").
-        Payload(EmailPayload{ID: 123, To: "user@example.com"}).
-        OnQueue("default"),
-)
-
-// Shutdown gracefully drains in-flight work (where supported).
-shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
-_ = q.Shutdown(shutdownCtx)
+fake := bus.NewFake()
+_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
+fake.AssertDispatched(nil, "emails:send")
 ```
 
-## Driver selection via config
+### Runtime/driver tests
 
-Use `queue.Config` with `New` for advanced/custom setups where you need multiple fields together.
-Use `q.Workers(n).StartWorkers(ctx)` to configure worker count before start.
+Use `queue.NewFake()` when testing queue/task-level dispatch semantics.
 
-### Config support matrix
+```go
+fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+fake.AssertDispatched(nil, "emails:send")
+```
 
-Common:
+## Queue Runtime (Lower Level)
 
-| Field | Notes |
-|--:|:--|
-| **Driver** | Selects backend. |
-| **DefaultQueue** | Default queue name used by helpers (task-level `OnQueue(...)` still controls dispatch target). |
+If you do not need workflow orchestration, use `queue.Queue` directly.
 
-Null:
+```go
+q, _ := queue.NewWorkerpool()
+q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+    return nil
+})
+_ = q.Workers(2).StartWorkers(context.Background())
+defer q.Shutdown(context.Background())
+_ = q.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+```
 
-| Field | Required | Notes |
-|--:|:--:|:--|
-| **Driver** | ✓ | `DriverNull` |
-
-Sync:
-
-| Field | Required | Notes |
-|--:|:--:|:--|
-| **Driver** | ✓ | `DriverSync` |
-
-Workerpool:
-
-| Field | Required | Notes |
-|--:|:--:|:--|
-| **Driver** | ✓ | `DriverWorkerpool` |
-
-Database:
-
-| Field | Required | Notes |
-|--:|:--:|:--|
-| **Driver** | ✓ | `DriverDatabase` |
-| **Database** | o | Existing `*sql.DB` handle; if set, driver/DSN can be omitted. |
-| **DatabaseDriver** | ✓* | `sqlite`, `mysql`, or `pgx` (required when `Database` is nil). |
-| **DatabaseDSN** | ✓* | Connection string (required when `Database` is nil). |
-| **DefaultQueue** | o | Queue default for DB-backed runtime. |
-
-Redis:
-
-| Field | Required | Notes |
-|--:|:--:|:--|
-| **Driver** | ✓ | `DriverRedis` |
-| **RedisAddr** | ✓ | Required for Redis queue dispatching. |
-| **RedisPassword** | o | Redis auth password. |
-| **RedisDB** | o | Redis logical DB index. |
-
-NATS:
-
-| Field | Required | Notes |
-|--:|:--:|:--|
-| **Driver** | ✓ | `DriverNATS` |
-| **NATSURL** | ✓ | Required for NATS queue dispatching. |
-
-SQS:
-
-| Field | Required | Notes |
-|--:|:--:|:--|
-| **Driver** | ✓ | `DriverSQS` |
-| **SQSRegion** | o | AWS region (defaults to `us-east-1`). |
-| **SQSEndpoint** | o | Override endpoint (localstack/testing). |
-| **SQSAccessKey** | o | Static access key. |
-| **SQSSecretKey** | o | Static secret key. |
-
-RabbitMQ:
-
-| Field | Required | Notes |
-|--:|:--:|:--|
-| **Driver** | ✓ | `DriverRabbitMQ` |
-| **RabbitMQURL** | ✓ | Required for RabbitMQ queue dispatching. |
-
+Matrix status and backend integration notes are tracked in `docs/integration-scenarios.md`.
 ## API reference
 
 The API section below is autogenerated; do not edit between the markers.
@@ -626,8 +310,8 @@ Catch registers a callback invoked when batch encounters a failure.
 
 ```go
 batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	Catch(func(context.Context, bus.BatchState, error) error { return nil }).
-	Dispatch(context.Background())
+    Catch(func(context.Context, bus.BatchState, error) error { return nil }).
+    Dispatch(context.Background())
 ```
 
 #### <a id="bus-batchbuilder-dispatch"></a>bus.BatchBuilder.Dispatch
@@ -644,8 +328,8 @@ Finally registers a callback invoked once when batch reaches terminal state.
 
 ```go
 batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	Finally(func(context.Context, bus.BatchState) error { return nil }).
-	Dispatch(context.Background())
+    Finally(func(context.Context, bus.BatchState) error { return nil }).
+    Dispatch(context.Background())
 ```
 
 #### <a id="bus-batchbuilder-name"></a>bus.BatchBuilder.Name
@@ -670,8 +354,8 @@ Progress registers a callback invoked as jobs complete.
 
 ```go
 batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	Progress(func(context.Context, bus.BatchState) error { return nil }).
-	Dispatch(context.Background())
+    Progress(func(context.Context, bus.BatchState) error { return nil }).
+    Dispatch(context.Background())
 ```
 
 #### <a id="bus-batchbuilder-then"></a>bus.BatchBuilder.Then
@@ -680,8 +364,8 @@ Then registers a callback invoked once when batch succeeds.
 
 ```go
 batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	Then(func(context.Context, bus.BatchState) error { return nil }).
-	Dispatch(context.Background())
+    Then(func(context.Context, bus.BatchState) error { return nil }).
+    Dispatch(context.Background())
 ```
 
 ### Chaining
@@ -692,8 +376,8 @@ Catch registers a callback invoked when chain execution fails.
 
 ```go
 chainID, _ := b.Chain(bus.NewJob("a", nil)).
-	Catch(func(context.Context, bus.ChainState, error) error { return nil }).
-	Dispatch(context.Background())
+    Catch(func(context.Context, bus.ChainState, error) error { return nil }).
+    Dispatch(context.Background())
 ```
 
 #### <a id="bus-chainbuilder-dispatch"></a>bus.ChainBuilder.Dispatch
@@ -710,8 +394,8 @@ Finally registers a callback invoked once when chain execution finishes.
 
 ```go
 chainID, _ := b.Chain(bus.NewJob("a", nil)).
-	Finally(func(context.Context, bus.ChainState) error { return nil }).
-	Dispatch(context.Background())
+    Finally(func(context.Context, bus.ChainState) error { return nil }).
+    Dispatch(context.Background())
 ```
 
 #### <a id="bus-chainbuilder-onqueue"></a>bus.ChainBuilder.OnQueue
@@ -720,8 +404,8 @@ OnQueue applies a default queue to chain jobs that do not set one.
 
 ```go
 chainID, _ := b.Chain(
-	bus.NewJob("a", nil),
-	bus.NewJob("b", nil),
+    bus.NewJob("a", nil),
+    bus.NewJob("b", nil),
 ).OnQueue("critical").Dispatch(context.Background())
 ```
 
@@ -737,10 +421,10 @@ b, _ := bus.New(q)
 b.Register("monitor:poll", func(context.Context, bus.Context) error { return nil })
 defer b.Shutdown(context.Background())
 type PollPayload struct {
-	URL string `json:"url"`
+    URL string `json:"url"`
 }
 _, _ = b.Dispatch(context.Background(), bus.NewJob("monitor:poll", PollPayload{
-	URL: "https://goforj.dev/health",
+    URL: "https://goforj.dev/health",
 }))
 ```
 
@@ -759,17 +443,17 @@ NewJob creates a typed bus job payload with optional fluent options.
 
 ```go
 type PollPayload struct {
-	URL string `json:"url"`
+    URL string `json:"url"`
 }
 job := bus.NewJob("monitor:poll", PollPayload{
-	URL: "https://goforj.dev/health",
+    URL: "https://goforj.dev/health",
 }).
-	OnQueue("monitor-critical").
-	Delay(2 * time.Second).
-	Timeout(15 * time.Second).
-	Retry(3).
-	Backoff(500 * time.Millisecond).
-	UniqueFor(30 * time.Second)
+    OnQueue("monitor-critical").
+    Delay(2 * time.Second).
+    Timeout(15 * time.Second).
+    Retry(3).
+    Backoff(500 * time.Millisecond).
+    UniqueFor(30 * time.Second)
 ```
 
 #### <a id="bus-newmemorystore"></a>bus.NewMemoryStore
@@ -786,8 +470,8 @@ NewSQLStore creates a SQL-backed orchestration store.
 
 ```go
 store, _ := bus.NewSQLStore(bus.SQLStoreConfig{
-	DriverName: "sqlite",
-	DSN:        "file:bus.db?_busy_timeout=5000",
+    DriverName: "sqlite",
+    DSN:        "file:bus.db?_busy_timeout=5000",
 })
 ```
 
@@ -809,8 +493,8 @@ MultiObserver fans out one event to multiple observers.
 
 ```go
 observer := bus.MultiObserver(
-	bus.ObserverFunc(func(event bus.Event) {}),
-	bus.ObserverFunc(func(event bus.Event) {}),
+    bus.ObserverFunc(func(event bus.Event) {}),
+    bus.ObserverFunc(func(event bus.Event) {}),
 )
 observer.Observe(bus.Event{Kind: bus.EventDispatchStarted})
 ```
@@ -841,7 +525,7 @@ Bind unmarshals the job payload into dst.
 
 ```go
 type PollPayload struct {
-	URL string `json:"url"`
+    URL string `json:"url"`
 }
 var payload PollPayload
 ```
@@ -902,7 +586,7 @@ Handle wraps matched errors as fatal errors to stop retries.
 
 ```go
 mw := bus.FailOnError{
-	When: func(err error) bool { return err != nil },
+    When: func(err error) bool { return err != nil },
 }
 ```
 
@@ -912,7 +596,7 @@ Handle calls the wrapped middleware function.
 
 ```go
 mw := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
-	return next(ctx, jc)
+    return next(ctx, jc)
 })
 ```
 
@@ -922,7 +606,7 @@ Handle applies limiter checks before executing the next handler.
 
 ```go
 mw := bus.RateLimit{
-	Key: func(context.Context, bus.Context) string { return "emails" },
+    Key: func(context.Context, bus.Context) string { return "emails" },
 }
 ```
 
@@ -940,7 +624,7 @@ Handle skips job execution when Predicate returns true.
 
 ```go
 mw := bus.SkipWhen{
-	Predicate: func(context.Context, bus.Context) bool { return true },
+    Predicate: func(context.Context, bus.Context) bool { return true },
 }
 ```
 
@@ -950,8 +634,8 @@ Handle acquires a lock and prevents concurrent overlap for the same key.
 
 ```go
 mw := bus.WithoutOverlapping{
-	Key: func(context.Context, bus.Context) string { return "job-key" },
-	TTL: 30 * time.Second,
+    Key: func(context.Context, bus.Context) string { return "job-key" },
+    TTL: 30 * time.Second,
 }
 ```
 
@@ -972,13 +656,13 @@ WithMiddleware appends middleware to the runtime execution chain.
 
 ```go
 audit := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
-	return next(ctx, jc)
+    return next(ctx, jc)
 })
 skipHealth := bus.SkipWhen{
-	Predicate: func(_ context.Context, jc bus.Context) bool { return jc.JobType == "health:ping" },
+    Predicate: func(_ context.Context, jc bus.Context) bool { return jc.JobType == "health:ping" },
 }
 fatalize := bus.FailOnError{
-	When: func(err error) bool { return err != nil },
+    When: func(err error) bool { return err != nil },
 }
 b, _ := bus.New(q, bus.WithMiddleware(audit, skipHealth, fatalize))
 ```
@@ -1109,8 +793,8 @@ Batch records a batch specification.
 ```go
 fake := bus.NewFake()
 _, _ = fake.Batch(
-	bus.NewJob("a", nil),
-	bus.NewJob("b", nil),
+    bus.NewJob("a", nil),
+    bus.NewJob("b", nil),
 ).Dispatch(context.Background())
 ```
 
@@ -1121,8 +805,8 @@ Chain records a chain specification.
 ```go
 fake := bus.NewFake()
 _, _ = fake.Chain(
-	bus.NewJob("a", nil),
-	bus.NewJob("b", nil),
+    bus.NewJob("a", nil),
+    bus.NewJob("b", nil),
 ).Dispatch(context.Background())
 ```
 
@@ -1147,23 +831,23 @@ New creates a queue based on Config.Driver.
 ```go
 q, err := queue.NewSync()
 if err != nil {
-	return
+    return
 }
 type EmailPayload struct {
-	ID int `json:"id"`
+    ID int `json:"id"`
 }
 q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-	var payload EmailPayload
-	if err := task.Bind(&payload); err != nil {
-		return err
-	}
-	return nil
+    var payload EmailPayload
+    if err := task.Bind(&payload); err != nil {
+        return err
+    }
+    return nil
 })
 defer q.Shutdown(context.Background())
-	context.Background(),
-	queue.NewTask("emails:send").
-		Payload(EmailPayload{ID: 1}).
-		OnQueue("default"),
+    context.Background(),
+    queue.NewTask("emails:send").
+        Payload(EmailPayload{ID: 1}).
+        OnQueue("default"),
 )
 ```
 
@@ -1174,7 +858,7 @@ NewDatabase creates a SQL-backed queue runtime.
 ```go
 q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
 if err != nil {
-	return
+    return
 }
 ```
 
@@ -1185,7 +869,7 @@ NewNATS creates a NATS-backed queue runtime.
 ```go
 q, err := queue.NewNATS("nats://127.0.0.1:4222")
 if err != nil {
-	return
+    return
 }
 ```
 
@@ -1196,7 +880,7 @@ NewNull creates a drop-only queue runtime.
 ```go
 q, err := queue.NewNull()
 if err != nil {
-	return
+    return
 }
 ```
 
@@ -1206,20 +890,20 @@ NewQueueWithDefaults creates a queue runtime and sets the default queue name.
 
 ```go
 q, err := queue.NewQueueWithDefaults("critical", queue.Config{
-	Driver: queue.DriverSync,
+    Driver: queue.DriverSync,
 })
 if err != nil {
-	return
+    return
 }
 type EmailPayload struct {
-	ID int `json:"id"`
+    ID int `json:"id"`
 }
 q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-	var payload EmailPayload
-	if err := task.Bind(&payload); err != nil {
-		return err
-	}
-	return nil
+    var payload EmailPayload
+    if err := task.Bind(&payload); err != nil {
+        return err
+    }
+    return nil
 })
 defer q.Shutdown(context.Background())
 ```
@@ -1231,7 +915,7 @@ NewRabbitMQ creates a RabbitMQ-backed queue runtime.
 ```go
 q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
 if err != nil {
-	return
+    return
 }
 ```
 
@@ -1242,7 +926,7 @@ NewRedis creates a Redis-backed queue runtime.
 ```go
 q, err := queue.NewRedis("127.0.0.1:6379")
 if err != nil {
-	return
+    return
 }
 ```
 
@@ -1253,7 +937,7 @@ NewSQS creates an SQS-backed queue runtime.
 ```go
 q, err := queue.NewSQS("us-east-1")
 if err != nil {
-	return
+    return
 }
 ```
 
@@ -1272,7 +956,7 @@ NewSync creates a synchronous in-process queue runtime.
 ```go
 q, err := queue.NewSync()
 if err != nil {
-	return
+    return
 }
 ```
 
@@ -1283,7 +967,7 @@ NewWorkerpool creates an in-process workerpool queue runtime.
 ```go
 q, err := queue.NewWorkerpool()
 if err != nil {
-	return
+    return
 }
 ```
 
@@ -1295,9 +979,9 @@ Active returns active count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-	ByQueue: map[string]queue.QueueCounters{
-		"default": {Active: 2},
-	},
+    ByQueue: map[string]queue.QueueCounters{
+        "default": {Active: 2},
+    },
 }
 fmt.Println(snapshot.Active("default"))
 // Output: 2
@@ -1309,9 +993,9 @@ Archived returns archived count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-	ByQueue: map[string]queue.QueueCounters{
-		"default": {Archived: 7},
-	},
+    ByQueue: map[string]queue.QueueCounters{
+        "default": {Archived: 7},
+    },
 }
 fmt.Println(snapshot.Archived("default"))
 // Output: 7
@@ -1323,9 +1007,9 @@ Failed returns failed count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-	ByQueue: map[string]queue.QueueCounters{
-		"default": {Failed: 2},
-	},
+    ByQueue: map[string]queue.QueueCounters{
+        "default": {Failed: 2},
+    },
 }
 fmt.Println(snapshot.Failed("default"))
 // Output: 2
@@ -1338,8 +1022,8 @@ MultiObserver fans out events to multiple observers.
 ```go
 events := make(chan queue.Event, 2)
 observer := queue.MultiObserver(
-	queue.ChannelObserver{Events: events},
-	queue.ObserverFunc(func(queue.Event) {}),
+    queue.ChannelObserver{Events: events},
+    queue.ObserverFunc(func(queue.Event) {}),
 )
 observer.Observe(queue.Event{Kind: queue.EventEnqueueAccepted})
 fmt.Println(len(events))
@@ -1364,9 +1048,9 @@ Observe handles a queue runtime event.
 ```go
 var observer queue.Observer
 observer.Observe(queue.Event{
-	Kind:   queue.EventEnqueueAccepted,
-	Driver: queue.DriverSync,
-	Queue:  "default",
+    Kind:   queue.EventEnqueueAccepted,
+    Driver: queue.DriverSync,
+    Queue:  "default",
 })
 ```
 
@@ -1377,22 +1061,22 @@ Observe calls the wrapped function.
 ```go
 logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 observer := queue.ObserverFunc(func(event queue.Event) {
-	logger.Info("queue event",
-		"kind", event.Kind,
-		"driver", event.Driver,
-		"queue", event.Queue,
-		"task_type", event.TaskType,
-		"attempt", event.Attempt,
-		"max_retry", event.MaxRetry,
-		"duration", event.Duration,
-		"err", event.Err,
-	)
+    logger.Info("queue event",
+        "kind", event.Kind,
+        "driver", event.Driver,
+        "queue", event.Queue,
+        "task_type", event.TaskType,
+        "attempt", event.Attempt,
+        "max_retry", event.MaxRetry,
+        "duration", event.Duration,
+        "err", event.Err,
+    )
 })
 observer.Observe(queue.Event{
-	Kind:     queue.EventProcessSucceeded,
-	Driver:   queue.DriverSync,
-	Queue:    "default",
-	TaskType: "emails:send",
+    Kind:     queue.EventProcessSucceeded,
+    Driver:   queue.DriverSync,
+    Queue:    "default",
+    TaskType: "emails:send",
 })
 ```
 
@@ -1403,10 +1087,10 @@ Observe records an event and updates normalized counters.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-	Kind:   queue.EventEnqueueAccepted,
-	Driver: queue.DriverSync,
-	Queue:  "default",
-	Time:   time.Now(),
+    Kind:   queue.EventEnqueueAccepted,
+    Driver: queue.DriverSync,
+    Queue:  "default",
+    Time:   time.Now(),
 })
 ```
 
@@ -1428,10 +1112,10 @@ Paused returns paused count for a queue.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-	Kind:   queue.EventQueuePaused,
-	Driver: queue.DriverSync,
-	Queue:  "default",
-	Time:   time.Now(),
+    Kind:   queue.EventQueuePaused,
+    Driver: queue.DriverSync,
+    Queue:  "default",
+    Time:   time.Now(),
 })
 snapshot := collector.Snapshot()
 fmt.Println(snapshot.Paused("default"))
@@ -1444,9 +1128,9 @@ Pending returns pending count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-	ByQueue: map[string]queue.QueueCounters{
-		"default": {Pending: 3},
-	},
+    ByQueue: map[string]queue.QueueCounters{
+        "default": {Pending: 3},
+    },
 }
 fmt.Println(snapshot.Pending("default"))
 // Output: 3
@@ -1458,9 +1142,9 @@ Processed returns processed count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-	ByQueue: map[string]queue.QueueCounters{
-		"default": {Processed: 11},
-	},
+    ByQueue: map[string]queue.QueueCounters{
+        "default": {Processed: 11},
+    },
 }
 fmt.Println(snapshot.Processed("default"))
 // Output: 11
@@ -1473,10 +1157,10 @@ Queue returns queue counters for a queue name.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-	Kind:   queue.EventEnqueueAccepted,
-	Driver: queue.DriverSync,
-	Queue:  "default",
-	Time:   time.Now(),
+    Kind:   queue.EventEnqueueAccepted,
+    Driver: queue.DriverSync,
+    Queue:  "default",
+    Time:   time.Now(),
 })
 snapshot := collector.Snapshot()
 counters, ok := snapshot.Queue("default")
@@ -1491,10 +1175,10 @@ Queues returns sorted queue names present in the snapshot.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-	Kind:   queue.EventEnqueueAccepted,
-	Driver: queue.DriverSync,
-	Queue:  "critical",
-	Time:   time.Now(),
+    Kind:   queue.EventEnqueueAccepted,
+    Driver: queue.DriverSync,
+    Queue:  "critical",
+    Time:   time.Now(),
 })
 snapshot := collector.Snapshot()
 names := snapshot.Queues()
@@ -1519,9 +1203,9 @@ RetryCount returns retry count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-	ByQueue: map[string]queue.QueueCounters{
-		"default": {Retry: 1},
-	},
+    ByQueue: map[string]queue.QueueCounters{
+        "default": {Retry: 1},
+    },
 }
 fmt.Println(snapshot.RetryCount("default"))
 // Output: 1
@@ -1533,9 +1217,9 @@ Scheduled returns scheduled count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-	ByQueue: map[string]queue.QueueCounters{
-		"default": {Scheduled: 4},
-	},
+    ByQueue: map[string]queue.QueueCounters{
+        "default": {Scheduled: 4},
+    },
 }
 fmt.Println(snapshot.Scheduled("default"))
 // Output: 4
@@ -1548,25 +1232,25 @@ Snapshot returns a copy of collected counters.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-	Kind:   queue.EventEnqueueAccepted,
-	Driver: queue.DriverSync,
-	Queue:  "default",
-	Time:   time.Now(),
+    Kind:   queue.EventEnqueueAccepted,
+    Driver: queue.DriverSync,
+    Queue:  "default",
+    Time:   time.Now(),
 })
 collector.Observe(queue.Event{
-	Kind:   queue.EventProcessStarted,
-	Driver: queue.DriverSync,
-	Queue:  "default",
-	TaskKey: "task-1",
-	Time:   time.Now(),
+    Kind:   queue.EventProcessStarted,
+    Driver: queue.DriverSync,
+    Queue:  "default",
+    TaskKey: "task-1",
+    Time:   time.Now(),
 })
 collector.Observe(queue.Event{
-	Kind:     queue.EventProcessSucceeded,
-	Driver:   queue.DriverSync,
-	Queue:    "default",
-	TaskKey:  "task-1",
-	Duration: 12 * time.Millisecond,
-	Time:     time.Now(),
+    Kind:     queue.EventProcessSucceeded,
+    Driver:   queue.DriverSync,
+    Queue:    "default",
+    TaskKey:  "task-1",
+    Duration: 12 * time.Millisecond,
+    Time:     time.Now(),
 })
 snapshot := collector.Snapshot()
 counters, _ := snapshot.Queue("default")
@@ -1619,10 +1303,10 @@ Throughput returns rolling throughput windows for a queue name.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-	Kind:   queue.EventProcessSucceeded,
-	Driver: queue.DriverSync,
-	Queue:  "default",
-	Time:   time.Now(),
+    Kind:   queue.EventProcessSucceeded,
+    Driver: queue.DriverSync,
+    Queue:  "default",
+    Time:   time.Now(),
 })
 snapshot := collector.Snapshot()
 throughput, ok := snapshot.Throughput("default")
@@ -1639,9 +1323,9 @@ Dispatch submits a typed job payload using the default queue.
 ```go
 var q queue.Queue
 err := q.Dispatch(
-	queue.NewTask("emails:send").
-		Payload(map[string]any{"id": 1}).
-		OnQueue("default"),
+    queue.NewTask("emails:send").
+        Payload(map[string]any{"id": 1}).
+        OnQueue("default"),
 )
 ```
 
@@ -1652,8 +1336,8 @@ DispatchCtx submits a typed job payload using the provided context.
 ```go
 var q queue.Queue
 err := q.DispatchCtx(
-	context.Background(),
-	queue.NewTask("emails:send").OnQueue("default"),
+    context.Background(),
+    queue.NewTask("emails:send").OnQueue("default"),
 )
 ```
 
@@ -1718,7 +1402,7 @@ Bind unmarshals task payload JSON into dst.
 
 ```go
 type EmailPayload struct {
-	ID int `json:"id"`
+    ID int `json:"id"`
 }
 task := queue.NewTask("emails:send").Payload(EmailPayload{ID: 1})
 var payload EmailPayload
@@ -1762,17 +1446,17 @@ _Example: payload struct_
 
 ```go
 type Meta struct {
-	Nested bool `json:"nested"`
+    Nested bool `json:"nested"`
 }
 type EmailPayload struct {
-	ID   int    `json:"id"`
-	To   string `json:"to"`
-	Meta Meta   `json:"meta"`
+    ID   int    `json:"id"`
+    To   string `json:"to"`
+    Meta Meta   `json:"meta"`
 }
 taskStruct := queue.NewTask("emails:send").Payload(EmailPayload{
-	ID:   1,
-	To:   "user@example.com",
-	Meta: Meta{Nested: true},
+    ID:   1,
+    To:   "user@example.com",
+    Meta: Meta{Nested: true},
 })
 ```
 
@@ -1780,9 +1464,9 @@ _Example: payload map_
 
 ```go
 taskMap := queue.NewTask("emails:send").Payload(map[string]any{
-	"id":  1,
-	"to":  "user@example.com",
-	"meta": map[string]any{"nested": true},
+    "id":  1,
+    "to":  "user@example.com",
+    "meta": map[string]any{"nested": true},
 })
 ```
 
@@ -1853,8 +1537,8 @@ AssertDispatchedOn fails when taskType was not dispatched on queueName.
 
 ```go
 fake := queue.NewFake()
-	queue.NewTask("emails:send").
-		OnQueue("critical"),
+    queue.NewTask("emails:send").
+        OnQueue("critical"),
 )
 fake.AssertDispatchedOn(nil, "critical", "emails:send")
 ```
@@ -1922,9 +1606,9 @@ NewFake creates a queue fake that records dispatches and provides assertions.
 
 ```go
 fake := queue.NewFake()
-	queue.NewTask("emails:send").
-		Payload(map[string]any{"id": 1}).
-		OnQueue("critical"),
+queue.NewTask("emails:send").
+Payload(map[string]any{"id": 1}).
+OnQueue("critical"),
 )
 records := fake.Records()
 fmt.Println(len(records), records[0].Queue, records[0].Task.Type)
