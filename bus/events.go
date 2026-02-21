@@ -47,10 +47,29 @@ type Observer interface {
 
 type ObserverFunc func(event Event)
 
+// Observe calls the wrapped observer function.
+// @group Events
+//
+// Example: observer func
+//
+//	observer := bus.ObserverFunc(func(event bus.Event) {
+//		_ = event.Kind
+//	})
+//	observer.Observe(bus.Event{Kind: bus.EventDispatchStarted})
 func (f ObserverFunc) Observe(event Event) {
 	f(event)
 }
 
+// MultiObserver fans out one event to multiple observers.
+// @group Events
+//
+// Example: fan out observers
+//
+//	observer := bus.MultiObserver(
+//		bus.ObserverFunc(func(event bus.Event) {}),
+//		bus.ObserverFunc(func(event bus.Event) {}),
+//	)
+//	observer.Observe(bus.Event{Kind: bus.EventDispatchStarted})
 func MultiObserver(observers ...Observer) Observer {
 	filtered := make([]Observer, 0, len(observers))
 	for _, observer := range observers {

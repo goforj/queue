@@ -39,12 +39,30 @@ type Bus interface {
 
 type Option func(*runtime)
 
+// WithObserver installs an event observer for dispatch/job/chain/batch lifecycle hooks.
+// @group Options
+//
+// Example: attach observer
+//
+//	observer := bus.ObserverFunc(func(event bus.Event) {
+//		_ = event.Kind
+//	})
+//	b, _ := bus.New(q, bus.WithObserver(observer))
+//	_ = b
 func WithObserver(observer Observer) Option {
 	return func(r *runtime) {
 		r.observer = observer
 	}
 }
 
+// WithStore overrides the orchestration store used for chain/batch/callback state.
+// @group Options
+//
+// Example: custom store
+//
+//	store := bus.NewMemoryStore()
+//	b, _ := bus.New(q, bus.WithStore(store))
+//	_ = b
 func WithStore(store Store) Option {
 	return func(r *runtime) {
 		if store != nil {
@@ -53,6 +71,14 @@ func WithStore(store Store) Option {
 	}
 }
 
+// WithClock overrides the runtime clock used for event/state timestamps.
+// @group Options
+//
+// Example: fixed clock
+//
+//	fixed := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+//	b, _ := bus.New(q, bus.WithClock(func() time.Time { return fixed }))
+//	_ = b
 func WithClock(clock func() time.Time) Option {
 	return func(r *runtime) {
 		if clock != nil {
@@ -61,6 +87,16 @@ func WithClock(clock func() time.Time) Option {
 	}
 }
 
+// WithMiddleware appends middleware to the runtime execution chain.
+// @group Options
+//
+// Example: add middleware
+//
+//	mw := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
+//		return next(ctx, jc)
+//	})
+//	b, _ := bus.New(q, bus.WithMiddleware(mw))
+//	_ = b
 func WithMiddleware(middlewares ...Middleware) Option {
 	return func(r *runtime) {
 		for _, m := range middlewares {
@@ -142,12 +178,24 @@ type runtime struct {
 
 var _ Bus = (*runtime)(nil)
 
+// Register binds a job type to a handler.
+// @group Runtime
+//
+// Example: register handler
+//
+//	b.Register("emails:send", func(ctx context.Context, jc bus.Context) error { return nil })
 func (r *runtime) Register(jobType string, handler Handler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.handlers[jobType] = handler
 }
 
+// Dispatch enqueues one job for execution.
+// @group Runtime
+//
+// Example: dispatch one job
+//
+//	_, _ = b.Dispatch(context.Background(), bus.NewJob("emails:send", map[string]any{"id": 1}))
 func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error) {
 	wj, err := toWireJob(job)
 	if err != nil {
@@ -221,17 +269,50 @@ func (r *runtime) Batch(jobs ...Job) BatchBuilder {
 	return &batchBuilder{r: r, jobs: append([]Job(nil), jobs...)}
 }
 
+// StartWorkers starts the underlying queue worker runtime.
+// @group Runtime
+//
+// Example: start workers
+//
+//	_ = b.StartWorkers(context.Background())
 func (r *runtime) StartWorkers(ctx context.Context) error { return r.q.StartWorkers(ctx) }
+
+// Shutdown stops the underlying queue worker runtime.
+// @group Runtime
+//
+// Example: shutdown workers
+//
+//	_ = b.Shutdown(context.Background())
 func (r *runtime) Shutdown(ctx context.Context) error     { return r.q.Shutdown(ctx) }
 
+// FindBatch returns persisted batch state by id.
+// @group Runtime
+//
+// Example: find batch state
+//
+//	st, _ := b.FindBatch(context.Background(), "bat_123")
+//	_ = st
 func (r *runtime) FindBatch(ctx context.Context, batchID string) (BatchState, error) {
 	return r.store.GetBatch(ctx, batchID)
 }
 
+// FindChain returns persisted chain state by id.
+// @group Runtime
+//
+// Example: find chain state
+//
+//	st, _ := b.FindChain(context.Background(), "chn_123")
+//	_ = st
 func (r *runtime) FindChain(ctx context.Context, chainID string) (ChainState, error) {
 	return r.store.GetChain(ctx, chainID)
 }
 
+// Prune removes terminal orchestration records older than before.
+// @group Runtime
+//
+// Example: prune old state
+//
+//	_ = b.Prune(context.Background(), time.Now().Add(-24*time.Hour))
 func (r *runtime) Prune(ctx context.Context, before time.Time) error {
 	return r.store.Prune(ctx, before)
 }

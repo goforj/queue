@@ -17,6 +17,16 @@ type SQLStoreConfig struct {
 	AutoMigrate bool
 }
 
+// NewSQLStore creates a SQL-backed orchestration store.
+// @group Constructors
+//
+// Example: new sql store
+//
+//	store, _ := bus.NewSQLStore(bus.SQLStoreConfig{
+//		DriverName: "sqlite",
+//		DSN:        "file:bus.db?_busy_timeout=5000",
+//	})
+//	_ = store
 func NewSQLStore(cfg SQLStoreConfig) (Store, error) {
 	if cfg.DB == nil {
 		if cfg.DriverName == "" {
