@@ -32,7 +32,7 @@
 go get github.com/goforj/queue
 ```
 
-## bus vs queue (simple)
+## bus vs queue
 
 - `bus` is the higher-level API. Use it when you want workflow features like chains, batches, middleware, callbacks, and unified lifecycle events.
 - `queue` is the lower-level runtime API (drivers, tasks, workers).
