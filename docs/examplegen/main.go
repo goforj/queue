@@ -500,24 +500,19 @@ func writeMain(base string, fd *FuncDoc, importPath string) error {
 		buf.WriteString(")\n\n")
 	}
 
-	buf.WriteString("func main() {\n")
-
-	// Description
-	if fd.Description != "" {
-		for _, line := range strings.Split(fd.Description, "\n") {
-			buf.WriteString("\t// " + line + "\n")
+	if len(fd.Examples) == 1 {
+		buf.WriteString("func main() {\n")
+		if fd.Description != "" {
+			for _, line := range strings.Split(fd.Description, "\n") {
+				buf.WriteString("\t// " + line + "\n")
+			}
+			buf.WriteString("\n")
 		}
-		buf.WriteString("\n")
-	}
-
-	// Examples
-	for _, ex := range fd.Examples {
+		ex := fd.Examples[0]
 		if ex.Label != "" {
 			buf.WriteString("\t// Example: " + ex.Label + "\n")
 		}
-
 		ex.Code = strings.TrimLeft(ex.Code, "\n")
-
 		for _, line := range strings.Split(ex.Code, "\n") {
 			if strings.TrimSpace(line) == "" {
 				buf.WriteString("\n")
@@ -525,9 +520,40 @@ func writeMain(base string, fd *FuncDoc, importPath string) error {
 				buf.WriteString("\t" + line + "\n")
 			}
 		}
+		buf.WriteString("}\n")
+		return os.WriteFile(filepath.Join(dir, "main.go"), buf.Bytes(), 0o644)
 	}
 
-	buf.WriteString("}\n")
+	buf.WriteString("func main() {\n")
+	for i := range fd.Examples {
+		buf.WriteString(fmt.Sprintf("\texample%d()\n", i+1))
+	}
+	buf.WriteString("}\n\n")
+
+	for i, ex := range fd.Examples {
+		buf.WriteString(fmt.Sprintf("func example%d() {\n", i+1))
+
+		if i == 0 && fd.Description != "" {
+			for _, line := range strings.Split(fd.Description, "\n") {
+				buf.WriteString("\t// " + line + "\n")
+			}
+			buf.WriteString("\n")
+		}
+
+		if ex.Label != "" {
+			buf.WriteString("\t// Example: " + ex.Label + "\n")
+		}
+
+		ex.Code = strings.TrimLeft(ex.Code, "\n")
+		for _, line := range strings.Split(ex.Code, "\n") {
+			if strings.TrimSpace(line) == "" {
+				buf.WriteString("\n")
+			} else {
+				buf.WriteString("\t" + line + "\n")
+			}
+		}
+		buf.WriteString("}\n\n")
+	}
 
 	return os.WriteFile(filepath.Join(dir, "main.go"), buf.Bytes(), 0o644)
 }

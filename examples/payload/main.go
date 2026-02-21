@@ -6,12 +6,21 @@ package main
 import "github.com/goforj/queue"
 
 func main() {
+	example1()
+	example2()
+	example3()
+}
+
+func example1() {
 	// Payload sets task payload from common value types.
 
 	// Example: payload bytes
 	taskBytes := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
 	_ = taskBytes
 
+}
+
+func example2() {
 	// Example: payload struct
 	type Meta struct {
 		Nested bool `json:"nested"`
@@ -28,6 +37,9 @@ func main() {
 	})
 	_ = taskStruct
 
+}
+
+func example3() {
 	// Example: payload map
 	taskMap := queue.NewTask("emails:send").Payload(map[string]any{
 		"id":  1,
@@ -36,3 +48,4 @@ func main() {
 	})
 	_ = taskMap
 }
+

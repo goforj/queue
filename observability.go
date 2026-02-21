@@ -60,6 +60,15 @@ type Event struct {
 type Observer interface {
 	// Observe handles a queue runtime event.
 	// @group Observability
+	//
+	// Example: observe runtime event
+	//
+	//	var observer queue.Observer
+	//	observer.Observe(queue.Event{
+	//		Kind:   queue.EventEnqueueAccepted,
+	//		Driver: queue.DriverSync,
+	//		Queue:  "default",
+	//	})
 	Observe(event Event)
 }
 
@@ -136,6 +145,15 @@ type ChannelObserver struct {
 }
 
 // Observe forwards an event to the configured channel.
+// @group Observability
+//
+// Example: channel observer
+//
+//	ch := make(chan queue.Event, 1)
+//	observer := queue.ChannelObserver{Events: ch}
+//	observer.Observe(queue.Event{Kind: queue.EventProcessStarted, Queue: "default"})
+//	event := <-ch
+//	_ = event
 func (c ChannelObserver) Observe(event Event) {
 	if c.Events == nil {
 		return
