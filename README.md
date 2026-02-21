@@ -111,11 +111,13 @@ func main() {
 ## Job builder options
 
 ```go
+// Define a struct for your job payload.
 type EmailPayload struct {
 	ID int `json:"id"`
 	To string `json:"to"`
 }
 
+// Fluent builder pattern for job options.
 job := queue.NewJob("emails:send").
 	// Payload can be bytes, structs, maps, or JSON-marshalable values.
 	// Default payload is empty.
@@ -139,15 +141,10 @@ job := queue.NewJob("emails:send").
 	// Default is 0 (no dedupe).
 	UniqueFor(45 * time.Second)
 
+// Dispatch the job to the queue.
 _ = q.Dispatch(job)
-```
 
-```go
-type EmailPayload struct {
-	ID int `json:"id"`
-	To string `json:"to"`
-}
-
+// In handlers, use Bind to decode payload into a struct.
 q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 	var payload EmailPayload
 	if err := job.Bind(&payload); err != nil {
