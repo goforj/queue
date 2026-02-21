@@ -140,13 +140,13 @@ func TestSQSIntegration_UniqueDuplicate(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	taskType := "job:sqs:unique"
+	jobType := "job:sqs:unique"
 	payload := []byte("same")
-	first := NewJob(taskType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
+	first := NewJob(jobType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
 	if err := q.DispatchCtx(context.Background(), first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := NewJob(taskType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
+	second := NewJob(jobType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
 	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)

@@ -36,7 +36,7 @@ const workerEnqueueKey workerContextKey = "queue.worker.enqueue.allowed"
 type queuedTask struct {
 	ctx  context.Context
 	task Job
-	opts taskOptions
+	opts jobOptions
 }
 
 func newLocalQueue(driver Driver) *localQueue {
@@ -74,7 +74,7 @@ func (d *localQueue) Driver() Driver {
 	return d.driver
 }
 
-// Register associates a handler with a task type.
+// Register associates a handler with a job type.
 // @group Queue
 //
 // Example: local register
@@ -94,12 +94,12 @@ func (d *localQueue) Driver() Driver {
 //		_ = payload
 //		return nil
 //	})
-func (d *localQueue) Register(taskType string, handler Handler) {
-	if taskType == "" || handler == nil {
+func (d *localQueue) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
 		return
 	}
 	d.mu.Lock()
-	d.handlers[taskType] = handler
+	d.handlers[jobType] = handler
 	d.mu.Unlock()
 }
 
@@ -191,7 +191,7 @@ func (d *localQueue) Dispatch(ctx context.Context, task Job) error {
 	if err := task.validate(); err != nil {
 		return err
 	}
-	parsed := task.enqueueOptions()
+	parsed := task.jobOptions()
 	if parsed.uniqueTTL > 0 {
 		if !d.claimUnique(task, parsed.queueName, parsed.uniqueTTL) {
 			return ErrDuplicate
@@ -217,12 +217,12 @@ func (d *localQueue) Dispatch(ctx context.Context, task Job) error {
 	return nil
 }
 
-func (d *localQueue) enqueueNow(ctx context.Context, task Job, parsed taskOptions) error {
+func (d *localQueue) enqueueNow(ctx context.Context, task Job, parsed jobOptions) error {
 	if d.isPaused(parsed.queueName) {
 		return ErrQueuePaused
 	}
 	if _, ok := d.lookup(task.Type); !ok {
-		return fmt.Errorf("no handler registered for task type %q", task.Type)
+		return fmt.Errorf("no handler registered for job type %q", task.Type)
 	}
 	if d.driver == DriverWorkerpool {
 		return d.enqueueAsync(ctx, task, parsed)
@@ -230,7 +230,7 @@ func (d *localQueue) enqueueNow(ctx context.Context, task Job, parsed taskOption
 	return d.runWithRetry(ctx, task, parsed)
 }
 
-func (d *localQueue) enqueueAsync(ctx context.Context, task Job, parsed taskOptions) error {
+func (d *localQueue) enqueueAsync(ctx context.Context, task Job, parsed jobOptions) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
@@ -319,12 +319,12 @@ func (d *localQueue) worker(workQueue <-chan queuedTask) {
 func (d *localQueue) run(ctx context.Context, task Job) error {
 	handler, ok := d.lookup(task.Type)
 	if !ok {
-		return fmt.Errorf("no handler registered for task type %q", task.Type)
+		return fmt.Errorf("no handler registered for job type %q", task.Type)
 	}
 	return handler(ctx, task)
 }
 
-func (d *localQueue) runWithRetry(ctx context.Context, task Job, parsed taskOptions) error {
+func (d *localQueue) runWithRetry(ctx context.Context, task Job, parsed jobOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -367,9 +367,9 @@ func (d *localQueue) runWithRetry(ctx context.Context, task Job, parsed taskOpti
 	return lastErr
 }
 
-func (d *localQueue) lookup(taskType string) (Handler, bool) {
+func (d *localQueue) lookup(jobType string) (Handler, bool) {
 	d.mu.RLock()
-	handler, ok := d.handlers[taskType]
+	handler, ok := d.handlers[jobType]
 	d.mu.RUnlock()
 	return handler, ok
 }

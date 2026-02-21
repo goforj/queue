@@ -27,7 +27,7 @@ type Queue interface {
 	// Dispatch submits a typed job payload using the default queue.
 	// @group Queue
 	//
-	// Example: dispatch typed task
+	// Example: dispatch typed job
 	//
 	//	var q queue.Queue
 	//	err := q.Dispatch(
@@ -51,14 +51,14 @@ type Queue interface {
 	//	_ = err
 	DispatchCtx(ctx context.Context, job any) error
 
-	// Register associates a handler with a task type.
+	// Register associates a handler with a job type.
 	// @group Queue
 	//
 	// Example: register a handler
 	//
 	//	var q queue.Queue
 	//	q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
-	Register(taskType string, handler Handler)
+	Register(jobType string, handler Handler)
 
 	// StartWorkers starts worker execution.
 	// @group Queue
@@ -140,7 +140,7 @@ type queueBackend interface {
 
 type runtimeQueueBackend interface {
 	queueBackend
-	Register(taskType string, handler Handler)
+	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
 }
 
@@ -409,7 +409,7 @@ type externalQueueRuntime struct {
 }
 
 type runtimeWorkerBackend interface {
-	Register(taskType string, handler Handler)
+	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
 	Shutdown(ctx context.Context) error
 }
@@ -423,7 +423,7 @@ func (q *queueCommon) Dispatch(job any) error {
 }
 
 func (q *queueCommon) DispatchCtx(ctx context.Context, job any) error {
-	task, err := q.taskFromJob(job)
+	task, err := q.jobFromAny(job)
 	if err != nil {
 		return err
 	}
@@ -442,32 +442,32 @@ func (q *externalQueueRuntime) DispatchCtx(ctx context.Context, job any) error {
 	return q.common.DispatchCtx(ctx, job)
 }
 
-func (q *nativeQueueRuntime) Register(taskType string, handler Handler) {
+func (q *nativeQueueRuntime) Register(jobType string, handler Handler) {
 	q.mu.Lock()
 	if q.registered == nil {
 		q.registered = make(map[string]Handler)
 	}
-	q.registered[taskType] = handler
+	q.registered[jobType] = handler
 	started := q.started
 	q.mu.Unlock()
 
 	if started {
-		q.runtime.Register(taskType, q.common.wrapRegisteredHandler(taskType, handler))
+		q.runtime.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
 	}
 }
 
-func (q *externalQueueRuntime) Register(taskType string, handler Handler) {
+func (q *externalQueueRuntime) Register(jobType string, handler Handler) {
 	q.mu.Lock()
 	if q.registered == nil {
 		q.registered = make(map[string]Handler)
 	}
-	q.registered[taskType] = handler
+	q.registered[jobType] = handler
 	w := q.worker
 	started := q.started
 	q.mu.Unlock()
 
 	if started && w != nil {
-		w.Register(taskType, q.common.wrapRegisteredHandler(taskType, handler))
+		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
 	}
 }
 
@@ -481,13 +481,13 @@ func (q *nativeQueueRuntime) StartWorkers(ctx context.Context) error {
 		return nil
 	}
 	registered := make(map[string]Handler, len(q.registered))
-	for taskType, handler := range q.registered {
-		registered[taskType] = handler
+	for jobType, handler := range q.registered {
+		registered[jobType] = handler
 	}
 	q.mu.Unlock()
 
-	for taskType, handler := range registered {
-		q.runtime.Register(taskType, q.common.wrapRegisteredHandler(taskType, handler))
+	for jobType, handler := range registered {
+		q.runtime.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
 	}
 	if err := q.runtime.StartWorkers(ctx); err != nil {
 		return err
@@ -509,8 +509,8 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	}
 	workers := q.workers
 	registered := make(map[string]Handler, len(q.registered))
-	for taskType, handler := range q.registered {
-		registered[taskType] = handler
+	for jobType, handler := range q.registered {
+		registered[jobType] = handler
 	}
 	q.mu.Unlock()
 
@@ -518,8 +518,8 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for taskType, handler := range registered {
-		w.Register(taskType, q.common.wrapRegisteredHandler(taskType, handler))
+	for jobType, handler := range registered {
+		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
 	}
 	if err := w.StartWorkers(ctx); err != nil {
 		return err
@@ -628,11 +628,11 @@ func (q *externalQueueRuntime) Stats(ctx context.Context) (StatsSnapshot, error)
 	return q.common.Stats(ctx)
 }
 
-func (q *queueCommon) wrapRegisteredHandler(taskType string, handler Handler) Handler {
+func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Handler {
 	if handler == nil || q.cfg.Observer == nil {
 		return handler
 	}
-	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", taskType, handler)
+	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, handler)
 }
 
 func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error) {
@@ -700,33 +700,33 @@ func NewQueueWithDefaults(defaultQueue string, cfg Config) (Queue, error) {
 	return New(cfg)
 }
 
-func (q *queueCommon) taskFromJob(job any) (Job, error) {
+func (q *queueCommon) jobFromAny(job any) (Job, error) {
 	if task, ok := job.(Job); ok {
 		if task.Type == "" {
-			return Job{}, fmt.Errorf("dispatch task type is required")
+			return Job{}, fmt.Errorf("dispatch job type is required")
 		}
 		return task, nil
 	}
 	if job == nil {
 		return Job{}, fmt.Errorf("dispatch job is nil")
 	}
-	taskType := taskTypeFromValue(job)
-	if taskType == "" {
+	jobType := jobTypeFromValue(job)
+	if jobType == "" {
 		return Job{}, fmt.Errorf("dispatch job type could not be inferred")
 	}
 	if marshaler, ok := job.(interface{ JobType() string }); ok {
 		if t := marshaler.JobType(); t != "" {
-			taskType = t
+			jobType = t
 		}
 	}
 	payload, err := json.Marshal(job)
 	if err != nil {
 		return Job{}, fmt.Errorf("marshal dispatch job: %w", err)
 	}
-	return NewJob(taskType).Payload(payload).OnQueue(q.cfg.DefaultQueue), nil
+	return NewJob(jobType).Payload(payload).OnQueue(q.cfg.DefaultQueue), nil
 }
 
-func taskTypeFromValue(v any) string {
+func jobTypeFromValue(v any) string {
 	t := reflect.TypeOf(v)
 	if t == nil {
 		return ""

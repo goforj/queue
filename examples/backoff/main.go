@@ -13,5 +13,5 @@ func main() {
 
 	// Example: backoff
 	job := queue.NewJob("emails:send").Backoff(500 * time.Millisecond)
-	_ = task
+	_ = job
 }

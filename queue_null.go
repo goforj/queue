@@ -38,9 +38,9 @@ func (q *nullQueue) Dispatch(ctx context.Context, task Job) error {
 	if err := task.validate(); err != nil {
 		return err
 	}
-	opts := task.enqueueOptions()
+	opts := task.jobOptions()
 	if opts.queueName == "" {
-		return fmt.Errorf("task queue is required")
+		return fmt.Errorf("job queue is required")
 	}
 	if opts.uniqueTTL > 0 {
 		if !q.claimUnique(task, opts.queueName, opts.uniqueTTL) {

@@ -53,12 +53,12 @@ func TestDatabaseQueue_Unique(t *testing.T) {
 	if err := d.Workers(1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)
 	}
-	taskType := "job:db-unique"
+	jobType := "job:db-unique"
 	payload := []byte("same")
-	if err := d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); err != nil {
+	if err := d.DispatchCtx(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	if err := d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); !errors.Is(err, ErrDuplicate) {
+	if err := d.DispatchCtx(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
 }

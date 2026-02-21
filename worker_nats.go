@@ -27,12 +27,12 @@ func newNATSWorker(url string) runtimeWorkerBackend {
 	}
 }
 
-func (w *natsWorker) Register(taskType string, handler Handler) {
-	if taskType == "" || handler == nil {
+func (w *natsWorker) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
 		return
 	}
 	w.mu.Lock()
-	w.handlers[taskType] = handler
+	w.handlers[jobType] = handler
 	w.mu.Unlock()
 }
 

@@ -252,7 +252,7 @@ func TestSQSQueue_DispatchValidationBranches(t *testing.T) {
 	}
 
 	if err := q.Dispatch(nil, NewJob("")); err == nil {
-		t.Fatal("expected validation error for empty task type")
+		t.Fatal("expected validation error for empty job type")
 	}
 	if err := q.Dispatch(nil, NewJob("job:sqs")); err == nil {
 		t.Fatal("expected queue required error")

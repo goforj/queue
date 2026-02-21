@@ -6,9 +6,9 @@ package main
 import "github.com/goforj/queue"
 
 func main() {
-	// NewJob creates a task value with a required task type.
+	// NewJob creates a job value with a required job type.
 
-	// Example: new task
+	// Example: new job
 	job := queue.NewJob("emails:send")
-	_ = task
+	_ = job
 }

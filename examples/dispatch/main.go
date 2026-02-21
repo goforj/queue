@@ -18,7 +18,7 @@ func main() {
 func example1() {
 	// Dispatch submits a typed job payload using the default queue.
 
-	// Example: dispatch typed task
+	// Example: dispatch typed job
 	var q queue.Queue
 	err := q.Dispatch(
 		queue.NewJob("emails:send").

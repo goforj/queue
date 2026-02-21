@@ -172,7 +172,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 			if err == nil {
 				t.Fatal("expected missing queue error")
 			}
-			if !strings.Contains(err.Error(), "task queue is required") {
+			if !strings.Contains(err.Error(), "job queue is required") {
 				t.Fatalf("expected missing queue error, got %v", err)
 			}
 			return
@@ -419,18 +419,18 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if expiryWait <= 0 {
 			expiryWait = ttl + 30*time.Millisecond
 		}
-		taskType := "job:contract:unique"
+		jobType := "job:contract:unique"
 		payload := []byte("same")
-		err := d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
+		err := d.DispatchCtx(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(ttl))
 		if err != nil {
 			t.Fatalf("first unique dispatch failed: %v", err)
 		}
-		err = d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
+		err = d.DispatchCtx(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(ttl))
 		if !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
 		time.Sleep(expiryWait)
-		err = d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
+		err = d.DispatchCtx(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(ttl))
 		if err != nil {
 			t.Fatalf("dispatch after unique ttl failed: %v", err)
 		}
@@ -447,17 +447,17 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		taskType := "job:contract:unique-scope"
+		jobType := "job:contract:unique-scope"
 		payload := []byte("same")
 		ttl := factory.uniqueTTL
 		if ttl <= 0 {
 			ttl = 400 * time.Millisecond
 		}
-		first := NewJob(taskType).Payload(payload).OnQueue("queue-a").UniqueFor(ttl)
+		first := NewJob(jobType).Payload(payload).OnQueue("queue-a").UniqueFor(ttl)
 		if err := d.DispatchCtx(context.Background(), first); err != nil {
 			t.Fatalf("first dispatch failed: %v", err)
 		}
-		second := NewJob(taskType).Payload(payload).OnQueue("queue-b").UniqueFor(ttl)
+		second := NewJob(jobType).Payload(payload).OnQueue("queue-b").UniqueFor(ttl)
 		if err := d.DispatchCtx(context.Background(), second); err != nil {
 			t.Fatalf("expected unique lock to be queue scoped, got %v", err)
 		}
@@ -468,7 +468,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		err := d.DispatchCtx(context.Background(), NewJob("").OnQueue("default"))
 		if err == nil {
-			t.Fatal("expected missing task type error")
+			t.Fatal("expected missing job type error")
 		}
 	})
 

@@ -135,13 +135,13 @@ func TestNATSIntegration_UniqueDuplicate(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	taskType := "job:nats:unique"
+	jobType := "job:nats:unique"
 	payload := []byte("same")
-	first := NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	first := NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
 	if err := q.DispatchCtx(context.Background(), first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	second := NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
 	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)

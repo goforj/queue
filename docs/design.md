@@ -43,7 +43,7 @@ Primary objectives:
 - `StartWorkers(ctx context.Context) error`
 - `Dispatch(job any) error`
 - `DispatchCtx(ctx context.Context, task any) error`
-- `Register(taskType string, handler Handler)`
+- `Register(jobType string, handler Handler)`
 - `Shutdown(ctx context.Context) error`
 
 Constructor:
@@ -57,7 +57,7 @@ Constructor:
 `Worker` remains an internal runtime wrapper used by queue implementations:
 
 - `Driver() Driver`
-- `Register(taskType string, handler Handler)`
+- `Register(jobType string, handler Handler)`
 - `StartWorkers(context.Context) error`
 - `Shutdown() error`
 
@@ -73,7 +73,7 @@ Worker execution settings are configured from `Queue` via `Workers(n).StartWorke
 
 `Job` is immutable-ish via value receivers and explicit execution boundary (`Queue.DispatchCtx`):
 
-- `NewJob(taskType string) Job`
+- `NewJob(jobType string) Job`
 - `Payload(any) Job`
 - `PayloadJSON(any) Job`
 - `OnQueue(string) Job`
@@ -120,7 +120,7 @@ Implementation detail:
 Primary types:
 
 - `EventKind` (dispatch/process/pause lifecycle constants)
-- `Event` (kind, driver, queue, task type/key, retry/attempt, timing, error)
+- `Event` (kind, driver, queue, job type/key, retry/attempt, timing, error)
 - `Observer` + `ObserverFunc`
 - `StatsCollector`
 - `StatsSnapshot`, `QueueCounters`, throughput windows
@@ -217,7 +217,7 @@ Nightly reliability workflow:
 README has:
 
 - quick start and driver usage
-- task options table
+- job options table
 - reliability guarantees
 - trust matrix
 - observability quick guide

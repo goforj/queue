@@ -10,5 +10,5 @@ func main() {
 
 	// Example: retry
 	job := queue.NewJob("emails:send").Retry(4)
-	_ = task
+	_ = job
 }

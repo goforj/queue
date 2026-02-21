@@ -136,13 +136,13 @@ func TestRabbitMQIntegration_UniqueDuplicate(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	taskType := "job:rabbitmq:unique"
+	jobType := "job:rabbitmq:unique"
 	payload := []byte("same")
-	first := NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	first := NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
 	if err := q.DispatchCtx(context.Background(), first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	second := NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
 	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
@@ -158,7 +158,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	queueName := uniqueQueueName("rabbitmq-delay-restart")
-	taskType := "job:rabbitmq:delay-restart"
+	jobType := "job:rabbitmq:delay-restart"
 	delay := 2 * time.Second
 	start := time.Now()
 	done := make(chan struct{}, 1)
@@ -167,7 +167,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	consumer1.Register(taskType, func(_ context.Context, _ Job) error {
+	consumer1.Register(jobType, func(_ context.Context, _ Job) error {
 		select {
 		case done <- struct{}{}:
 		default:
@@ -184,7 +184,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	}
 	defer producer.Shutdown(context.Background())
 
-	task := NewJob(taskType).
+	task := NewJob(jobType).
 		Payload(scenarioPayload{ID: 1, Name: "delay-restart"}).
 		OnQueue(queueName).
 		Delay(delay)
@@ -200,7 +200,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
-	consumer2.Register(taskType, func(_ context.Context, _ Job) error {
+	consumer2.Register(jobType, func(_ context.Context, _ Job) error {
 		select {
 		case done <- struct{}{}:
 		default:
@@ -227,7 +227,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	queueName := uniqueQueueName("rabbitmq-retry-restart")
-	taskType := "job:rabbitmq:retry-restart"
+	jobType := "job:rabbitmq:retry-restart"
 	backoff := 1200 * time.Millisecond
 	firstAttempt := make(chan struct{}, 1)
 	done := make(chan struct{}, 1)
@@ -237,7 +237,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	consumer1.Register(taskType, func(_ context.Context, _ Job) error {
+	consumer1.Register(jobType, func(_ context.Context, _ Job) error {
 		if calls.Add(1) == 1 {
 			select {
 			case firstAttempt <- struct{}{}:
@@ -261,7 +261,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	}
 	defer producer.Shutdown(context.Background())
 
-	task := NewJob(taskType).
+	task := NewJob(jobType).
 		Payload(scenarioPayload{ID: 2, Name: "retry-restart"}).
 		OnQueue(queueName).
 		Retry(1).
@@ -283,7 +283,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
-	consumer2.Register(taskType, func(_ context.Context, _ Job) error {
+	consumer2.Register(jobType, func(_ context.Context, _ Job) error {
 		if calls.Add(1) == 1 {
 			return errors.New("retry once")
 		}
@@ -313,7 +313,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	queueName := uniqueQueueName("rabbitmq-delay-queue")
-	taskType := "job:rabbitmq:delay-queue"
+	jobType := "job:rabbitmq:delay-queue"
 	delay := 2 * time.Second
 	start := time.Now()
 	done := make(chan struct{}, 1)
@@ -322,7 +322,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	consumer.Register(taskType, func(_ context.Context, _ Job) error {
+	consumer.Register(jobType, func(_ context.Context, _ Job) error {
 		select {
 		case done <- struct{}{}:
 		default:
@@ -340,7 +340,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewJob(taskType).
+	task := NewJob(jobType).
 		Payload(scenarioPayload{ID: 3, Name: "delay-queue"}).
 		OnQueue(queueName).
 		Delay(delay)

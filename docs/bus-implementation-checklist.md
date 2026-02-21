@@ -24,7 +24,7 @@ Acceptance:
 
 ### Queue Runtime Integration
 
-- [x] Register internal task types:
+- [x] Register internal job types:
   - `bus:job`
   - `bus:chain:node`
   - `bus:batch:job`

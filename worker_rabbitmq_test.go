@@ -105,7 +105,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 				if _, ok := ctx.Deadline(); !ok {
 					t.Fatal("expected timeout context")
 				}
-				opts := task.enqueueOptions()
+				opts := task.jobOptions()
 				if task.Type != "job:ok" || opts.queueName != "critical" || opts.attempt != 1 {
 					t.Fatalf("unexpected task fields: type=%q queue=%q attempt=%d", task.Type, opts.queueName, opts.attempt)
 				}

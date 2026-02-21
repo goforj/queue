@@ -84,11 +84,11 @@ func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 			return err
 		}
 	}
-	task, err := f.taskFromJob(job)
+	task, err := f.jobFromAny(job)
 	if err != nil {
 		return err
 	}
-	queueName := task.enqueueOptions().queueName
+	queueName := task.jobOptions().queueName
 	if queueName == "" {
 		queueName = f.defaultQueue
 	}
@@ -101,7 +101,7 @@ func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 	return nil
 }
 
-// Register associates a handler with a task type.
+// Register associates a handler with a job type.
 // @group Testing
 //
 // Example: register no-op on fake
@@ -207,28 +207,28 @@ func (f *FakeQueue) AssertCount(t testing.TB, expected int) {
 	}
 }
 
-// AssertDispatched fails when taskType was not dispatched.
+// AssertDispatched fails when jobType was not dispatched.
 // @group Testing
 //
-// Example: assert task type dispatched
+// Example: assert job type dispatched
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	fake.AssertDispatched(nil, "emails:send")
-func (f *FakeQueue) AssertDispatched(t testing.TB, taskType string) {
+func (f *FakeQueue) AssertDispatched(t testing.TB, jobType string) {
 	t.Helper()
 	for _, record := range f.Records() {
-		if record.Job.Type == taskType {
+		if record.Job.Type == jobType {
 			return
 		}
 	}
-	t.Fatalf("expected task type %q to be dispatched", taskType)
+	t.Fatalf("expected job type %q to be dispatched", jobType)
 }
 
-// AssertDispatchedOn fails when taskType was not dispatched on queueName.
+// AssertDispatchedOn fails when jobType was not dispatched on queueName.
 // @group Testing
 //
-// Example: assert task type dispatched on queue
+// Example: assert job type dispatched on queue
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(
@@ -236,82 +236,82 @@ func (f *FakeQueue) AssertDispatched(t testing.TB, taskType string) {
 //			OnQueue("critical"),
 //	)
 //	fake.AssertDispatchedOn(nil, "critical", "emails:send")
-func (f *FakeQueue) AssertDispatchedOn(t testing.TB, queueName, taskType string) {
+func (f *FakeQueue) AssertDispatchedOn(t testing.TB, queueName, jobType string) {
 	t.Helper()
 	for _, record := range f.Records() {
-		if record.Job.Type == taskType && record.Queue == queueName {
+		if record.Job.Type == jobType && record.Queue == queueName {
 			return
 		}
 	}
-	t.Fatalf("expected task type %q dispatched on queue %q", taskType, queueName)
+	t.Fatalf("expected job type %q dispatched on queue %q", jobType, queueName)
 }
 
-// AssertDispatchedTimes fails when taskType dispatch count does not match expected.
+// AssertDispatchedTimes fails when jobType dispatch count does not match expected.
 // @group Testing
 //
-// Example: assert task type dispatched times
+// Example: assert job type dispatched times
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	fake.AssertDispatchedTimes(nil, "emails:send", 2)
-func (f *FakeQueue) AssertDispatchedTimes(t testing.TB, taskType string, expected int) {
+func (f *FakeQueue) AssertDispatchedTimes(t testing.TB, jobType string, expected int) {
 	t.Helper()
 	var count int
 	for _, record := range f.Records() {
-		if record.Job.Type == taskType {
+		if record.Job.Type == jobType {
 			count++
 		}
 	}
 	if count != expected {
-		t.Fatalf("expected task type %q dispatched %d times, got %d", taskType, expected, count)
+		t.Fatalf("expected job type %q dispatched %d times, got %d", jobType, expected, count)
 	}
 }
 
-// AssertNotDispatched fails when taskType was dispatched.
+// AssertNotDispatched fails when jobType was dispatched.
 // @group Testing
 //
-// Example: assert task type not dispatched
+// Example: assert job type not dispatched
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	fake.AssertNotDispatched(nil, "emails:cancel")
-func (f *FakeQueue) AssertNotDispatched(t testing.TB, taskType string) {
+func (f *FakeQueue) AssertNotDispatched(t testing.TB, jobType string) {
 	t.Helper()
 	for _, record := range f.Records() {
-		if record.Job.Type == taskType {
-			t.Fatalf("expected task type %q not to be dispatched", taskType)
+		if record.Job.Type == jobType {
+			t.Fatalf("expected job type %q not to be dispatched", jobType)
 		}
 	}
 }
 
-func (f *FakeQueue) taskFromJob(job any) (Job, error) {
+func (f *FakeQueue) jobFromAny(job any) (Job, error) {
 	if task, ok := job.(Job); ok {
 		if task.Type == "" {
-			return Job{}, fmt.Errorf("dispatch task type is required")
+			return Job{}, fmt.Errorf("dispatch job type is required")
 		}
 		return task, nil
 	}
 	if job == nil {
 		return Job{}, fmt.Errorf("dispatch job is nil")
 	}
-	taskType := fakeTaskTypeFromValue(job)
-	if taskType == "" {
+	jobType := fakeJobTypeFromValue(job)
+	if jobType == "" {
 		return Job{}, fmt.Errorf("dispatch job type could not be inferred")
 	}
 	if typed, ok := job.(interface{ JobType() string }); ok {
 		if t := typed.JobType(); t != "" {
-			taskType = t
+			jobType = t
 		}
 	}
 	payload, err := json.Marshal(job)
 	if err != nil {
 		return Job{}, fmt.Errorf("marshal dispatch job: %w", err)
 	}
-	return NewJob(taskType).Payload(payload).OnQueue(f.defaultQueue), nil
+	return NewJob(jobType).Payload(payload).OnQueue(f.defaultQueue), nil
 }
 
-func fakeTaskTypeFromValue(v any) string {
+func fakeJobTypeFromValue(v any) string {
 	t := reflect.TypeOf(v)
 	if t == nil {
 		return ""

@@ -1131,7 +1131,7 @@ job := queue.NewJob("emails:send").Backoff(500 * time.Millisecond)
 
 #### <a id="queue-job-bind"></a>queue.Job.Bind
 
-Bind unmarshals task payload JSON into dst.
+Bind unmarshals job payload JSON into dst.
 
 ```go
 type EmailPayload struct {
@@ -1151,7 +1151,7 @@ job := queue.NewJob("emails:send").Delay(300 * time.Millisecond)
 
 #### <a id="queue-newjob"></a>queue.NewJob
 
-NewJob creates a task value with a required task type.
+NewJob creates a task value with a required job type.
 
 ```go
 job := queue.NewJob("emails:send")
@@ -1167,7 +1167,7 @@ job := queue.NewJob("emails:send").OnQueue("critical")
 
 #### <a id="queue-job-payload"></a>queue.Job.Payload
 
-Payload sets task payload from common value types.
+Payload sets job payload from common value types.
 
 _Example: payload bytes_
 
@@ -1205,7 +1205,7 @@ taskMap := queue.NewJob("emails:send").Payload(map[string]any{
 
 #### <a id="queue-job-payloadbytes"></a>queue.Job.PayloadBytes
 
-PayloadBytes returns a copy of task payload bytes.
+PayloadBytes returns a copy of job payload bytes.
 
 ```go
 job := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
@@ -1230,7 +1230,7 @@ job := queue.NewJob("emails:send").Retry(4)
 
 #### <a id="queue-job-timeout"></a>queue.Job.Timeout
 
-Timeout sets per-task execution timeout.
+Timeout sets per-job execution timeout.
 
 ```go
 job := queue.NewJob("emails:send").Timeout(10 * time.Second)
@@ -1625,7 +1625,7 @@ driver := q.Driver()
 
 #### <a id="queue-queue-register"></a>queue.Queue.Register
 
-Register associates a handler with a task type.
+Register associates a handler with a job type.
 
 ```go
 var q queue.Queue
@@ -1672,7 +1672,7 @@ fake.AssertCount(nil, 1)
 
 #### <a id="queue-fakequeue-assertdispatched"></a>queue.FakeQueue.AssertDispatched
 
-AssertDispatched fails when taskType was not dispatched.
+AssertDispatched fails when jobType was not dispatched.
 
 ```go
 fake := queue.NewFake()
@@ -1681,7 +1681,7 @@ fake.AssertDispatched(nil, "emails:send")
 
 #### <a id="queue-fakequeue-assertdispatchedon"></a>queue.FakeQueue.AssertDispatchedOn
 
-AssertDispatchedOn fails when taskType was not dispatched on queueName.
+AssertDispatchedOn fails when jobType was not dispatched on queueName.
 
 ```go
 fake := queue.NewFake()
@@ -1693,7 +1693,7 @@ fake.AssertDispatchedOn(nil, "critical", "emails:send")
 
 #### <a id="queue-fakequeue-assertdispatchedtimes"></a>queue.FakeQueue.AssertDispatchedTimes
 
-AssertDispatchedTimes fails when taskType dispatch count does not match expected.
+AssertDispatchedTimes fails when jobType dispatch count does not match expected.
 
 ```go
 fake := queue.NewFake()
@@ -1702,7 +1702,7 @@ fake.AssertDispatchedTimes(nil, "emails:send", 2)
 
 #### <a id="queue-fakequeue-assertnotdispatched"></a>queue.FakeQueue.AssertNotDispatched
 
-AssertNotDispatched fails when taskType was dispatched.
+AssertNotDispatched fails when jobType was dispatched.
 
 ```go
 fake := queue.NewFake()
@@ -1776,7 +1776,7 @@ fmt.Println(len(records), records[0].Job.Type)
 
 #### <a id="queue-fakequeue-register"></a>queue.FakeQueue.Register
 
-Register associates a handler with a task type.
+Register associates a handler with a job type.
 
 ```go
 fake := queue.NewFake()

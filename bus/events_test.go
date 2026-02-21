@@ -19,11 +19,11 @@ func (q *failingDispatchQueue) Dispatch(job any) error {
 	return q.DispatchCtx(context.Background(), job)
 }
 func (q *failingDispatchQueue) DispatchCtx(context.Context, any) error { return q.err }
-func (q *failingDispatchQueue) Register(taskType string, handler queue.Handler) {
+func (q *failingDispatchQueue) Register(jobType string, handler queue.Handler) {
 	if q.handlers == nil {
 		q.handlers = make(map[string]queue.Handler)
 	}
-	q.handlers[taskType] = handler
+	q.handlers[jobType] = handler
 }
 func (q *failingDispatchQueue) StartWorkers(context.Context) error { return nil }
 func (q *failingDispatchQueue) Workers(count int) queue.Queue {

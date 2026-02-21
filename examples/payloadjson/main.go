@@ -10,5 +10,5 @@ func main() {
 
 	// Example: payload json
 	job := queue.NewJob("emails:send").PayloadJSON(map[string]int{"id": 1})
-	_ = task
+	_ = job
 }

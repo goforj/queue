@@ -63,9 +63,9 @@ func (q *rabbitMQQueue) Dispatch(ctx context.Context, task Job) error {
 	if err := task.validate(); err != nil {
 		return err
 	}
-	parsed := task.enqueueOptions()
+	parsed := task.jobOptions()
 	if parsed.queueName == "" {
-		return fmt.Errorf("task queue is required")
+		return fmt.Errorf("job queue is required")
 	}
 	if parsed.uniqueTTL > 0 && !q.claimUnique(task, parsed.queueName, parsed.uniqueTTL) {
 		return ErrDuplicate

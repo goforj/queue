@@ -42,12 +42,12 @@ func newRabbitMQWorker(cfg rabbitMQWorkerConfig) runtimeWorkerBackend {
 	}
 }
 
-func (w *rabbitMQWorker) Register(taskType string, handler Handler) {
-	if taskType == "" || handler == nil {
+func (w *rabbitMQWorker) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
 		return
 	}
 	w.mu.Lock()
-	w.handlers[taskType] = handler
+	w.handlers[jobType] = handler
 	w.mu.Unlock()
 }
 

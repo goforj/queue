@@ -66,9 +66,9 @@ func (q *natsQueue) Dispatch(_ context.Context, task Job) error {
 	if err := task.validate(); err != nil {
 		return err
 	}
-	parsed := task.enqueueOptions()
+	parsed := task.jobOptions()
 	if parsed.queueName == "" {
-		return fmt.Errorf("task queue is required")
+		return fmt.Errorf("job queue is required")
 	}
 	if q.nc == nil {
 		if err := q.ensureConn(); err != nil {

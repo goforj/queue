@@ -9,9 +9,9 @@ import (
 )
 
 func main() {
-	// Timeout sets per-task execution timeout.
+	// Timeout sets per-job execution timeout.
 
 	// Example: timeout
 	job := queue.NewJob("emails:send").Timeout(10 * time.Second)
-	_ = task
+	_ = job
 }

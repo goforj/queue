@@ -12,7 +12,7 @@ func main() {
 }
 
 func example1() {
-	// Payload sets task payload from common value types.
+	// Payload sets job payload from common value types.
 
 	// Example: payload bytes
 	taskBytes := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))

@@ -17,16 +17,16 @@ import (
 //	job := queue.NewJob("emails:send").
 //		PayloadJSON(map[string]string{"to": "user@example.com"}).
 //		OnQueue("critical")
-//	_ = task
+//	_ = job
 type Job struct {
 	Type string
 
 	payload  []byte
-	options  taskOptions
+	options  jobOptions
 	buildErr error
 }
 
-type taskOptions struct {
+type jobOptions struct {
 	queueName string
 	timeout   *time.Duration
 	maxRetry  *int
@@ -36,18 +36,18 @@ type taskOptions struct {
 	uniqueTTL time.Duration
 }
 
-// NewJob creates a task value with a required task type.
+// NewJob creates a job value with a required job type.
 // @group Job
 //
-// Example: new task
+// Example: new job
 //
 //	job := queue.NewJob("emails:send")
-//	_ = task
-func NewJob(taskType string) Job {
-	return Job{Type: taskType}
+//	_ = job
+func NewJob(jobType string) Job {
+	return Job{Type: jobType}
 }
 
-// Payload sets task payload from common value types.
+// Payload sets job payload from common value types.
 // @group Job
 //
 // Example: payload bytes
@@ -96,7 +96,7 @@ func (t Job) Payload(payload any) Job {
 // Example: payload json
 //
 //	job := queue.NewJob("emails:send").PayloadJSON(map[string]int{"id": 1})
-//	_ = task
+//	_ = job
 func (t Job) PayloadJSON(v any) Job {
 	payload, err := encodePayload(v)
 	if err != nil {
@@ -113,19 +113,19 @@ func (t Job) PayloadJSON(v any) Job {
 // Example: on queue
 //
 //	job := queue.NewJob("emails:send").OnQueue("critical")
-//	_ = task
+//	_ = job
 func (t Job) OnQueue(name string) Job {
 	t.options.queueName = name
 	return t
 }
 
-// Timeout sets per-task execution timeout.
+// Timeout sets per-job execution timeout.
 // @group Job
 //
 // Example: timeout
 //
 //	job := queue.NewJob("emails:send").Timeout(10 * time.Second)
-//	_ = task
+//	_ = job
 func (t Job) Timeout(timeout time.Duration) Job {
 	if timeout < 0 {
 		return t.withBuildErr(fmt.Errorf("timeout must be >= 0"))
@@ -140,7 +140,7 @@ func (t Job) Timeout(timeout time.Duration) Job {
 // Example: retry
 //
 //	job := queue.NewJob("emails:send").Retry(4)
-//	_ = task
+//	_ = job
 func (t Job) Retry(maxRetry int) Job {
 	if maxRetry < 0 {
 		return t.withBuildErr(fmt.Errorf("retry must be >= 0"))
@@ -155,7 +155,7 @@ func (t Job) Retry(maxRetry int) Job {
 // Example: backoff
 //
 //	job := queue.NewJob("emails:send").Backoff(500 * time.Millisecond)
-//	_ = task
+//	_ = job
 func (t Job) Backoff(backoff time.Duration) Job {
 	if backoff < 0 {
 		return t.withBuildErr(fmt.Errorf("backoff must be >= 0"))
@@ -170,7 +170,7 @@ func (t Job) Backoff(backoff time.Duration) Job {
 // Example: delay
 //
 //	job := queue.NewJob("emails:send").Delay(300 * time.Millisecond)
-//	_ = task
+//	_ = job
 func (t Job) Delay(delay time.Duration) Job {
 	if delay < 0 {
 		return t.withBuildErr(fmt.Errorf("delay must be >= 0"))
@@ -185,7 +185,7 @@ func (t Job) Delay(delay time.Duration) Job {
 // Example: unique for
 //
 //	job := queue.NewJob("emails:send").UniqueFor(45 * time.Second)
-//	_ = task
+//	_ = job
 func (t Job) UniqueFor(ttl time.Duration) Job {
 	if ttl < 0 {
 		return t.withBuildErr(fmt.Errorf("unique ttl must be >= 0"))
@@ -194,19 +194,19 @@ func (t Job) UniqueFor(ttl time.Duration) Job {
 	return t
 }
 
-// PayloadBytes returns a copy of task payload bytes.
+// PayloadBytes returns a copy of job payload bytes.
 // @group Job
 //
 // Example: payload bytes read
 //
 //	job := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
-//	payload := task.PayloadBytes()
+//	payload := job.PayloadBytes()
 //	_ = payload
 func (t Job) PayloadBytes() []byte {
 	return append([]byte(nil), t.payload...)
 }
 
-// Bind unmarshals task payload JSON into dst.
+// Bind unmarshals job payload JSON into dst.
 // @group Job
 //
 // Example: bind payload
@@ -216,7 +216,7 @@ func (t Job) PayloadBytes() []byte {
 //	}
 //	job := queue.NewJob("emails:send").Payload(EmailPayload{ID: 1})
 //	var payload EmailPayload
-//	_ = task.Bind(&payload)
+//	_ = job.Bind(&payload)
 func (t Job) Bind(dst any) error {
 	if dst == nil {
 		return fmt.Errorf("bind destination is required")
@@ -262,12 +262,12 @@ func (t Job) validate() error {
 		return t.buildErr
 	}
 	if t.Type == "" {
-		return fmt.Errorf("task type is required")
+		return fmt.Errorf("job type is required")
 	}
 	return nil
 }
 
-func (t Job) enqueueOptions() taskOptions {
+func (t Job) jobOptions() jobOptions {
 	return t.options
 }
 
@@ -283,7 +283,7 @@ func (t Job) withAttempt(attempt int) Job {
 	return t
 }
 
-// Handler processes a task.
+// Handler processes a job.
 // @group Job
 //
 // Example: handler
@@ -292,8 +292,8 @@ func (t Job) withAttempt(attempt int) Job {
 //	_ = handler
 type Handler func(ctx context.Context, task Job) error
 
-// ErrDuplicate indicates a duplicate unique task enqueue.
-var ErrDuplicate = errors.New("duplicate task")
+// ErrDuplicate indicates a duplicate unique job enqueue.
+var ErrDuplicate = errors.New("duplicate job")
 
 // ErrQueuerShuttingDown indicates enqueue was rejected during shutdown.
 var ErrQueuerShuttingDown = errors.New("queue is shutting down")

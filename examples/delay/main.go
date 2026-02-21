@@ -13,5 +13,5 @@ func main() {
 
 	// Example: delay
 	job := queue.NewJob("emails:send").Delay(300 * time.Millisecond)
-	_ = task
+	_ = job
 }

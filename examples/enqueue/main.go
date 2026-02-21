@@ -22,7 +22,7 @@ func main() {
 	}
 	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 		var payload EmailPayload
-		if err := task.Bind(&payload); err != nil {
+		if err := job.Bind(&payload); err != nil {
 			return err
 		}
 		_ = payload
@@ -32,5 +32,5 @@ func main() {
 		Payload(EmailPayload{ID: 1}).
 		OnQueue("default").
 		Delay(10 * time.Millisecond)
-	_ = q.DispatchCtx(context.Background(), task)
+	_ = q.DispatchCtx(context.Background(), job)
 }

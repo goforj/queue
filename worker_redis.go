@@ -25,11 +25,11 @@ func newRedisWorker(server asynqServer, mux *asynq.ServeMux) runtimeWorkerBacken
 	return &redisWorker{server: server, mux: mux}
 }
 
-func (w *redisWorker) Register(taskType string, handler Handler) {
-	if taskType == "" || handler == nil {
+func (w *redisWorker) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
 		return
 	}
-	w.mux.HandleFunc(taskType, func(ctx context.Context, task *asynq.Task) error {
+	w.mux.HandleFunc(jobType, func(ctx context.Context, task *asynq.Task) error {
 		return handler(ctx, NewJob(task.Type()).Payload(task.Payload()))
 	})
 }
