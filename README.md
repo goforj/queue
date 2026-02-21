@@ -22,8 +22,8 @@
 <p align="center">
   <a href="https://github.com/goforj/queue/actions/workflows/test.yml"><img src="https://img.shields.io/badge/integration%20matrix-7%2F7%20backends-brightgreen" alt="Integration matrix backends"></a>
   <a href="https://github.com/goforj/queue/actions/workflows/soak.yml"><img src="https://img.shields.io/badge/soak%2Fchaos-7%2F7%20backends-brightgreen" alt="Soak & chaos backends"></a>
-  <img src="https://img.shields.io/badge/tests-unit%20%E2%9C%85%20|%20race%20%E2%9C%85%20|%20integration%20%E2%9C%85%20|%20scenarios%20%E2%9C%85-brightgreen" alt="Test suites">
-  <img src="https://img.shields.io/badge/options-delay%20|%20backoff%20|%20timeout%20|%20retry%20|%20unique%20|%20queue-brightgreen" alt="Options covered">
+  <img src="https://img.shields.io/badge/integration%20backends-redis%20|%20database%20|%20nats%20|%20sqs%20|%20rabbitmq%20|%20sync%20|%20workerpool-blue" alt="Integration backends">
+  <img src="https://img.shields.io/badge/integration%20local-docker%20required-orange" alt="Integration local requirement">
 </p>
 
 ## Installation
@@ -56,17 +56,17 @@ func main() {
 	q, _ := queue.NewWorkerpool()
 	b, _ := bus.New(q)
 
-	b.Register("users:load", func(ctx context.Context, jc bus.Context) error {
+	b.Register("reports:generate", func(ctx context.Context, jc bus.Context) error {
 		return nil
 	})
-	b.Register("emails:render", func(ctx context.Context, jc bus.Context) error {
+	b.Register("reports:upload", func(ctx context.Context, jc bus.Context) error {
 		var payload EmailPayload
 		if err := jc.Bind(&payload); err != nil {
 			return err
 		}
 		return nil
 	})
-	b.Register("emails:send", func(ctx context.Context, jc bus.Context) error {
+	b.Register("users:notify_report_ready", func(ctx context.Context, jc bus.Context) error {
 		return nil
 	})
 
@@ -74,9 +74,12 @@ func main() {
 	defer b.Shutdown(context.Background())
 
 	chainID, _ := b.Chain(
-		bus.NewJob("users:load", map[string]any{"id": 123}),
-		bus.NewJob("emails:render", EmailPayload{ID: 123}),
-		bus.NewJob("emails:send", map[string]any{"id": 123}),
+		// 1) generate report data
+		bus.NewJob("reports:generate", map[string]any{"report_id": "rpt_123"}),
+		// 2) upload report artifact after generate succeeds
+		bus.NewJob("reports:upload", EmailPayload{ID: 123}),
+		// 3) notify user only after upload succeeds
+		bus.NewJob("users:notify_report_ready", map[string]any{"user_id": 123}),
 	).OnQueue("critical").Dispatch(context.Background())
 	_ = chainID
 }
