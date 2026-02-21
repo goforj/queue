@@ -15,24 +15,24 @@ func BenchmarkStatsCollectorObserve(b *testing.B) {
 		now := time.Now()
 		taskKey := "bench-task"
 		collector.Observe(Event{
-			Kind:    EventEnqueueAccepted,
-			Driver:  DriverSync,
-			Queue:   "default",
-			TaskKey: taskKey,
-			Time:    now,
+			Kind:   EventEnqueueAccepted,
+			Driver: DriverSync,
+			Queue:  "default",
+			JobKey: taskKey,
+			Time:   now,
 		})
 		collector.Observe(Event{
-			Kind:    EventProcessStarted,
-			Driver:  DriverSync,
-			Queue:   "default",
-			TaskKey: taskKey,
-			Time:    now.Add(1 * time.Millisecond),
+			Kind:   EventProcessStarted,
+			Driver: DriverSync,
+			Queue:  "default",
+			JobKey: taskKey,
+			Time:   now.Add(1 * time.Millisecond),
 		})
 		collector.Observe(Event{
 			Kind:     EventProcessSucceeded,
 			Driver:   DriverSync,
 			Queue:    "default",
-			TaskKey:  taskKey,
+			JobKey:   taskKey,
 			Duration: 2 * time.Millisecond,
 			Time:     now.Add(3 * time.Millisecond),
 		})
@@ -49,12 +49,12 @@ func BenchmarkEnqueueSync_NoObserver(b *testing.B) {
 		b.Fatalf("start workers failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
-	task := NewJob("job:bench:no-observer").OnQueue("default")
+	job := NewJob("job:bench:no-observer").OnQueue("default")
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := q.DispatchCtx(context.Background(), task); err != nil {
+		if err := q.DispatchCtx(context.Background(), job); err != nil {
 			b.Fatalf("dispatch failed: %v", err)
 		}
 	}
@@ -74,12 +74,12 @@ func BenchmarkEnqueueSync_WithObserver(b *testing.B) {
 		b.Fatalf("start workers failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
-	task := NewJob("job:bench:with-observer").OnQueue("default")
+	job := NewJob("job:bench:with-observer").OnQueue("default")
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := q.DispatchCtx(context.Background(), task); err != nil {
+		if err := q.DispatchCtx(context.Background(), job); err != nil {
 			b.Fatalf("dispatch failed: %v", err)
 		}
 	}

@@ -100,7 +100,7 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 		Timeout(timeout).
 		Retry(2).
 		Backoff(backoff)
-	if err := q.DispatchCtx(context.Background(), task); err != nil {
+	if err := q.DispatchCtx(context.Background(), job); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -188,7 +188,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 		Payload(scenarioPayload{ID: 1, Name: "delay-restart"}).
 		OnQueue(queueName).
 		Delay(delay)
-	if err := producer.DispatchCtx(context.Background(), task); err != nil {
+	if err := producer.DispatchCtx(context.Background(), job); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -266,7 +266,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		OnQueue(queueName).
 		Retry(1).
 		Backoff(backoff)
-	if err := producer.DispatchCtx(context.Background(), task); err != nil {
+	if err := producer.DispatchCtx(context.Background(), job); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -344,7 +344,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 		Payload(scenarioPayload{ID: 3, Name: "delay-queue"}).
 		OnQueue(queueName).
 		Delay(delay)
-	if err := q.DispatchCtx(context.Background(), task); err != nil {
+	if err := q.DispatchCtx(context.Background(), job); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -377,7 +377,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(15 * time.Second):
-		t.Fatal("timed out waiting for delayed task processing")
+		t.Fatal("timed out waiting for delayed job processing")
 	}
 	if elapsed := time.Since(start); elapsed < delay-150*time.Millisecond {
 		t.Fatalf("expected delayed execution after about %s, got %s", delay, elapsed)

@@ -15,7 +15,7 @@
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-378-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-377-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
@@ -97,7 +97,7 @@ import (
 func main() {
 	q, _ := queue.NewWorkerpool()
 
-	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 		return nil
 	})
 
@@ -222,7 +222,7 @@ _ = q
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 observer := queue.ObserverFunc(func(event queue.Event) {
 	attemptInfo := fmt.Sprintf("attempt=%d/%d", event.Attempt, event.MaxRetry+1)
-	taskInfo := fmt.Sprintf("task=%s key=%s queue=%s driver=%s", event.TaskType, event.TaskKey, event.Queue, event.Driver)
+	taskInfo := fmt.Sprintf("task=%s key=%s queue=%s driver=%s", event.JobType, event.JobKey, event.Queue, event.Driver)
 
 	switch event.Kind {
 	case queue.EventEnqueueAccepted:
@@ -337,9 +337,9 @@ _ = b
 | --- | --- |
 | enqueue_accepted | Job accepted by driver for enqueue. |
 | enqueue_rejected | Job enqueue failed. |
-| enqueue_duplicate | Duplicate task rejected due to uniqueness key. |
+| enqueue_duplicate | Duplicate job rejected due to uniqueness key. |
 | enqueue_canceled | Context cancellation prevented enqueue. |
-| process_started | Worker began processing task. |
+| process_started | Worker began processing job. |
 | process_succeeded | Handler returned success. |
 | process_failed | Handler returned error. |
 | process_retried | Driver scheduled retry attempt. |
@@ -384,7 +384,7 @@ fake.AssertDispatched(nil, "emails:send")
 
 ### Runtime/driver tests
 
-Use `queue.NewFake()` when testing queue/task-level dispatch semantics.
+Use `queue.NewFake()` when testing queue/job-level dispatch semantics.
 
 ```go
 fake := queue.NewFake()
@@ -398,7 +398,7 @@ If you do not need workflow orchestration, use `queue.Queue` directly.
 
 ```go
 q, _ := queue.NewWorkerpool()
-q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
     return nil
 })
 _ = q.Workers(2).StartWorkers(context.Background())
@@ -984,7 +984,7 @@ if err != nil {
 type EmailPayload struct {
 	ID int `json:"id"`
 }
-q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 	var payload EmailPayload
 	if err := task.Bind(&payload); err != nil {
 		return err
@@ -1046,7 +1046,7 @@ if err != nil {
 type EmailPayload struct {
 	ID int `json:"id"`
 }
-q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 	var payload EmailPayload
 	if err := task.Bind(&payload); err != nil {
 		return err
@@ -1151,7 +1151,7 @@ job := queue.NewJob("emails:send").Delay(300 * time.Millisecond)
 
 #### <a id="queue-newjob"></a>queue.NewJob
 
-NewJob creates a task value with a required job type.
+NewJob creates a job value with a required job type.
 
 ```go
 job := queue.NewJob("emails:send")
@@ -1209,7 +1209,7 @@ PayloadBytes returns a copy of job payload bytes.
 
 ```go
 job := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
-payload := task.PayloadBytes()
+payload := job.PayloadBytes()
 ```
 
 #### <a id="queue-job-payloadjson"></a>queue.Job.PayloadJSON
@@ -1338,7 +1338,7 @@ observer := queue.ObserverFunc(func(event queue.Event) {
 		"kind", event.Kind,
 		"driver", event.Driver,
 		"queue", event.Queue,
-		"task_type", event.TaskType,
+		"job_type", event.JobType,
 		"attempt", event.Attempt,
 		"max_retry", event.MaxRetry,
 		"duration", event.Duration,
@@ -1349,7 +1349,7 @@ observer.Observe(queue.Event{
 	Kind:     queue.EventProcessSucceeded,
 	Driver:   queue.DriverSync,
 	Queue:    "default",
-	TaskType: "emails:send",
+	JobType: "emails:send",
 })
 ```
 
@@ -1514,14 +1514,14 @@ collector.Observe(queue.Event{
 	Kind:   queue.EventProcessStarted,
 	Driver: queue.DriverSync,
 	Queue:  "default",
-	TaskKey: "task-1",
+	JobKey: "task-1",
 	Time:   time.Now(),
 })
 collector.Observe(queue.Event{
 	Kind:     queue.EventProcessSucceeded,
 	Driver:   queue.DriverSync,
 	Queue:    "default",
-	TaskKey:  "task-1",
+	JobKey:  "task-1",
 	Duration: 12 * time.Millisecond,
 	Time:     time.Now(),
 })

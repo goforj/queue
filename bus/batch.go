@@ -195,9 +195,9 @@ type batchCallbacks struct {
 	finally  func(ctx context.Context, st BatchState) error
 }
 
-func (r *runtime) handleInternalBatchJob(ctx context.Context, task queue.Job) error {
+func (r *runtime) handleInternalBatchJob(ctx context.Context, job queue.Job) error {
 	var env envelope
-	if err := task.Bind(&env); err != nil {
+	if err := job.Bind(&env); err != nil {
 		return err
 	}
 	_ = r.store.MarkBatchJobStarted(ctx, env.BatchID, env.JobID)
@@ -303,9 +303,9 @@ func (r *runtime) callbackOnce(ctx context.Context, key string) (bool, error) {
 	return r.store.MarkCallbackInvoked(ctx, key)
 }
 
-func (r *runtime) handleInternalCallback(ctx context.Context, task queue.Job) error {
+func (r *runtime) handleInternalCallback(ctx context.Context, job queue.Job) error {
 	var env envelope
-	if err := task.Bind(&env); err != nil {
+	if err := job.Bind(&env); err != nil {
 		return err
 	}
 	cbErr := error(nil)

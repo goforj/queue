@@ -12,7 +12,7 @@ This document defines the public observability event contract emitted through `O
 
 Dispatch lifecycle:
 
-- `EventEnqueueAccepted`: task accepted for dispatch.
+- `EventEnqueueAccepted`: job accepted for dispatch.
 - `EventEnqueueRejected`: dispatch failed with error.
 - `EventEnqueueDuplicate`: dispatch rejected as duplicate (`UniqueFor`).
 - `EventEnqueueCanceled`: dispatch canceled by context.
@@ -38,8 +38,8 @@ Present on all events whenever known:
 - `Time`
 - `Driver`
 - `Queue`
-- `TaskType`
-- `TaskKey`
+- `JobType`
+- `JobKey`
 
 Processing events additionally include:
 
@@ -56,7 +56,7 @@ Failure/cancel/reject events additionally include:
 - Events are per-attempt, not aggregated.
 - `EventProcessRetried` is emitted only when another attempt will occur (`Attempt < MaxRetry`).
 - `EventProcessArchived` is emitted when retries are exhausted.
-- `TaskKey` is a deterministic hash key for correlation. It is not guaranteed globally unique.
+- `JobKey` is a deterministic hash key for correlation. It is not guaranteed globally unique.
 - `Queue` defaults to `"default"` when not explicitly set.
 
 ## Cross-driver support

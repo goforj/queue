@@ -45,8 +45,8 @@ type Event struct {
 	Kind      EventKind
 	Driver    Driver
 	Queue     string
-	TaskType  string
-	TaskKey   string
+	JobType  string
+	JobKey   string
 	Attempt   int
 	MaxRetry  int
 	Scheduled bool
@@ -87,7 +87,7 @@ type ObserverFunc func(event Event)
 //			"kind", event.Kind,
 //			"driver", event.Driver,
 //			"queue", event.Queue,
-//			"task_type", event.TaskType,
+//			"job_type", event.JobType,
 //			"attempt", event.Attempt,
 //			"max_retry", event.MaxRetry,
 //			"duration", event.Duration,
@@ -98,7 +98,7 @@ type ObserverFunc func(event Event)
 //		Kind:     queue.EventProcessSucceeded,
 //		Driver:   queue.DriverSync,
 //		Queue:    "default",
-//		TaskType: "emails:send",
+//		JobType: "emails:send",
 //	})
 func (f ObserverFunc) Observe(event Event) {
 	f(event)
@@ -526,8 +526,8 @@ func (c *StatsCollector) Observe(event Event) {
 		if event.Scheduled {
 			state.counters.Scheduled++
 		}
-		if event.TaskKey != "" {
-			state.pendingByKey[event.TaskKey] = append(state.pendingByKey[event.TaskKey], now)
+		if event.JobKey != "" {
+			state.pendingByKey[event.JobKey] = append(state.pendingByKey[event.JobKey], now)
 		}
 	case EventEnqueueRejected, EventEnqueueCanceled:
 		// no queue-depth mutation
@@ -541,14 +541,14 @@ func (c *StatsCollector) Observe(event Event) {
 			state.counters.Scheduled--
 		}
 		state.counters.Active++
-		if event.TaskKey != "" {
-			if entries, ok := state.pendingByKey[event.TaskKey]; ok && len(entries) > 0 {
+		if event.JobKey != "" {
+			if entries, ok := state.pendingByKey[event.JobKey]; ok && len(entries) > 0 {
 				enqueuedAt := entries[0]
 				rest := entries[1:]
 				if len(rest) == 0 {
-					delete(state.pendingByKey, event.TaskKey)
+					delete(state.pendingByKey, event.JobKey)
 				} else {
-					state.pendingByKey[event.TaskKey] = rest
+					state.pendingByKey[event.JobKey] = rest
 				}
 				if now.After(enqueuedAt) {
 					state.waitSum += now.Sub(enqueuedAt)
@@ -606,14 +606,14 @@ func (c *StatsCollector) Observe(event Event) {
 //		Kind:   queue.EventProcessStarted,
 //		Driver: queue.DriverSync,
 //		Queue:  "default",
-//		TaskKey: "task-1",
+//		JobKey: "task-1",
 //		Time:   time.Now(),
 //	})
 //	collector.Observe(queue.Event{
 //		Kind:     queue.EventProcessSucceeded,
 //		Driver:   queue.DriverSync,
 //		Queue:    "default",
-//		TaskKey:  "task-1",
+//		JobKey:  "task-1",
 //		Duration: 12 * time.Millisecond,
 //		Time:     time.Now(),
 //	})
@@ -761,9 +761,9 @@ func (q *observedQueue) Dispatch(ctx context.Context, task Job) error {
 	opts := task.jobOptions()
 	base := Event{
 		Driver:    q.driver,
-		Queue:     taskQueueName(task),
-		TaskType:  task.Type,
-		TaskKey:   taskEventKey(task),
+		Queue:     jobQueueName(task),
+		JobType:  task.Type,
+		JobKey:   jobEventKey(task),
 		MaxRetry:  optionInt(opts.maxRetry),
 		Scheduled: opts.delay > 0,
 		Time:      time.Now(),
@@ -811,14 +811,14 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 		opts := task.jobOptions()
 		effectiveQueue := queueName
 		if effectiveQueue == "" {
-			effectiveQueue = taskQueueName(task)
+			effectiveQueue = jobQueueName(task)
 		}
 		start := time.Now()
 		base := Event{
 			Driver:    driver,
 			Queue:     effectiveQueue,
-			TaskType:  jobType,
-			TaskKey:   taskEventKey(task),
+			JobType:  jobType,
+			JobKey:   jobEventKey(task),
 			Attempt:   opts.attempt,
 			MaxRetry:  optionInt(opts.maxRetry),
 			Scheduled: opts.delay > 0,
@@ -865,7 +865,7 @@ func safeObserve(observer Observer, event Event) {
 	observer.Observe(event)
 }
 
-func taskQueueName(task Job) string {
+func jobQueueName(task Job) string {
 	queueName := task.jobOptions().queueName
 	if queueName == "" {
 		return "default"
@@ -880,7 +880,7 @@ func optionInt(v *int) int {
 	return *v
 }
 
-func taskEventKey(task Job) string {
+func jobEventKey(task Job) string {
 	hash := sha1.Sum(append([]byte(task.Type+":"), task.PayloadBytes()...))
 	return fmt.Sprintf("%x", hash[:])
 }

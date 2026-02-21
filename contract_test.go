@@ -266,14 +266,14 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		task := NewJob("job:contract:invalid-values").
+		job := NewJob("job:contract:invalid-values").
 			OnQueue("default").
 			Timeout(-1 * time.Second).
 			Retry(-1).
 			Backoff(-1 * time.Second).
 			Delay(-1 * time.Second).
 			UniqueFor(-1 * time.Second)
-		err := d.DispatchCtx(context.Background(), task)
+		err := d.DispatchCtx(context.Background(), job)
 		if err == nil {
 			t.Fatal("expected invalid option value error")
 		}
@@ -463,7 +463,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 	})
 
-	t.Run("missing_task_type", func(t *testing.T) {
+	t.Run("missing_job_type", func(t *testing.T) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		err := d.DispatchCtx(context.Background(), NewJob("").OnQueue("default"))

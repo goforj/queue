@@ -172,7 +172,7 @@ Execution flow:
 
 1. User dispatches job/chain/batch via Bus.
 2. Bus stores orchestration metadata (when required).
-3. Bus enqueues internal envelope task(s) via `q.DispatchCtx(...)`.
+3. Bus enqueues internal envelope job(s) via `q.DispatchCtx(...)`.
 4. Queue workers execute bus internal handlers.
 5. Bus executes registered user handler and updates orchestration state.
 6. Bus enqueues next node(s)/callback tasks as needed.
@@ -259,7 +259,7 @@ Retry ownership:
 Callback failure policy:
 
 - Commit terminal workflow state first.
-- Execute callback as `bus:callback` task.
+- Execute callback as `bus:callback` job.
 - Callback failure emits event and retries with capped attempts.
 - Callback failure does not roll back terminal workflow state.
 

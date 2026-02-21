@@ -86,7 +86,7 @@ func (d *localQueue) Driver() Driver {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 //		var payload EmailPayload
 //		if err := task.Bind(&payload); err != nil {
 //			return err
@@ -171,7 +171,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 //		var payload EmailPayload
 //		if err := task.Bind(&payload); err != nil {
 //			return err
@@ -183,7 +183,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //		Payload(EmailPayload{ID: 1}).
 //		OnQueue("default").
 //		Delay(10 * time.Millisecond)
-//	_ = q.DispatchCtx(context.Background(), task)
+//	_ = q.DispatchCtx(context.Background(), job)
 func (d *localQueue) Dispatch(ctx context.Context, task Job) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown

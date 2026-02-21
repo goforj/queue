@@ -66,6 +66,6 @@ What these prove:
 - FIFO ordering contract is asserted for backends marked ordering-capable.
 - Backpressure saturation scenarios prove continued forward progress.
 - Large payload processing is validated end-to-end.
-- Config/task-option fuzz coverage validates mixed option combinations across backends for stability.
+- Config/job-option fuzz coverage validates mixed option combinations across backends for stability.
 - End-to-end completion for all successfully dispatched tasks.
 
