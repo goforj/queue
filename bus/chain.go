@@ -8,9 +8,44 @@ import (
 )
 
 type ChainBuilder interface {
+	// OnQueue applies a default queue to chain jobs that do not set one.
+	// @group Chaining
+	//
+	// Example: set chain queue
+	//
+	//	chainID, _ := b.Chain(
+	//		bus.NewJob("a", nil),
+	//		bus.NewJob("b", nil),
+	//	).OnQueue("critical").Dispatch(context.Background())
+	//	_ = chainID
 	OnQueue(queue string) ChainBuilder
+	// Catch registers a callback invoked when chain execution fails.
+	// @group Chaining
+	//
+	// Example: chain catch callback
+	//
+	//	chainID, _ := b.Chain(bus.NewJob("a", nil)).
+	//		Catch(func(context.Context, bus.ChainState, error) error { return nil }).
+	//		Dispatch(context.Background())
+	//	_ = chainID
 	Catch(fn func(ctx context.Context, st ChainState, err error) error) ChainBuilder
+	// Finally registers a callback invoked once when chain execution finishes.
+	// @group Chaining
+	//
+	// Example: chain finally callback
+	//
+	//	chainID, _ := b.Chain(bus.NewJob("a", nil)).
+	//		Finally(func(context.Context, bus.ChainState) error { return nil }).
+	//		Dispatch(context.Background())
+	//	_ = chainID
 	Finally(fn func(ctx context.Context, st ChainState) error) ChainBuilder
+	// Dispatch creates and starts the chain workflow.
+	// @group Chaining
+	//
+	// Example: dispatch chain
+	//
+	//	chainID, _ := b.Chain(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
+	//	_ = chainID
 	Dispatch(ctx context.Context) (string, error)
 }
 

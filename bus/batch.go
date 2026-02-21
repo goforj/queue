@@ -8,13 +8,77 @@ import (
 )
 
 type BatchBuilder interface {
+	// Name sets a display name for the batch.
+	// @group Batching
+	//
+	// Example: set batch name
+	//
+	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).Name("nightly").Dispatch(context.Background())
+	//	_ = batchID
 	Name(name string) BatchBuilder
+	// OnQueue applies a default queue to batch jobs that do not set one.
+	// @group Batching
+	//
+	// Example: set batch queue
+	//
+	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).OnQueue("critical").Dispatch(context.Background())
+	//	_ = batchID
 	OnQueue(queue string) BatchBuilder
+	// AllowFailures keeps the batch running when individual jobs fail.
+	// @group Batching
+	//
+	// Example: allow failures
+	//
+	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).AllowFailures().Dispatch(context.Background())
+	//	_ = batchID
 	AllowFailures() BatchBuilder
+	// Progress registers a callback invoked as jobs complete.
+	// @group Batching
+	//
+	// Example: progress callback
+	//
+	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).
+	//		Progress(func(context.Context, bus.BatchState) error { return nil }).
+	//		Dispatch(context.Background())
+	//	_ = batchID
 	Progress(fn func(ctx context.Context, st BatchState) error) BatchBuilder
+	// Then registers a callback invoked once when batch succeeds.
+	// @group Batching
+	//
+	// Example: then callback
+	//
+	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).
+	//		Then(func(context.Context, bus.BatchState) error { return nil }).
+	//		Dispatch(context.Background())
+	//	_ = batchID
 	Then(fn func(ctx context.Context, st BatchState) error) BatchBuilder
+	// Catch registers a callback invoked when batch encounters a failure.
+	// @group Batching
+	//
+	// Example: catch callback
+	//
+	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).
+	//		Catch(func(context.Context, bus.BatchState, error) error { return nil }).
+	//		Dispatch(context.Background())
+	//	_ = batchID
 	Catch(fn func(ctx context.Context, st BatchState, err error) error) BatchBuilder
+	// Finally registers a callback invoked once when batch reaches terminal state.
+	// @group Batching
+	//
+	// Example: finally callback
+	//
+	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).
+	//		Finally(func(context.Context, bus.BatchState) error { return nil }).
+	//		Dispatch(context.Background())
+	//	_ = batchID
 	Finally(fn func(ctx context.Context, st BatchState) error) BatchBuilder
+	// Dispatch creates and starts the batch workflow.
+	// @group Batching
+	//
+	// Example: dispatch batch
+	//
+	//	batchID, _ := b.Batch(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
+	//	_ = batchID
 	Dispatch(ctx context.Context) (string, error)
 }
 

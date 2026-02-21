@@ -78,6 +78,7 @@ func run() error {
 
 type FuncDoc struct {
 	Package     string
+	Owner       string
 	Name        string
 	Group       string
 	Behavior    string
@@ -122,12 +123,46 @@ func parseFuncs(root string) ([]*FuncDoc, error) {
 
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Package == out[j].Package {
-			return out[i].Name < out[j].Name
+			if out[i].Owner == out[j].Owner {
+				return out[i].Name < out[j].Name
+			}
+			return out[i].Owner < out[j].Owner
 		}
 		return out[i].Package < out[j].Package
 	})
 
 	return out, nil
+}
+
+func receiverOwner(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return receiverOwner(t.X)
+	case *ast.IndexExpr:
+		return receiverOwner(t.X)
+	case *ast.IndexListExpr:
+		return receiverOwner(t.X)
+	default:
+		return ""
+	}
+}
+
+func anchorFor(fd *FuncDoc) string {
+	parts := []string{fd.Package}
+	if fd.Owner != "" {
+		parts = append(parts, fd.Owner)
+	}
+	parts = append(parts, fd.Name)
+	return strings.ToLower(strings.Join(parts, "-"))
+}
+
+func displayName(fd *FuncDoc) string {
+	if fd.Owner != "" {
+		return fd.Owner + "." + fd.Name
+	}
+	return fd.Name
 }
 
 func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
@@ -159,30 +194,71 @@ func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
 
 	for _, file := range pkg.Files {
 		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Doc == nil {
-				continue
-			}
-
-			if !ast.IsExported(fn.Name.Name) {
-				continue
-			}
-
-			fd := &FuncDoc{
-				Package:     pkgName,
-				Name:        fn.Name.Name,
-				Group:       extractGroup(fn.Doc),
-				Behavior:    extractBehavior(fn.Doc),
-				Fluent:      extractFluent(fn.Doc),
-				Description: extractDescription(fn.Doc),
-				Examples:    extractExamples(fset, fn),
-			}
-
-			key := fd.Package + "." + fd.Name
-			if existing, ok := funcs[key]; ok {
-				existing.Examples = append(existing.Examples, fd.Examples...)
-			} else {
-				funcs[key] = fd
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Doc == nil || !ast.IsExported(d.Name.Name) {
+					continue
+				}
+				owner := ""
+				if d.Recv != nil && len(d.Recv.List) > 0 {
+					owner = receiverOwner(d.Recv.List[0].Type)
+					if owner != "" && !ast.IsExported(owner) {
+						continue
+					}
+				}
+				fd := &FuncDoc{
+					Package:     pkgName,
+					Owner:       owner,
+					Name:        d.Name.Name,
+					Group:       extractGroup(d.Doc),
+					Behavior:    extractBehavior(d.Doc),
+					Fluent:      extractFluent(d.Doc),
+					Description: extractDescription(d.Doc),
+					Examples:    extractExamplesFromCommentGroup(fset, d.Doc),
+				}
+				mergeFuncDoc(funcs, fd)
+			case *ast.GenDecl:
+				if d.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range d.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					iface, ok := typeSpec.Type.(*ast.InterfaceType)
+					if !ok || iface.Methods == nil {
+						continue
+					}
+					for _, field := range iface.Methods.List {
+						if len(field.Names) == 0 {
+							continue
+						}
+						doc := field.Doc
+						if doc == nil {
+							doc = field.Comment
+						}
+						if doc == nil {
+							continue
+						}
+						for _, name := range field.Names {
+							if !ast.IsExported(name.Name) {
+								continue
+							}
+							fd := &FuncDoc{
+								Package:     pkgName,
+								Owner:       typeSpec.Name.Name,
+								Name:        name.Name,
+								Group:       extractGroup(doc),
+								Behavior:    extractBehavior(doc),
+								Fluent:      extractFluent(doc),
+								Description: extractDescription(doc),
+								Examples:    extractExamplesFromCommentGroup(fset, doc),
+							}
+							mergeFuncDoc(funcs, fd)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -195,7 +271,35 @@ func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
 		out = append(out, fd)
 	}
 
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Package == out[j].Package {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Package < out[j].Package
+	})
+
 	return out, nil
+}
+
+func mergeFuncDoc(funcs map[string]*FuncDoc, fd *FuncDoc) {
+	key := fd.Package + "." + fd.Owner + "." + fd.Name
+	if existing, ok := funcs[key]; ok {
+		existing.Examples = append(existing.Examples, fd.Examples...)
+		if existing.Description == "" && fd.Description != "" {
+			existing.Description = fd.Description
+		}
+		if existing.Group == "Other" && fd.Group != "Other" {
+			existing.Group = fd.Group
+		}
+		if existing.Behavior == "" && fd.Behavior != "" {
+			existing.Behavior = fd.Behavior
+		}
+		if existing.Fluent == "" && fd.Fluent != "" {
+			existing.Fluent = fd.Fluent
+		}
+		return
+	}
+	funcs[key] = fd
 }
 
 func extractGroup(group *ast.CommentGroup) string {
@@ -251,7 +355,7 @@ func extractDescription(group *ast.CommentGroup) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-func extractExamples(fset *token.FileSet, fn *ast.FuncDecl) []Example {
+func extractExamplesFromCommentGroup(fset *token.FileSet, group *ast.CommentGroup) []Example {
 	var out []Example
 	var current []string
 	var label string
@@ -274,7 +378,7 @@ func extractExamples(fset *token.FileSet, fn *ast.FuncDecl) []Example {
 		inExample = false
 	}
 
-	for _, c := range fn.Doc.List {
+	for _, c := range group.List {
 		raw := strings.TrimPrefix(c.Text, "//")
 		line := strings.TrimSpace(raw)
 
@@ -380,13 +484,18 @@ func renderAPI(funcs []*FuncDoc) string {
 
 		for _, group := range groupNames {
 			sort.Slice(byPackageGroup[pkg][group], func(i, j int) bool {
-				return byPackageGroup[pkg][group][i].Name < byPackageGroup[pkg][group][j].Name
+				left := byPackageGroup[pkg][group][i]
+				right := byPackageGroup[pkg][group][j]
+				if left.Name == right.Name {
+					return left.Owner < right.Owner
+				}
+				return left.Name < right.Name
 			})
 
 			var links []string
 			for _, fn := range byPackageGroup[pkg][group] {
-				anchor := strings.ToLower(fn.Package + "-" + fn.Name)
-				label := fn.Package + "." + fn.Name
+				anchor := anchorFor(fn)
+				label := displayName(fn)
 				links = append(links, fmt.Sprintf("[%s](#%s)", label, anchor))
 			}
 
@@ -411,10 +520,18 @@ func renderAPI(funcs []*FuncDoc) string {
 
 		for _, group := range groupNames {
 			buf.WriteString("### " + group + "\n\n")
+			sort.Slice(byPackageGroup[pkg][group], func(i, j int) bool {
+				left := byPackageGroup[pkg][group][i]
+				right := byPackageGroup[pkg][group][j]
+				if left.Name == right.Name {
+					return left.Owner < right.Owner
+				}
+				return left.Name < right.Name
+			})
 			for _, fn := range byPackageGroup[pkg][group] {
-				anchor := strings.ToLower(fn.Package + "-" + fn.Name)
+				anchor := anchorFor(fn)
 
-				header := fn.Package + "." + fn.Name
+				header := fn.Package + "." + displayName(fn)
 				if fn.Behavior != "" {
 					header += " · " + fn.Behavior
 				}
