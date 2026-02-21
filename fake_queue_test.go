@@ -20,7 +20,7 @@ func TestFakeQueue_Assertions(t *testing.T) {
 	fake.AssertNotDispatched(t, "unknown:task")
 }
 
-func TestFakeQueue_DispatchStructInfersTaskType(t *testing.T) {
+func TestFakeQueue_DispatchStructInfersJobType(t *testing.T) {
 	type EmailPayload struct {
 		ID int `json:"id"`
 	}

@@ -42,7 +42,7 @@ Primary objectives:
 
 - `StartWorkers(ctx context.Context) error`
 - `Dispatch(job any) error`
-- `DispatchCtx(ctx context.Context, task any) error`
+- `DispatchCtx(ctx context.Context, job any) error`
 - `Register(jobType string, handler Handler)`
 - `Shutdown(ctx context.Context) error`
 

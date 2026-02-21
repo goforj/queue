@@ -54,7 +54,7 @@ func TestLocalQueue_DispatchDelayed(t *testing.T) {
 	select {
 	case <-triggered:
 	case <-time.After(250 * time.Millisecond):
-		t.Fatal("expected delayed task to execute")
+		t.Fatal("expected delayed job to execute")
 	}
 }
 
