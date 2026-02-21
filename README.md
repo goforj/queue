@@ -134,7 +134,7 @@ _ = b
 Use `queue` constructors to choose transport/runtime. Your bus handlers and jobs remain unchanged.
 
 | Backend | Constructor |
-| --- | --- |
+| ---: | --- |
 | In-process sync | `queue.NewSync()` |
 | In-process worker pool | `queue.NewWorkerpool()` |
 | SQL durable queue | `queue.NewDatabase(driver, dsn)` |
@@ -193,6 +193,50 @@ q, _ := queue.New(queue.Config{
 _ = q
 ```
 
+### Kitchen sink event logging
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+observer := queue.ObserverFunc(func(event queue.Event) {
+	attemptInfo := fmt.Sprintf("attempt=%d/%d", event.Attempt, event.MaxRetry+1)
+	taskInfo := fmt.Sprintf("task=%s key=%s queue=%s driver=%s", event.TaskType, event.TaskKey, event.Queue, event.Driver)
+
+	switch event.Kind {
+	case queue.EventEnqueueAccepted:
+		logger.Info("Accepted dispatch", "msg", fmt.Sprintf("Accepted %s", taskInfo), "scheduled", event.Scheduled, "at", event.Time.Format(time.RFC3339Nano))
+	case queue.EventEnqueueRejected:
+		logger.Error("Dispatch failed", "msg", fmt.Sprintf("Rejected %s", taskInfo), "error", event.Err)
+	case queue.EventEnqueueDuplicate:
+		logger.Warn("Skipped duplicate job", "msg", fmt.Sprintf("Duplicate %s", taskInfo))
+	case queue.EventEnqueueCanceled:
+		logger.Warn("Canceled dispatch", "msg", fmt.Sprintf("Canceled %s", taskInfo), "error", event.Err)
+	case queue.EventProcessStarted:
+		logger.Info("Started processing job", "msg", fmt.Sprintf("Started %s (%s)", taskInfo, attemptInfo), "at", event.Time.Format(time.RFC3339Nano))
+	case queue.EventProcessSucceeded:
+		logger.Info("Processed job", "msg", fmt.Sprintf("Processed %s in %s (%s)", taskInfo, event.Duration, attemptInfo))
+	case queue.EventProcessFailed:
+		logger.Error("Processing failed", "msg", fmt.Sprintf("Failed %s after %s (%s)", taskInfo, event.Duration, attemptInfo), "error", event.Err)
+	case queue.EventProcessRetried:
+		logger.Warn("Retrying job", "msg", fmt.Sprintf("Retry scheduled for %s (%s)", taskInfo, attemptInfo), "error", event.Err)
+	case queue.EventProcessArchived:
+		logger.Error("Archived failed job", "msg", fmt.Sprintf("Archived %s after final failure (%s)", taskInfo, attemptInfo), "error", event.Err)
+	case queue.EventQueuePaused:
+		logger.Info("Paused queue", "msg", fmt.Sprintf("Paused queue=%s driver=%s", event.Queue, event.Driver))
+	case queue.EventQueueResumed:
+		logger.Info("Resumed queue", "msg", fmt.Sprintf("Resumed queue=%s driver=%s", event.Queue, event.Driver))
+	default:
+		logger.Info("Queue event", "msg", fmt.Sprintf("kind=%s %s", event.Kind, taskInfo))
+	}
+})
+
+q, _ := queue.New(queue.Config{
+	Driver:    queue.DriverRedis,
+	RedisAddr: "127.0.0.1:6379",
+	Observer:  observer,
+})
+_ = q
+```
+
 ### Observability capabilities by driver
 
 | Driver | Native Stats | Pause/Resume |
@@ -221,6 +265,29 @@ _ = q
 | `process_archived` | Task moved to terminal failure state. |
 | `queue_paused` | Queue was paused (driver supports pause). |
 | `queue_resumed` | Queue was resumed. |
+
+### Bus events reference
+
+| EventKind | Meaning |
+| --- | --- |
+| `dispatch_started` | Bus accepted a dispatch request and created a dispatch record. |
+| `dispatch_succeeded` | Dispatch was successfully enqueued to the underlying queue runtime. |
+| `dispatch_failed` | Dispatch failed before job execution could start. |
+| `job_started` | A bus job handler started execution. |
+| `job_succeeded` | A bus job handler completed successfully. |
+| `job_failed` | A bus job handler returned an error. |
+| `chain_started` | A chain workflow was created and started. |
+| `chain_advanced` | Chain progressed from one node to the next node. |
+| `chain_completed` | Chain reached terminal success. |
+| `chain_failed` | Chain reached terminal failure. |
+| `batch_started` | A batch workflow was created and started. |
+| `batch_progressed` | Batch state changed as jobs completed/failed. |
+| `batch_completed` | Batch reached terminal success (or allowed-failure completion). |
+| `batch_failed` | Batch reached terminal failure. |
+| `batch_cancelled` | Batch was cancelled before normal completion. |
+| `callback_started` | Chain/batch callback execution started. |
+| `callback_succeeded` | Chain/batch callback completed successfully. |
+| `callback_failed` | Chain/batch callback returned an error. |
 
 ## Testing By Audience
 
