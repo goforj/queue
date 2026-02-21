@@ -162,25 +162,77 @@ func extractFuncDocs(
 	out := map[string]*FuncDoc{}
 
 	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Doc == nil {
-			continue
-		}
-
-		name := fn.Name.Name
-		if !ast.IsExported(name) {
-			continue
-		}
-
-		out[name] = &FuncDoc{
-			Name:        name,
-			Group:       extractGroup(fn.Doc),
-			Description: extractFuncDescription(fn.Doc),
-			Examples:    extractBlocks(fset, filename, name, fn),
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Doc == nil {
+				continue
+			}
+			name := d.Name.Name
+			if !ast.IsExported(name) {
+				continue
+			}
+			mergeFuncDoc(out, &FuncDoc{
+				Name:        name,
+				Group:       extractGroup(d.Doc),
+				Description: extractFuncDescription(d.Doc),
+				Examples:    extractBlocks(fset, filename, name, d.Doc),
+			})
+		case *ast.GenDecl:
+			if d.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range d.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				iface, ok := typeSpec.Type.(*ast.InterfaceType)
+				if !ok || iface.Methods == nil {
+					continue
+				}
+				for _, field := range iface.Methods.List {
+					if len(field.Names) == 0 {
+						continue
+					}
+					doc := field.Doc
+					if doc == nil {
+						doc = field.Comment
+					}
+					if doc == nil {
+						continue
+					}
+					for _, nameIdent := range field.Names {
+						name := nameIdent.Name
+						if !ast.IsExported(name) {
+							continue
+						}
+						mergeFuncDoc(out, &FuncDoc{
+							Name:        name,
+							Group:       extractGroup(doc),
+							Description: extractFuncDescription(doc),
+							Examples:    extractBlocks(fset, filename, name, doc),
+						})
+					}
+				}
+			}
 		}
 	}
 
 	return out
+}
+
+func mergeFuncDoc(out map[string]*FuncDoc, fd *FuncDoc) {
+	if existing, ok := out[fd.Name]; ok {
+		existing.Examples = append(existing.Examples, fd.Examples...)
+		if existing.Description == "" && fd.Description != "" {
+			existing.Description = fd.Description
+		}
+		if existing.Group == "Other" && fd.Group != "Other" {
+			existing.Group = fd.Group
+		}
+		return
+	}
+	out[fd.Name] = fd
 }
 
 func extractGroup(group *ast.CommentGroup) string {
@@ -249,11 +301,11 @@ func docLines(group *ast.CommentGroup) []docLine {
 func extractBlocks(
 	fset *token.FileSet,
 	filename, funcName string,
-	fn *ast.FuncDecl,
+	group *ast.CommentGroup,
 ) []Example {
 
 	var out []Example
-	lines := docLines(fn.Doc)
+	lines := docLines(group)
 
 	var label string
 	var collected []string
@@ -390,6 +442,9 @@ func writeMain(base string, fd *FuncDoc, importPath string) error {
 		}
 		if strings.Contains(ex.Code, "os.") {
 			imports["os"] = true
+		}
+		if strings.Contains(ex.Code, "slog.") {
+			imports["log/slog"] = true
 		}
 		if strings.Contains(ex.Code, "context.") {
 			imports["context"] = true
