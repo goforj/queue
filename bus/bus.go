@@ -328,26 +328,26 @@ func (r *runtime) dispatchEnvelope(ctx context.Context, taskType string, env env
 	if err != nil {
 		return err
 	}
-	task := queue.NewTask(taskType).Payload(payload)
+	job := queue.NewJob(taskType).Payload(payload)
 	if env.Job.Options.Queue != "" {
-		task = task.OnQueue(env.Job.Options.Queue)
+		job = job.OnQueue(env.Job.Options.Queue)
 	}
 	if env.Job.Options.Delay > 0 {
-		task = task.Delay(env.Job.Options.Delay)
+		job = job.Delay(env.Job.Options.Delay)
 	}
 	if env.Job.Options.Timeout > 0 {
-		task = task.Timeout(env.Job.Options.Timeout)
+		job = job.Timeout(env.Job.Options.Timeout)
 	}
 	if env.Job.Options.Retry > 0 {
-		task = task.Retry(env.Job.Options.Retry)
+		job = job.Retry(env.Job.Options.Retry)
 	}
 	if env.Job.Options.Backoff > 0 {
-		task = task.Backoff(env.Job.Options.Backoff)
+		job = job.Backoff(env.Job.Options.Backoff)
 	}
 	if env.Job.Options.UniqueFor > 0 {
-		task = task.UniqueFor(env.Job.Options.UniqueFor)
+		job = job.UniqueFor(env.Job.Options.UniqueFor)
 	}
-	return r.q.DispatchCtx(ctx, task)
+	return r.q.DispatchCtx(ctx, job)
 }
 
 func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind string, err error) error {
@@ -371,7 +371,7 @@ func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind stri
 	return r.dispatchEnvelope(ctx, internalTaskCallback, cbEnv)
 }
 
-func (r *runtime) handleInternalJob(ctx context.Context, task queue.Task) error {
+func (r *runtime) handleInternalJob(ctx context.Context, task queue.Job) error {
 	var env envelope
 	if err := task.Bind(&env); err != nil {
 		return err

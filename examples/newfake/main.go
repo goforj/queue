@@ -14,11 +14,11 @@ func main() {
 	// Example: fake queue assertions
 	fake := queue.NewFake()
 	_ = fake.Dispatch(
-		queue.NewTask("emails:send").
+		queue.NewJob("emails:send").
 			Payload(map[string]any{"id": 1}).
 			OnQueue("critical"),
 	)
 	records := fake.Records()
-	fmt.Println(len(records), records[0].Queue, records[0].Task.Type)
+	fmt.Println(len(records), records[0].Queue, records[0].Job.Type)
 	// Output: 1 critical emails:send
 }

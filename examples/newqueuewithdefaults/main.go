@@ -21,7 +21,7 @@ func main() {
 	type EmailPayload struct {
 		ID int `json:"id"`
 	}
-	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 		var payload EmailPayload
 		if err := task.Bind(&payload); err != nil {
 			return err
@@ -31,5 +31,5 @@ func main() {
 	})
 	_ = q.StartWorkers(context.Background())
 	defer q.Shutdown(context.Background())
-	_ = q.Dispatch(queue.NewTask("emails:send").Payload(EmailPayload{ID: 1}))
+	_ = q.Dispatch(queue.NewJob("emails:send").Payload(EmailPayload{ID: 1}))
 }

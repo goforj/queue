@@ -110,13 +110,13 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:immediate", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:immediate", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(context.Background(), NewTask("job:contract:immediate").Payload([]byte("ok")).OnQueue("default"))
+		err := d.DispatchCtx(context.Background(), NewJob("job:contract:immediate").Payload([]byte("ok")).OnQueue("default"))
 		if err != nil {
 			t.Fatalf("immediate dispatch failed: %v", err)
 		}
@@ -127,13 +127,13 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:delay", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:delay", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(context.Background(), NewTask("job:contract:delay").Payload([]byte("delayed")).OnQueue("default").Delay(20*time.Millisecond))
+		err := d.DispatchCtx(context.Background(), NewJob("job:contract:delay").Payload([]byte("delayed")).OnQueue("default").Delay(20*time.Millisecond))
 		if err != nil {
 			t.Fatalf("delayed dispatch failed: %v", err)
 		}
@@ -144,13 +144,13 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:queue", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:queue", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(context.Background(), NewTask("job:contract:queue").Payload([]byte("queue")).OnQueue("contract"))
+		err := d.DispatchCtx(context.Background(), NewJob("job:contract:queue").Payload([]byte("queue")).OnQueue("contract"))
 		if err != nil {
 			t.Fatalf("dispatch with queue failed: %v", err)
 		}
@@ -161,13 +161,13 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:noqueue", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:noqueue", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(context.Background(), NewTask("job:contract:noqueue").Payload([]byte("no-queue")))
+		err := d.DispatchCtx(context.Background(), NewJob("job:contract:noqueue").Payload([]byte("no-queue")))
 		if factory.requiresQueueName {
 			if err == nil {
 				t.Fatal("expected missing queue error")
@@ -187,13 +187,13 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:nilctx", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:nilctx", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(nil, NewTask("job:contract:nilctx").Payload([]byte("ok")).OnQueue("default"))
+		err := d.DispatchCtx(nil, NewJob("job:contract:nilctx").Payload([]byte("ok")).OnQueue("default"))
 		if err != nil {
 			t.Fatalf("dispatch with nil context failed: %v", err)
 		}
@@ -208,7 +208,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		timeoutChecked := make(chan bool, 1)
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:timeout", func(ctx context.Context, _ Task) error {
+				q.Register("job:contract:timeout", func(ctx context.Context, _ Job) error {
 					_, ok := ctx.Deadline()
 					timeoutChecked <- ok
 					return nil
@@ -218,7 +218,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(context.Background(), NewTask("job:contract:timeout").Payload([]byte("timeout")).OnQueue("default").Timeout(80*time.Millisecond))
+		err := d.DispatchCtx(context.Background(), NewJob("job:contract:timeout").Payload([]byte("timeout")).OnQueue("default").Timeout(80*time.Millisecond))
 		if err != nil {
 			t.Fatalf("dispatch with timeout failed: %v", err)
 		}
@@ -239,13 +239,13 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:invalid-payload", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:invalid-payload", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		task := NewTask("job:contract:invalid-payload").Payload(func() {})
+		task := NewJob("job:contract:invalid-payload").Payload(func() {})
 		err := d.DispatchCtx(context.Background(), task.OnQueue("default"))
 		if err == nil {
 			t.Fatal("expected payload build error")
@@ -260,13 +260,13 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:invalid-values", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:invalid-values", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		task := NewTask("job:contract:invalid-values").
+		task := NewJob("job:contract:invalid-values").
 			OnQueue("default").
 			Timeout(-1 * time.Second).
 			Retry(-1).
@@ -294,7 +294,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 		seen := make(chan payload, 1)
 		startWorker(t, d, func(q Queue) {
-			q.Register("job:contract:bind", func(_ context.Context, task Task) error {
+			q.Register("job:contract:bind", func(_ context.Context, task Job) error {
 				var in payload
 				if err := task.Bind(&in); err != nil {
 					return err
@@ -307,7 +307,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 			factory.beforeEach(t)
 		}
 		want := payload{ID: 42, Name: "bind"}
-		if err := d.DispatchCtx(context.Background(), NewTask("job:contract:bind").Payload(want).OnQueue("default")); err != nil {
+		if err := d.DispatchCtx(context.Background(), NewJob("job:contract:bind").Payload(want).OnQueue("default")); err != nil {
 			t.Fatalf("dispatch bind task failed: %v", err)
 		}
 		select {
@@ -327,7 +327,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		done := make(chan struct{}, 1)
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:maxretry", func(_ context.Context, _ Task) error {
+				q.Register("job:contract:maxretry", func(_ context.Context, _ Job) error {
 					if calls.Add(1) < 3 {
 						return errors.New("transient")
 					}
@@ -339,7 +339,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(context.Background(), NewTask("job:contract:maxretry").Payload([]byte("retry")).OnQueue("default").Retry(2))
+		err := d.DispatchCtx(context.Background(), NewJob("job:contract:maxretry").Payload([]byte("retry")).OnQueue("default").Retry(2))
 		if err != nil {
 			t.Fatalf("dispatch with max retry failed: %v", err)
 		}
@@ -363,7 +363,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		var calls atomic.Int32
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:backoff", func(_ context.Context, _ Task) error {
+				q.Register("job:contract:backoff", func(_ context.Context, _ Job) error {
 					if calls.Add(1) < 2 {
 						return errors.New("retry-me")
 					}
@@ -375,7 +375,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(context.Background(), NewTask("job:contract:backoff").Payload([]byte("backoff")).OnQueue("default").Retry(1).Backoff(10*time.Millisecond))
+		err := d.DispatchCtx(context.Background(), NewJob("job:contract:backoff").Payload([]byte("backoff")).OnQueue("default").Retry(1).Backoff(10*time.Millisecond))
 		if factory.backoffUnsupported {
 			if !errors.Is(err, ErrBackoffUnsupported) {
 				t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
@@ -405,7 +405,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:unique", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:unique", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
@@ -421,16 +421,16 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 		taskType := "job:contract:unique"
 		payload := []byte("same")
-		err := d.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
+		err := d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
 		if err != nil {
 			t.Fatalf("first unique dispatch failed: %v", err)
 		}
-		err = d.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
+		err = d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
 		if !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
 		time.Sleep(expiryWait)
-		err = d.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
+		err = d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(ttl))
 		if err != nil {
 			t.Fatalf("dispatch after unique ttl failed: %v", err)
 		}
@@ -441,7 +441,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
 			startWorker(t, d, func(q Queue) {
-				q.Register("job:contract:unique-scope", func(_ context.Context, _ Task) error { return nil })
+				q.Register("job:contract:unique-scope", func(_ context.Context, _ Job) error { return nil })
 			})
 		}
 		if factory.beforeEach != nil {
@@ -453,11 +453,11 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if ttl <= 0 {
 			ttl = 400 * time.Millisecond
 		}
-		first := NewTask(taskType).Payload(payload).OnQueue("queue-a").UniqueFor(ttl)
+		first := NewJob(taskType).Payload(payload).OnQueue("queue-a").UniqueFor(ttl)
 		if err := d.DispatchCtx(context.Background(), first); err != nil {
 			t.Fatalf("first dispatch failed: %v", err)
 		}
-		second := NewTask(taskType).Payload(payload).OnQueue("queue-b").UniqueFor(ttl)
+		second := NewJob(taskType).Payload(payload).OnQueue("queue-b").UniqueFor(ttl)
 		if err := d.DispatchCtx(context.Background(), second); err != nil {
 			t.Fatalf("expected unique lock to be queue scoped, got %v", err)
 		}
@@ -466,7 +466,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 	t.Run("missing_task_type", func(t *testing.T) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
-		err := d.DispatchCtx(context.Background(), NewTask("").OnQueue("default"))
+		err := d.DispatchCtx(context.Background(), NewJob("").OnQueue("default"))
 		if err == nil {
 			t.Fatal("expected missing task type error")
 		}
@@ -481,7 +481,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		err := d.DispatchCtx(context.Background(), NewTask("job:contract:missing-handler").OnQueue("default"))
+		err := d.DispatchCtx(context.Background(), NewJob("job:contract:missing-handler").OnQueue("default"))
 		if factory.assertMissingHandlerErr && err == nil {
 			t.Fatal("expected missing handler error")
 		}

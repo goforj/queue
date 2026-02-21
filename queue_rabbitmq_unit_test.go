@@ -35,14 +35,14 @@ func TestRabbitMQQueue_HelperBranches(t *testing.T) {
 func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 	q := newRabbitMQQueue("amqp://example", "default").(*rabbitMQQueue)
 
-	if err := q.Dispatch(context.Background(), NewTask("")); err == nil {
+	if err := q.Dispatch(context.Background(), NewJob("")); err == nil {
 		t.Fatal("expected validation error for empty task type")
 	}
-	if err := q.Dispatch(context.Background(), NewTask("job:noqueue")); err == nil {
+	if err := q.Dispatch(context.Background(), NewJob("job:noqueue")); err == nil {
 		t.Fatal("expected queue required error")
 	}
 
-	task := NewTask("job:dup").Payload([]byte(`{"k":"v"}`)).OnQueue("default").UniqueFor(10 * time.Second)
+	task := NewJob("job:dup").Payload([]byte(`{"k":"v"}`)).OnQueue("default").UniqueFor(10 * time.Second)
 	_ = q.claimUnique(task, "default", 10*time.Second)
 	if err := q.Dispatch(context.Background(), task); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate before dial path, got %v", err)
@@ -51,7 +51,7 @@ func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 
 func TestRabbitMQQueue_ClaimUniquePrunesExpired(t *testing.T) {
 	q := newRabbitMQQueue("amqp://example", "default").(*rabbitMQQueue)
-	task := NewTask("job:unique").Payload([]byte(`{"id":1}`)).OnQueue("default")
+	task := NewJob("job:unique").Payload([]byte(`{"id":1}`)).OnQueue("default")
 	key := "default:" + task.Type + ":" + string(task.PayloadBytes())
 	q.unique[key] = time.Now().Add(-time.Second)
 

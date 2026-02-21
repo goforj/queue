@@ -175,7 +175,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	}
 	err := handler(
 		runCtx,
-		NewTask(incoming.Type).
+		NewJob(incoming.Type).
 			Payload(incoming.Payload).
 			OnQueue(incoming.Queue).
 			Retry(incoming.MaxRetry).

@@ -30,9 +30,9 @@ func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
 	w := newRedisWorker(server, mux).(*redisWorker)
 
 	// Register no-op branches.
-	w.Register("", func(context.Context, Task) error { return nil })
+	w.Register("", func(context.Context, Job) error { return nil })
 	w.Register("job:nil", nil)
-	w.Register("job:ok", func(context.Context, Task) error { return nil })
+	w.Register("job:ok", func(context.Context, Job) error { return nil })
 
 	// Start with canceled context branch.
 	ctx, cancel := context.WithCancel(context.Background())

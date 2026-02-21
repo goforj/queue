@@ -102,7 +102,7 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 	}
 	err := handler(
 		ctx,
-		NewTask(incoming.Type).
+		NewJob(incoming.Type).
 			Payload(incoming.Payload).
 			OnQueue(incoming.Queue).
 			Retry(incoming.MaxRetry).

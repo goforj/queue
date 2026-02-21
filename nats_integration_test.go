@@ -26,7 +26,7 @@ func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new nats queue failed: %v", err)
 	}
-	q.Register("job:nats:bind", func(_ context.Context, task Task) error {
+	q.Register("job:nats:bind", func(_ context.Context, task Job) error {
 		var in payload
 		if err := task.Bind(&in); err != nil {
 			return err
@@ -40,7 +40,7 @@ func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 42}
-	if err := q.DispatchCtx(context.Background(), NewTask("job:nats:bind").Payload(want).OnQueue("default")); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewJob("job:nats:bind").Payload(want).OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestNATSIntegration_OptionBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new nats queue failed: %v", err)
 	}
-	q.Register("job:nats:opts", func(ctx context.Context, _ Task) error {
+	q.Register("job:nats:opts", func(ctx context.Context, _ Job) error {
 		if calls.Add(1) == 1 {
 			_, ok := ctx.Deadline()
 			deadlineSeen <- ok
@@ -89,7 +89,7 @@ func TestNATSIntegration_OptionBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewTask("job:nats:opts").
+	task := NewJob("job:nats:opts").
 		Payload([]byte("opts")).
 		OnQueue("default").
 		Delay(delay).
@@ -137,11 +137,11 @@ func TestNATSIntegration_UniqueDuplicate(t *testing.T) {
 
 	taskType := "job:nats:unique"
 	payload := []byte("same")
-	first := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	first := NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
 	if err := q.DispatchCtx(context.Background(), first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	second := NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
 	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)

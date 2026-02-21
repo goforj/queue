@@ -33,7 +33,7 @@ func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
-	q.Register("job:rabbitmq:bind", func(_ context.Context, task Task) error {
+	q.Register("job:rabbitmq:bind", func(_ context.Context, task Job) error {
 		var in payload
 		if err := task.Bind(&in); err != nil {
 			return err
@@ -47,7 +47,7 @@ func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 42}
-	if err := q.DispatchCtx(context.Background(), NewTask("job:rabbitmq:bind").Payload(want).OnQueue("default")); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewJob("job:rabbitmq:bind").Payload(want).OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
-	q.Register("job:rabbitmq:opts", func(ctx context.Context, _ Task) error {
+	q.Register("job:rabbitmq:opts", func(ctx context.Context, _ Job) error {
 		if calls.Add(1) == 1 {
 			_, ok := ctx.Deadline()
 			deadlineSeen <- ok
@@ -93,7 +93,7 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewTask("job:rabbitmq:opts").
+	task := NewJob("job:rabbitmq:opts").
 		Payload([]byte("opts")).
 		OnQueue("default").
 		Delay(delay).
@@ -138,11 +138,11 @@ func TestRabbitMQIntegration_UniqueDuplicate(t *testing.T) {
 
 	taskType := "job:rabbitmq:unique"
 	payload := []byte("same")
-	first := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	first := NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
 	if err := q.DispatchCtx(context.Background(), first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
+	second := NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond)
 	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
@@ -167,7 +167,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	consumer1.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer1.Register(taskType, func(_ context.Context, _ Job) error {
 		select {
 		case done <- struct{}{}:
 		default:
@@ -184,7 +184,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	}
 	defer producer.Shutdown(context.Background())
 
-	task := NewTask(taskType).
+	task := NewJob(taskType).
 		Payload(scenarioPayload{ID: 1, Name: "delay-restart"}).
 		OnQueue(queueName).
 		Delay(delay)
@@ -200,7 +200,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
-	consumer2.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer2.Register(taskType, func(_ context.Context, _ Job) error {
 		select {
 		case done <- struct{}{}:
 		default:
@@ -237,7 +237,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	consumer1.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer1.Register(taskType, func(_ context.Context, _ Job) error {
 		if calls.Add(1) == 1 {
 			select {
 			case firstAttempt <- struct{}{}:
@@ -261,7 +261,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	}
 	defer producer.Shutdown(context.Background())
 
-	task := NewTask(taskType).
+	task := NewJob(taskType).
 		Payload(scenarioPayload{ID: 2, Name: "retry-restart"}).
 		OnQueue(queueName).
 		Retry(1).
@@ -283,7 +283,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
-	consumer2.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer2.Register(taskType, func(_ context.Context, _ Job) error {
 		if calls.Add(1) == 1 {
 			return errors.New("retry once")
 		}
@@ -322,7 +322,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
-	consumer.Register(taskType, func(_ context.Context, _ Task) error {
+	consumer.Register(taskType, func(_ context.Context, _ Job) error {
 		select {
 		case done <- struct{}{}:
 		default:
@@ -340,7 +340,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewTask(taskType).
+	task := NewJob(taskType).
 		Payload(scenarioPayload{ID: 3, Name: "delay-queue"}).
 		OnQueue(queueName).
 		Delay(delay)

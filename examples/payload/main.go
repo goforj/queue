@@ -15,7 +15,7 @@ func example1() {
 	// Payload sets task payload from common value types.
 
 	// Example: payload bytes
-	taskBytes := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+	taskBytes := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
 	_ = taskBytes
 
 }
@@ -30,7 +30,7 @@ func example2() {
 		To   string `json:"to"`
 		Meta Meta   `json:"meta"`
 	}
-	taskStruct := queue.NewTask("emails:send").Payload(EmailPayload{
+	taskStruct := queue.NewJob("emails:send").Payload(EmailPayload{
 		ID:   1,
 		To:   "user@example.com",
 		Meta: Meta{Nested: true},
@@ -41,7 +41,7 @@ func example2() {
 
 func example3() {
 	// Example: payload map
-	taskMap := queue.NewTask("emails:send").Payload(map[string]any{
+	taskMap := queue.NewJob("emails:send").Payload(map[string]any{
 		"id":  1,
 		"to":  "user@example.com",
 		"meta": map[string]any{"nested": true},

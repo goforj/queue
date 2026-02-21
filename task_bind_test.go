@@ -21,7 +21,7 @@ func TestTaskBind_Success(t *testing.T) {
 		Meta Meta   `json:"meta"`
 	}
 
-	task := NewTask("job:bind").Payload(Payload{
+	task := NewJob("job:bind").Payload(Payload{
 		ID:   7,
 		Name: "alice",
 		Meta: Meta{Active: true},
@@ -37,7 +37,7 @@ func TestTaskBind_Success(t *testing.T) {
 }
 
 func TestTaskBind_RequiresPointerDestination(t *testing.T) {
-	task := NewTask("job:bind").Payload(map[string]any{"id": 1})
+	task := NewJob("job:bind").Payload(map[string]any{"id": 1})
 
 	if err := task.Bind(nil); err == nil {
 		t.Fatal("expected nil destination error")
@@ -55,7 +55,7 @@ func TestTaskBind_RequiresPointerDestination(t *testing.T) {
 }
 
 func TestTaskBind_InvalidJSON(t *testing.T) {
-	task := NewTask("job:bind").Payload("not-json")
+	task := NewJob("job:bind").Payload("not-json")
 	var out map[string]any
 	if err := task.Bind(&out); err == nil {
 		t.Fatal("expected bind error for invalid json payload")
@@ -63,7 +63,7 @@ func TestTaskBind_InvalidJSON(t *testing.T) {
 }
 
 func TestTaskPayloadJSON_UsesMarshalerAndCapturesError(t *testing.T) {
-	task := NewTask("job:json").PayloadJSON(goodMarshaler{})
+	task := NewJob("job:json").PayloadJSON(goodMarshaler{})
 	var out map[string]bool
 	if err := task.Bind(&out); err != nil {
 		t.Fatalf("bind marshaled payload failed: %v", err)
@@ -72,7 +72,7 @@ func TestTaskPayloadJSON_UsesMarshalerAndCapturesError(t *testing.T) {
 		t.Fatalf("expected marshaled payload to include ok=true, got %#v", out)
 	}
 
-	errTask := NewTask("job:json").PayloadJSON(badMarshaler{})
+	errTask := NewJob("job:json").PayloadJSON(badMarshaler{})
 	if err := errTask.validate(); err == nil {
 		t.Fatal("expected payload marshaling error")
 	}

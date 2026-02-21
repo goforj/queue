@@ -12,7 +12,7 @@ import (
 // DispatchRecord captures one dispatch observed by FakeQueue.
 // @group Testing
 type DispatchRecord struct {
-	Task  Task
+	Job   Job
 	Queue string
 }
 
@@ -32,12 +32,12 @@ type FakeQueue struct {
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(
-//		queue.NewTask("emails:send").
+//		queue.NewJob("emails:send").
 //			Payload(map[string]any{"id": 1}).
 //			OnQueue("critical"),
 //	)
 //	records := fake.Records()
-//	fmt.Println(len(records), records[0].Queue, records[0].Task.Type)
+//	fmt.Println(len(records), records[0].Queue, records[0].Job.Type)
 //	// Output: 1 critical emails:send
 func NewFake() *FakeQueue {
 	return &FakeQueue{
@@ -62,7 +62,7 @@ func (f *FakeQueue) Driver() Driver { return DriverNull }
 // Example: dispatch to fake queue
 //
 //	fake := queue.NewFake()
-//	err := fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+//	err := fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 //	_ = err
 func (f *FakeQueue) Dispatch(job any) error {
 	return f.DispatchCtx(context.Background(), job)
@@ -75,7 +75,7 @@ func (f *FakeQueue) Dispatch(job any) error {
 //
 //	fake := queue.NewFake()
 //	ctx := context.Background()
-//	err := fake.DispatchCtx(ctx, queue.NewTask("emails:send").OnQueue("default"))
+//	err := fake.DispatchCtx(ctx, queue.NewJob("emails:send").OnQueue("default"))
 //	fmt.Println(err == nil)
 //	// Output: true
 func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
@@ -94,7 +94,7 @@ func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 	}
 	f.mu.Lock()
 	f.records = append(f.records, DispatchRecord{
-		Task:  task,
+		Job:   task,
 		Queue: queueName,
 	})
 	f.mu.Unlock()
@@ -107,7 +107,7 @@ func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 // Example: register no-op on fake
 //
 //	fake := queue.NewFake()
-//	fake.Register("emails:send", func(context.Context, queue.Task) error { return nil })
+//	fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 func (f *FakeQueue) Register(string, Handler) {}
 
 // StartWorkers starts worker execution.
@@ -147,7 +147,7 @@ func (f *FakeQueue) Shutdown(context.Context) error { return nil }
 // Example: reset records
 //
 //	fake := queue.NewFake()
-//	_ = fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+//	_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 //	fmt.Println(len(fake.Records()))
 //	fake.Reset()
 //	fmt.Println(len(fake.Records()))
@@ -166,9 +166,9 @@ func (f *FakeQueue) Reset() {
 // Example: read records
 //
 //	fake := queue.NewFake()
-//	_ = fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+//	_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 //	records := fake.Records()
-//	fmt.Println(len(records), records[0].Task.Type)
+//	fmt.Println(len(records), records[0].Job.Type)
 //	// Output: 1 emails:send
 func (f *FakeQueue) Records() []DispatchRecord {
 	f.mu.RLock()
@@ -198,7 +198,7 @@ func (f *FakeQueue) AssertNothingDispatched(t testing.TB) {
 // Example: assert dispatch count
 //
 //	fake := queue.NewFake()
-//	_ = fake.Dispatch(queue.NewTask("emails:send"))
+//	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	fake.AssertCount(nil, 1)
 func (f *FakeQueue) AssertCount(t testing.TB, expected int) {
 	t.Helper()
@@ -213,12 +213,12 @@ func (f *FakeQueue) AssertCount(t testing.TB, expected int) {
 // Example: assert task type dispatched
 //
 //	fake := queue.NewFake()
-//	_ = fake.Dispatch(queue.NewTask("emails:send"))
+//	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	fake.AssertDispatched(nil, "emails:send")
 func (f *FakeQueue) AssertDispatched(t testing.TB, taskType string) {
 	t.Helper()
 	for _, record := range f.Records() {
-		if record.Task.Type == taskType {
+		if record.Job.Type == taskType {
 			return
 		}
 	}
@@ -232,14 +232,14 @@ func (f *FakeQueue) AssertDispatched(t testing.TB, taskType string) {
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(
-//		queue.NewTask("emails:send").
+//		queue.NewJob("emails:send").
 //			OnQueue("critical"),
 //	)
 //	fake.AssertDispatchedOn(nil, "critical", "emails:send")
 func (f *FakeQueue) AssertDispatchedOn(t testing.TB, queueName, taskType string) {
 	t.Helper()
 	for _, record := range f.Records() {
-		if record.Task.Type == taskType && record.Queue == queueName {
+		if record.Job.Type == taskType && record.Queue == queueName {
 			return
 		}
 	}
@@ -252,14 +252,14 @@ func (f *FakeQueue) AssertDispatchedOn(t testing.TB, queueName, taskType string)
 // Example: assert task type dispatched times
 //
 //	fake := queue.NewFake()
-//	_ = fake.Dispatch(queue.NewTask("emails:send"))
-//	_ = fake.Dispatch(queue.NewTask("emails:send"))
+//	_ = fake.Dispatch(queue.NewJob("emails:send"))
+//	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	fake.AssertDispatchedTimes(nil, "emails:send", 2)
 func (f *FakeQueue) AssertDispatchedTimes(t testing.TB, taskType string, expected int) {
 	t.Helper()
 	var count int
 	for _, record := range f.Records() {
-		if record.Task.Type == taskType {
+		if record.Job.Type == taskType {
 			count++
 		}
 	}
@@ -274,41 +274,41 @@ func (f *FakeQueue) AssertDispatchedTimes(t testing.TB, taskType string, expecte
 // Example: assert task type not dispatched
 //
 //	fake := queue.NewFake()
-//	_ = fake.Dispatch(queue.NewTask("emails:send"))
+//	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	fake.AssertNotDispatched(nil, "emails:cancel")
 func (f *FakeQueue) AssertNotDispatched(t testing.TB, taskType string) {
 	t.Helper()
 	for _, record := range f.Records() {
-		if record.Task.Type == taskType {
+		if record.Job.Type == taskType {
 			t.Fatalf("expected task type %q not to be dispatched", taskType)
 		}
 	}
 }
 
-func (f *FakeQueue) taskFromJob(job any) (Task, error) {
-	if task, ok := job.(Task); ok {
+func (f *FakeQueue) taskFromJob(job any) (Job, error) {
+	if task, ok := job.(Job); ok {
 		if task.Type == "" {
-			return Task{}, fmt.Errorf("dispatch task type is required")
+			return Job{}, fmt.Errorf("dispatch task type is required")
 		}
 		return task, nil
 	}
 	if job == nil {
-		return Task{}, fmt.Errorf("dispatch job is nil")
+		return Job{}, fmt.Errorf("dispatch job is nil")
 	}
 	taskType := fakeTaskTypeFromValue(job)
 	if taskType == "" {
-		return Task{}, fmt.Errorf("dispatch job type could not be inferred")
+		return Job{}, fmt.Errorf("dispatch job type could not be inferred")
 	}
-	if typed, ok := job.(interface{ TaskType() string }); ok {
-		if t := typed.TaskType(); t != "" {
+	if typed, ok := job.(interface{ JobType() string }); ok {
+		if t := typed.JobType(); t != "" {
 			taskType = t
 		}
 	}
 	payload, err := json.Marshal(job)
 	if err != nil {
-		return Task{}, fmt.Errorf("marshal dispatch job: %w", err)
+		return Job{}, fmt.Errorf("marshal dispatch job: %w", err)
 	}
-	return NewTask(taskType).Payload(payload).OnQueue(f.defaultQueue), nil
+	return NewJob(taskType).Payload(payload).OnQueue(f.defaultQueue), nil
 }
 
 func fakeTaskTypeFromValue(v any) string {

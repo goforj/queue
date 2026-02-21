@@ -10,7 +10,7 @@ func main() {
 
 	// Example: assert task type dispatched times
 	fake := queue.NewFake()
-	_ = fake.Dispatch(queue.NewTask("emails:send"))
-	_ = fake.Dispatch(queue.NewTask("emails:send"))
+	_ = fake.Dispatch(queue.NewJob("emails:send"))
+	_ = fake.Dispatch(queue.NewJob("emails:send"))
 	fake.AssertDispatchedTimes(nil, "emails:send", 2)
 }

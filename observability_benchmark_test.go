@@ -44,12 +44,12 @@ func BenchmarkEnqueueSync_NoObserver(b *testing.B) {
 	if err != nil {
 		b.Fatalf("new queue failed: %v", err)
 	}
-	q.Register("job:bench:no-observer", func(context.Context, Task) error { return nil })
+	q.Register("job:bench:no-observer", func(context.Context, Job) error { return nil })
 	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
 		b.Fatalf("start workers failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
-	task := NewTask("job:bench:no-observer").OnQueue("default")
+	task := NewJob("job:bench:no-observer").OnQueue("default")
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -69,12 +69,12 @@ func BenchmarkEnqueueSync_WithObserver(b *testing.B) {
 	if err != nil {
 		b.Fatalf("new queue failed: %v", err)
 	}
-	q.Register("job:bench:with-observer", func(context.Context, Task) error { return nil })
+	q.Register("job:bench:with-observer", func(context.Context, Job) error { return nil })
 	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
 		b.Fatalf("start workers failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
-	task := NewTask("job:bench:with-observer").OnQueue("default")
+	task := NewJob("job:bench:with-observer").OnQueue("default")
 
 	b.ReportAllocs()
 	b.ResetTimer()

@@ -88,7 +88,7 @@ func TestSQSWorker_ProcessSuccessInvokesHandlerAndDeletes(t *testing.T) {
 	called := 0
 	w := &sqsWorker{
 		handlers: map[string]Handler{
-			"job:ok": func(ctx context.Context, task Task) error {
+			"job:ok": func(ctx context.Context, task Job) error {
 				called++
 				if _, ok := ctx.Deadline(); !ok {
 					t.Fatal("expected timeout context")
@@ -139,7 +139,7 @@ func TestSQSWorker_ProcessFailureRetryAndTerminal(t *testing.T) {
 		stub := &sqsWorkerClientStub{}
 		w := &sqsWorker{
 			handlers: map[string]Handler{
-				"job:retry": func(context.Context, Task) error { return errors.New("boom") },
+				"job:retry": func(context.Context, Job) error { return errors.New("boom") },
 			},
 			client:   stub,
 			queueURL: "https://example.local/queue/default",
@@ -176,7 +176,7 @@ func TestSQSWorker_ProcessFailureRetryAndTerminal(t *testing.T) {
 		stub := &sqsWorkerClientStub{}
 		w := &sqsWorker{
 			handlers: map[string]Handler{
-				"job:terminal": func(context.Context, Task) error { return errors.New("boom") },
+				"job:terminal": func(context.Context, Job) error { return errors.New("boom") },
 			},
 			client:   stub,
 			queueURL: "https://example.local/queue/default",
@@ -208,12 +208,12 @@ func TestSQSWorker_NewRegisterAndShutdown(t *testing.T) {
 		t.Fatalf("expected default queue fallback, got %q", backend.cfg.DefaultQueue)
 	}
 
-	backend.Register("", func(context.Context, Task) error { return nil })
+	backend.Register("", func(context.Context, Job) error { return nil })
 	backend.Register("job:nil", nil)
 	if len(backend.handlers) != 0 {
 		t.Fatalf("expected empty handlers for ignored registrations, got %d", len(backend.handlers))
 	}
-	backend.Register("job:ok", func(context.Context, Task) error { return nil })
+	backend.Register("job:ok", func(context.Context, Job) error { return nil })
 	if len(backend.handlers) != 1 {
 		t.Fatalf("expected one handler registration, got %d", len(backend.handlers))
 	}

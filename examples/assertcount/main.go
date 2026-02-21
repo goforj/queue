@@ -10,6 +10,6 @@ func main() {
 
 	// Example: assert dispatch count
 	fake := queue.NewFake()
-	_ = fake.Dispatch(queue.NewTask("emails:send"))
+	_ = fake.Dispatch(queue.NewJob("emails:send"))
 	fake.AssertCount(nil, 1)
 }

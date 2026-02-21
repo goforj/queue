@@ -15,7 +15,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new null queue failed: %v", err)
 		}
-		benchmarkDispatchLoop(b, ctx, q, NewTask("bench:null").OnQueue("default"))
+		benchmarkDispatchLoop(b, ctx, q, NewJob("bench:null").OnQueue("default"))
 	})
 
 	b.Run("sync", func(b *testing.B) {
@@ -23,7 +23,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new sync queue failed: %v", err)
 		}
-		q.Register("bench:sync", func(context.Context, Task) error { return nil })
+		q.Register("bench:sync", func(context.Context, Job) error { return nil })
 		if err := q.Workers(1).StartWorkers(ctx); err != nil {
 			b.Fatalf("start sync workers failed: %v", err)
 		}
@@ -36,7 +36,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new workerpool queue failed: %v", err)
 		}
-		q.Register("bench:workerpool", func(context.Context, Task) error { return nil })
+		q.Register("bench:workerpool", func(context.Context, Job) error { return nil })
 		if err := q.Workers(4).StartWorkers(ctx); err != nil {
 			b.Fatalf("start workerpool failed: %v", err)
 		}
@@ -55,7 +55,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new sqlite queue failed: %v", err)
 		}
-		q.Register("bench:sqlite", func(context.Context, Task) error { return nil })
+		q.Register("bench:sqlite", func(context.Context, Job) error { return nil })
 		if err := q.StartWorkers(ctx); err != nil {
 			b.Fatalf("start sqlite workers failed: %v", err)
 		}
@@ -64,7 +64,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	})
 }
 
-func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q Queue, task Task) {
+func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q Queue, task Job) {
 	// Warm up one dispatch so constructor/startup overhead stays out of the loop.
 	if err := q.DispatchCtx(ctx, task); err != nil {
 		b.Fatalf("warmup dispatch failed: %v", err)
@@ -78,8 +78,8 @@ func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q Queue, task Task
 	}
 }
 
-func benchTask(taskType, queueName string) Task {
-	return NewTask(taskType).
+func benchTask(taskType, queueName string) Job {
+	return NewJob(taskType).
 		Payload(struct {
 			ID   int    `json:"id"`
 			Kind string `json:"kind"`

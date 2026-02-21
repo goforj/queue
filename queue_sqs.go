@@ -88,7 +88,7 @@ func (q *sqsQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (q *sqsQueue) Dispatch(ctx context.Context, task Task) error {
+func (q *sqsQueue) Dispatch(ctx context.Context, task Job) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -201,7 +201,7 @@ func isQueueDoesNotExist(err error, target **types.QueueDoesNotExist) bool {
 	return false
 }
 
-func (q *sqsQueue) claimUnique(task Task, queueName string, ttl time.Duration) bool {
+func (q *sqsQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
 	key := queueName + ":" + task.Type + ":" + string(task.PayloadBytes())
 	q.mu.Lock()

@@ -21,7 +21,7 @@ func example1() {
 	// Example: dispatch typed task
 	var q queue.Queue
 	err := q.Dispatch(
-		queue.NewTask("emails:send").
+		queue.NewJob("emails:send").
 			Payload(map[string]any{"id": 1}).
 			OnQueue("default"),
 	)
@@ -31,7 +31,7 @@ func example1() {
 func example2() {
 	// Example: dispatch to fake queue
 	fake := queue.NewFake()
-	err := fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+	err := fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 	_ = err
 }
 
@@ -44,7 +44,7 @@ func example3() {
 	type EmailPayload struct {
 		ID int `json:"id"`
 	}
-	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 		var payload EmailPayload
 		if err := task.Bind(&payload); err != nil {
 			return err
@@ -52,7 +52,7 @@ func example3() {
 		_ = payload
 		return nil
 	})
-	task := queue.NewTask("emails:send").
+	job := queue.NewJob("emails:send").
 		Payload(EmailPayload{ID: 1}).
 		OnQueue("default").
 		Delay(10 * time.Millisecond)

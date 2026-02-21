@@ -9,9 +9,9 @@ func TestFakeQueue_Assertions(t *testing.T) {
 	fake := NewFake()
 	fake.AssertNothingDispatched(t)
 
-	_ = fake.Dispatch(NewTask("emails:send").Payload(map[string]int{"id": 1}).OnQueue("critical"))
-	_ = fake.Dispatch(NewTask("emails:send").Payload(map[string]int{"id": 2}).OnQueue("critical"))
-	_ = fake.Dispatch(NewTask("emails:cleanup").Payload(map[string]int{"id": 3}).OnQueue("default"))
+	_ = fake.Dispatch(NewJob("emails:send").Payload(map[string]int{"id": 1}).OnQueue("critical"))
+	_ = fake.Dispatch(NewJob("emails:send").Payload(map[string]int{"id": 2}).OnQueue("critical"))
+	_ = fake.Dispatch(NewJob("emails:cleanup").Payload(map[string]int{"id": 3}).OnQueue("default"))
 
 	fake.AssertCount(t, 3)
 	fake.AssertDispatched(t, "emails:send")
@@ -34,8 +34,8 @@ func TestFakeQueue_DispatchStructInfersTaskType(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
-	if records[0].Task.Type != "EmailPayload" {
-		t.Fatalf("expected inferred type EmailPayload, got %q", records[0].Task.Type)
+	if records[0].Job.Type != "EmailPayload" {
+		t.Fatalf("expected inferred type EmailPayload, got %q", records[0].Job.Type)
 	}
 	if records[0].Queue != "default" {
 		t.Fatalf("expected default queue, got %q", records[0].Queue)
@@ -47,7 +47,7 @@ func TestFakeQueue_ContextCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := fake.DispatchCtx(ctx, NewTask("emails:send").Payload([]byte("{}")).OnQueue("default")); err == nil {
+	if err := fake.DispatchCtx(ctx, NewJob("emails:send").Payload([]byte("{}")).OnQueue("default")); err == nil {
 		t.Fatal("expected canceled context error")
 	}
 	fake.AssertNothingDispatched(t)
@@ -58,7 +58,7 @@ func TestFakeQueue_NoopRuntimeMethodsAndReset(t *testing.T) {
 	if fake.Driver() != DriverNull {
 		t.Fatalf("expected fake driver %q, got %q", DriverNull, fake.Driver())
 	}
-	fake.Register("job:noop", func(context.Context, Task) error { return nil })
+	fake.Register("job:noop", func(context.Context, Job) error { return nil })
 	if err := fake.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers noop failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestFakeQueue_NoopRuntimeMethodsAndReset(t *testing.T) {
 		t.Fatalf("shutdown noop failed: %v", err)
 	}
 
-	_ = fake.Dispatch(NewTask("job:one").OnQueue("default"))
+	_ = fake.Dispatch(NewJob("job:one").OnQueue("default"))
 	if len(fake.Records()) != 1 {
 		t.Fatalf("expected one record before reset, got %d", len(fake.Records()))
 	}

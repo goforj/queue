@@ -143,7 +143,7 @@ func nodeID(chainID string, idx int) string {
 	return chainID + "_" + newID("n")
 }
 
-func (r *runtime) handleInternalChainNode(ctx context.Context, task queue.Task) error {
+func (r *runtime) handleInternalChainNode(ctx context.Context, task queue.Job) error {
 	var env envelope
 	if err := task.Bind(&env); err != nil {
 		return err

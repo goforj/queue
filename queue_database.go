@@ -159,7 +159,7 @@ func (d *databaseQueue) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *databaseQueue) Dispatch(ctx context.Context, task Task) error {
+func (d *databaseQueue) Dispatch(ctx context.Context, task Job) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -329,7 +329,7 @@ func (d *databaseQueue) processJob(job *dbJob) {
 	}
 	err := handler(
 		ctx,
-		NewTask(job.taskType).
+		NewJob(job.taskType).
 			Payload(job.payload).
 			OnQueue(job.queueName).
 			Retry(job.maxRetry).
@@ -440,7 +440,7 @@ WHERE id=?`)
 	return err
 }
 
-func (d *databaseQueue) acquireUnique(ctx context.Context, task Task, queueName string, expiresAt time.Time) (bool, error) {
+func (d *databaseQueue) acquireUnique(ctx context.Context, task Job, queueName string, expiresAt time.Time) (bool, error) {
 	now := time.Now().UnixMilli()
 	expiresAtMillis := expiresAt.UnixMilli()
 	key := uniqueTaskKey(task, queueName)
@@ -462,7 +462,7 @@ func (d *databaseQueue) acquireUnique(ctx context.Context, task Task, queueName 
 	return rows == 1, nil
 }
 
-func uniqueTaskKey(task Task, queueName string) string {
+func uniqueTaskKey(task Job, queueName string) string {
 	hash := sha256.Sum256(append([]byte(queueName+":"+task.Type+":"), task.PayloadBytes()...))
 	return hex.EncodeToString(hash[:])
 }

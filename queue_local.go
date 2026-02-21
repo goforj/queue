@@ -35,7 +35,7 @@ const workerEnqueueKey workerContextKey = "queue.worker.enqueue.allowed"
 
 type queuedTask struct {
 	ctx  context.Context
-	task Task
+	task Job
 	opts taskOptions
 }
 
@@ -86,7 +86,7 @@ func (d *localQueue) Driver() Driver {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 //		var payload EmailPayload
 //		if err := task.Bind(&payload); err != nil {
 //			return err
@@ -171,7 +171,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 //		var payload EmailPayload
 //		if err := task.Bind(&payload); err != nil {
 //			return err
@@ -179,12 +179,12 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //		_ = payload
 //		return nil
 //	})
-//	task := queue.NewTask("emails:send").
+//	job := queue.NewJob("emails:send").
 //		Payload(EmailPayload{ID: 1}).
 //		OnQueue("default").
 //		Delay(10 * time.Millisecond)
 //	_ = q.DispatchCtx(context.Background(), task)
-func (d *localQueue) Dispatch(ctx context.Context, task Task) error {
+func (d *localQueue) Dispatch(ctx context.Context, task Job) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
@@ -217,7 +217,7 @@ func (d *localQueue) Dispatch(ctx context.Context, task Task) error {
 	return nil
 }
 
-func (d *localQueue) enqueueNow(ctx context.Context, task Task, parsed taskOptions) error {
+func (d *localQueue) enqueueNow(ctx context.Context, task Job, parsed taskOptions) error {
 	if d.isPaused(parsed.queueName) {
 		return ErrQueuePaused
 	}
@@ -230,7 +230,7 @@ func (d *localQueue) enqueueNow(ctx context.Context, task Task, parsed taskOptio
 	return d.runWithRetry(ctx, task, parsed)
 }
 
-func (d *localQueue) enqueueAsync(ctx context.Context, task Task, parsed taskOptions) error {
+func (d *localQueue) enqueueAsync(ctx context.Context, task Job, parsed taskOptions) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
@@ -316,7 +316,7 @@ func (d *localQueue) worker(workQueue <-chan queuedTask) {
 	}
 }
 
-func (d *localQueue) run(ctx context.Context, task Task) error {
+func (d *localQueue) run(ctx context.Context, task Job) error {
 	handler, ok := d.lookup(task.Type)
 	if !ok {
 		return fmt.Errorf("no handler registered for task type %q", task.Type)
@@ -324,7 +324,7 @@ func (d *localQueue) run(ctx context.Context, task Task) error {
 	return handler(ctx, task)
 }
 
-func (d *localQueue) runWithRetry(ctx context.Context, task Task, parsed taskOptions) error {
+func (d *localQueue) runWithRetry(ctx context.Context, task Job, parsed taskOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -422,7 +422,7 @@ func (d *localQueue) Stats(_ context.Context) (StatsSnapshot, error) {
 	}, nil
 }
 
-func (d *localQueue) claimUnique(task Task, queueName string, ttl time.Duration) bool {
+func (d *localQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
 	key := queueName + ":" + task.Type + ":" + string(task.PayloadBytes())
 

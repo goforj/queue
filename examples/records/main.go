@@ -13,8 +13,8 @@ func main() {
 
 	// Example: read records
 	fake := queue.NewFake()
-	_ = fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+	_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 	records := fake.Records()
-	fmt.Println(len(records), records[0].Task.Type)
+	fmt.Println(len(records), records[0].Job.Type)
 	// Output: 1 emails:send
 }

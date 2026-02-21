@@ -257,7 +257,7 @@ func TestRedisIntegration_DispatchSmoke(t *testing.T) {
 	queueName := uniqueQueueName("redis-smoke")
 	taskType := "job:smoke"
 	payload := []byte("hello")
-	if err := q.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue(queueName)); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue(queueName)); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -291,7 +291,7 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 
 	err = q.DispatchCtx(
 		context.Background(),
-		NewTask("job:options").
+		NewJob("job:options").
 			Payload([]byte("opts")).
 			OnQueue(queueName).
 			Delay(delay).
@@ -333,7 +333,7 @@ func TestRedisIntegration_DefaultTimeoutApplied(t *testing.T) {
 	queueName := uniqueQueueName("redis-default-timeout")
 	err = q.DispatchCtx(
 		context.Background(),
-		NewTask("job:default-timeout").
+		NewJob("job:default-timeout").
 			Payload([]byte("opts")).
 			OnQueue(queueName),
 	)
@@ -363,11 +363,11 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 	queueName := uniqueQueueName("redis-unique")
 	taskType := "job:unique"
 	payload := []byte("same")
-	first := NewTask(taskType).Payload(payload).OnQueue(queueName).UniqueFor(5 * time.Second)
+	first := NewJob(taskType).Payload(payload).OnQueue(queueName).UniqueFor(5 * time.Second)
 	if err := q.DispatchCtx(context.Background(), first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := NewTask(taskType).Payload(payload).OnQueue(queueName).UniqueFor(5 * time.Second)
+	second := NewJob(taskType).Payload(payload).OnQueue(queueName).UniqueFor(5 * time.Second)
 	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
@@ -387,7 +387,7 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
 
-	err = q.DispatchCtx(context.Background(), NewTask("job:backoff-unsupported").Payload([]byte("x")).OnQueue("default").Backoff(1*time.Second))
+	err = q.DispatchCtx(context.Background(), NewJob("job:backoff-unsupported").Payload([]byte("x")).OnQueue("default").Backoff(1*time.Second))
 	if !errors.Is(err, ErrBackoffUnsupported) {
 		t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
 	}
@@ -410,7 +410,7 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
-	q.Register("job:bind", func(_ context.Context, task Task) error {
+	q.Register("job:bind", func(_ context.Context, task Job) error {
 		var in payload
 		if err := task.Bind(&in); err != nil {
 			return err
@@ -424,7 +424,7 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 99}
-	if err := q.DispatchCtx(context.Background(), NewTask("job:bind").Payload(want).OnQueue("default")); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewJob("job:bind").Payload(want).OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -1043,7 +1043,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	var expected atomic.Int32
 
 	t.Run("scenario_register_handler", func(t *testing.T) {
-		w.Register(taskType, func(_ context.Context, task Task) error {
+		w.Register(taskType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
@@ -1066,7 +1066,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				task := NewTask(taskType).
+				task := NewJob(taskType).
 					Payload(scenarioPayload{ID: i, Name: fx.name}).
 					OnQueue(fx.queueName)
 				if i%3 == 0 {
@@ -1121,11 +1121,11 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		var poisonCalls atomic.Int32
 		recoveryDone := make(chan struct{}, 1)
 
-		w.Register(poisonType, func(_ context.Context, _ Task) error {
+		w.Register(poisonType, func(_ context.Context, _ Job) error {
 			poisonCalls.Add(1)
 			return errors.New("poison")
 		})
-		w.Register(goodType, func(_ context.Context, _ Task) error {
+		w.Register(goodType, func(_ context.Context, _ Job) error {
 			select {
 			case recoveryDone <- struct{}{}:
 			default:
@@ -1133,7 +1133,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		poison := NewTask(poisonType).
+		poison := NewJob(poisonType).
 			Payload(scenarioPayload{ID: 9001, Name: "poison"}).
 			OnQueue(fx.queueName).
 			Retry(2)
@@ -1165,7 +1165,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			expectedPoisonCalls,
 		)
 
-		good := NewTask(goodType).
+		good := NewJob(goodType).
 			Payload(scenarioPayload{ID: 9002, Name: "recovery"}).
 			OnQueue(fx.queueName)
 		requireScenarioNoErr(t, "poison_recovery_dispatch", q.DispatchCtx(context.Background(), good))
@@ -1186,7 +1186,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		restartType := "job:scenario:restart:" + fx.name
 		done := make(chan struct{}, 1)
 
-		w.Register(restartType, func(_ context.Context, _ Task) error {
+		w.Register(restartType, func(_ context.Context, _ Job) error {
 			select {
 			case done <- struct{}{}:
 			default:
@@ -1194,7 +1194,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		task := NewTask(restartType).
+		task := NewJob(restartType).
 			Payload(scenarioPayload{ID: 9100, Name: "restart"}).
 			OnQueue(fx.queueName).
 			Delay(750 * time.Millisecond)
@@ -1208,7 +1208,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		requireScenarioNoErr(t, "restart_shutdown_first_worker", (w).Shutdown(context.Background()))
 		w = fx.newWorker(t)
-		w.Register(restartType, func(_ context.Context, _ Task) error {
+		w.Register(restartType, func(_ context.Context, _ Job) error {
 			select {
 			case done <- struct{}{}:
 			default:
@@ -1234,21 +1234,21 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		var emptyBindErrs atomic.Int32
 		goodDone := make(chan struct{}, 1)
 
-		w.Register(badType, func(_ context.Context, task Task) error {
+		w.Register(badType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				badBindErrs.Add(1)
 			}
 			return nil
 		})
-		w.Register(emptyType, func(_ context.Context, task Task) error {
+		w.Register(emptyType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				emptyBindErrs.Add(1)
 			}
 			return nil
 		})
-		w.Register(goodType, func(_ context.Context, task Task) error {
+		w.Register(goodType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
@@ -1260,7 +1260,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		badTask := NewTask(badType).
+		badTask := NewJob(badType).
 			Payload([]byte("not-json")).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
@@ -1277,7 +1277,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		}
 		requireScenarioTrue(t, "bind_bad_seen", badBindErrs.Load() == 1, "bind_errors=%d expected=1", badBindErrs.Load())
 
-		emptyTask := NewTask(emptyType).
+		emptyTask := NewJob(emptyType).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
 			emptyTask = emptyTask.Timeout(taskTimeout)
@@ -1293,7 +1293,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		}
 		requireScenarioTrue(t, "bind_empty_seen", emptyBindErrs.Load() == 1, "bind_errors=%d expected=1", emptyBindErrs.Load())
 
-		goodTask := NewTask(goodType).
+		goodTask := NewJob(goodType).
 			Payload(scenarioPayload{ID: 9200, Name: "bind-good"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
@@ -1314,15 +1314,15 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		primary := fx.queueName
 		secondary := fx.queueName + "_other"
 
-		first := NewTask(uniqueType).
+		first := NewJob(uniqueType).
 			Payload(payload).
 			OnQueue(primary).
 			UniqueFor(2 * time.Second)
-		secondSameQueue := NewTask(uniqueType).
+		secondSameQueue := NewJob(uniqueType).
 			Payload(payload).
 			OnQueue(primary).
 			UniqueFor(2 * time.Second)
-		otherQueue := NewTask(uniqueType).
+		otherQueue := NewJob(uniqueType).
 			Payload(payload).
 			OnQueue(secondary).
 			UniqueFor(2 * time.Second)
@@ -1346,11 +1346,11 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		var cancelSeen atomic.Int32
 		goodDone := make(chan struct{}, 1)
 
-		w.Register(cancelType, func(_ context.Context, _ Task) error {
+		w.Register(cancelType, func(_ context.Context, _ Job) error {
 			cancelSeen.Add(1)
 			return nil
 		})
-		w.Register(goodType, func(_ context.Context, _ Task) error {
+		w.Register(goodType, func(_ context.Context, _ Job) error {
 			select {
 			case goodDone <- struct{}{}:
 			default:
@@ -1360,7 +1360,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		cancelCtx, cancel := context.WithCancel(context.Background())
 		cancel()
-		cancelTask := NewTask(cancelType).
+		cancelTask := NewJob(cancelType).
 			Payload(scenarioPayload{ID: 9400, Name: "ctx-cancel"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
@@ -1379,7 +1379,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			requireScenarioTrue(t, "dispatch_ctx_cancel_not_processed", cancelSeen.Load() == 0, "unexpected processed count=%d", cancelSeen.Load())
 		}
 
-		goodTask := NewTask(goodType).
+		goodTask := NewJob(goodType).
 			Payload(scenarioPayload{ID: 9401, Name: "ctx-good"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
@@ -1405,14 +1405,14 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		retryDone := make(chan struct{}, 1)
 		var retryCalls atomic.Int32
 
-		w.Register(delayedType, func(_ context.Context, _ Task) error {
+		w.Register(delayedType, func(_ context.Context, _ Job) error {
 			select {
 			case delayedDone <- struct{}{}:
 			default:
 			}
 			return nil
 		})
-		w.Register(retryType, func(_ context.Context, _ Task) error {
+		w.Register(retryType, func(_ context.Context, _ Job) error {
 			if retryCalls.Add(1) == 1 {
 				return errors.New("retry once")
 			}
@@ -1423,14 +1423,14 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		delayedTask := NewTask(delayedType).
+		delayedTask := NewJob(delayedType).
 			Payload(scenarioPayload{ID: 9500, Name: "shutdown-delay"}).
 			OnQueue(fx.queueName).
 			Delay(1200 * time.Millisecond)
-		var retryTask Task
+		var retryTask Job
 		retryEnabled := fx.supportsBackoff
 		if retryEnabled {
-			retryTask = NewTask(retryType).
+			retryTask = NewJob(retryType).
 				Payload(scenarioPayload{ID: 9501, Name: "shutdown-retry"}).
 				OnQueue(fx.queueName).
 				Delay(900 * time.Millisecond).
@@ -1451,14 +1451,14 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioNoErr(t, "shutdown_during_delay", (w).Shutdown(context.Background()))
 
 		w = fx.newWorker(t)
-		w.Register(delayedType, func(_ context.Context, _ Task) error {
+		w.Register(delayedType, func(_ context.Context, _ Job) error {
 			select {
 			case delayedDone <- struct{}{}:
 			default:
 			}
 			return nil
 		})
-		w.Register(retryType, func(_ context.Context, _ Task) error {
+		w.Register(retryType, func(_ context.Context, _ Job) error {
 			if retryCalls.Add(1) == 1 {
 				return errors.New("retry once")
 			}
@@ -1499,7 +1499,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		var processed atomic.Int32
 		const totalTasks = 30
 
-		handler := func(_ context.Context, task Task) error {
+		handler := func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
@@ -1515,7 +1515,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioNoErr(t, "multi_worker_secondary_start", (worker2).StartWorkers(context.Background()))
 
 		for i := 0; i < totalTasks; i++ {
-			task := NewTask(taskType).
+			task := NewJob(taskType).
 				Payload(scenarioPayload{ID: i, Name: "multi-worker"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
@@ -1553,7 +1553,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		var mu sync.Mutex
 		seen := make(map[int]struct{})
 
-		w.Register(taskType, func(_ context.Context, task Task) error {
+		w.Register(taskType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
@@ -1575,10 +1575,10 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		first := NewTask(taskType).
+		first := NewJob(taskType).
 			Payload(scenarioPayload{ID: 9600, Name: "idempotency"}).
 			OnQueue(fx.queueName)
-		second := NewTask(taskType).
+		second := NewJob(taskType).
 			Payload(scenarioPayload{ID: 9600, Name: "idempotency"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
@@ -1612,7 +1612,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		badCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		task := NewTask("job:scenario:fault-dispatch:" + fx.name).
+		task := NewJob("job:scenario:fault-dispatch:" + fx.name).
 			Payload(scenarioPayload{ID: 9700, Name: "fault-dispatch"}).
 			OnQueue(fx.queueName).
 			Retry(1)
@@ -1640,7 +1640,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		taskType := "job:scenario:fault-recovery:" + fx.name
 		done := make(chan struct{}, 1)
-		w.Register(taskType, func(_ context.Context, task Task) error {
+		w.Register(taskType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
@@ -1653,7 +1653,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 		requireScenarioNoErr(t, "recover_worker_start", (w).StartWorkers(context.Background()))
 
-		task := NewTask(taskType).
+		task := NewJob(taskType).
 			Payload(scenarioPayload{ID: 9701, Name: "fault-recovery"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
@@ -1678,7 +1678,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		taskType := "job:scenario:ordering:" + fx.name
 		const count = 20
 		orderCh := make(chan int, count)
-		w.Register(taskType, func(_ context.Context, task Task) error {
+		w.Register(taskType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
@@ -1688,7 +1688,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 
 		for i := 0; i < count; i++ {
-			task := NewTask(taskType).
+			task := NewJob(taskType).
 				Payload(scenarioPayload{ID: i, Name: "ordering"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
@@ -1719,7 +1719,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		taskType := "job:scenario:backpressure:" + fx.name
 		var processed atomic.Int32
-		w.Register(taskType, func(_ context.Context, _ Task) error {
+		w.Register(taskType, func(_ context.Context, _ Job) error {
 			time.Sleep(40 * time.Millisecond)
 			processed.Add(1)
 			return nil
@@ -1727,7 +1727,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		const total = 80
 		for i := 0; i < total; i++ {
-			task := NewTask(taskType).
+			task := NewJob(taskType).
 				Payload(scenarioPayload{ID: i, Name: "backpressure"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
@@ -1738,14 +1738,14 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		probeType := "job:scenario:backpressure-probe:" + fx.name
 		probeDone := make(chan struct{}, 1)
-		w.Register(probeType, func(_ context.Context, _ Task) error {
+		w.Register(probeType, func(_ context.Context, _ Job) error {
 			select {
 			case probeDone <- struct{}{}:
 			default:
 			}
 			return nil
 		})
-		probe := NewTask(probeType).
+		probe := NewJob(probeType).
 			Payload(scenarioPayload{ID: 9800, Name: "probe"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
@@ -1767,7 +1767,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		taskType := "job:scenario:payload-large:" + fx.name
 		done := make(chan struct{}, 1)
 		expectedLen := 128 * 1024
-		w.Register(taskType, func(_ context.Context, task Task) error {
+		w.Register(taskType, func(_ context.Context, task Job) error {
 			var payload struct {
 				ID   int    `json:"id"`
 				Data string `json:"data"`
@@ -1785,7 +1785,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		task := NewTask(taskType).
+		task := NewJob(taskType).
 			Payload(struct {
 				ID   int    `json:"id"`
 				Data string `json:"data"`
@@ -1807,7 +1807,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		taskType := "job:scenario:fuzz:" + fx.name
 		var processed atomic.Int32
-		w.Register(taskType, func(_ context.Context, task Task) error {
+		w.Register(taskType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
@@ -1821,7 +1821,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		expected := int32(0)
 		const cases = 80
 		for i := 0; i < cases; i++ {
-			task := NewTask(taskType).
+			task := NewJob(taskType).
 				Payload(scenarioPayload{ID: 10000 + i, Name: "fuzz"}).
 				OnQueue(fx.queueName)
 			if r.Intn(2) == 0 {
@@ -1869,7 +1869,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		taskType := "job:scenario:soak:" + fx.name
 		var processed atomic.Int32
-		w.Register(taskType, func(_ context.Context, task Task) error {
+		w.Register(taskType, func(_ context.Context, task Job) error {
 			var payload scenarioPayload
 			if err := task.Bind(&payload); err != nil {
 				return err
@@ -1893,7 +1893,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				defer wg.Done()
 				for i := 0; i < perProducer; i++ {
 					id := startID + i
-					task := NewTask(taskType).
+					task := NewJob(taskType).
 						Payload(scenarioPayload{ID: id, Name: "soak"}).
 						OnQueue(fx.queueName)
 					if id%5 == 0 {

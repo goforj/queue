@@ -208,7 +208,7 @@ func TestSQSQueue_ShutdownAndClaimUnique(t *testing.T) {
 		t.Fatal("expected shutdown to reset client and queue cache")
 	}
 
-	task := NewTask("job:sqs").Payload(map[string]any{"id": 1}).OnQueue("default")
+	task := NewJob("job:sqs").Payload(map[string]any{"id": 1}).OnQueue("default")
 	if !q.claimUnique(task, "default", time.Minute) {
 		t.Fatal("expected first unique claim to succeed")
 	}
@@ -229,7 +229,7 @@ func TestSQSQueue_DispatchSendsMessage(t *testing.T) {
 		unique:    map[string]time.Time{},
 	}
 
-	err := q.Dispatch(context.Background(), NewTask("job:sqs").
+	err := q.Dispatch(context.Background(), NewJob("job:sqs").
 		Payload(map[string]any{"id": 7}).
 		OnQueue("critical").
 		Delay(2*time.Second).
@@ -251,10 +251,10 @@ func TestSQSQueue_DispatchValidationBranches(t *testing.T) {
 		unique:    map[string]time.Time{},
 	}
 
-	if err := q.Dispatch(nil, NewTask("")); err == nil {
+	if err := q.Dispatch(nil, NewJob("")); err == nil {
 		t.Fatal("expected validation error for empty task type")
 	}
-	if err := q.Dispatch(nil, NewTask("job:sqs")); err == nil {
+	if err := q.Dispatch(nil, NewJob("job:sqs")); err == nil {
 		t.Fatal("expected queue required error")
 	}
 }
@@ -339,24 +339,24 @@ func TestRedisQueue_StatsBranches(t *testing.T) {
 func TestRedisQueue_DispatchBranches(t *testing.T) {
 	t.Run("client unavailable", func(t *testing.T) {
 		r := &redisQueue{}
-		if err := r.Dispatch(context.Background(), NewTask("job:redis").OnQueue("default")); err == nil {
+		if err := r.Dispatch(context.Background(), NewJob("job:redis").OnQueue("default")); err == nil {
 			t.Fatal("expected client unavailable error")
 		}
 	})
 
 	t.Run("validation and queue required", func(t *testing.T) {
 		r := &redisQueue{client: &redisEnqueueClientStub{}}
-		if err := r.Dispatch(context.Background(), NewTask("")); err == nil {
+		if err := r.Dispatch(context.Background(), NewJob("")); err == nil {
 			t.Fatal("expected validation error")
 		}
-		if err := r.Dispatch(context.Background(), NewTask("job:redis")); err == nil {
+		if err := r.Dispatch(context.Background(), NewJob("job:redis")); err == nil {
 			t.Fatal("expected queue required error")
 		}
 	})
 
 	t.Run("backoff unsupported", func(t *testing.T) {
 		r := &redisQueue{client: &redisEnqueueClientStub{}}
-		if err := r.Dispatch(context.Background(), NewTask("job:redis").OnQueue("default").Backoff(time.Second)); !errors.Is(err, ErrBackoffUnsupported) {
+		if err := r.Dispatch(context.Background(), NewJob("job:redis").OnQueue("default").Backoff(time.Second)); !errors.Is(err, ErrBackoffUnsupported) {
 			t.Fatalf("expected backoff unsupported, got %v", err)
 		}
 	})
@@ -364,7 +364,7 @@ func TestRedisQueue_DispatchBranches(t *testing.T) {
 	t.Run("duplicate mapping", func(t *testing.T) {
 		client := &redisEnqueueClientStub{enqueueErr: asynq.ErrDuplicateTask}
 		r := &redisQueue{client: client}
-		if err := r.Dispatch(context.Background(), NewTask("job:redis").OnQueue("default")); !errors.Is(err, ErrDuplicate) {
+		if err := r.Dispatch(context.Background(), NewJob("job:redis").OnQueue("default")); !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected duplicate mapping error, got %v", err)
 		}
 	})
@@ -372,7 +372,7 @@ func TestRedisQueue_DispatchBranches(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		client := &redisEnqueueClientStub{}
 		r := &redisQueue{client: client}
-		err := r.Dispatch(context.Background(), NewTask("job:redis").
+		err := r.Dispatch(context.Background(), NewJob("job:redis").
 			OnQueue("default").
 			Retry(2).
 			Timeout(5*time.Second).

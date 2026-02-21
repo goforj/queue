@@ -9,6 +9,6 @@ func main() {
 	// OnQueue sets the target queue name.
 
 	// Example: on queue
-	task := queue.NewTask("emails:send").OnQueue("critical")
+	job := queue.NewJob("emails:send").OnQueue("critical")
 	_ = task
 }
