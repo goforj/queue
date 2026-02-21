@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// NewMemoryStore creates an in-memory orchestration store implementation.
+// @group Constructors
+//
+// Example: new memory store
+//
+//	store := bus.NewMemoryStore()
+//	_ = store
 func NewMemoryStore() Store {
 	return &memoryStore{
 		chains:    make(map[string]*memoryChain),

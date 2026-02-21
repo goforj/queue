@@ -9,12 +9,25 @@ import (
 
 type Next func(ctx context.Context, jc Context) error
 
+// Middleware can intercept bus job execution.
+// @group Middleware
 type Middleware interface {
 	Handle(ctx context.Context, jc Context, next Next) error
 }
 
+// MiddlewareFunc adapts a function to Middleware.
+// @group Middleware
 type MiddlewareFunc func(ctx context.Context, jc Context, next Next) error
 
+// Handle calls the wrapped middleware function.
+// @group Middleware
+//
+// Example: middleware func
+//
+//	mw := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
+//		return next(ctx, jc)
+//	})
+//	_ = mw
 func (f MiddlewareFunc) Handle(ctx context.Context, jc Context, next Next) error {
 	return f(ctx, jc, next)
 }
@@ -45,6 +58,13 @@ var (
 
 type RetryPolicy struct{}
 
+// Handle passes execution through without modification.
+// @group Middleware
+//
+// Example: retry policy passthrough
+//
+//	policy := bus.RetryPolicy{}
+//	_ = policy
 func (RetryPolicy) Handle(ctx context.Context, jc Context, next Next) error {
 	return next(ctx, jc)
 }
@@ -53,6 +73,15 @@ type SkipWhen struct {
 	Predicate func(ctx context.Context, jc Context) bool
 }
 
+// Handle skips job execution when Predicate returns true.
+// @group Middleware
+//
+// Example: skip by predicate
+//
+//	mw := bus.SkipWhen{
+//		Predicate: func(context.Context, bus.Context) bool { return true },
+//	}
+//	_ = mw
 func (s SkipWhen) Handle(ctx context.Context, jc Context, next Next) error {
 	if s.Predicate != nil && s.Predicate(ctx, jc) {
 		return nil
@@ -64,6 +93,15 @@ type FailOnError struct {
 	When func(err error) bool
 }
 
+// Handle wraps matched errors as fatal errors to stop retries.
+// @group Middleware
+//
+// Example: fail on any error
+//
+//	mw := bus.FailOnError{
+//		When: func(err error) bool { return err != nil },
+//	}
+//	_ = mw
 func (f FailOnError) Handle(ctx context.Context, jc Context, next Next) error {
 	err := next(ctx, jc)
 	if err == nil {
@@ -91,6 +129,15 @@ type RateLimit struct {
 	Limiter RateLimiter
 }
 
+// Handle applies limiter checks before executing the next handler.
+// @group Middleware
+//
+// Example: rate limit middleware
+//
+//	mw := bus.RateLimit{
+//		Key: func(context.Context, bus.Context) string { return "emails" },
+//	}
+//	_ = mw
 func (r RateLimit) Handle(ctx context.Context, jc Context, next Next) error {
 	if r.Limiter == nil {
 		return next(ctx, jc)
@@ -125,6 +172,16 @@ type WithoutOverlapping struct {
 	Locker Locker
 }
 
+// Handle acquires a lock and prevents concurrent overlap for the same key.
+// @group Middleware
+//
+// Example: without overlapping
+//
+//	mw := bus.WithoutOverlapping{
+//		Key: func(context.Context, bus.Context) string { return "job-key" },
+//		TTL: 30 * time.Second,
+//	}
+//	_ = mw
 func (w WithoutOverlapping) Handle(ctx context.Context, jc Context, next Next) error {
 	if w.Locker == nil {
 		return next(ctx, jc)
