@@ -4,8 +4,10 @@ package bus_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -13,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/bus"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -528,7 +532,7 @@ func uniqueQueueName(prefix string) string {
 
 func startRedisContainer(ctx context.Context) (testcontainers.Container, string, error) {
 	req := testcontainers.ContainerRequest{
-		Image:        "redis:7-alpine",
+		Image:        "redis:7",
 		ExposedPorts: []string{"6379/tcp"},
 		WaitingFor:   wait.ForListeningPort("6379/tcp").WithStartupTimeout(60 * time.Second),
 	}
@@ -549,7 +553,7 @@ func startRedisContainer(ctx context.Context) (testcontainers.Container, string,
 
 func startMySQLContainer(ctx context.Context) (testcontainers.Container, string, error) {
 	req := testcontainers.ContainerRequest{
-		Image:        "mysql:8",
+		Image:        "mysql:8.0",
 		ExposedPorts: []string{"3306/tcp"},
 		Env: map[string]string{
 			"MYSQL_ROOT_PASSWORD": "root",
@@ -557,7 +561,10 @@ func startMySQLContainer(ctx context.Context) (testcontainers.Container, string,
 			"MYSQL_USER":          "queue",
 			"MYSQL_PASSWORD":      "queue",
 		},
-		WaitingFor: wait.ForListeningPort("3306/tcp").WithStartupTimeout(120 * time.Second),
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("3306/tcp"),
+			wait.ForLog("ready for connections"),
+		).WithStartupTimeout(120 * time.Second),
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	if err != nil {
@@ -565,25 +572,35 @@ func startMySQLContainer(ctx context.Context) (testcontainers.Container, string,
 	}
 	host, err := c.Host(ctx)
 	if err != nil {
+		_ = c.Terminate(ctx)
 		return nil, "", err
 	}
 	port, err := c.MappedPort(ctx, "3306/tcp")
 	if err != nil {
+		_ = c.Terminate(ctx)
 		return nil, "", err
 	}
-	return c, fmt.Sprintf("%s:%s", host, port.Port()), nil
+	addr := net.JoinHostPort(host, port.Port())
+	if err := waitForMySQLReady(addr, 60*time.Second); err != nil {
+		_ = c.Terminate(ctx)
+		return nil, "", err
+	}
+	return c, addr, nil
 }
 
 func startPostgresContainer(ctx context.Context) (testcontainers.Container, string, error) {
 	req := testcontainers.ContainerRequest{
-		Image:        "postgres:15",
+		Image:        "postgres:16",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "queue",
 			"POSTGRES_PASSWORD": "queue",
 			"POSTGRES_DB":       "queue_test",
 		},
-		WaitingFor: wait.ForListeningPort("5432/tcp").WithStartupTimeout(90 * time.Second),
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("5432/tcp"),
+			wait.ForLog("database system is ready to accept connections"),
+		).WithStartupTimeout(90 * time.Second),
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	if err != nil {
@@ -591,13 +608,20 @@ func startPostgresContainer(ctx context.Context) (testcontainers.Container, stri
 	}
 	host, err := c.Host(ctx)
 	if err != nil {
+		_ = c.Terminate(ctx)
 		return nil, "", err
 	}
 	port, err := c.MappedPort(ctx, "5432/tcp")
 	if err != nil {
+		_ = c.Terminate(ctx)
 		return nil, "", err
 	}
-	return c, fmt.Sprintf("%s:%s", host, port.Port()), nil
+	addr := net.JoinHostPort(host, port.Port())
+	if err := waitForPostgresReady(addr, 60*time.Second); err != nil {
+		_ = c.Terminate(ctx)
+		return nil, "", err
+	}
+	return c, addr, nil
 }
 
 func startNATSContainer(ctx context.Context) (testcontainers.Container, string, error) {
@@ -664,4 +688,46 @@ func startRabbitMQContainer(ctx context.Context) (testcontainers.Container, stri
 		return nil, "", err
 	}
 	return c, fmt.Sprintf("amqp://guest:guest@%s:%s/", host, port.Port()), nil
+}
+
+func waitForMySQLReady(addr string, timeout time.Duration) error {
+	dsn := fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", addr)
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		db, err := sql.Open("mysql", dsn)
+		if err == nil {
+			pingErr := db.Ping()
+			_ = db.Close()
+			if pingErr == nil {
+				return nil
+			}
+			lastErr = pingErr
+		} else {
+			lastErr = err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("mysql not ready: %w", lastErr)
+}
+
+func waitForPostgresReady(addr string, timeout time.Duration) error {
+	dsn := fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", addr)
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		db, err := sql.Open("pgx", dsn)
+		if err == nil {
+			pingErr := db.Ping()
+			_ = db.Close()
+			if pingErr == nil {
+				return nil
+			}
+			lastErr = pingErr
+		} else {
+			lastErr = err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("postgres not ready: %w", lastErr)
 }
