@@ -330,6 +330,22 @@ fmt.Printf("hour=%+v\n", throughput.Hour)
 `SnapshotQueue` prefers native driver stats when available and falls back to the collector snapshot when a driver does not expose native stats.
 Use `queue.SupportsNativeStats(q)` and `queue.SupportsPause(q)` to branch runtime behavior safely.
 
+### Distributed counters and source of truth
+
+In distributed systems, `Observer` + `StatsCollector` counters are process-local and in-memory.
+They are useful for local insight and per-worker telemetry, but they are not a globally consistent source of truth by themselves.
+
+Use this rule:
+
+- Drivers with native stats (`Sync`, `Workerpool`, `Database`, `Redis`): use `SnapshotQueue(...)` and treat driver-native stats as authoritative.
+- Drivers without native stats (`NATS`, `SQS`, `RabbitMQ`, `Null`): treat observer events as telemetry signals and aggregate them centrally (metrics/log pipeline) for cluster-wide numbers.
+
+Practical guidance:
+
+- Always keep an observer attached for eventing/alerting.
+- For cluster dashboards, prefer backend-native stats when available.
+- For non-native backends, publish observer events to centralized metrics/logging and compute totals there.
+
 ### Compose observers
 
 Use `queue.MultiObserver(...)` when you want multiple observer behaviors at once, such as logging plus stats collection.
