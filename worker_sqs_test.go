@@ -228,6 +228,37 @@ func TestSQSWorker_NewRegisterAndShutdown(t *testing.T) {
 	}
 }
 
+func TestSQSWorker_StartWorkersFastPaths(t *testing.T) {
+	backend := newSQSWorker(sqsWorkerConfig{}).(*sqsWorker)
+
+	backend.started = true
+	if err := backend.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("expected started fast-path nil, got %v", err)
+	}
+	backend.started = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := backend.StartWorkers(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+func TestSQSWorker_StartWorkersInvalidEndpoint(t *testing.T) {
+	backend := newSQSWorker(sqsWorkerConfig{
+		DefaultQueue: "default",
+		SQSRegion:    "us-east-1",
+		SQSEndpoint:  "://bad-endpoint",
+	}).(*sqsWorker)
+
+	if err := backend.StartWorkers(context.Background()); err == nil {
+		t.Fatal("expected start workers error for invalid endpoint")
+	}
+	if backend.started {
+		t.Fatal("expected worker to remain stopped after start error")
+	}
+}
+
 func TestSQSWorker_DeleteIgnoresNilReceiptHandle(t *testing.T) {
 	stub := &sqsWorkerClientStub{}
 	w := &sqsWorker{

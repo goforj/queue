@@ -65,3 +65,46 @@ func TestFakePruneNoop(t *testing.T) {
 		t.Fatalf("expected fake prune noop, got %v", err)
 	}
 }
+
+func TestFakeRuntimeNoopAndFluentBuilders(t *testing.T) {
+	f := bus.NewFake()
+
+	// No-op runtime methods should be callable.
+	f.Register("monitor:noop", func(context.Context, bus.Context) error { return nil })
+	if err := f.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers noop failed: %v", err)
+	}
+	if err := f.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown noop failed: %v", err)
+	}
+
+	// Chain fluent methods should be callable and keep chain dispatch functional.
+	chainID, err := f.Chain(bus.NewJob("a", nil)).
+		OnQueue("critical").
+		Catch(func(context.Context, bus.ChainState, error) error { return nil }).
+		Finally(func(context.Context, bus.ChainState) error { return nil }).
+		Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("chain dispatch failed: %v", err)
+	}
+	if chainID == "" {
+		t.Fatal("expected chain id")
+	}
+
+	// Batch fluent methods should be callable and keep batch dispatch functional.
+	batchID, err := f.Batch(bus.NewJob("a", nil)).
+		Name("nightly").
+		OnQueue("critical").
+		AllowFailures().
+		Progress(func(context.Context, bus.BatchState) error { return nil }).
+		Then(func(context.Context, bus.BatchState) error { return nil }).
+		Catch(func(context.Context, bus.BatchState, error) error { return nil }).
+		Finally(func(context.Context, bus.BatchState) error { return nil }).
+		Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("batch dispatch failed: %v", err)
+	}
+	if batchID == "" {
+		t.Fatal("expected batch id")
+	}
+}

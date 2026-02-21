@@ -158,6 +158,32 @@ func TestExternalQueueRuntimeRegisterShutdownAndWorkers(t *testing.T) {
 	}
 }
 
+func TestExternalQueueRuntimePauseResumeStatsWrappers(t *testing.T) {
+	inner := &queueBackendStub{
+		stats: StatsSnapshot{
+			ByQueue: map[string]QueueCounters{
+				"default": {Pending: 3},
+			},
+		},
+	}
+	common := &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverNull}
+	q := &externalQueueRuntime{common: common, registered: map[string]Handler{}}
+
+	if err := q.Pause(context.Background(), "default"); err != nil {
+		t.Fatalf("pause failed: %v", err)
+	}
+	if err := q.Resume(context.Background(), "default"); err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	snap, err := q.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("stats failed: %v", err)
+	}
+	if got := snap.Pending("default"); got != 3 {
+		t.Fatalf("expected pending=3, got %d", got)
+	}
+}
+
 func TestQueueConstructorsAndBackendDriverMethods(t *testing.T) {
 	if got := newNullQueue().Driver(); got != DriverNull {
 		t.Fatalf("expected null driver, got %q", got)
@@ -260,4 +286,38 @@ func TestQueueCommonPauseResumeStatsUnsupported(t *testing.T) {
 	if _, err := common.Stats(context.Background()); err == nil {
 		t.Fatal("expected stats unsupported error")
 	}
+}
+
+func TestExternalQueueRuntimeStartWorkersErrorBranches(t *testing.T) {
+	t.Run("factory error for unsupported driver", func(t *testing.T) {
+		q := &externalQueueRuntime{
+			common:     &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{Driver: Driver("unknown")}, driver: Driver("unknown")},
+			registered: map[string]Handler{},
+		}
+		if err := q.StartWorkers(context.Background()); err == nil {
+			t.Fatal("expected start workers error for unsupported driver")
+		}
+		if q.started {
+			t.Fatal("expected runtime to remain not started")
+		}
+	})
+
+	t.Run("worker start error propagates", func(t *testing.T) {
+		q := &externalQueueRuntime{
+			common: &queueCommon{
+				inner:  &queueBackendRecorder{},
+				cfg:    Config{Driver: DriverNATS, NATSURL: "nats://127.0.0.1:1"},
+				driver: DriverNATS,
+			},
+			registered: map[string]Handler{
+				"job:nats": func(context.Context, Task) error { return nil },
+			},
+		}
+		if err := q.StartWorkers(context.Background()); err == nil {
+			t.Fatal("expected start workers error for unreachable nats")
+		}
+		if q.started || q.worker != nil {
+			t.Fatal("expected runtime to remain stopped when worker start fails")
+		}
+	})
 }
