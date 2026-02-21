@@ -32,50 +32,67 @@
 go get github.com/goforj/queue
 ```
 
-## Start Here (Bus)
+## bus vs queue (simple)
 
-For most applications, use `bus` as the primary API and treat `queue` as the backend runtime abstraction.
+- `bus` is the higher-level API. It is a superset built on top of `queue`.
+- `queue` is the lower-level runtime API (drivers, tasks, workers).
+- If unsure, start with `bus`.
+
+## Quick Start (Bus)
 
 ```go
 import (
-    "context"
+	"context"
 
-    "github.com/goforj/queue"
-    "github.com/goforj/queue/bus"
+	"github.com/goforj/queue"
+	"github.com/goforj/queue/bus"
 )
 
 type EmailPayload struct {
-    ID int `json:"id"`
+	ID int `json:"id"`
 }
 
 func main() {
-    q, _ := queue.NewWorkerpool()
-    b, _ := bus.New(q)
+	q, _ := queue.NewWorkerpool()
+	b, _ := bus.New(q)
 
-    b.Register("emails:send", func(ctx context.Context, jc bus.Context) error {
-        var payload EmailPayload
-        if err := jc.Bind(&payload); err != nil {
-            return err
-        }
-        return nil
-    })
+	b.Register("emails:send", func(ctx context.Context, jc bus.Context) error {
+		var payload EmailPayload
+		if err := jc.Bind(&payload); err != nil {
+			return err
+		}
+		return nil
+	})
 
-    _ = b.StartWorkers(context.Background())
-    defer b.Shutdown(context.Background())
+	_ = b.StartWorkers(context.Background())
+	defer b.Shutdown(context.Background())
 
-    _, _ = b.Dispatch(context.Background(),
-        bus.NewJob("emails:send", EmailPayload{ID: 123}),
-    )
+	_, _ = b.Dispatch(context.Background(), bus.NewJob("emails:send", EmailPayload{ID: 123}))
 }
 ```
 
-### When To Use Bus vs Queue
+## Quick Start (Queue only)
 
-| Use case | Recommendation |
-| --- | --- |
-| Application workflows, chain/batch orchestration, middleware, callbacks | Use `bus` |
-| Low-level queue runtime control only (`Task`, raw dispatch/register lifecycle) | Use `queue` directly |
-| Unsure which one to pick | Start with `bus` and swap queue backends underneath |
+```go
+import (
+	"context"
+
+	"github.com/goforj/queue"
+)
+
+func main() {
+	q, _ := queue.NewWorkerpool()
+
+	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+		return nil
+	})
+
+	_ = q.Workers(2).StartWorkers(context.Background())
+	defer q.Shutdown(context.Background())
+
+	_ = q.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+}
+```
 
 ## Drivers
 
@@ -90,15 +107,7 @@ func main() {
 | <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 | <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-## Bus Quickstart
-
-`bus` is the app-level workflow layer.
-
-1. `Register` handlers by job type.
-2. `Dispatch` one job, or compose `Chain(...)` / `Batch(...)`.
-3. Add options like `WithMiddleware`, `WithObserver`, and `WithStore`.
-
-### Chaining middleware
+## Bus middleware example
 
 ```go
 audit := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
@@ -164,11 +173,11 @@ _ = b
 
 ### Distributed counters and source of truth
 
-1. `StatsCollector` counters are process-local and event-driven.
-2. In multi-process deployments, aggregate metrics externally (OTel/Prometheus/etc.).
-3. Prefer backend-native stats when available.
-4. `queue.SupportsNativeStats(q)` indicates native driver snapshot support.
-5. `queue.SnapshotQueue(ctx, q, collector, queueName)` merges native + collector where possible.
+- `StatsCollector` counters are process-local and event-driven.
+- In multi-process deployments, aggregate metrics externally (OTel/Prometheus/etc.).
+- Prefer backend-native stats when available.
+- `queue.SupportsNativeStats(q)` indicates native driver snapshot support.
+- `queue.SnapshotQueue(ctx, q, collector, queueName)` merges native + collector where possible.
 
 ### Compose observers
 
@@ -193,7 +202,7 @@ q, _ := queue.New(queue.Config{
 _ = q
 ```
 
-### Kitchen sink event logging
+### Queue kitchen sink event logging
 
 ```go
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -237,6 +246,64 @@ q, _ := queue.New(queue.Config{
 _ = q
 ```
 
+### Bus kitchen sink event logging
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+observer := bus.ObserverFunc(func(event bus.Event) {
+	ids := fmt.Sprintf("dispatch=%s job=%s chain=%s batch=%s", event.DispatchID, event.JobID, event.ChainID, event.BatchID)
+	jobInfo := fmt.Sprintf("job_type=%s queue=%s attempt=%d", event.JobType, event.Queue, event.Attempt)
+
+	switch event.Kind {
+	case bus.EventDispatchStarted:
+		logger.Info("Dispatch started", "msg", fmt.Sprintf("%s %s", ids, jobInfo), "at", event.Time.Format(time.RFC3339Nano))
+	case bus.EventDispatchSucceeded:
+		logger.Info("Dispatch enqueued", "msg", fmt.Sprintf("%s %s", ids, jobInfo))
+	case bus.EventDispatchFailed:
+		logger.Error("Dispatch failed", "msg", fmt.Sprintf("%s %s", ids, jobInfo), "error", event.Err)
+	case bus.EventJobStarted:
+		logger.Info("Job started", "msg", fmt.Sprintf("%s %s", ids, jobInfo))
+	case bus.EventJobSucceeded:
+		logger.Info("Job succeeded", "msg", fmt.Sprintf("%s %s duration=%s", ids, jobInfo, event.Duration))
+	case bus.EventJobFailed:
+		logger.Error("Job failed", "msg", fmt.Sprintf("%s %s duration=%s", ids, jobInfo, event.Duration), "error", event.Err)
+	case bus.EventChainStarted:
+		logger.Info("Chain started", "msg", ids)
+	case bus.EventChainAdvanced:
+		logger.Info("Chain advanced", "msg", ids)
+	case bus.EventChainCompleted:
+		logger.Info("Chain completed", "msg", ids)
+	case bus.EventChainFailed:
+		logger.Error("Chain failed", "msg", ids, "error", event.Err)
+	case bus.EventBatchStarted:
+		logger.Info("Batch started", "msg", ids)
+	case bus.EventBatchProgressed:
+		logger.Info("Batch progressed", "msg", ids)
+	case bus.EventBatchCompleted:
+		logger.Info("Batch completed", "msg", ids)
+	case bus.EventBatchFailed:
+		logger.Error("Batch failed", "msg", ids, "error", event.Err)
+	case bus.EventBatchCancelled:
+		logger.Warn("Batch cancelled", "msg", ids)
+	case bus.EventCallbackStarted:
+		logger.Info("Callback started", "msg", ids)
+	case bus.EventCallbackSucceeded:
+		logger.Info("Callback succeeded", "msg", ids)
+	case bus.EventCallbackFailed:
+		logger.Error("Callback failed", "msg", ids, "error", event.Err)
+	default:
+		logger.Info("Bus event", "msg", fmt.Sprintf("kind=%s %s %s", event.Kind, ids, jobInfo))
+	}
+})
+
+q, _ := queue.New(queue.Config{
+	Driver:    queue.DriverRedis,
+	RedisAddr: "127.0.0.1:6379",
+})
+b, _ := bus.New(q, bus.WithObserver(observer))
+_ = b
+```
+
 ### Observability capabilities by driver
 
 | Driver | Native Stats | Pause/Resume |
@@ -250,7 +317,7 @@ _ = q
 | sqs | - | - |
 | rabbitmq | - | - |
 
-### Observability events reference
+### Queue events reference
 
 | EventKind | Meaning |
 | --- | --- |
