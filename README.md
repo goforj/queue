@@ -34,7 +34,7 @@ go get github.com/goforj/queue
 
 ## bus vs queue (simple)
 
-- `bus` is the higher-level API. It is a superset built on top of `queue`.
+- `bus` is the higher-level API. Use it when you want workflow features like chains, batches, middleware, callbacks, and unified lifecycle events.
 - `queue` is the lower-level runtime API (drivers, tasks, workers).
 - If unsure, start with `bus`.
 
@@ -56,18 +56,29 @@ func main() {
 	q, _ := queue.NewWorkerpool()
 	b, _ := bus.New(q)
 
-	b.Register("emails:send", func(ctx context.Context, jc bus.Context) error {
+	b.Register("users:load", func(ctx context.Context, jc bus.Context) error {
+		return nil
+	})
+	b.Register("emails:render", func(ctx context.Context, jc bus.Context) error {
 		var payload EmailPayload
 		if err := jc.Bind(&payload); err != nil {
 			return err
 		}
 		return nil
 	})
+	b.Register("emails:send", func(ctx context.Context, jc bus.Context) error {
+		return nil
+	})
 
 	_ = b.StartWorkers(context.Background())
 	defer b.Shutdown(context.Background())
 
-	_, _ = b.Dispatch(context.Background(), bus.NewJob("emails:send", EmailPayload{ID: 123}))
+	chainID, _ := b.Chain(
+		bus.NewJob("users:load", map[string]any{"id": 123}),
+		bus.NewJob("emails:render", EmailPayload{ID: 123}),
+		bus.NewJob("emails:send", map[string]any{"id": 123}),
+	).OnQueue("critical").Dispatch(context.Background())
+	_ = chainID
 }
 ```
 
