@@ -100,7 +100,7 @@ Acceptance:
 
 - Duplicate dispatch test.
 - Duplicate chain-advance test.
-- Duplicate callback task test.
+- Duplicate callback job test.
 - Retry behavior tests prove no duplicated orchestration transitions.
 
 ### Middleware

@@ -108,6 +108,55 @@ func main() {
 }
 ```
 
+## Job builder options
+
+```go
+type EmailPayload struct {
+	ID int `json:"id"`
+	To string `json:"to"`
+}
+
+job := queue.NewJob("emails:send").
+	// Payload can be bytes, structs, maps, or JSON-marshalable values.
+	// Default payload is empty.
+	Payload(EmailPayload{ID: 123, To: "user@example.com"}).
+	// OnQueue sets the queue name.
+	// Default is empty; broker-style drivers expect an explicit queue.
+	OnQueue("default").
+	// Timeout sets per-job execution timeout.
+	// Default is unset; some drivers may apply driver/runtime defaults.
+	Timeout(20 * time.Second).
+	// Retry sets max retries.
+	// Default is 0, which means one total attempt.
+	Retry(3).
+	// Backoff sets retry delay.
+	// Default is unset; Redis dispatch returns ErrBackoffUnsupported.
+	Backoff(500 * time.Millisecond).
+	// Delay schedules first execution in the future.
+	// Default is 0 (run immediately).
+	Delay(2 * time.Second).
+	// UniqueFor deduplicates Type+Payload for a TTL window.
+	// Default is 0 (no dedupe).
+	UniqueFor(45 * time.Second)
+
+_ = q.Dispatch(job)
+```
+
+```go
+type EmailPayload struct {
+	ID int `json:"id"`
+	To string `json:"to"`
+}
+
+q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+	var payload EmailPayload
+	if err := job.Bind(&payload); err != nil {
+		return err
+	}
+	return nil
+})
+```
+
 ## Drivers
 
 | Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout |
@@ -222,33 +271,33 @@ _ = q
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 observer := queue.ObserverFunc(func(event queue.Event) {
 	attemptInfo := fmt.Sprintf("attempt=%d/%d", event.Attempt, event.MaxRetry+1)
-	taskInfo := fmt.Sprintf("task=%s key=%s queue=%s driver=%s", event.JobType, event.JobKey, event.Queue, event.Driver)
+	jobInfo := fmt.Sprintf("job=%s key=%s queue=%s driver=%s", event.JobType, event.JobKey, event.Queue, event.Driver)
 
 	switch event.Kind {
 	case queue.EventEnqueueAccepted:
-		logger.Info("Accepted dispatch", "msg", fmt.Sprintf("Accepted %s", taskInfo), "scheduled", event.Scheduled, "at", event.Time.Format(time.RFC3339Nano))
+		logger.Info("Accepted dispatch", "msg", fmt.Sprintf("Accepted %s", jobInfo), "scheduled", event.Scheduled, "at", event.Time.Format(time.RFC3339Nano))
 	case queue.EventEnqueueRejected:
-		logger.Error("Dispatch failed", "msg", fmt.Sprintf("Rejected %s", taskInfo), "error", event.Err)
+		logger.Error("Dispatch failed", "msg", fmt.Sprintf("Rejected %s", jobInfo), "error", event.Err)
 	case queue.EventEnqueueDuplicate:
-		logger.Warn("Skipped duplicate job", "msg", fmt.Sprintf("Duplicate %s", taskInfo))
+		logger.Warn("Skipped duplicate job", "msg", fmt.Sprintf("Duplicate %s", jobInfo))
 	case queue.EventEnqueueCanceled:
-		logger.Warn("Canceled dispatch", "msg", fmt.Sprintf("Canceled %s", taskInfo), "error", event.Err)
+		logger.Warn("Canceled dispatch", "msg", fmt.Sprintf("Canceled %s", jobInfo), "error", event.Err)
 	case queue.EventProcessStarted:
-		logger.Info("Started processing job", "msg", fmt.Sprintf("Started %s (%s)", taskInfo, attemptInfo), "at", event.Time.Format(time.RFC3339Nano))
+		logger.Info("Started processing job", "msg", fmt.Sprintf("Started %s (%s)", jobInfo, attemptInfo), "at", event.Time.Format(time.RFC3339Nano))
 	case queue.EventProcessSucceeded:
-		logger.Info("Processed job", "msg", fmt.Sprintf("Processed %s in %s (%s)", taskInfo, event.Duration, attemptInfo))
+		logger.Info("Processed job", "msg", fmt.Sprintf("Processed %s in %s (%s)", jobInfo, event.Duration, attemptInfo))
 	case queue.EventProcessFailed:
-		logger.Error("Processing failed", "msg", fmt.Sprintf("Failed %s after %s (%s)", taskInfo, event.Duration, attemptInfo), "error", event.Err)
+		logger.Error("Processing failed", "msg", fmt.Sprintf("Failed %s after %s (%s)", jobInfo, event.Duration, attemptInfo), "error", event.Err)
 	case queue.EventProcessRetried:
-		logger.Warn("Retrying job", "msg", fmt.Sprintf("Retry scheduled for %s (%s)", taskInfo, attemptInfo), "error", event.Err)
+		logger.Warn("Retrying job", "msg", fmt.Sprintf("Retry scheduled for %s (%s)", jobInfo, attemptInfo), "error", event.Err)
 	case queue.EventProcessArchived:
-		logger.Error("Archived failed job", "msg", fmt.Sprintf("Archived %s after final failure (%s)", taskInfo, attemptInfo), "error", event.Err)
+		logger.Error("Archived failed job", "msg", fmt.Sprintf("Archived %s after final failure (%s)", jobInfo, attemptInfo), "error", event.Err)
 	case queue.EventQueuePaused:
 		logger.Info("Paused queue", "msg", fmt.Sprintf("Paused queue=%s driver=%s", event.Queue, event.Driver))
 	case queue.EventQueueResumed:
 		logger.Info("Resumed queue", "msg", fmt.Sprintf("Resumed queue=%s driver=%s", event.Queue, event.Driver))
 	default:
-		logger.Info("Queue event", "msg", fmt.Sprintf("kind=%s %s", event.Kind, taskInfo))
+		logger.Info("Queue event", "msg", fmt.Sprintf("kind=%s %s", event.Kind, jobInfo))
 	}
 })
 
@@ -1514,14 +1563,14 @@ collector.Observe(queue.Event{
 	Kind:   queue.EventProcessStarted,
 	Driver: queue.DriverSync,
 	Queue:  "default",
-	JobKey: "task-1",
+	JobKey: "job-1",
 	Time:   time.Now(),
 })
 collector.Observe(queue.Event{
 	Kind:     queue.EventProcessSucceeded,
 	Driver:   queue.DriverSync,
 	Queue:    "default",
-	JobKey:  "task-1",
+	JobKey:  "job-1",
 	Duration: 12 * time.Millisecond,
 	Time:     time.Now(),
 })

@@ -729,7 +729,7 @@ func waitForPendingTask(t *testing.T, inspector *asynq.Inspector, queueName stri
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("pending task not found for queue %q within %s", queueName, timeout)
+	t.Fatalf("pending job not found for queue %q within %s", queueName, timeout)
 	return nil
 }
 
@@ -746,7 +746,7 @@ func waitForScheduledTask(t *testing.T, inspector *asynq.Inspector, queueName st
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("scheduled task not found for queue %q within %s", queueName, timeout)
+	t.Fatalf("scheduled job not found for queue %q within %s", queueName, timeout)
 	return nil
 }
 
@@ -1081,7 +1081,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				if fx.supportsBackoff && i%5 == 0 {
 					task = task.Retry(1).Backoff(20 * time.Millisecond)
 				}
-				if err := q.DispatchCtx(context.Background(), job); err != nil {
+				if err := q.DispatchCtx(context.Background(), task); err != nil {
 					errCh <- fmt.Errorf("dispatch %d failed: %w", i, err)
 					return
 				}
@@ -1173,7 +1173,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		select {
 		case <-recoveryDone:
 		case <-time.After(10 * time.Second):
-			t.Fatalf("[poison_recovery_processing] recovery task was not processed")
+			t.Fatalf("[poison_recovery_processing] recovery job was not processed")
 		}
 	})
 
@@ -1204,7 +1204,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.supportsBackoff {
 			task = task.Retry(1).Backoff(250 * time.Millisecond)
 		}
-		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), job))
+		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), task))
 
 		requireScenarioNoErr(t, "restart_shutdown_first_worker", (w).Shutdown(context.Background()))
 		w = fx.newWorker(t)
@@ -1220,7 +1220,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		select {
 		case <-done:
 		case <-time.After(12 * time.Second):
-			t.Fatalf("[restart_recovery_processing] task did not recover after worker restart")
+			t.Fatalf("[restart_recovery_processing] job did not recover after worker restart")
 		}
 	})
 
@@ -1304,7 +1304,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		select {
 		case <-goodDone:
 		case <-time.After(10 * time.Second):
-			t.Fatalf("[bind_good_processing] valid payload task was not processed")
+			t.Fatalf("[bind_good_processing] valid payload job was not processed")
 		}
 	})
 
@@ -1389,7 +1389,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		select {
 		case <-goodDone:
 		case <-time.After(10 * time.Second):
-			t.Fatalf("[dispatch_ctx_good_processed] follow-up task was not processed")
+			t.Fatalf("[dispatch_ctx_good_processed] follow-up job was not processed")
 		}
 	})
 
@@ -1473,13 +1473,13 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		select {
 		case <-delayedDone:
 		case <-time.After(15 * time.Second):
-			t.Fatalf("[shutdown_delay_processed] delayed task did not process after restart")
+			t.Fatalf("[shutdown_delay_processed] delayed job did not process after restart")
 		}
 		if retryEnabled {
 			select {
 			case <-retryDone:
 			case <-time.After(15 * time.Second):
-				t.Fatalf("[shutdown_retry_processed] retry task did not process after restart")
+				t.Fatalf("[shutdown_retry_processed] retry job did not process after restart")
 			}
 		}
 	})
@@ -1521,7 +1521,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "multi_worker_dispatch", q.DispatchCtx(context.Background(), job))
+			requireScenarioNoErr(t, "multi_worker_dispatch", q.DispatchCtx(context.Background(), task))
 		}
 
 		deadline := time.Now().Add(20 * time.Second)
@@ -1659,11 +1659,11 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "recover_dispatch", q.DispatchCtx(context.Background(), job))
+		requireScenarioNoErr(t, "recover_dispatch", q.DispatchCtx(context.Background(), task))
 		select {
 		case <-done:
 		case <-time.After(12 * time.Second):
-			t.Fatalf("[recover_processed] task was not processed after broker recovery")
+			t.Fatalf("[recover_processed] job was not processed after broker recovery")
 		}
 	})
 
@@ -1694,7 +1694,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "ordering_dispatch", q.DispatchCtx(context.Background(), job))
+			requireScenarioNoErr(t, "ordering_dispatch", q.DispatchCtx(context.Background(), task))
 		}
 
 		got := make([]int, 0, count)
@@ -1733,7 +1733,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "backpressure_dispatch", q.DispatchCtx(context.Background(), job))
+			requireScenarioNoErr(t, "backpressure_dispatch", q.DispatchCtx(context.Background(), task))
 		}
 
 		probeType := "job:scenario:backpressure-probe:" + fx.name
@@ -1756,7 +1756,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		select {
 		case <-probeDone:
 		case <-time.After(20 * time.Second):
-			t.Fatalf("[backpressure_probe_processed] probe task was not processed under saturation")
+			t.Fatalf("[backpressure_probe_processed] probe job was not processed under saturation")
 		}
 		requireScenarioTrue(t, "backpressure_progress", processed.Load() > 0, "processed=%d expected>0", processed.Load())
 	})
@@ -1794,11 +1794,11 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "payload_large_dispatch", q.DispatchCtx(context.Background(), job))
+		requireScenarioNoErr(t, "payload_large_dispatch", q.DispatchCtx(context.Background(), task))
 		select {
 		case <-done:
 		case <-time.After(15 * time.Second):
-			t.Fatalf("[payload_large_processed] large payload task was not processed")
+			t.Fatalf("[payload_large_processed] large payload job was not processed")
 		}
 	})
 
@@ -1845,7 +1845,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if r.Intn(4) == 0 {
 				task = task.UniqueFor(time.Duration(1+r.Intn(2)) * time.Second)
 			}
-			if err := q.DispatchCtx(context.Background(), job); err != nil {
+			if err := q.DispatchCtx(context.Background(), task); err != nil {
 				t.Fatalf("[fuzz _dispatch_case_%d] dispatch failed: %v", i, err)
 			}
 			expected++
@@ -1915,7 +1915,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 					if id%10 == 0 {
 						task = task.UniqueFor(1 * time.Second)
 					}
-					if err := q.DispatchCtx(context.Background(), job); err != nil {
+					if err := q.DispatchCtx(context.Background(), task); err != nil {
 						errCh <- err
 						return
 					}

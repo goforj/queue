@@ -220,7 +220,7 @@ func (d *databaseQueue) Dispatch(ctx context.Context, task Job) error {
 
 	query := d.rebind(
 		`INSERT INTO queue_jobs
-        (queue_name, task_type, payload, timeout_seconds, max_retry, backoff_millis, attempt, available_at, state, created_at, updated_at)
+        (queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt, available_at, state, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?)`,
 	)
 	_, err := d.db.ExecContext(
@@ -382,7 +382,7 @@ func (d *databaseQueue) claimOne(ctx context.Context) (*dbJob, error) {
 }
 
 func (d *databaseQueue) selectPendingJob(ctx context.Context, tx *sql.Tx, now int64) (*dbJob, error) {
-	query := `SELECT id, queue_name, task_type, payload, timeout_seconds, max_retry, backoff_millis, attempt
+	query := `SELECT id, queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt
 FROM queue_jobs
 WHERE state='pending' AND available_at <= ?
 ORDER BY id ASC
@@ -494,7 +494,7 @@ func (d *databaseQueue) schemaStatements() []string {
 			`CREATE TABLE IF NOT EXISTS queue_jobs (
                 id BIGSERIAL PRIMARY KEY,
                 queue_name TEXT NOT NULL,
-                task_type TEXT NOT NULL,
+                job_type TEXT NOT NULL,
                 payload BYTEA NOT NULL,
                 timeout_seconds BIGINT NULL,
                 max_retry INTEGER NOT NULL DEFAULT 0,
@@ -518,7 +518,7 @@ func (d *databaseQueue) schemaStatements() []string {
 			`CREATE TABLE IF NOT EXISTS queue_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 queue_name TEXT NOT NULL,
-                task_type TEXT NOT NULL,
+                job_type TEXT NOT NULL,
                 payload BLOB NOT NULL,
                 timeout_seconds INTEGER NULL,
                 max_retry INTEGER NOT NULL DEFAULT 0,
@@ -542,7 +542,7 @@ func (d *databaseQueue) schemaStatements() []string {
 			`CREATE TABLE IF NOT EXISTS queue_jobs (
                 id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                 queue_name VARCHAR(191) NOT NULL,
-                task_type VARCHAR(191) NOT NULL,
+                job_type VARCHAR(191) NOT NULL,
                 payload LONGBLOB NOT NULL,
                 timeout_seconds BIGINT NULL,
                 max_retry INT NOT NULL DEFAULT 0,

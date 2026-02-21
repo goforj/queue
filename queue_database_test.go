@@ -43,7 +43,7 @@ func TestDatabaseQueue_DispatchAndProcess(t *testing.T) {
 	select {
 	case <-triggered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected task to be processed")
+		t.Fatal("expected job to be processed")
 	}
 }
 
@@ -126,7 +126,7 @@ func TestDatabaseQueue_QueueAndWorkerInteropSQLite(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("expected interop task to be processed")
+		t.Fatal("expected interop job to be processed")
 	}
 }
 
@@ -177,8 +177,8 @@ func TestDatabaseQueue_StatsSnapshot(t *testing.T) {
 		t.Fatalf("dispatch dead failed: %v", err)
 	}
 
-	_, _ = dq.db.ExecContext(context.Background(), dq.rebind(`UPDATE queue_jobs SET state='processing' WHERE task_type=?`), "job:processing")
-	_, _ = dq.db.ExecContext(context.Background(), dq.rebind(`UPDATE queue_jobs SET state='dead' WHERE task_type=?`), "job:dead")
+	_, _ = dq.db.ExecContext(context.Background(), dq.rebind(`UPDATE queue_jobs SET state='processing' WHERE job_type=?`), "job:processing")
+	_, _ = dq.db.ExecContext(context.Background(), dq.rebind(`UPDATE queue_jobs SET state='dead' WHERE job_type=?`), "job:dead")
 
 	snap, err := dq.Stats(nil)
 	if err != nil {

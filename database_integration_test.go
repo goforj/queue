@@ -51,7 +51,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 		case <-triggered:
 		case <-time.After(15 * time.Second):
 			logDatabaseQueueState(t, cfg, "dispatch_and_process timeout")
-			t.Fatal("expected task to be processed")
+			t.Fatal("expected job to be processed")
 		}
 	})
 
@@ -78,7 +78,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			}
 		case <-time.After(15 * time.Second):
 			logDatabaseQueueState(t, cfg, "delay timeout")
-			t.Fatal("expected delayed task to run")
+			t.Fatal("expected delayed job to run")
 		}
 	})
 
