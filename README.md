@@ -254,40 +254,40 @@ _ = q
 
 | EventKind | Meaning |
 | --- | --- |
-| `enqueue_accepted` | Task accepted by driver for enqueue. |
-| `enqueue_rejected` | Task enqueue failed. |
-| `enqueue_duplicate` | Duplicate task rejected due to uniqueness key. |
-| `enqueue_canceled` | Context cancellation prevented enqueue. |
-| `process_started` | Worker began processing task. |
-| `process_succeeded` | Handler returned success. |
-| `process_failed` | Handler returned error. |
-| `process_retried` | Driver scheduled retry attempt. |
-| `process_archived` | Task moved to terminal failure state. |
-| `queue_paused` | Queue was paused (driver supports pause). |
-| `queue_resumed` | Queue was resumed. |
+| enqueue_accepted | Task accepted by driver for enqueue. |
+| enqueue_rejected | Task enqueue failed. |
+| enqueue_duplicate | Duplicate task rejected due to uniqueness key. |
+| enqueue_canceled | Context cancellation prevented enqueue. |
+| process_started | Worker began processing task. |
+| process_succeeded | Handler returned success. |
+| process_failed | Handler returned error. |
+| process_retried | Driver scheduled retry attempt. |
+| process_archived | Task moved to terminal failure state. |
+| queue_paused | Queue was paused (driver supports pause). |
+| queue_resumed | Queue was resumed. |
 
 ### Bus events reference
 
 | EventKind | Meaning |
 | --- | --- |
-| `dispatch_started` | Bus accepted a dispatch request and created a dispatch record. |
-| `dispatch_succeeded` | Dispatch was successfully enqueued to the underlying queue runtime. |
-| `dispatch_failed` | Dispatch failed before job execution could start. |
-| `job_started` | A bus job handler started execution. |
-| `job_succeeded` | A bus job handler completed successfully. |
-| `job_failed` | A bus job handler returned an error. |
-| `chain_started` | A chain workflow was created and started. |
-| `chain_advanced` | Chain progressed from one node to the next node. |
-| `chain_completed` | Chain reached terminal success. |
-| `chain_failed` | Chain reached terminal failure. |
-| `batch_started` | A batch workflow was created and started. |
-| `batch_progressed` | Batch state changed as jobs completed/failed. |
-| `batch_completed` | Batch reached terminal success (or allowed-failure completion). |
-| `batch_failed` | Batch reached terminal failure. |
-| `batch_cancelled` | Batch was cancelled before normal completion. |
-| `callback_started` | Chain/batch callback execution started. |
-| `callback_succeeded` | Chain/batch callback completed successfully. |
-| `callback_failed` | Chain/batch callback returned an error. |
+| dispatch_started | Bus accepted a dispatch request and created a dispatch record. |
+| dispatch_succeeded | Dispatch was successfully enqueued to the underlying queue runtime. |
+| dispatch_failed | Dispatch failed before job execution could start. |
+| job_started | A bus job handler started execution. |
+| job_succeeded | A bus job handler completed successfully. |
+| job_failed | A bus job handler returned an error. |
+| chain_started | A chain workflow was created and started. |
+| chain_advanced | Chain progressed from one node to the next node. |
+| chain_completed | Chain reached terminal success. |
+| chain_failed | Chain reached terminal failure. |
+| batch_started | A batch workflow was created and started. |
+| batch_progressed | Batch state changed as jobs completed/failed. |
+| batch_completed | Batch reached terminal success (or allowed-failure completion). |
+| batch_failed | Batch reached terminal failure. |
+| batch_cancelled | Batch was cancelled before normal completion. |
+| callback_started | Chain/batch callback execution started. |
+| callback_succeeded | Chain/batch callback completed successfully. |
+| callback_failed | Chain/batch callback returned an error. |
 
 ## Testing By Audience
 
