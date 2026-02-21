@@ -181,10 +181,10 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			})
 
 			t.Run("scenario_dispatch_success", func(t *testing.T) {
-				okTask := NewJob(okType).
+				okJob := NewJob(okType).
 					Payload(scenarioPayload{ID: 1, Name: "obs-ok"}).
 					OnQueue(fx.queue)
-				requireScenarioNoErr(t, "dispatch_success", q.DispatchCtx(context.Background(), okTask))
+				requireScenarioNoErr(t, "dispatch_success", q.DispatchCtx(context.Background(), okJob))
 				select {
 				case <-okDone:
 				case <-time.After(12 * time.Second):
@@ -193,24 +193,24 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			})
 
 			t.Run("scenario_dispatch_retry_archive", func(t *testing.T) {
-				failTask := NewJob(failType).
+				failJob := NewJob(failType).
 					Payload(scenarioPayload{ID: 2, Name: "obs-fail"}).
 					OnQueue(fx.queue).
 					Retry(0)
-				requireScenarioNoErr(t, "dispatch_retry_archive", q.DispatchCtx(context.Background(), failTask))
+				requireScenarioNoErr(t, "dispatch_retry_archive", q.DispatchCtx(context.Background(), failJob))
 				waitForObservabilityScenario(t, "retry_archive_attempts", 12*time.Second, func() bool {
 					return failedCalls.Load() >= 1
 				})
 			})
 
 			if fx.name != "redis" {
-				t.Run("scenario_dispatch_retried_task", func(t *testing.T) {
-					retryTask := NewJob(failType).
+				t.Run("scenario_dispatch_retried_job", func(t *testing.T) {
+					retryJob := NewJob(failType).
 						Payload(scenarioPayload{ID: 3, Name: "obs-retry"}).
 						OnQueue(fx.queue).
 						Retry(1).
 						Backoff(20 * time.Millisecond)
-					requireScenarioNoErr(t, "dispatch_retried_task", q.DispatchCtx(context.Background(), retryTask))
+					requireScenarioNoErr(t, "dispatch_retried_job", q.DispatchCtx(context.Background(), retryJob))
 					waitForObservabilityScenario(t, "retried_job_attempts", 12*time.Second, func() bool {
 						return failedCalls.Load() >= 3
 					})

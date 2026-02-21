@@ -28,7 +28,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 			b.Fatalf("start sync workers failed: %v", err)
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
-		benchmarkDispatchLoop(b, ctx, q, benchTask("bench:sync", "sync"))
+		benchmarkDispatchLoop(b, ctx, q, benchJob("bench:sync", "sync"))
 	})
 
 	b.Run("workerpool", func(b *testing.B) {
@@ -41,7 +41,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 			b.Fatalf("start workerpool failed: %v", err)
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
-		benchmarkDispatchLoop(b, ctx, q, benchTask("bench:workerpool", "workerpool"))
+		benchmarkDispatchLoop(b, ctx, q, benchJob("bench:workerpool", "workerpool"))
 	})
 
 	b.Run("database-sqlite", func(b *testing.B) {
@@ -60,7 +60,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 			b.Fatalf("start sqlite workers failed: %v", err)
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
-		benchmarkDispatchLoop(b, ctx, q, benchTask("bench:sqlite", "sqlite"))
+		benchmarkDispatchLoop(b, ctx, q, benchJob("bench:sqlite", "sqlite"))
 	})
 }
 
@@ -78,7 +78,7 @@ func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q Queue, job Job) 
 	}
 }
 
-func benchTask(jobType, queueName string) Job {
+func benchJob(jobType, queueName string) Job {
 	return NewJob(jobType).
 		Payload(struct {
 			ID   int    `json:"id"`

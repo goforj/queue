@@ -27,7 +27,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
 		return q
-	}, benchTask("bench:redis", uniqueQueueName("bench-redis-q")))
+	}, benchJob("bench:redis", uniqueQueueName("bench-redis-q")))
 
 	runIntegrationDriverBench(b, "nats", func(b *testing.B) Queue {
 		cfg := Config{
@@ -45,7 +45,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
 		return q
-	}, benchTask("bench:nats", uniqueQueueName("bench-nats-q")))
+	}, benchJob("bench:nats", uniqueQueueName("bench-nats-q")))
 
 	runIntegrationDriverBench(b, "sqs", func(b *testing.B) Queue {
 		cfg := Config{
@@ -66,7 +66,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
 		return q
-	}, benchTask("bench:sqs", uniqueQueueName("bench-sqs-q")))
+	}, benchJob("bench:sqs", uniqueQueueName("bench-sqs-q")))
 
 	runIntegrationDriverBench(b, "rabbitmq", func(b *testing.B) Queue {
 		cfg := Config{
@@ -84,7 +84,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
 		return q
-	}, benchTask("bench:rabbitmq", uniqueQueueName("bench-rmq-q")))
+	}, benchJob("bench:rabbitmq", uniqueQueueName("bench-rmq-q")))
 
 	runIntegrationDriverBench(b, "mysql", func(b *testing.B) Queue {
 		cfg := Config{
@@ -103,7 +103,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
 		return q
-	}, benchTask("bench:mysql", "default"))
+	}, benchJob("bench:mysql", "default"))
 
 	runIntegrationDriverBench(b, "postgres", func(b *testing.B) Queue {
 		cfg := Config{
@@ -122,7 +122,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		}
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
 		return q
-	}, benchTask("bench:postgres", "default"))
+	}, benchJob("bench:postgres", "default"))
 }
 
 func runIntegrationDriverBench(b *testing.B, backend string, ctor func(b *testing.B) Queue, job Job) {

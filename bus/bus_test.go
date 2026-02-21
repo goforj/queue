@@ -157,7 +157,7 @@ func TestBatchTracksCompletion(t *testing.T) {
 	}
 }
 
-func TestCallbackTaskEmitsCallbackEvents(t *testing.T) {
+func TestCallbackJobEmitsCallbackEvents(t *testing.T) {
 	q, err := queue.NewSync()
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
@@ -271,7 +271,7 @@ func TestBatchFailFastEmitsCancelled(t *testing.T) {
 	}
 }
 
-func TestChainCatchRunsOnceForDuplicateCallbackTasks(t *testing.T) {
+func TestChainCatchRunsOnceForDuplicateCallbackJobs(t *testing.T) {
 	q, err := queue.NewSync()
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
@@ -321,7 +321,7 @@ func TestChainCatchRunsOnceForDuplicateCallbackTasks(t *testing.T) {
 	}
 }
 
-func TestBatchThenFinallyRunOnceForDuplicateCallbackTasks(t *testing.T) {
+func TestBatchThenFinallyRunOnceForDuplicateCallbackJobs(t *testing.T) {
 	q, err := queue.NewSync()
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
@@ -381,7 +381,7 @@ func TestBatchThenFinallyRunOnceForDuplicateCallbackTasks(t *testing.T) {
 	}
 }
 
-func TestBatchCatchRunsOnceForDuplicateCallbackTasks(t *testing.T) {
+func TestBatchCatchRunsOnceForDuplicateCallbackJobs(t *testing.T) {
 	q, err := queue.NewSync()
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)

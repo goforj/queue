@@ -30,7 +30,7 @@ func TestDispatch_BasicJobSuccess(t *testing.T) {
 	eng := &stubEngine{res: StartWorkflowResult{WorkflowID: "wf-1", RunID: "run-1"}}
 	a, err := New(Config{
 		Namespace: "default",
-		TaskQueue: "monitor",
+		JobQueue:  "monitor",
 		Engine:    eng,
 	})
 	if err != nil {
@@ -50,8 +50,8 @@ func TestDispatch_BasicJobSuccess(t *testing.T) {
 	if eng.req.JobType != "monitor:poll" {
 		t.Fatalf("expected job type monitor:poll, got %q", eng.req.JobType)
 	}
-	if eng.req.TaskQueue != "monitor" {
-		t.Fatalf("expected job queue monitor, got %q", eng.req.TaskQueue)
+	if eng.req.JobQueue != "monitor" {
+		t.Fatalf("expected job queue monitor, got %q", eng.req.JobQueue)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestDispatch_PassesJobOptionsToEngine(t *testing.T) {
 	eng := &stubEngine{res: StartWorkflowResult{WorkflowID: "wf-1", RunID: "run-1"}}
 	a, err := New(Config{
 		Namespace: "default",
-		TaskQueue: "monitor",
+		JobQueue:  "monitor",
 		Engine:    eng,
 	})
 	if err != nil {
@@ -106,8 +106,8 @@ func TestDispatch_PassesJobOptionsToEngine(t *testing.T) {
 		t.Fatalf("dispatch: %v", err)
 	}
 
-	if eng.req.TaskQueue != "monitor-critical" {
-		t.Fatalf("expected job queue override monitor-critical, got %q", eng.req.TaskQueue)
+	if eng.req.JobQueue != "monitor-critical" {
+		t.Fatalf("expected job queue override monitor-critical, got %q", eng.req.JobQueue)
 	}
 	if eng.req.Options.Queue != "monitor-critical" {
 		t.Fatalf("expected options queue monitor-critical, got %q", eng.req.Options.Queue)
@@ -133,7 +133,7 @@ func TestChain_BasicSuccess(t *testing.T) {
 	eng := &stubEngine{res: StartWorkflowResult{WorkflowID: "wf-chain-1", RunID: "run-1"}}
 	a, err := New(Config{
 		Namespace: "default",
-		TaskQueue: "monitor",
+		JobQueue:  "monitor",
 		Engine:    eng,
 	})
 	if err != nil {
@@ -157,8 +157,8 @@ func TestChain_BasicSuccess(t *testing.T) {
 	if eng.req.JobType != "bus:chain" {
 		t.Fatalf("expected job type bus:chain, got %q", eng.req.JobType)
 	}
-	if eng.req.TaskQueue != "critical-monitor" {
-		t.Fatalf("expected queue override critical-monitor, got %q", eng.req.TaskQueue)
+	if eng.req.JobQueue != "critical-monitor" {
+		t.Fatalf("expected queue override critical-monitor, got %q", eng.req.JobQueue)
 	}
 	st, err := a.FindChain(context.Background(), id)
 	if err != nil {
@@ -194,7 +194,7 @@ func TestBatch_BasicSuccess(t *testing.T) {
 	eng := &stubEngine{res: StartWorkflowResult{WorkflowID: "wf-batch-1", RunID: "run-1"}}
 	a, err := New(Config{
 		Namespace: "default",
-		TaskQueue: "monitor",
+		JobQueue:  "monitor",
 		Engine:    eng,
 	})
 	if err != nil {
@@ -218,8 +218,8 @@ func TestBatch_BasicSuccess(t *testing.T) {
 	if eng.req.JobType != "bus:batch" {
 		t.Fatalf("expected job type bus:batch, got %q", eng.req.JobType)
 	}
-	if eng.req.TaskQueue != "batch-monitor" {
-		t.Fatalf("expected queue override batch-monitor, got %q", eng.req.TaskQueue)
+	if eng.req.JobQueue != "batch-monitor" {
+		t.Fatalf("expected queue override batch-monitor, got %q", eng.req.JobQueue)
 	}
 	st, err := a.FindBatch(context.Background(), id)
 	if err != nil {
@@ -296,7 +296,7 @@ func TestAdapter_RegisterAndNoopRuntimeMethods(t *testing.T) {
 
 func TestBuilderNoopCallbacksAndToWireJobErrors(t *testing.T) {
 	eng := &stubEngine{res: StartWorkflowResult{WorkflowID: "wf-1", RunID: "run-1"}}
-	a, err := New(Config{TaskQueue: "default", Engine: eng})
+	a, err := New(Config{JobQueue: "default", Engine: eng})
 	if err != nil {
 		t.Fatalf("new adapter: %v", err)
 	}

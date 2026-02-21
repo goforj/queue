@@ -72,8 +72,8 @@ func TestJobPayloadJSON_UsesMarshalerAndCapturesError(t *testing.T) {
 		t.Fatalf("expected marshaled payload to include ok=true, got %#v", out)
 	}
 
-	errTask := NewJob("job:json").PayloadJSON(badMarshaler{})
-	if err := errTask.validate(); err == nil {
+	errJob := NewJob("job:json").PayloadJSON(badMarshaler{})
+	if err := errJob.validate(); err == nil {
 		t.Fatal("expected payload marshaling error")
 	}
 }

@@ -19,7 +19,7 @@ var ErrNotImplemented = ErrEngineRequired
 
 type Config struct {
 	Namespace string
-	TaskQueue string
+	JobQueue  string
 	Engine    Engine
 }
 
@@ -31,7 +31,7 @@ type StartWorkflowRequest struct {
 	DispatchID string
 	JobID      string
 	Namespace  string
-	TaskQueue  string
+	JobQueue   string
 	JobType    string
 	Payload    []byte
 	Options    bus.JobOptions
@@ -54,8 +54,8 @@ type Adapter struct {
 var _ bus.Bus = (*Adapter)(nil)
 
 func New(cfg Config) (*Adapter, error) {
-	if cfg.TaskQueue == "" {
-		cfg.TaskQueue = "default"
+	if cfg.JobQueue == "" {
+		cfg.JobQueue = "default"
 	}
 	return &Adapter{
 		cfg:         cfg,
@@ -88,7 +88,7 @@ func (a *Adapter) DispatchCtx(ctx context.Context, job bus.Job) (bus.DispatchRes
 		DispatchID: dispatchID,
 		JobID:      jobID,
 		Namespace:  a.cfg.Namespace,
-		TaskQueue:  queueForJob(a.cfg.TaskQueue, wj.Options.Queue),
+		JobQueue:   queueForJob(a.cfg.JobQueue, wj.Options.Queue),
 		JobType:    wj.Type,
 		Payload:    wj.Payload,
 		Options:    wj.Options,
@@ -154,7 +154,7 @@ func (b *temporalChainBuilder) Dispatch(ctx context.Context) (string, error) {
 		DispatchID: chainID,
 		JobID:      newID("job"),
 		Namespace:  b.adapter.cfg.Namespace,
-		TaskQueue:  queueForJob(b.adapter.cfg.TaskQueue, b.queue),
+		JobQueue:   queueForJob(b.adapter.cfg.JobQueue, b.queue),
 		JobType:    "bus:chain",
 		Payload:    chainPayload,
 		Options:    bus.JobOptions{Queue: b.queue},
@@ -166,7 +166,7 @@ func (b *temporalChainBuilder) Dispatch(ctx context.Context) (string, error) {
 	b.adapter.chainStates[chainID] = bus.ChainState{
 		ChainID:    chainID,
 		DispatchID: chainID,
-		Queue:      queueForJob(b.adapter.cfg.TaskQueue, b.queue),
+		Queue:      queueForJob(b.adapter.cfg.JobQueue, b.queue),
 		Nodes:      nil,
 		NextIndex:  0,
 		Completed:  false,
@@ -231,7 +231,7 @@ func (b *temporalBatchBuilder) Dispatch(ctx context.Context) (string, error) {
 		DispatchID: batchID,
 		JobID:      newID("job"),
 		Namespace:  b.adapter.cfg.Namespace,
-		TaskQueue:  queueForJob(b.adapter.cfg.TaskQueue, b.queue),
+		JobQueue:   queueForJob(b.adapter.cfg.JobQueue, b.queue),
 		JobType:    "bus:batch",
 		Payload:    batchPayload,
 		Options:    bus.JobOptions{Queue: b.queue},
@@ -244,7 +244,7 @@ func (b *temporalBatchBuilder) Dispatch(ctx context.Context) (string, error) {
 		BatchID:     batchID,
 		DispatchID:  batchID,
 		Name:        b.name,
-		Queue:       queueForJob(b.adapter.cfg.TaskQueue, b.queue),
+		Queue:       queueForJob(b.adapter.cfg.JobQueue, b.queue),
 		AllowFailed: b.allowFailures,
 		Total:       len(b.jobs),
 		Pending:     len(b.jobs),
