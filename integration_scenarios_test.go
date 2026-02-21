@@ -1081,7 +1081,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				if fx.supportsBackoff && i%5 == 0 {
 					task = task.Retry(1).Backoff(20 * time.Millisecond)
 				}
-				if err := q.DispatchCtx(context.Background(), task); err != nil {
+				if err := q.DispatchCtx(context.Background(), job); err != nil {
 					errCh <- fmt.Errorf("dispatch %d failed: %w", i, err)
 					return
 				}
@@ -1204,7 +1204,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.supportsBackoff {
 			task = task.Retry(1).Backoff(250 * time.Millisecond)
 		}
-		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), task))
+		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), job))
 
 		requireScenarioNoErr(t, "restart_shutdown_first_worker", (w).Shutdown(context.Background()))
 		w = fx.newWorker(t)
@@ -1521,7 +1521,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "multi_worker_dispatch", q.DispatchCtx(context.Background(), task))
+			requireScenarioNoErr(t, "multi_worker_dispatch", q.DispatchCtx(context.Background(), job))
 		}
 
 		deadline := time.Now().Add(20 * time.Second)
@@ -1659,7 +1659,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "recover_dispatch", q.DispatchCtx(context.Background(), task))
+		requireScenarioNoErr(t, "recover_dispatch", q.DispatchCtx(context.Background(), job))
 		select {
 		case <-done:
 		case <-time.After(12 * time.Second):
@@ -1694,7 +1694,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "ordering_dispatch", q.DispatchCtx(context.Background(), task))
+			requireScenarioNoErr(t, "ordering_dispatch", q.DispatchCtx(context.Background(), job))
 		}
 
 		got := make([]int, 0, count)
@@ -1733,7 +1733,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				task = task.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "backpressure_dispatch", q.DispatchCtx(context.Background(), task))
+			requireScenarioNoErr(t, "backpressure_dispatch", q.DispatchCtx(context.Background(), job))
 		}
 
 		probeType := "job:scenario:backpressure-probe:" + fx.name
@@ -1794,7 +1794,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			task = task.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "payload_large_dispatch", q.DispatchCtx(context.Background(), task))
+		requireScenarioNoErr(t, "payload_large_dispatch", q.DispatchCtx(context.Background(), job))
 		select {
 		case <-done:
 		case <-time.After(15 * time.Second):
@@ -1845,7 +1845,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if r.Intn(4) == 0 {
 				task = task.UniqueFor(time.Duration(1+r.Intn(2)) * time.Second)
 			}
-			if err := q.DispatchCtx(context.Background(), task); err != nil {
+			if err := q.DispatchCtx(context.Background(), job); err != nil {
 				t.Fatalf("[fuzz _dispatch_case_%d] dispatch failed: %v", i, err)
 			}
 			expected++
@@ -1915,7 +1915,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 					if id%10 == 0 {
 						task = task.UniqueFor(1 * time.Second)
 					}
-					if err := q.DispatchCtx(context.Background(), task); err != nil {
+					if err := q.DispatchCtx(context.Background(), job); err != nil {
 						errCh <- err
 						return
 					}

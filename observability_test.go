@@ -84,7 +84,7 @@ func TestStatsSnapshot_Getters(t *testing.T) {
 		Kind:     EventProcessStarted,
 		Driver:   DriverSync,
 		Queue:    "default",
-		TaskKey:  "task-1",
+		JobKey:  "task-1",
 		Time:     now.Add(10 * time.Millisecond),
 		Duration: 5 * time.Millisecond,
 	})
@@ -92,7 +92,7 @@ func TestStatsSnapshot_Getters(t *testing.T) {
 		Kind:     EventProcessSucceeded,
 		Driver:   DriverSync,
 		Queue:    "default",
-		TaskKey:  "task-1",
+		JobKey:  "task-1",
 		Time:     now.Add(20 * time.Millisecond),
 		Duration: 5 * time.Millisecond,
 	})

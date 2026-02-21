@@ -371,9 +371,9 @@ func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind stri
 	return r.dispatchEnvelope(ctx, internalTaskCallback, cbEnv)
 }
 
-func (r *runtime) handleInternalJob(ctx context.Context, task queue.Job) error {
+func (r *runtime) handleInternalJob(ctx context.Context, job queue.Job) error {
 	var env envelope
-	if err := task.Bind(&env); err != nil {
+	if err := job.Bind(&env); err != nil {
 		return err
 	}
 	return r.executeWireJob(ctx, env)

@@ -169,7 +169,7 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 //		var payload EmailPayload
 //		if err := task.Bind(&payload); err != nil {
 //			return err
@@ -682,7 +682,7 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 //		var payload EmailPayload
 //		if err := task.Bind(&payload); err != nil {
 //			return err

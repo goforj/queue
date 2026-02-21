@@ -143,9 +143,9 @@ func nodeID(chainID string, idx int) string {
 	return chainID + "_" + newID("n")
 }
 
-func (r *runtime) handleInternalChainNode(ctx context.Context, task queue.Job) error {
+func (r *runtime) handleInternalChainNode(ctx context.Context, job queue.Job) error {
 	var env envelope
-	if err := task.Bind(&env); err != nil {
+	if err := job.Bind(&env); err != nil {
 		return err
 	}
 	err := r.executeWireJob(ctx, env)

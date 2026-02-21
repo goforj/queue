@@ -288,7 +288,7 @@ func (t Job) withAttempt(attempt int) Job {
 //
 // Example: handler
 //
-//	handler := func(ctx context.Context, task queue.Job) error { return nil }
+//	handler := func(ctx context.Context, job queue.Job) error { return nil }
 //	_ = handler
 type Handler func(ctx context.Context, task Job) error
 

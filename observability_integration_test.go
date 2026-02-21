@@ -188,7 +188,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				select {
 				case <-okDone:
 				case <-time.After(12 * time.Second):
-					t.Fatal("timed out waiting for observed success task processing")
+					t.Fatal("timed out waiting for observed success job processing")
 				}
 			})
 

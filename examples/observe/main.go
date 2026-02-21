@@ -37,7 +37,7 @@ func example2() {
 			"kind", event.Kind,
 			"driver", event.Driver,
 			"queue", event.Queue,
-			"task_type", event.TaskType,
+			"job_type", event.JobType,
 			"attempt", event.Attempt,
 			"max_retry", event.MaxRetry,
 			"duration", event.Duration,
@@ -48,7 +48,7 @@ func example2() {
 		Kind:     queue.EventProcessSucceeded,
 		Driver:   queue.DriverSync,
 		Queue:    "default",
-		TaskType: "emails:send",
+		JobType: "emails:send",
 	})
 }
 

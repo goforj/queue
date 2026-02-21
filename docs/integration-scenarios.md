@@ -60,22 +60,22 @@ What this proves today:
 - Worker lifecycle idempotency (`StartWorkers` and `Shutdown` are safe when called twice).
 - Concurrent dispatch pressure with mixed job options (`Delay`, `Timeout`, `Retry`, `Backoff` where supported).
 - Payload decode path with `Job.Bind`.
-- Poison-message behavior is enforced per-backend capability in the fixture matrix (retry ceiling where supported, plus healthy-task recovery after poison).
+- Poison-message behavior is enforced per-backend capability in the fixture matrix (retry ceiling where supported, plus healthy-job recovery after poison).
 - Worker restart recovery is validated only on backends marked restart-capable in the fixture matrix.
 - Invalid JSON payload decode behavior via `Job.Bind` is exercised, followed by successful processing of a valid payload.
 - Queue-scoped uniqueness is validated (same queue duplicate rejected, different queue accepted).
-- Dispatch context-cancellation behavior is validated per backend capability, with healthy follow-up task processing.
+- Dispatch context-cancellation behavior is validated per backend capability, with healthy follow-up job processing.
 - Shutdown during delayed and retry workloads is validated with restart/recovery checks on supported backends.
-- Multi-worker contention is validated for deterministic backends to ensure single successful processing per task.
+- Multi-worker contention is validated for deterministic backends to ensure single successful processing per job.
 - Duplicate-delivery idempotency patterns are validated under forced retry with single side-effect commit.
 - Broker fault injection and consume-after-recovery flow is validated on supported backends.
 - FIFO ordering contract is validated for backends marked ordering-capable.
 - Backpressure saturation preserves forward progress and probe processing.
 - Large payload handling is validated end-to-end.
-- Config/task-option fuzz coverage validates mixed option combinations across backends for stability.
+- Config/job-option fuzz coverage validates mixed option combinations across backends for stability.
 - Long-run soak mixed-load behavior is available via opt-in (`RUN_SOAK=1`).
 - RabbitMQ delayed/retry durability now uses broker-side delay queues (TTL + dead-letter) so delayed work survives worker restarts.
-- Redis dispatch now applies a default task timeout when none is provided, preventing timeout/deadline-missing runtime edge cases.
+- Redis dispatch now applies a default job timeout when none is provided, preventing timeout/deadline-missing runtime edge cases.
 - End-to-end completion for successfully dispatched tasks.
 
 ## Next scenarios
@@ -105,7 +105,7 @@ Multi-worker contention
 - Goal: extend with larger fan-out and churn (workers joining/leaving mid-run).
 - Status: planned.
 
-Config/task-option fuzzing
+Config/job-option fuzzing
 - Candidate scenario: `scenario_config_option_fuzz` extensions.
 - Goal: extend with invalid-combination mutation buckets and error-shape assertions.
 - Status: planned.

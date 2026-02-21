@@ -56,7 +56,7 @@ func (q *nullQueue) Shutdown(context.Context) error {
 
 func (q *nullQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
-	key := queueName + ":" + taskEventKey(task)
+	key := queueName + ":" + jobEventKey(task)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for k, expiresAt := range q.unique {

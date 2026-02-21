@@ -96,7 +96,7 @@ func TestNATSIntegration_OptionBehavior(t *testing.T) {
 		Timeout(timeout).
 		Retry(2).
 		Backoff(backoff)
-	if err := q.DispatchCtx(context.Background(), task); err != nil {
+	if err := q.DispatchCtx(context.Background(), job); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 

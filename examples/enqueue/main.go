@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	// Enqueue schedules or executes a task using the local driver.
+	// Enqueue schedules or executes a job using the local driver.
 
 	// Example: local enqueue
 	q, err := queue.NewSync()
@@ -20,7 +20,7 @@ func main() {
 	type EmailPayload struct {
 		ID int `json:"id"`
 	}
-	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
+	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 		var payload EmailPayload
 		if err := job.Bind(&payload); err != nil {
 			return err

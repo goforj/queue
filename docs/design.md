@@ -29,7 +29,7 @@ Provide one stable queue API that can run across multiple backends without forci
 Primary objectives:
 
 - consistent dispatch/handler programming model
-- explicit task metadata (retry/delay/timeout/queue/uniqueness)
+- explicit job metadata (retry/delay/timeout/queue/uniqueness)
 - backend-specific durability/performance where available
 - strong reliability and scenario coverage across supported drivers
 - useful observability hooks independent of backend
@@ -276,7 +276,7 @@ Core API:
 
 - `queue.go`
 - `worker.go`
-- `task.go`
+- `job.go`
 - `driver.go`
 
 Drivers:

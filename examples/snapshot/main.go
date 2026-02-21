@@ -24,14 +24,14 @@ func main() {
 		Kind:   queue.EventProcessStarted,
 		Driver: queue.DriverSync,
 		Queue:  "default",
-		TaskKey: "task-1",
+		JobKey: "task-1",
 		Time:   time.Now(),
 	})
 	collector.Observe(queue.Event{
 		Kind:     queue.EventProcessSucceeded,
 		Driver:   queue.DriverSync,
 		Queue:    "default",
-		TaskKey:  "task-1",
+		JobKey:  "task-1",
 		Duration: 12 * time.Millisecond,
 		Time:     time.Now(),
 	})

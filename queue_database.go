@@ -443,7 +443,7 @@ WHERE id=?`)
 func (d *databaseQueue) acquireUnique(ctx context.Context, task Job, queueName string, expiresAt time.Time) (bool, error) {
 	now := time.Now().UnixMilli()
 	expiresAtMillis := expiresAt.UnixMilli()
-	key := uniqueTaskKey(task, queueName)
+	key := uniqueJobKey(task, queueName)
 	insert := d.rebind(`INSERT INTO queue_unique_locks(lock_key, expires_at) VALUES(?, ?)`)
 	_, err := d.db.ExecContext(ctx, insert, key, expiresAtMillis)
 	if err == nil {
@@ -462,7 +462,7 @@ func (d *databaseQueue) acquireUnique(ctx context.Context, task Job, queueName s
 	return rows == 1, nil
 }
 
-func uniqueTaskKey(task Job, queueName string) string {
+func uniqueJobKey(task Job, queueName string) string {
 	hash := sha256.Sum256(append([]byte(queueName+":"+task.Type+":"), task.PayloadBytes()...))
 	return hex.EncodeToString(hash[:])
 }
