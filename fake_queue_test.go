@@ -52,3 +52,29 @@ func TestFakeQueue_ContextCanceled(t *testing.T) {
 	}
 	fake.AssertNothingDispatched(t)
 }
+
+func TestFakeQueue_NoopRuntimeMethodsAndReset(t *testing.T) {
+	fake := NewFake()
+	if fake.Driver() != DriverNull {
+		t.Fatalf("expected fake driver %q, got %q", DriverNull, fake.Driver())
+	}
+	fake.Register("job:noop", func(context.Context, Task) error { return nil })
+	if err := fake.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers noop failed: %v", err)
+	}
+	if got := fake.Workers(5); got != fake {
+		t.Fatal("expected Workers to return same fake queue")
+	}
+	if err := fake.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown noop failed: %v", err)
+	}
+
+	_ = fake.Dispatch(NewTask("job:one").OnQueue("default"))
+	if len(fake.Records()) != 1 {
+		t.Fatalf("expected one record before reset, got %d", len(fake.Records()))
+	}
+	fake.Reset()
+	if len(fake.Records()) != 0 {
+		t.Fatalf("expected no records after reset, got %d", len(fake.Records()))
+	}
+}
