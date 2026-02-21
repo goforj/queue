@@ -58,7 +58,7 @@ Observability suite status (`TestObservabilityIntegration_AllBackends`):
 What this proves today:
 
 - Worker lifecycle idempotency (`StartWorkers` and `Shutdown` are safe when called twice).
-- Concurrent dispatch pressure with mixed task options (`Delay`, `Timeout`, `Retry`, `Backoff` where supported).
+- Concurrent dispatch pressure with mixed job options (`Delay`, `Timeout`, `Retry`, `Backoff` where supported).
 - Payload decode path with `Job.Bind`.
 - Poison-message behavior is enforced per-backend capability in the fixture matrix (retry ceiling where supported, plus healthy-task recovery after poison).
 - Worker restart recovery is validated only on backends marked restart-capable in the fixture matrix.

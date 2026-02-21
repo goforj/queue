@@ -65,7 +65,7 @@ type databaseQueue struct {
 type dbJob struct {
 	id             int64
 	queueName      string
-	taskType       string
+	jobType        string
 	payload        []byte
 	timeoutSeconds sql.NullInt64
 	maxRetry       int
@@ -109,12 +109,12 @@ func (d *databaseQueue) Driver() Driver {
 	return DriverDatabase
 }
 
-func (d *databaseQueue) Register(taskType string, handler Handler) {
-	if taskType == "" || handler == nil {
+func (d *databaseQueue) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
 		return
 	}
 	d.mu.Lock()
-	d.handlers[taskType] = handler
+	d.handlers[jobType] = handler
 	d.mu.Unlock()
 }
 
@@ -174,14 +174,14 @@ func (d *databaseQueue) Dispatch(ctx context.Context, task Job) error {
 			return err
 		}
 	}
-	parsed := task.enqueueOptions()
+	parsed := task.jobOptions()
 	payloadBytes := task.PayloadBytes()
 	if payloadBytes == nil {
 		payloadBytes = []byte{}
 	}
 	queueName := parsed.queueName
 	if queueName == "" {
-		return fmt.Errorf("task queue is required")
+		return fmt.Errorf("job queue is required")
 	}
 
 	now := time.Now()
@@ -280,9 +280,9 @@ func (d *databaseQueue) Stats(ctx context.Context) (StatsSnapshot, error) {
 	return StatsSnapshot{ByQueue: byQueue, ThroughputByQueue: throughput}, nil
 }
 
-func (d *databaseQueue) lookup(taskType string) (Handler, bool) {
+func (d *databaseQueue) lookup(jobType string) (Handler, bool) {
 	d.mu.RLock()
-	handler, ok := d.handlers[taskType]
+	handler, ok := d.handlers[jobType]
 	d.mu.RUnlock()
 	return handler, ok
 }
@@ -316,9 +316,9 @@ func (d *databaseQueue) workerLoop() {
 }
 
 func (d *databaseQueue) processJob(job *dbJob) {
-	handler, ok := d.lookup(job.taskType)
+	handler, ok := d.lookup(job.jobType)
 	if !ok {
-		_ = d.markFailed(context.Background(), job, fmt.Errorf("no handler registered for task type %q", job.taskType))
+		_ = d.markFailed(context.Background(), job, fmt.Errorf("no handler registered for job type %q", job.jobType))
 		return
 	}
 	ctx := context.Background()
@@ -329,7 +329,7 @@ func (d *databaseQueue) processJob(job *dbJob) {
 	}
 	err := handler(
 		ctx,
-		NewJob(job.taskType).
+		NewJob(job.jobType).
 			Payload(job.payload).
 			OnQueue(job.queueName).
 			Retry(job.maxRetry).
@@ -396,7 +396,7 @@ LIMIT 1`
 	if err := row.Scan(
 		&job.id,
 		&job.queueName,
-		&job.taskType,
+		&job.jobType,
 		&job.payload,
 		&job.timeoutSeconds,
 		&job.maxRetry,

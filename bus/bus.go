@@ -323,12 +323,12 @@ func (r *runtime) Prune(ctx context.Context, before time.Time) error {
 	return r.store.Prune(ctx, before)
 }
 
-func (r *runtime) dispatchEnvelope(ctx context.Context, taskType string, env envelope) error {
+func (r *runtime) dispatchEnvelope(ctx context.Context, jobType string, env envelope) error {
 	payload, err := json.Marshal(env)
 	if err != nil {
 		return err
 	}
-	job := queue.NewJob(taskType).Payload(payload)
+	job := queue.NewJob(jobType).Payload(payload)
 	if env.Job.Options.Queue != "" {
 		job = job.OnQueue(env.Job.Options.Queue)
 	}

@@ -52,7 +52,7 @@ Optional long-run scenario (enabled with `RUN_SOAK=1`):
 
 What these prove:
 - Worker lifecycle idempotency (`StartWorkers` and `Shutdown` can be called twice safely).
-- Concurrent dispatch pressure with mixed task options (`Delay`, `Timeout`, `Retry`, `Backoff` where supported).
+- Concurrent dispatch pressure with mixed job options (`Delay`, `Timeout`, `Retry`, `Backoff` where supported).
 - Payload decode path via `Job.Bind(...)`.
 - Poison task behavior by backend capability (retry ceiling where supported) and healthy-task recovery.
 - Restart recovery only for backends that support deterministic restart durability in integration.

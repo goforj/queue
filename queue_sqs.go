@@ -95,9 +95,9 @@ func (q *sqsQueue) Dispatch(ctx context.Context, task Job) error {
 	if err := task.validate(); err != nil {
 		return err
 	}
-	parsed := task.enqueueOptions()
+	parsed := task.jobOptions()
 	if parsed.queueName == "" {
-		return fmt.Errorf("task queue is required")
+		return fmt.Errorf("job queue is required")
 	}
 	if err := q.ensureClient(ctx); err != nil {
 		return err

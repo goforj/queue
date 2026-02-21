@@ -758,7 +758,7 @@ func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
 
 func (q *observedQueue) Dispatch(ctx context.Context, task Job) error {
 	err := q.inner.Dispatch(ctx, task)
-	opts := task.enqueueOptions()
+	opts := task.jobOptions()
 	base := Event{
 		Driver:    q.driver,
 		Queue:     taskQueueName(task),
@@ -788,7 +788,7 @@ func (q *observedQueue) Dispatch(ctx context.Context, task Job) error {
 	return err
 }
 
-func (q *observedQueue) Register(taskType string, handler Handler) {
+func (q *observedQueue) Register(jobType string, handler Handler) {
 	runtime, ok := q.inner.(interface {
 		Register(string, Handler)
 	})
@@ -796,19 +796,19 @@ func (q *observedQueue) Register(taskType string, handler Handler) {
 		return
 	}
 	if handler == nil {
-		runtime.Register(taskType, handler)
+		runtime.Register(jobType, handler)
 		return
 	}
-	runtime.Register(taskType, wrapObservedHandler(q.observer, q.driver, "", taskType, handler))
+	runtime.Register(jobType, wrapObservedHandler(q.observer, q.driver, "", jobType, handler))
 }
 
 func (q *observedQueue) Driver() Driver {
 	return q.driver
 }
 
-func wrapObservedHandler(observer Observer, driver Driver, queueName string, taskType string, handler Handler) Handler {
+func wrapObservedHandler(observer Observer, driver Driver, queueName string, jobType string, handler Handler) Handler {
 	return func(ctx context.Context, task Job) error {
-		opts := task.enqueueOptions()
+		opts := task.jobOptions()
 		effectiveQueue := queueName
 		if effectiveQueue == "" {
 			effectiveQueue = taskQueueName(task)
@@ -817,7 +817,7 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, tas
 		base := Event{
 			Driver:    driver,
 			Queue:     effectiveQueue,
-			TaskType:  taskType,
+			TaskType:  jobType,
 			TaskKey:   taskEventKey(task),
 			Attempt:   opts.attempt,
 			MaxRetry:  optionInt(opts.maxRetry),
@@ -866,7 +866,7 @@ func safeObserve(observer Observer, event Event) {
 }
 
 func taskQueueName(task Job) string {
-	queueName := task.enqueueOptions().queueName
+	queueName := task.jobOptions().queueName
 	if queueName == "" {
 		return "default"
 	}

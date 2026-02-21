@@ -26,8 +26,8 @@ func (s *queueBackendStub) Shutdown(context.Context) error { return nil }
 func (s *queueBackendStub) StartWorkers(context.Context) error {
 	return s.startErr
 }
-func (s *queueBackendStub) Register(taskType string, h Handler) {
-	s.registered = taskType
+func (s *queueBackendStub) Register(jobType string, h Handler) {
+	s.registered = jobType
 	s.handler = h
 }
 func (s *queueBackendStub) Pause(context.Context, string) error {

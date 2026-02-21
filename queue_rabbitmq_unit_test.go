@@ -36,7 +36,7 @@ func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 	q := newRabbitMQQueue("amqp://example", "default").(*rabbitMQQueue)
 
 	if err := q.Dispatch(context.Background(), NewJob("")); err == nil {
-		t.Fatal("expected validation error for empty task type")
+		t.Fatal("expected validation error for empty job type")
 	}
 	if err := q.Dispatch(context.Background(), NewJob("job:noqueue")); err == nil {
 		t.Fatal("expected queue required error")

@@ -159,7 +159,7 @@ b, _ := bus.New(
 
 ## Queue Integration Contract
 
-Bus registers reserved internal task types on the underlying queue:
+Bus registers reserved internal job types on the underlying queue:
 
 - `bus:job`
 - `bus:chain:node`

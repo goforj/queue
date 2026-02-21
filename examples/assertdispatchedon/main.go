@@ -6,9 +6,9 @@ package main
 import "github.com/goforj/queue"
 
 func main() {
-	// AssertDispatchedOn fails when taskType was not dispatched on queueName.
+	// AssertDispatchedOn fails when jobType was not dispatched on queueName.
 
-	// Example: assert task type dispatched on queue
+	// Example: assert job type dispatched on queue
 	fake := queue.NewFake()
 	_ = fake.Dispatch(
 		queue.NewJob("emails:send").

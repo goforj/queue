@@ -78,8 +78,8 @@ func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q Queue, task Job)
 	}
 }
 
-func benchTask(taskType, queueName string) Job {
-	return NewJob(taskType).
+func benchTask(jobType, queueName string) Job {
+	return NewJob(jobType).
 		Payload(struct {
 			ID   int    `json:"id"`
 			Kind string `json:"kind"`

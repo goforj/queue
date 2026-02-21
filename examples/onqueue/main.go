@@ -10,5 +10,5 @@ func main() {
 
 	// Example: on queue
 	job := queue.NewJob("emails:send").OnQueue("critical")
-	_ = task
+	_ = job
 }

@@ -13,5 +13,5 @@ func main() {
 
 	// Example: unique for
 	job := queue.NewJob("emails:send").UniqueFor(45 * time.Second)
-	_ = task
+	_ = job
 }

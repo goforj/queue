@@ -21,7 +21,7 @@ func TestLocalQueue_DispatchRunsRegisteredHandler(t *testing.T) {
 	d.Register("job:test", func(_ context.Context, task Job) error {
 		calls.Add(1)
 		if task.Type != "job:test" {
-			t.Fatalf("expected task type job:test, got %q", task.Type)
+			t.Fatalf("expected job type job:test, got %q", task.Type)
 		}
 		if string(task.PayloadBytes()) != "hello" {
 			t.Fatalf("expected payload hello, got %q", string(task.PayloadBytes()))
@@ -70,7 +70,7 @@ func TestLocalQueue_DispatchMissingTypeFails(t *testing.T) {
 	d := newLocalQueue(DriverSync)
 	err := d.Dispatch(context.Background(), NewJob("").OnQueue("default"))
 	if err == nil {
-		t.Fatal("expected missing task type error")
+		t.Fatal("expected missing job type error")
 	}
 }
 
@@ -82,14 +82,14 @@ func TestLocalQueue_DispatchWithUnique(t *testing.T) {
 		return nil
 	})
 
-	taskType := "job:unique"
+	jobType := "job:unique"
 	payload := []byte("payload")
-	err := d.Dispatch(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
+	err := d.Dispatch(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
 	if err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
 
-	err = d.Dispatch(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
+	err = d.Dispatch(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
@@ -98,7 +98,7 @@ func TestLocalQueue_DispatchWithUnique(t *testing.T) {
 	}
 
 	time.Sleep(150 * time.Millisecond)
-	err = d.Dispatch(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
+	err = d.Dispatch(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(120*time.Millisecond))
 	if err != nil {
 		t.Fatalf("expected dispatch after ttl expiry to succeed, got %v", err)
 	}

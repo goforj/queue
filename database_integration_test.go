@@ -89,13 +89,13 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg DatabaseConfig) 
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		taskType := "job:db:unique"
+		jobType := "job:db:unique"
 		payload := []byte("same")
-		err := d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
+		err := d.DispatchCtx(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
 		if err != nil {
 			t.Fatalf("first dispatch failed: %v", err)
 		}
-		err = d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
+		err = d.DispatchCtx(context.Background(), NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
 		if !errors.Is(err, ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}

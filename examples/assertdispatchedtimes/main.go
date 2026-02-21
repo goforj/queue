@@ -6,9 +6,9 @@ package main
 import "github.com/goforj/queue"
 
 func main() {
-	// AssertDispatchedTimes fails when taskType dispatch count does not match expected.
+	// AssertDispatchedTimes fails when jobType dispatch count does not match expected.
 
-	// Example: assert task type dispatched times
+	// Example: assert job type dispatched times
 	fake := queue.NewFake()
 	_ = fake.Dispatch(queue.NewJob("emails:send"))
 	_ = fake.Dispatch(queue.NewJob("emails:send"))

@@ -19,11 +19,11 @@ func (s *runtimeBackendStub) Dispatch(context.Context, Job) error {
 	return nil
 }
 
-func (s *runtimeBackendStub) Register(taskType string, handler Handler) {
+func (s *runtimeBackendStub) Register(jobType string, handler Handler) {
 	if s.registered == nil {
 		s.registered = make(map[string]Handler)
 	}
-	s.registered[taskType] = handler
+	s.registered[jobType] = handler
 }
 
 func (s *runtimeBackendStub) StartWorkers(context.Context) error {
@@ -54,23 +54,23 @@ func (q *queueBackendRecorder) Shutdown(context.Context) error {
 func TestQueueCommon_TaskFromJobAndHelpers(t *testing.T) {
 	common := &queueCommon{cfg: Config{DefaultQueue: "default"}}
 
-	if _, err := common.taskFromJob(nil); err == nil {
+	if _, err := common.jobFromAny(nil); err == nil {
 		t.Fatal("expected nil job error")
 	}
-	if _, err := common.taskFromJob(NewJob("")); err == nil {
-		t.Fatal("expected empty task type error")
+	if _, err := common.jobFromAny(NewJob("")); err == nil {
+		t.Fatal("expected empty job type error")
 	}
-	if _, err := common.taskFromJob(struct{ F func() }{}); err == nil {
+	if _, err := common.jobFromAny(struct{ F func() }{}); err == nil {
 		t.Fatal("expected marshal error for func field")
 	}
 	type namedJob struct{}
-	if got := taskTypeFromValue(namedJob{}); got != "namedJob" {
+	if got := jobTypeFromValue(namedJob{}); got != "namedJob" {
 		t.Fatalf("expected inferred type namedJob, got %q", got)
 	}
-	if got := taskTypeFromValue(&namedJob{}); got != "namedJob" {
+	if got := jobTypeFromValue(&namedJob{}); got != "namedJob" {
 		t.Fatalf("expected inferred pointer type namedJob, got %q", got)
 	}
-	if got := taskTypeFromValue(map[string]any{}); got != "" {
+	if got := jobTypeFromValue(map[string]any{}); got != "" {
 		t.Fatalf("expected anonymous type to return empty, got %q", got)
 	}
 }
