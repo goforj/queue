@@ -274,3 +274,58 @@ func TestFindNotFoundAndPruneNoop(t *testing.T) {
 		t.Fatalf("expected prune noop, got %v", err)
 	}
 }
+
+func TestAdapter_RegisterAndNoopRuntimeMethods(t *testing.T) {
+	a, err := New(Config{})
+	if err != nil {
+		t.Fatalf("new adapter: %v", err)
+	}
+	a.Register("", func(context.Context, bus.Context) error { return nil })
+	a.Register("job:nil", nil)
+	a.Register("job:ok", func(context.Context, bus.Context) error { return nil })
+	if len(a.handlers) != 1 {
+		t.Fatalf("expected one registered handler, got %d", len(a.handlers))
+	}
+	if err := a.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers noop should succeed: %v", err)
+	}
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown noop should succeed: %v", err)
+	}
+}
+
+func TestBuilderNoopCallbacksAndToWireJobErrors(t *testing.T) {
+	eng := &stubEngine{res: StartWorkflowResult{WorkflowID: "wf-1", RunID: "run-1"}}
+	a, err := New(Config{TaskQueue: "default", Engine: eng})
+	if err != nil {
+		t.Fatalf("new adapter: %v", err)
+	}
+	chainID, err := a.Chain(bus.NewJob("job:one", map[string]any{"id": 1})).
+		Catch(func(context.Context, bus.ChainState, error) error { return nil }).
+		Finally(func(context.Context, bus.ChainState) error { return nil }).
+		Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("chain dispatch: %v", err)
+	}
+	if chainID == "" {
+		t.Fatal("expected non-empty chain id")
+	}
+	batchID, err := a.Batch(bus.NewJob("job:two", map[string]any{"id": 2})).
+		Progress(func(context.Context, bus.BatchState) error { return nil }).
+		Then(func(context.Context, bus.BatchState) error { return nil }).
+		Catch(func(context.Context, bus.BatchState, error) error { return nil }).
+		Finally(func(context.Context, bus.BatchState) error { return nil }).
+		Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("batch dispatch: %v", err)
+	}
+	if batchID == "" {
+		t.Fatal("expected non-empty batch id")
+	}
+	if _, err := toWireJob(bus.Job{}); err == nil {
+		t.Fatal("expected toWireJob to reject empty job type")
+	}
+	if _, err := toWireJob(bus.NewJob("bad", func() {})); err == nil {
+		t.Fatal("expected toWireJob to reject non-marshable payload")
+	}
+}

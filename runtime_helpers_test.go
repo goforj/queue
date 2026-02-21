@@ -25,6 +25,17 @@ func TestRabbitMQConnectionClosedDetection(t *testing.T) {
 	}
 }
 
+func TestDialRabbitMQWithRetry_InvalidURLFailsFast(t *testing.T) {
+	start := time.Now()
+	_, err := dialRabbitMQWithRetry("://bad-url", 5*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected dial error for invalid rabbitmq url")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("expected invalid url dial to fail quickly")
+	}
+}
+
 func TestNullQueue_StartWorkersAndRegister(t *testing.T) {
 	q := newNullQueue().(*nullQueue)
 
