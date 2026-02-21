@@ -297,7 +297,7 @@ func (d *localQueue) startMemoryWorkersLocked() {
 
 func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	defer d.workerWG.Done()
-	taskTimeout := d.cfg.DefaultJobTimeout
+	jobTimeout := d.cfg.DefaultJobTimeout
 	for job := range workQueue {
 		func() {
 			defer func() {
@@ -306,9 +306,9 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 			d.started.Add(1)
 			defer d.finished.Add(1)
 			workerCtx := context.WithValue(job.ctx, workerEnqueueKey, true)
-			if taskTimeout > 0 {
+			if jobTimeout > 0 {
 				var cancel context.CancelFunc
-				workerCtx, cancel = context.WithTimeout(workerCtx, taskTimeout)
+				workerCtx, cancel = context.WithTimeout(workerCtx, jobTimeout)
 				defer cancel()
 			}
 			_ = d.runWithRetry(workerCtx, job.job, job.opts)
@@ -338,15 +338,15 @@ func (d *localQueue) runWithRetry(ctx context.Context, job Job, parsed jobOption
 		attempts += *parsed.maxRetry
 	}
 	var lastErr error
-	taskForRun := job
+	jobForRun := job
 	if parsed.maxRetry != nil {
-		taskForRun = taskForRun.Retry(*parsed.maxRetry)
+		jobForRun = jobForRun.Retry(*parsed.maxRetry)
 	}
 	if parsed.queueName != "" {
-		taskForRun = taskForRun.OnQueue(parsed.queueName)
+		jobForRun = jobForRun.OnQueue(parsed.queueName)
 	}
 	for attempt := 1; attempt <= attempts; attempt++ {
-		lastErr = d.run(ctx, taskForRun.withAttempt(attempt-1))
+		lastErr = d.run(ctx, jobForRun.withAttempt(attempt-1))
 		if lastErr == nil {
 			return nil
 		}
