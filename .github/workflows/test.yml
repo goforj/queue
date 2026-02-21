@@ -101,28 +101,3 @@ jobs:
           RUN_INTEGRATION: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
         run: go test -tags integration ./...
-
-  integration-e2e-scenarios:
-    needs: [integration-matrix-guard, integration-scenarios-contract-guard]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [null, sync, workerpool, redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "stable"
-
-      - name: Install dependencies
-        run: go mod download
-
-      - name: Run integration scenario suite
-        env:
-          RUN_INTEGRATION: "1"
-          INTEGRATION_BACKEND: ${{ matrix.backend }}
-        run: go test -tags integration ./... -run '^TestIntegrationScenarios_AllBackends$'
