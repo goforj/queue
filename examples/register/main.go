@@ -19,7 +19,7 @@ func example1() {
 
 	// Example: register a handler
 	var q queue.Queue
-	q.Register("emails:send", func(context.Context, queue.Task) error { return nil })
+	q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 }
 
 func example2() {
@@ -31,7 +31,7 @@ func example2() {
 	type EmailPayload struct {
 		ID int `json:"id"`
 	}
-	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 		var payload EmailPayload
 		if err := task.Bind(&payload); err != nil {
 			return err
@@ -44,6 +44,6 @@ func example2() {
 func example3() {
 	// Example: register no-op on fake
 	fake := queue.NewFake()
-	fake.Register("emails:send", func(context.Context, queue.Task) error { return nil })
+	fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 }
 

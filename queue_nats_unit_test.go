@@ -19,16 +19,16 @@ func TestNATSQueue_EnsureConnShortCircuitsWhenPresent(t *testing.T) {
 func TestNATSQueue_DispatchValidationAndConnectionFailure(t *testing.T) {
 	q := newNATSQueue("://bad-url").(*natsQueue)
 
-	if err := q.Dispatch(context.Background(), NewTask("")); err == nil {
+	if err := q.Dispatch(context.Background(), NewJob("")); err == nil {
 		t.Fatal("expected validation error for empty type")
 	}
 
-	if err := q.Dispatch(context.Background(), NewTask("job:nats")); err == nil {
+	if err := q.Dispatch(context.Background(), NewJob("job:nats")); err == nil {
 		t.Fatal("expected queue required error")
 	}
 
 	// Valid task should proceed to ensureConn and fail for invalid URL.
-	err := q.Dispatch(context.Background(), NewTask("job:nats").OnQueue("default"))
+	err := q.Dispatch(context.Background(), NewJob("job:nats").OnQueue("default"))
 	if err == nil {
 		t.Fatal("expected connection/parse error")
 	}
@@ -40,7 +40,7 @@ func TestNATSQueue_ShutdownNilConnAndHelpers(t *testing.T) {
 		t.Fatalf("shutdown with nil conn failed: %v", err)
 	}
 
-	task := NewTask("job:nats").Payload(map[string]any{"id": 1}).OnQueue("default")
+	task := NewJob("job:nats").Payload(map[string]any{"id": 1}).OnQueue("default")
 	if !q.claimUnique(task, "default", time.Minute) {
 		t.Fatal("expected first unique claim to succeed")
 	}

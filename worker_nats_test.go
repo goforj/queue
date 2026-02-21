@@ -16,13 +16,13 @@ func TestNATSWorker_NewRegisterAndShutdown(t *testing.T) {
 		t.Fatalf("expected url to be preserved, got %q", w.url)
 	}
 
-	w.Register("", func(context.Context, Task) error { return nil })
+	w.Register("", func(context.Context, Job) error { return nil })
 	w.Register("job:nil", nil)
 	if len(w.handlers) != 0 {
 		t.Fatalf("expected ignored registrations, got %d handlers", len(w.handlers))
 	}
 
-	w.Register("job:ok", func(context.Context, Task) error { return nil })
+	w.Register("job:ok", func(context.Context, Job) error { return nil })
 	if len(w.handlers) != 1 {
 		t.Fatalf("expected one handler, got %d", len(w.handlers))
 	}
@@ -61,7 +61,7 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 	t.Run("success uses timeout and task options", func(t *testing.T) {
 		called := 0
 		w := newNATSWorker("nats://example:4222").(*natsWorker)
-		w.Register("job:ok", func(ctx context.Context, task Task) error {
+		w.Register("job:ok", func(ctx context.Context, task Job) error {
 			called++
 			if _, ok := ctx.Deadline(); !ok {
 				t.Fatal("expected timeout context")
@@ -97,7 +97,7 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 
 	t.Run("failed handler with retries calls republish path", func(t *testing.T) {
 		w := newNATSWorker("nats://example:4222").(*natsWorker)
-		w.Register("job:fail", func(context.Context, Task) error { return errors.New("boom") })
+		w.Register("job:fail", func(context.Context, Job) error { return errors.New("boom") })
 		body, err := json.Marshal(natsMessage{Type: "job:fail", Queue: "default", Attempt: 0, MaxRetry: 2, BackoffMillis: 5})
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -107,7 +107,7 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 
 	t.Run("failed handler at max retries stops", func(t *testing.T) {
 		w := newNATSWorker("nats://example:4222").(*natsWorker)
-		w.Register("job:terminal", func(context.Context, Task) error { return errors.New("boom") })
+		w.Register("job:terminal", func(context.Context, Job) error { return errors.New("boom") })
 		body, err := json.Marshal(natsMessage{Type: "job:terminal", Queue: "default", Attempt: 2, MaxRetry: 2})
 		if err != nil {
 			t.Fatalf("marshal: %v", err)

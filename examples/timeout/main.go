@@ -12,6 +12,6 @@ func main() {
 	// Timeout sets per-task execution timeout.
 
 	// Example: timeout
-	task := queue.NewTask("emails:send").Timeout(10 * time.Second)
+	job := queue.NewJob("emails:send").Timeout(10 * time.Second)
 	_ = task
 }

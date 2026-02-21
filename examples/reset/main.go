@@ -13,7 +13,7 @@ func main() {
 
 	// Example: reset records
 	fake := queue.NewFake()
-	_ = fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+	_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 	fmt.Println(len(fake.Records()))
 	fake.Reset()
 	fmt.Println(len(fake.Records()))

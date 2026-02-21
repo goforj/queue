@@ -62,7 +62,7 @@ func (q *natsQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (q *natsQueue) Dispatch(_ context.Context, task Task) error {
+func (q *natsQueue) Dispatch(_ context.Context, task Job) error {
 	if err := task.validate(); err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (q *natsQueue) Dispatch(_ context.Context, task Task) error {
 	return q.nc.Publish(natsSubject(parsed.queueName), payload)
 }
 
-func (q *natsQueue) claimUnique(task Task, queueName string, ttl time.Duration) bool {
+func (q *natsQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
 	key := queueName + ":" + task.Type + ":" + string(task.PayloadBytes())
 

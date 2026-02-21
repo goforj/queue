@@ -35,7 +35,7 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}
-	q.Register("job:sqs:bind", func(_ context.Context, task Task) error {
+	q.Register("job:sqs:bind", func(_ context.Context, task Job) error {
 		var in payload
 		if err := task.Bind(&in); err != nil {
 			return err
@@ -49,7 +49,7 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 42}
-	if err := q.DispatchCtx(context.Background(), NewTask("job:sqs:bind").Payload(want).OnQueue(queueName)); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewJob("job:sqs:bind").Payload(want).OnQueue(queueName)); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}
-	q.Register("job:sqs:opts", func(ctx context.Context, _ Task) error {
+	q.Register("job:sqs:opts", func(ctx context.Context, _ Job) error {
 		if calls.Add(1) == 1 {
 			_, ok := ctx.Deadline()
 			deadlineSeen <- ok
@@ -96,7 +96,7 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewTask("job:sqs:opts").
+	task := NewJob("job:sqs:opts").
 		Payload([]byte("opts")).
 		OnQueue(queueName).
 		Delay(delay).
@@ -142,11 +142,11 @@ func TestSQSIntegration_UniqueDuplicate(t *testing.T) {
 
 	taskType := "job:sqs:unique"
 	payload := []byte("same")
-	first := NewTask(taskType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
+	first := NewJob(taskType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
 	if err := q.DispatchCtx(context.Background(), first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := NewTask(taskType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
+	second := NewJob(taskType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
 	err = q.DispatchCtx(context.Background(), second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)

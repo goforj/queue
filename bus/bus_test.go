@@ -313,7 +313,7 @@ func TestChainCatchRunsOnceForDuplicateCallbackTasks(t *testing.T) {
 		"callback_kind":  "chain_catch",
 		"error":          "boom",
 	}
-	if err := q.Dispatch(queue.NewTask("bus:callback").Payload(cbPayload)); err != nil {
+	if err := q.Dispatch(queue.NewJob("bus:callback").Payload(cbPayload)); err != nil {
 		t.Fatalf("dispatch duplicate callback: %v", err)
 	}
 	if catchCount != 1 {
@@ -368,7 +368,7 @@ func TestBatchThenFinallyRunOnceForDuplicateCallbackTasks(t *testing.T) {
 			"batch_id":       batchID,
 			"callback_kind":  callbackKind,
 		}
-		if err := q.Dispatch(queue.NewTask("bus:callback").Payload(cbPayload)); err != nil {
+		if err := q.Dispatch(queue.NewJob("bus:callback").Payload(cbPayload)); err != nil {
 			t.Fatalf("dispatch duplicate callback (%s): %v", callbackKind, err)
 		}
 	}
@@ -423,7 +423,7 @@ func TestBatchCatchRunsOnceForDuplicateCallbackTasks(t *testing.T) {
 		"callback_kind":  "batch_catch",
 		"error":          "boom",
 	}
-	if err := q.Dispatch(queue.NewTask("bus:callback").Payload(cbPayload)); err != nil {
+	if err := q.Dispatch(queue.NewJob("bus:callback").Payload(cbPayload)); err != nil {
 		t.Fatalf("dispatch duplicate callback: %v", err)
 	}
 	if catchCount != 1 {

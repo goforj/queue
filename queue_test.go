@@ -195,7 +195,7 @@ func TestRabbitMQQueue_DispatchWithoutURLFails(t *testing.T) {
 
 func TestRedisQueue_BackoffUnsupported(t *testing.T) {
 	q := newRedisQueue(fakeEnqueuer{}, nil, false)
-	err := q.Dispatch(context.Background(), NewTask("job:test").Payload([]byte("{}")).OnQueue("default").Backoff(time.Second))
+	err := q.Dispatch(context.Background(), NewJob("job:test").Payload([]byte("{}")).OnQueue("default").Backoff(time.Second))
 	if !errors.Is(err, ErrBackoffUnsupported) {
 		t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
 	}
@@ -256,14 +256,14 @@ func TestQueueRuntime_StartWorkersSharesInProcessRuntime(t *testing.T) {
 		t.Fatalf("new queue failed: %v", err)
 	}
 	handled := false
-	q.Register("job:shared", func(_ context.Context, _ Task) error {
+	q.Register("job:shared", func(_ context.Context, _ Job) error {
 		handled = true
 		return nil
 	})
 	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)
 	}
-	if err := q.DispatchCtx(context.Background(), NewTask("job:shared").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewJob("job:shared").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 	if !handled {

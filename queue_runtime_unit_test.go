@@ -15,7 +15,7 @@ type runtimeBackendStub struct {
 }
 
 func (s *runtimeBackendStub) Driver() Driver { return DriverSync }
-func (s *runtimeBackendStub) Dispatch(context.Context, Task) error {
+func (s *runtimeBackendStub) Dispatch(context.Context, Job) error {
 	return nil
 }
 
@@ -37,12 +37,12 @@ func (s *runtimeBackendStub) Shutdown(context.Context) error {
 }
 
 type queueBackendRecorder struct {
-	dispatched []Task
+	dispatched []Job
 	shutdowns  int
 }
 
 func (q *queueBackendRecorder) Driver() Driver { return DriverNull }
-func (q *queueBackendRecorder) Dispatch(_ context.Context, task Task) error {
+func (q *queueBackendRecorder) Dispatch(_ context.Context, task Job) error {
 	q.dispatched = append(q.dispatched, task)
 	return nil
 }
@@ -57,7 +57,7 @@ func TestQueueCommon_TaskFromJobAndHelpers(t *testing.T) {
 	if _, err := common.taskFromJob(nil); err == nil {
 		t.Fatal("expected nil job error")
 	}
-	if _, err := common.taskFromJob(NewTask("")); err == nil {
+	if _, err := common.taskFromJob(NewJob("")); err == nil {
 		t.Fatal("expected empty task type error")
 	}
 	if _, err := common.taskFromJob(struct{ F func() }{}); err == nil {
@@ -93,7 +93,7 @@ func TestQueueCommonDispatchAndNativeRuntimeWrappers(t *testing.T) {
 		t.Fatalf("expected one inferred task dispatch, got %+v", inner.dispatched)
 	}
 
-	q.Register("job:one", func(context.Context, Task) error { return nil })
+	q.Register("job:one", func(context.Context, Job) error { return nil })
 	if err := q.StartWorkers(nil); err != nil {
 		t.Fatalf("start workers failed: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestQueueCommonDispatchAndNativeRuntimeWrappers(t *testing.T) {
 	if _, ok := worker.registered["job:one"]; !ok {
 		t.Fatal("expected registered handler to be forwarded on start")
 	}
-	q.Register("job:two", func(context.Context, Task) error { return nil })
+	q.Register("job:two", func(context.Context, Job) error { return nil })
 	if _, ok := worker.registered["job:two"]; !ok {
 		t.Fatal("expected register after start to forward immediately")
 	}
@@ -137,14 +137,14 @@ func TestExternalQueueRuntimeRegisterShutdownAndWorkers(t *testing.T) {
 	}
 	q.started = true
 
-	q.Register("job:external", func(context.Context, Task) error { return nil })
+	q.Register("job:external", func(context.Context, Job) error { return nil })
 	if _, ok := worker.registered["job:external"]; !ok {
 		t.Fatal("expected register to forward to started external worker")
 	}
-	if err := q.Dispatch(NewTask("job:external").OnQueue("default")); err != nil {
+	if err := q.Dispatch(NewJob("job:external").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch wrapper failed: %v", err)
 	}
-	if err := q.DispatchCtx(context.Background(), NewTask("job:external").OnQueue("default")); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewJob("job:external").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch ctx failed: %v", err)
 	}
 	if err := q.Shutdown(nil); err != nil {
@@ -188,7 +188,7 @@ func TestQueueConstructorsAndBackendDriverMethods(t *testing.T) {
 	if got := newNullQueue().Driver(); got != DriverNull {
 		t.Fatalf("expected null driver, got %q", got)
 	}
-	newNullQueue().(*nullQueue).Register("job:nil", func(context.Context, Task) error { return nil })
+	newNullQueue().(*nullQueue).Register("job:nil", func(context.Context, Job) error { return nil })
 	if got := newNATSQueue("nats://example").Driver(); got != DriverNATS {
 		t.Fatalf("expected nats driver, got %q", got)
 	}
@@ -233,7 +233,7 @@ func TestNativeRuntimeStartWorkersErrorPath(t *testing.T) {
 	q := &nativeQueueRuntime{
 		common:     &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
 		runtime:    worker,
-		registered: map[string]Handler{"job:one": func(context.Context, Task) error { return nil }},
+		registered: map[string]Handler{"job:one": func(context.Context, Job) error { return nil }},
 	}
 	if err := q.StartWorkers(context.Background()); err == nil {
 		t.Fatal("expected start workers error")
@@ -245,7 +245,7 @@ func TestNativeRuntimeStartWorkersErrorPath(t *testing.T) {
 
 func TestQueueCommonWrapRegisteredHandlerWithoutObserver(t *testing.T) {
 	common := &queueCommon{cfg: Config{Driver: DriverSync}}
-	h := func(context.Context, Task) error { return nil }
+	h := func(context.Context, Job) error { return nil }
 	if got := common.wrapRegisteredHandler("job:x", h); got == nil {
 		t.Fatal("expected non-nil passthrough handler")
 	}
@@ -310,7 +310,7 @@ func TestExternalQueueRuntimeStartWorkersErrorBranches(t *testing.T) {
 				driver: DriverNATS,
 			},
 			registered: map[string]Handler{
-				"job:nats": func(context.Context, Task) error { return nil },
+				"job:nats": func(context.Context, Job) error { return nil },
 			},
 		}
 		if err := q.StartWorkers(context.Background()); err == nil {

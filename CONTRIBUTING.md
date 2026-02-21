@@ -53,10 +53,10 @@ Optional long-run scenario (enabled with `RUN_SOAK=1`):
 What these prove:
 - Worker lifecycle idempotency (`StartWorkers` and `Shutdown` can be called twice safely).
 - Concurrent dispatch pressure with mixed task options (`Delay`, `Timeout`, `Retry`, `Backoff` where supported).
-- Payload decode path via `Task.Bind(...)`.
+- Payload decode path via `Job.Bind(...)`.
 - Poison task behavior by backend capability (retry ceiling where supported) and healthy-task recovery.
 - Restart recovery only for backends that support deterministic restart durability in integration.
-- Invalid JSON payload behavior through `Task.Bind(...)` does not wedge workers; valid payloads still process.
+- Invalid JSON payload behavior through `Job.Bind(...)` does not wedge workers; valid payloads still process.
 - Uniqueness is enforced per queue (duplicate rejected in same queue, allowed across queues).
 - Dispatch context cancellation behavior is verified per backend capability, with healthy follow-up processing.
 - Worker shutdown during delayed/retry workloads is exercised with restart and recovery assertions where supported.

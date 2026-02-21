@@ -29,7 +29,7 @@ func (q *nullQueue) StartWorkers(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (q *nullQueue) Dispatch(ctx context.Context, task Task) error {
+func (q *nullQueue) Dispatch(ctx context.Context, task Job) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -54,7 +54,7 @@ func (q *nullQueue) Shutdown(context.Context) error {
 	return nil
 }
 
-func (q *nullQueue) claimUnique(task Task, queueName string, ttl time.Duration) bool {
+func (q *nullQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
 	key := queueName + ":" + taskEventKey(task)
 	q.mu.Lock()

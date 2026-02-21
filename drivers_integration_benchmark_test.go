@@ -21,7 +21,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new redis queue failed: %v", err)
 		}
-		q.Register("bench:redis", func(context.Context, Task) error { return nil })
+		q.Register("bench:redis", func(context.Context, Job) error { return nil })
 		if err := q.Workers(2).StartWorkers(ctx); err != nil {
 			b.Fatalf("start redis workers failed: %v", err)
 		}
@@ -39,7 +39,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new nats queue failed: %v", err)
 		}
-		q.Register("bench:nats", func(context.Context, Task) error { return nil })
+		q.Register("bench:nats", func(context.Context, Job) error { return nil })
 		if err := q.Workers(2).StartWorkers(ctx); err != nil {
 			b.Fatalf("start nats workers failed: %v", err)
 		}
@@ -60,7 +60,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new sqs queue failed: %v", err)
 		}
-		q.Register("bench:sqs", func(context.Context, Task) error { return nil })
+		q.Register("bench:sqs", func(context.Context, Job) error { return nil })
 		if err := q.Workers(2).StartWorkers(ctx); err != nil {
 			b.Fatalf("start sqs workers failed: %v", err)
 		}
@@ -78,7 +78,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new rabbitmq queue failed: %v", err)
 		}
-		q.Register("bench:rabbitmq", func(context.Context, Task) error { return nil })
+		q.Register("bench:rabbitmq", func(context.Context, Job) error { return nil })
 		if err := q.Workers(2).StartWorkers(ctx); err != nil {
 			b.Fatalf("start rabbitmq workers failed: %v", err)
 		}
@@ -97,7 +97,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new mysql queue failed: %v", err)
 		}
-		q.Register("bench:mysql", func(context.Context, Task) error { return nil })
+		q.Register("bench:mysql", func(context.Context, Job) error { return nil })
 		if err := q.StartWorkers(ctx); err != nil {
 			b.Fatalf("start mysql workers failed: %v", err)
 		}
@@ -116,7 +116,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new postgres queue failed: %v", err)
 		}
-		q.Register("bench:postgres", func(context.Context, Task) error { return nil })
+		q.Register("bench:postgres", func(context.Context, Job) error { return nil })
 		if err := q.StartWorkers(ctx); err != nil {
 			b.Fatalf("start postgres workers failed: %v", err)
 		}
@@ -125,7 +125,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 	}, benchTask("bench:postgres", "default"))
 }
 
-func runIntegrationDriverBench(b *testing.B, backend string, ctor func(b *testing.B) Queue, task Task) {
+func runIntegrationDriverBench(b *testing.B, backend string, ctor func(b *testing.B) Queue, task Job) {
 	b.Run(backend, func(b *testing.B) {
 		if !integrationBackendEnabled(backend) {
 			b.Skipf("%s integration backend not selected", backend)

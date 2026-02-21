@@ -30,14 +30,14 @@ func newSQLiteQueueForTest(t *testing.T) Queue {
 func TestDatabaseQueue_DispatchAndProcess(t *testing.T) {
 	d := newSQLiteQueueForTest(t)
 	triggered := make(chan struct{}, 1)
-	d.Register("job:db-basic", func(_ context.Context, _ Task) error {
+	d.Register("job:db-basic", func(_ context.Context, _ Job) error {
 		triggered <- struct{}{}
 		return nil
 	})
 	if err := d.Workers(1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)
 	}
-	if err := d.DispatchCtx(context.Background(), NewTask("job:db-basic").Payload([]byte("hello")).OnQueue("default")); err != nil {
+	if err := d.DispatchCtx(context.Background(), NewJob("job:db-basic").Payload([]byte("hello")).OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 	select {
@@ -49,16 +49,16 @@ func TestDatabaseQueue_DispatchAndProcess(t *testing.T) {
 
 func TestDatabaseQueue_Unique(t *testing.T) {
 	d := newSQLiteQueueForTest(t)
-	d.Register("job:db-unique", func(_ context.Context, _ Task) error { return nil })
+	d.Register("job:db-unique", func(_ context.Context, _ Job) error { return nil })
 	if err := d.Workers(1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)
 	}
 	taskType := "job:db-unique"
 	payload := []byte("same")
-	if err := d.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); err != nil {
+	if err := d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	if err := d.DispatchCtx(context.Background(), NewTask(taskType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); !errors.Is(err, ErrDuplicate) {
+	if err := d.DispatchCtx(context.Background(), NewJob(taskType).Payload(payload).OnQueue("default").UniqueFor(300*time.Millisecond)); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func TestDatabaseQueue_RetryWithBackoff(t *testing.T) {
 	d := newSQLiteQueueForTest(t)
 	triggered := make(chan struct{}, 1)
 	var calls atomic.Int64
-	d.Register("job:db-retry", func(_ context.Context, _ Task) error {
+	d.Register("job:db-retry", func(_ context.Context, _ Job) error {
 		if calls.Add(1) < 3 {
 			return errors.New("transient")
 		}
@@ -77,7 +77,7 @@ func TestDatabaseQueue_RetryWithBackoff(t *testing.T) {
 	if err := d.Workers(1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)
 	}
-	if err := d.DispatchCtx(context.Background(), NewTask("job:db-retry").OnQueue("default").Retry(2).Backoff(20*time.Millisecond)); err != nil {
+	if err := d.DispatchCtx(context.Background(), NewJob("job:db-retry").OnQueue("default").Retry(2).Backoff(20*time.Millisecond)); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 	select {
@@ -113,14 +113,14 @@ func TestDatabaseQueue_QueueAndWorkerInteropSQLite(t *testing.T) {
 	defer producer.Shutdown(context.Background())
 
 	done := make(chan struct{}, 1)
-	consumer.Register("job:db-interop", func(_ context.Context, _ Task) error {
+	consumer.Register("job:db-interop", func(_ context.Context, _ Job) error {
 		done <- struct{}{}
 		return nil
 	})
 	if err := consumer.Workers(1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("consumer start failed: %v", err)
 	}
-	if err := producer.DispatchCtx(context.Background(), NewTask("job:db-interop").OnQueue("default")); err != nil {
+	if err := producer.DispatchCtx(context.Background(), NewJob("job:db-interop").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 	select {
@@ -167,13 +167,13 @@ func TestDatabaseQueue_StatsSnapshot(t *testing.T) {
 		t.Fatalf("ensure schema failed: %v", err)
 	}
 
-	if err := qi.Dispatch(NewTask("job:pending").OnQueue("default")); err != nil {
+	if err := qi.Dispatch(NewJob("job:pending").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch pending failed: %v", err)
 	}
-	if err := qi.Dispatch(NewTask("job:processing").OnQueue("default")); err != nil {
+	if err := qi.Dispatch(NewJob("job:processing").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch processing failed: %v", err)
 	}
-	if err := qi.Dispatch(NewTask("job:dead").OnQueue("default")); err != nil {
+	if err := qi.Dispatch(NewJob("job:dead").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch dead failed: %v", err)
 	}
 

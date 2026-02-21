@@ -170,7 +170,7 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 	}
 	err := handler(
 		runCtx,
-		NewTask(incoming.Type).
+		NewJob(incoming.Type).
 			Payload(incoming.Payload).
 			OnQueue(incoming.Queue).
 			Retry(incoming.MaxRetry).

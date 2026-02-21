@@ -20,7 +20,7 @@ func main() {
 	type EmailPayload struct {
 		ID int `json:"id"`
 	}
-	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 		var payload EmailPayload
 		if err := task.Bind(&payload); err != nil {
 			return err
@@ -28,7 +28,7 @@ func main() {
 		_ = payload
 		return nil
 	})
-	task := queue.NewTask("emails:send").
+	job := queue.NewJob("emails:send").
 		Payload(EmailPayload{ID: 1}).
 		OnQueue("default").
 		Delay(10 * time.Millisecond)

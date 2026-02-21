@@ -31,7 +31,7 @@ type Queue interface {
 	//
 	//	var q queue.Queue
 	//	err := q.Dispatch(
-	//		queue.NewTask("emails:send").
+	//		queue.NewJob("emails:send").
 	//			Payload(map[string]any{"id": 1}).
 	//			OnQueue("default"),
 	//	)
@@ -46,7 +46,7 @@ type Queue interface {
 	//	var q queue.Queue
 	//	err := q.DispatchCtx(
 	//		context.Background(),
-	//		queue.NewTask("emails:send").OnQueue("default"),
+	//		queue.NewJob("emails:send").OnQueue("default"),
 	//	)
 	//	_ = err
 	DispatchCtx(ctx context.Context, job any) error
@@ -57,7 +57,7 @@ type Queue interface {
 	// Example: register a handler
 	//
 	//	var q queue.Queue
-	//	q.Register("emails:send", func(context.Context, queue.Task) error { return nil })
+	//	q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 	Register(taskType string, handler Handler)
 
 	// StartWorkers starts worker execution.
@@ -134,7 +134,7 @@ type Config struct {
 
 type queueBackend interface {
 	Driver() Driver
-	Dispatch(ctx context.Context, task Task) error
+	Dispatch(ctx context.Context, task Job) error
 	Shutdown(ctx context.Context) error
 }
 
@@ -169,7 +169,7 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 //		var payload EmailPayload
 //		if err := task.Bind(&payload); err != nil {
 //			return err
@@ -181,7 +181,7 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //	defer q.Shutdown(context.Background())
 //	_ = q.DispatchCtx(
 //		context.Background(),
-//		queue.NewTask("emails:send").
+//		queue.NewJob("emails:send").
 //			Payload(EmailPayload{ID: 1}).
 //			OnQueue("default"),
 //	)
@@ -253,7 +253,7 @@ func New(cfg Config) (Queue, error) {
 //	if err != nil {
 //		return
 //	}
-//	_ = q.Dispatch(queue.NewTask("emails:send").Payload(map[string]int{"id": 1}).OnQueue("default"))
+//	_ = q.Dispatch(queue.NewJob("emails:send").Payload(map[string]int{"id": 1}).OnQueue("default"))
 func NewNull() (Queue, error) {
 	return New(Config{Driver: DriverNull})
 }
@@ -682,7 +682,7 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
+//	q.Register("emails:send", func(ctx context.Context, task queue.Job) error {
 //		var payload EmailPayload
 //		if err := task.Bind(&payload); err != nil {
 //			return err
@@ -692,7 +692,7 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 //	})
 //	_ = q.StartWorkers(context.Background())
 //	defer q.Shutdown(context.Background())
-//	_ = q.Dispatch(queue.NewTask("emails:send").Payload(EmailPayload{ID: 1}))
+//	_ = q.Dispatch(queue.NewJob("emails:send").Payload(EmailPayload{ID: 1}))
 func NewQueueWithDefaults(defaultQueue string, cfg Config) (Queue, error) {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = defaultQueue
@@ -700,30 +700,30 @@ func NewQueueWithDefaults(defaultQueue string, cfg Config) (Queue, error) {
 	return New(cfg)
 }
 
-func (q *queueCommon) taskFromJob(job any) (Task, error) {
-	if task, ok := job.(Task); ok {
+func (q *queueCommon) taskFromJob(job any) (Job, error) {
+	if task, ok := job.(Job); ok {
 		if task.Type == "" {
-			return Task{}, fmt.Errorf("dispatch task type is required")
+			return Job{}, fmt.Errorf("dispatch task type is required")
 		}
 		return task, nil
 	}
 	if job == nil {
-		return Task{}, fmt.Errorf("dispatch job is nil")
+		return Job{}, fmt.Errorf("dispatch job is nil")
 	}
 	taskType := taskTypeFromValue(job)
 	if taskType == "" {
-		return Task{}, fmt.Errorf("dispatch job type could not be inferred")
+		return Job{}, fmt.Errorf("dispatch job type could not be inferred")
 	}
-	if marshaler, ok := job.(interface{ TaskType() string }); ok {
-		if t := marshaler.TaskType(); t != "" {
+	if marshaler, ok := job.(interface{ JobType() string }); ok {
+		if t := marshaler.JobType(); t != "" {
 			taskType = t
 		}
 	}
 	payload, err := json.Marshal(job)
 	if err != nil {
-		return Task{}, fmt.Errorf("marshal dispatch job: %w", err)
+		return Job{}, fmt.Errorf("marshal dispatch job: %w", err)
 	}
-	return NewTask(taskType).Payload(payload).OnQueue(q.cfg.DefaultQueue), nil
+	return NewJob(taskType).Payload(payload).OnQueue(q.cfg.DefaultQueue), nil
 }
 
 func taskTypeFromValue(v any) string {

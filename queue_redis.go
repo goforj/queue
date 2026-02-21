@@ -65,7 +65,7 @@ func (d *redisQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (d *redisQueue) Dispatch(_ context.Context, task Task) error {
+func (d *redisQueue) Dispatch(_ context.Context, task Job) error {
 	if d.client == nil {
 		return fmt.Errorf("queue client unavailable for redis driver")
 	}

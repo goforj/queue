@@ -756,7 +756,7 @@ func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
 	return nil
 }
 
-func (q *observedQueue) Dispatch(ctx context.Context, task Task) error {
+func (q *observedQueue) Dispatch(ctx context.Context, task Job) error {
 	err := q.inner.Dispatch(ctx, task)
 	opts := task.enqueueOptions()
 	base := Event{
@@ -807,7 +807,7 @@ func (q *observedQueue) Driver() Driver {
 }
 
 func wrapObservedHandler(observer Observer, driver Driver, queueName string, taskType string, handler Handler) Handler {
-	return func(ctx context.Context, task Task) error {
+	return func(ctx context.Context, task Job) error {
 		opts := task.enqueueOptions()
 		effectiveQueue := queueName
 		if effectiveQueue == "" {
@@ -865,7 +865,7 @@ func safeObserve(observer Observer, event Event) {
 	observer.Observe(event)
 }
 
-func taskQueueName(task Task) string {
+func taskQueueName(task Job) string {
 	queueName := task.enqueueOptions().queueName
 	if queueName == "" {
 		return "default"
@@ -880,7 +880,7 @@ func optionInt(v *int) int {
 	return *v
 }
 
-func taskEventKey(task Task) string {
+func taskEventKey(task Job) string {
 	hash := sha1.Sum(append([]byte(task.Type+":"), task.PayloadBytes()...))
 	return fmt.Sprintf("%x", hash[:])
 }

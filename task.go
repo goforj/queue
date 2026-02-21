@@ -9,16 +9,16 @@ import (
 	"time"
 )
 
-// Task is a pure queue payload value plus enqueue metadata.
-// @group Task
+// Job is a pure queue payload value plus enqueue metadata.
+// @group Job
 //
 // Example: task
 //
-//	task := queue.NewTask("emails:send").
+//	job := queue.NewJob("emails:send").
 //		PayloadJSON(map[string]string{"to": "user@example.com"}).
 //		OnQueue("critical")
 //	_ = task
-type Task struct {
+type Job struct {
 	Type string
 
 	payload  []byte
@@ -36,23 +36,23 @@ type taskOptions struct {
 	uniqueTTL time.Duration
 }
 
-// NewTask creates a task value with a required task type.
-// @group Task
+// NewJob creates a task value with a required task type.
+// @group Job
 //
 // Example: new task
 //
-//	task := queue.NewTask("emails:send")
+//	job := queue.NewJob("emails:send")
 //	_ = task
-func NewTask(taskType string) Task {
-	return Task{Type: taskType}
+func NewJob(taskType string) Job {
+	return Job{Type: taskType}
 }
 
 // Payload sets task payload from common value types.
-// @group Task
+// @group Job
 //
 // Example: payload bytes
 //
-//	taskBytes := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+//	taskBytes := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
 //	_ = taskBytes
 //
 // Example: payload struct
@@ -65,7 +65,7 @@ func NewTask(taskType string) Task {
 //		To   string `json:"to"`
 //		Meta Meta   `json:"meta"`
 //	}
-//	taskStruct := queue.NewTask("emails:send").Payload(EmailPayload{
+//	taskStruct := queue.NewJob("emails:send").Payload(EmailPayload{
 //		ID:   1,
 //		To:   "user@example.com",
 //		Meta: Meta{Nested: true},
@@ -74,13 +74,13 @@ func NewTask(taskType string) Task {
 //
 // Example: payload map
 //
-//	taskMap := queue.NewTask("emails:send").Payload(map[string]any{
+//	taskMap := queue.NewJob("emails:send").Payload(map[string]any{
 //		"id":  1,
 //		"to":  "user@example.com",
 //		"meta": map[string]any{"nested": true},
 //	})
 //	_ = taskMap
-func (t Task) Payload(payload any) Task {
+func (t Job) Payload(payload any) Job {
 	encoded, err := encodePayload(payload)
 	if err != nil {
 		t.buildErr = err
@@ -91,13 +91,13 @@ func (t Task) Payload(payload any) Task {
 }
 
 // PayloadJSON marshals payload as JSON.
-// @group Task
+// @group Job
 //
 // Example: payload json
 //
-//	task := queue.NewTask("emails:send").PayloadJSON(map[string]int{"id": 1})
+//	job := queue.NewJob("emails:send").PayloadJSON(map[string]int{"id": 1})
 //	_ = task
-func (t Task) PayloadJSON(v any) Task {
+func (t Job) PayloadJSON(v any) Job {
 	payload, err := encodePayload(v)
 	if err != nil {
 		t.buildErr = err
@@ -108,25 +108,25 @@ func (t Task) PayloadJSON(v any) Task {
 }
 
 // OnQueue sets the target queue name.
-// @group Task
+// @group Job
 //
 // Example: on queue
 //
-//	task := queue.NewTask("emails:send").OnQueue("critical")
+//	job := queue.NewJob("emails:send").OnQueue("critical")
 //	_ = task
-func (t Task) OnQueue(name string) Task {
+func (t Job) OnQueue(name string) Job {
 	t.options.queueName = name
 	return t
 }
 
 // Timeout sets per-task execution timeout.
-// @group Task
+// @group Job
 //
 // Example: timeout
 //
-//	task := queue.NewTask("emails:send").Timeout(10 * time.Second)
+//	job := queue.NewJob("emails:send").Timeout(10 * time.Second)
 //	_ = task
-func (t Task) Timeout(timeout time.Duration) Task {
+func (t Job) Timeout(timeout time.Duration) Job {
 	if timeout < 0 {
 		return t.withBuildErr(fmt.Errorf("timeout must be >= 0"))
 	}
@@ -135,13 +135,13 @@ func (t Task) Timeout(timeout time.Duration) Task {
 }
 
 // Retry sets max retry attempts.
-// @group Task
+// @group Job
 //
 // Example: retry
 //
-//	task := queue.NewTask("emails:send").Retry(4)
+//	job := queue.NewJob("emails:send").Retry(4)
 //	_ = task
-func (t Task) Retry(maxRetry int) Task {
+func (t Job) Retry(maxRetry int) Job {
 	if maxRetry < 0 {
 		return t.withBuildErr(fmt.Errorf("retry must be >= 0"))
 	}
@@ -150,13 +150,13 @@ func (t Task) Retry(maxRetry int) Task {
 }
 
 // Backoff sets delay between retries.
-// @group Task
+// @group Job
 //
 // Example: backoff
 //
-//	task := queue.NewTask("emails:send").Backoff(500 * time.Millisecond)
+//	job := queue.NewJob("emails:send").Backoff(500 * time.Millisecond)
 //	_ = task
-func (t Task) Backoff(backoff time.Duration) Task {
+func (t Job) Backoff(backoff time.Duration) Job {
 	if backoff < 0 {
 		return t.withBuildErr(fmt.Errorf("backoff must be >= 0"))
 	}
@@ -165,13 +165,13 @@ func (t Task) Backoff(backoff time.Duration) Task {
 }
 
 // Delay defers execution by duration.
-// @group Task
+// @group Job
 //
 // Example: delay
 //
-//	task := queue.NewTask("emails:send").Delay(300 * time.Millisecond)
+//	job := queue.NewJob("emails:send").Delay(300 * time.Millisecond)
 //	_ = task
-func (t Task) Delay(delay time.Duration) Task {
+func (t Job) Delay(delay time.Duration) Job {
 	if delay < 0 {
 		return t.withBuildErr(fmt.Errorf("delay must be >= 0"))
 	}
@@ -180,13 +180,13 @@ func (t Task) Delay(delay time.Duration) Task {
 }
 
 // UniqueFor enables uniqueness dedupe within the given TTL.
-// @group Task
+// @group Job
 //
 // Example: unique for
 //
-//	task := queue.NewTask("emails:send").UniqueFor(45 * time.Second)
+//	job := queue.NewJob("emails:send").UniqueFor(45 * time.Second)
 //	_ = task
-func (t Task) UniqueFor(ttl time.Duration) Task {
+func (t Job) UniqueFor(ttl time.Duration) Job {
 	if ttl < 0 {
 		return t.withBuildErr(fmt.Errorf("unique ttl must be >= 0"))
 	}
@@ -195,29 +195,29 @@ func (t Task) UniqueFor(ttl time.Duration) Task {
 }
 
 // PayloadBytes returns a copy of task payload bytes.
-// @group Task
+// @group Job
 //
 // Example: payload bytes read
 //
-//	task := queue.NewTask("emails:send").Payload([]byte(`{"id":1}`))
+//	job := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
 //	payload := task.PayloadBytes()
 //	_ = payload
-func (t Task) PayloadBytes() []byte {
+func (t Job) PayloadBytes() []byte {
 	return append([]byte(nil), t.payload...)
 }
 
 // Bind unmarshals task payload JSON into dst.
-// @group Task
+// @group Job
 //
 // Example: bind payload
 //
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	task := queue.NewTask("emails:send").Payload(EmailPayload{ID: 1})
+//	job := queue.NewJob("emails:send").Payload(EmailPayload{ID: 1})
 //	var payload EmailPayload
 //	_ = task.Bind(&payload)
-func (t Task) Bind(dst any) error {
+func (t Job) Bind(dst any) error {
 	if dst == nil {
 		return fmt.Errorf("bind destination is required")
 	}
@@ -257,7 +257,7 @@ func encodePayload(payload any) ([]byte, error) {
 	return encoded, nil
 }
 
-func (t Task) validate() error {
+func (t Job) validate() error {
 	if t.buildErr != nil {
 		return t.buildErr
 	}
@@ -267,30 +267,30 @@ func (t Task) validate() error {
 	return nil
 }
 
-func (t Task) enqueueOptions() taskOptions {
+func (t Job) enqueueOptions() taskOptions {
 	return t.options
 }
 
-func (t Task) withBuildErr(err error) Task {
+func (t Job) withBuildErr(err error) Job {
 	if t.buildErr == nil {
 		t.buildErr = err
 	}
 	return t
 }
 
-func (t Task) withAttempt(attempt int) Task {
+func (t Job) withAttempt(attempt int) Job {
 	t.options.attempt = attempt
 	return t
 }
 
 // Handler processes a task.
-// @group Task
+// @group Job
 //
 // Example: handler
 //
-//	handler := func(ctx context.Context, task queue.Task) error { return nil }
+//	handler := func(ctx context.Context, task queue.Job) error { return nil }
 //	_ = handler
-type Handler func(ctx context.Context, task Task) error
+type Handler func(ctx context.Context, task Job) error
 
 // ErrDuplicate indicates a duplicate unique task enqueue.
 var ErrDuplicate = errors.New("duplicate task")

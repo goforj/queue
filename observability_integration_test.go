@@ -163,14 +163,14 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			var failedCalls atomic.Int64
 
 			t.Run("scenario_register_handlers", func(t *testing.T) {
-				q.Register(okType, func(_ context.Context, _ Task) error {
+				q.Register(okType, func(_ context.Context, _ Job) error {
 					select {
 					case okDone <- struct{}{}:
 					default:
 					}
 					return nil
 				})
-				q.Register(failType, func(_ context.Context, _ Task) error {
+				q.Register(failType, func(_ context.Context, _ Job) error {
 					failedCalls.Add(1)
 					return errors.New("obs boom")
 				})
@@ -181,7 +181,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			})
 
 			t.Run("scenario_dispatch_success", func(t *testing.T) {
-				okTask := NewTask(okType).
+				okTask := NewJob(okType).
 					Payload(scenarioPayload{ID: 1, Name: "obs-ok"}).
 					OnQueue(fx.queue)
 				requireScenarioNoErr(t, "dispatch_success", q.DispatchCtx(context.Background(), okTask))
@@ -193,7 +193,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			})
 
 			t.Run("scenario_dispatch_retry_archive", func(t *testing.T) {
-				failTask := NewTask(failType).
+				failTask := NewJob(failType).
 					Payload(scenarioPayload{ID: 2, Name: "obs-fail"}).
 					OnQueue(fx.queue).
 					Retry(0)
@@ -205,7 +205,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 
 			if fx.name != "redis" {
 				t.Run("scenario_dispatch_retried_task", func(t *testing.T) {
-					retryTask := NewTask(failType).
+					retryTask := NewJob(failType).
 						Payload(scenarioPayload{ID: 3, Name: "obs-retry"}).
 						OnQueue(fx.queue).
 						Retry(1).
@@ -242,10 +242,10 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				requireScenarioTrue(t, "collector_hour_failed", throughput.Hour.Failed >= 1, "hour_failed=%d expected>=1", throughput.Hour.Failed)
 				requireScenarioTrue(t, "collector_getter_processed", snapshot.Processed(fx.queue) == counters.Processed, "getter_processed=%d counters_processed=%d", snapshot.Processed(fx.queue), counters.Processed)
 				requireScenarioTrue(t, "collector_getter_failed", snapshot.Failed(fx.queue) == counters.Failed, "getter_failed=%d counters_failed=%d", snapshot.Failed(fx.queue), counters.Failed)
-					if fx.name != "redis" {
-						requireScenarioTrue(t, "collector_getter_retry", snapshot.RetryCount(fx.queue) == counters.Retry, "getter_retry=%d counters_retry=%d", snapshot.RetryCount(fx.queue), counters.Retry)
-					}
-				})
+				if fx.name != "redis" {
+					requireScenarioTrue(t, "collector_getter_retry", snapshot.RetryCount(fx.queue) == counters.Retry, "getter_retry=%d counters_retry=%d", snapshot.RetryCount(fx.queue), counters.Retry)
+				}
+			})
 
 			t.Run("scenario_assert_snapshotqueue", func(t *testing.T) {
 				snapFromQueue, err := SnapshotQueue(context.Background(), q, collector)

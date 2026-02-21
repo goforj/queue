@@ -19,7 +19,7 @@ type queueBackendStub struct {
 }
 
 func (s *queueBackendStub) Driver() Driver { return DriverNull }
-func (s *queueBackendStub) Dispatch(context.Context, Task) error {
+func (s *queueBackendStub) Dispatch(context.Context, Job) error {
 	return s.dispatchErr
 }
 func (s *queueBackendStub) Shutdown(context.Context) error { return nil }
@@ -87,7 +87,7 @@ func TestObservedQueue_DispatchClassifiesErrors(t *testing.T) {
 				driver:   DriverSync,
 				observer: recorder,
 			}
-			err := oq.Dispatch(context.Background(), NewTask("job:x").OnQueue("default").Retry(1))
+			err := oq.Dispatch(context.Background(), NewJob("job:x").OnQueue("default").Retry(1))
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("expected dispatch err %v, got %v", tc.err, err)
 			}
@@ -104,11 +104,11 @@ func TestObservedQueue_DispatchClassifiesErrors(t *testing.T) {
 func TestWrapObservedHandler_EmitsRetriedAndArchived(t *testing.T) {
 	t.Run("retry path", func(t *testing.T) {
 		recorder := &observerRecorder{}
-		h := wrapObservedHandler(recorder, DriverSync, "", "job:retry", func(context.Context, Task) error {
+		h := wrapObservedHandler(recorder, DriverSync, "", "job:retry", func(context.Context, Job) error {
 			return errors.New("boom")
 		})
 
-		err := h(context.Background(), NewTask("job:retry").OnQueue("default").Retry(1).withAttempt(0))
+		err := h(context.Background(), NewJob("job:retry").OnQueue("default").Retry(1).withAttempt(0))
 		if err == nil {
 			t.Fatal("expected handler error")
 		}
@@ -122,11 +122,11 @@ func TestWrapObservedHandler_EmitsRetriedAndArchived(t *testing.T) {
 
 	t.Run("archive path", func(t *testing.T) {
 		recorder := &observerRecorder{}
-		h := wrapObservedHandler(recorder, DriverSync, "", "job:archive", func(context.Context, Task) error {
+		h := wrapObservedHandler(recorder, DriverSync, "", "job:archive", func(context.Context, Job) error {
 			return errors.New("boom")
 		})
 
-		err := h(context.Background(), NewTask("job:archive").OnQueue("default").Retry(1).withAttempt(1))
+		err := h(context.Background(), NewJob("job:archive").OnQueue("default").Retry(1).withAttempt(1))
 		if err == nil {
 			t.Fatal("expected handler error")
 		}
@@ -173,7 +173,7 @@ func TestObservedQueue_WrapperMethods(t *testing.T) {
 	if err := oq.Resume(context.Background(), "critical"); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	oq.Register("job:wrapped", func(context.Context, Task) error { return nil })
+	oq.Register("job:wrapped", func(context.Context, Job) error { return nil })
 	if inner.registered != "job:wrapped" {
 		t.Fatalf("expected wrapped register call, got %q", inner.registered)
 	}
@@ -200,11 +200,11 @@ func TestObservedQueue_RegisterBranches(t *testing.T) {
 		t.Fatalf("expected register call for nil handler, got %q", inner.registered)
 	}
 
-	oq.Register("job:wrapped", func(context.Context, Task) error { return nil })
+	oq.Register("job:wrapped", func(context.Context, Job) error { return nil })
 	if inner.handler == nil {
 		t.Fatal("expected wrapped handler to be registered")
 	}
-	if err := inner.handler(context.Background(), NewTask("job:wrapped").OnQueue("default").Retry(0)); err != nil {
+	if err := inner.handler(context.Background(), NewJob("job:wrapped").OnQueue("default").Retry(0)); err != nil {
 		t.Fatalf("wrapped handler returned error: %v", err)
 	}
 	if len(recorder.events) < 2 {

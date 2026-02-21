@@ -59,10 +59,10 @@ What this proves today:
 
 - Worker lifecycle idempotency (`StartWorkers` and `Shutdown` are safe when called twice).
 - Concurrent dispatch pressure with mixed task options (`Delay`, `Timeout`, `Retry`, `Backoff` where supported).
-- Payload decode path with `Task.Bind`.
+- Payload decode path with `Job.Bind`.
 - Poison-message behavior is enforced per-backend capability in the fixture matrix (retry ceiling where supported, plus healthy-task recovery after poison).
 - Worker restart recovery is validated only on backends marked restart-capable in the fixture matrix.
-- Invalid JSON payload decode behavior via `Task.Bind` is exercised, followed by successful processing of a valid payload.
+- Invalid JSON payload decode behavior via `Job.Bind` is exercised, followed by successful processing of a valid payload.
 - Queue-scoped uniqueness is validated (same queue duplicate rejected, different queue accepted).
 - Dispatch context-cancellation behavior is validated per backend capability, with healthy follow-up task processing.
 - Shutdown during delayed and retry workloads is validated with restart/recovery checks on supported backends.

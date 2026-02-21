@@ -12,6 +12,6 @@ func main() {
 	// Delay defers execution by duration.
 
 	// Example: delay
-	task := queue.NewTask("emails:send").Delay(300 * time.Millisecond)
+	job := queue.NewJob("emails:send").Delay(300 * time.Millisecond)
 	_ = task
 }

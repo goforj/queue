@@ -69,26 +69,26 @@ Constructor path:
 
 Worker execution settings are configured from `Queue` via `Workers(n).StartWorkers(ctx)`; there is no separate public worker config surface.
 
-## Task API (fluent value object)
+## Job API (fluent value object)
 
-`Task` is immutable-ish via value receivers and explicit execution boundary (`Queue.DispatchCtx`):
+`Job` is immutable-ish via value receivers and explicit execution boundary (`Queue.DispatchCtx`):
 
-- `NewTask(taskType string) Task`
-- `Payload(any) Task`
-- `PayloadJSON(any) Task`
-- `OnQueue(string) Task`
-- `Timeout(time.Duration) Task`
-- `Retry(int) Task`
-- `Backoff(time.Duration) Task`
-- `Delay(time.Duration) Task`
-- `UniqueFor(time.Duration) Task`
+- `NewJob(taskType string) Job`
+- `Payload(any) Job`
+- `PayloadJSON(any) Job`
+- `OnQueue(string) Job`
+- `Timeout(time.Duration) Job`
+- `Retry(int) Job`
+- `Backoff(time.Duration) Job`
+- `Delay(time.Duration) Job`
+- `UniqueFor(time.Duration) Job`
 - `PayloadBytes() []byte`
 - `Bind(dst any) error`
 
 Important behavior:
 
-- Task contains data/metadata only.
-- No `Task.Dispatch()` or hidden dispatch paths.
+- Job contains data/metadata only.
+- No `Job.Dispatch()` or hidden dispatch paths.
 - `Bind` enforces pointer destination and uses JSON unmarshal.
 
 ## Driver architecture
@@ -240,7 +240,7 @@ Examples:
 
 - No hard coupling to ORM layer for database driver behavior.
 - Queue and worker remain separate constructs for clarity and backend parity.
-- Task builder is fluent and data-only; execution side effects stay on queue/worker.
+- Job builder is fluent and data-only; execution side effects stay on queue/worker.
 - Observability is additive and wrapper-based rather than per-driver bespoke APIs.
 - Reliability posture is enforced through contract + scenario matrices, not ad-hoc tests.
 

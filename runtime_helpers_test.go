@@ -39,7 +39,7 @@ func TestDialRabbitMQWithRetry_InvalidURLFailsFast(t *testing.T) {
 func TestNullQueue_StartWorkersAndRegister(t *testing.T) {
 	q := newNullQueue().(*nullQueue)
 
-	q.Register("job:null", func(context.Context, Task) error { return nil })
+	q.Register("job:null", func(context.Context, Job) error { return nil })
 
 	if err := q.StartWorkers(nil); err != nil {
 		t.Fatalf("nil context should be accepted: %v", err)
@@ -57,7 +57,7 @@ func TestLocalQueue_PauseResumeStatsAndShutdownStats(t *testing.T) {
 		Workers:       1,
 		QueueCapacity: 4,
 	})
-	q.Register("job:local:stats", func(_ context.Context, _ Task) error {
+	q.Register("job:local:stats", func(_ context.Context, _ Job) error {
 		time.Sleep(30 * time.Millisecond)
 		return nil
 	})
@@ -77,7 +77,7 @@ func TestLocalQueue_PauseResumeStatsAndShutdownStats(t *testing.T) {
 		t.Fatalf("expected paused=1, got %d", pausedSnap.Paused("default"))
 	}
 
-	err = q.Dispatch(context.Background(), NewTask("job:local:stats").Payload([]byte("x")).OnQueue("default"))
+	err = q.Dispatch(context.Background(), NewJob("job:local:stats").Payload([]byte("x")).OnQueue("default"))
 	if !errors.Is(err, ErrQueuePaused) {
 		t.Fatalf("expected ErrQueuePaused, got %v", err)
 	}
@@ -85,7 +85,7 @@ func TestLocalQueue_PauseResumeStatsAndShutdownStats(t *testing.T) {
 	if err := q.Resume(context.Background(), "default"); err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
-	if err := q.Dispatch(context.Background(), NewTask("job:local:stats").Payload([]byte("x")).OnQueue("default").Delay(80*time.Millisecond)); err != nil {
+	if err := q.Dispatch(context.Background(), NewJob("job:local:stats").Payload([]byte("x")).OnQueue("default").Delay(80*time.Millisecond)); err != nil {
 		t.Fatalf("dispatch delayed task failed: %v", err)
 	}
 

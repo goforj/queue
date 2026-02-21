@@ -13,5 +13,5 @@ func main() {
 	if err != nil {
 		return
 	}
-	_ = q.Dispatch(queue.NewTask("emails:send").Payload(map[string]int{"id": 1}).OnQueue("default"))
+	_ = q.Dispatch(queue.NewJob("emails:send").Payload(map[string]int{"id": 1}).OnQueue("default"))
 }

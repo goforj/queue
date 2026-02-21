@@ -12,6 +12,6 @@ func main() {
 	// Backoff sets delay between retries.
 
 	// Example: backoff
-	task := queue.NewTask("emails:send").Backoff(500 * time.Millisecond)
+	job := queue.NewJob("emails:send").Backoff(500 * time.Millisecond)
 	_ = task
 }

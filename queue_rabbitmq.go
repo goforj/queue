@@ -25,7 +25,7 @@ type rabbitMQMessage struct {
 }
 
 type rabbitMQQueue struct {
-	url string
+	url          string
 	defaultQueue string
 
 	mu     sync.Mutex
@@ -56,7 +56,7 @@ func (q *rabbitMQQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (q *rabbitMQQueue) Dispatch(ctx context.Context, task Task) error {
+func (q *rabbitMQQueue) Dispatch(ctx context.Context, task Job) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -112,7 +112,7 @@ func (q *rabbitMQQueue) Dispatch(ctx context.Context, task Task) error {
 	return nil
 }
 
-func (q *rabbitMQQueue) claimUnique(task Task, queueName string, ttl time.Duration) bool {
+func (q *rabbitMQQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
 	key := queueName + ":" + task.Type + ":" + string(task.PayloadBytes())
 

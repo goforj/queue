@@ -21,7 +21,7 @@ func example1() {
 	var q queue.Queue
 	err := q.DispatchCtx(
 		context.Background(),
-		queue.NewTask("emails:send").OnQueue("default"),
+		queue.NewJob("emails:send").OnQueue("default"),
 	)
 	_ = err
 }
@@ -30,7 +30,7 @@ func example2() {
 	// Example: dispatch with context
 	fake := queue.NewFake()
 	ctx := context.Background()
-	err := fake.DispatchCtx(ctx, queue.NewTask("emails:send").OnQueue("default"))
+	err := fake.DispatchCtx(ctx, queue.NewJob("emails:send").OnQueue("default"))
 	fmt.Println(err == nil)
 	// Output: true
 }

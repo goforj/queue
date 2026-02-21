@@ -27,8 +27,8 @@ func TestStatsCollector_CapturesQueueProcessing(t *testing.T) {
 	}
 
 	startTestQueue(t, q)
-	q.Register("job:obs:ok", func(_ context.Context, _ Task) error { return nil })
-	if err := q.DispatchCtx(context.Background(), NewTask("job:obs:ok").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
+	q.Register("job:obs:ok", func(_ context.Context, _ Job) error { return nil })
+	if err := q.DispatchCtx(context.Background(), NewJob("job:obs:ok").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -56,8 +56,8 @@ func TestStatsCollector_CapturesProcessingFailure(t *testing.T) {
 	}
 
 	startTestQueue(t, q)
-	q.Register("job:obs:fail", func(_ context.Context, _ Task) error { return errors.New("boom") })
-	_ = q.DispatchCtx(context.Background(), NewTask("job:obs:fail").Payload([]byte(`{}`)).OnQueue("default").Retry(0))
+	q.Register("job:obs:fail", func(_ context.Context, _ Job) error { return errors.New("boom") })
+	_ = q.DispatchCtx(context.Background(), NewJob("job:obs:fail").Payload([]byte(`{}`)).OnQueue("default").Retry(0))
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -129,8 +129,8 @@ func TestObserverPanic_DoesNotBreakDispatch(t *testing.T) {
 		t.Fatalf("new queue failed: %v", err)
 	}
 	startTestQueue(t, q)
-	q.Register("job:panic:enqueue", func(_ context.Context, _ Task) error { return nil })
-	if err := q.DispatchCtx(context.Background(), NewTask("job:panic:enqueue").OnQueue("default")); err != nil {
+	q.Register("job:panic:enqueue", func(_ context.Context, _ Job) error { return nil })
+	if err := q.DispatchCtx(context.Background(), NewJob("job:panic:enqueue").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 }
@@ -147,11 +147,11 @@ func TestObserverPanic_DoesNotBreakHandlerExecution(t *testing.T) {
 		t.Fatalf("new queue failed: %v", err)
 	}
 	startTestQueue(t, q)
-	q.Register("job:panic:handler", func(_ context.Context, _ Task) error {
+	q.Register("job:panic:handler", func(_ context.Context, _ Job) error {
 		called.Add(1)
 		return nil
 	})
-	if err := q.DispatchCtx(context.Background(), NewTask("job:panic:handler").OnQueue("default")); err != nil {
+	if err := q.DispatchCtx(context.Background(), NewJob("job:panic:handler").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 	if called.Load() != 1 {

@@ -33,12 +33,12 @@ func TestRabbitMQWorker_NewRegisterAndShutdown(t *testing.T) {
 		t.Fatalf("expected default queue fallback, got %q", w.cfg.DefaultQueue)
 	}
 
-	w.Register("", func(context.Context, Task) error { return nil })
+	w.Register("", func(context.Context, Job) error { return nil })
 	w.Register("job:nil", nil)
 	if len(w.handlers) != 0 {
 		t.Fatalf("expected ignored registrations, got %d", len(w.handlers))
 	}
-	w.Register("job:ok", func(context.Context, Task) error { return nil })
+	w.Register("job:ok", func(context.Context, Job) error { return nil })
 	if len(w.handlers) != 1 {
 		t.Fatalf("expected one handler, got %d", len(w.handlers))
 	}
@@ -100,7 +100,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		acks := &ackRecorder{}
 		called := 0
 		w := &rabbitMQWorker{handlers: map[string]Handler{
-			"job:ok": func(ctx context.Context, task Task) error {
+			"job:ok": func(ctx context.Context, task Job) error {
 				called++
 				if _, ok := ctx.Deadline(); !ok {
 					t.Fatal("expected timeout context")
@@ -139,7 +139,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		acks := &ackRecorder{}
 		w := &rabbitMQWorker{
 			handlers: map[string]Handler{
-				"job:retry": func(context.Context, Task) error { return errors.New("boom") },
+				"job:retry": func(context.Context, Job) error { return errors.New("boom") },
 			},
 			cfg: rabbitMQWorkerConfig{DefaultQueue: "default"},
 		}
@@ -157,7 +157,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		acks := &ackRecorder{}
 		w := &rabbitMQWorker{
 			handlers: map[string]Handler{
-				"job:terminal": func(context.Context, Task) error { return errors.New("boom") },
+				"job:terminal": func(context.Context, Job) error { return errors.New("boom") },
 			},
 			cfg: rabbitMQWorkerConfig{DefaultQueue: "default"},
 		}

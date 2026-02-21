@@ -11,7 +11,7 @@ func main() {
 	// Example: assert task type dispatched on queue
 	fake := queue.NewFake()
 	_ = fake.Dispatch(
-		queue.NewTask("emails:send").
+		queue.NewJob("emails:send").
 			OnQueue("critical"),
 	)
 	fake.AssertDispatchedOn(nil, "critical", "emails:send")
