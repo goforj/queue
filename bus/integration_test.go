@@ -342,6 +342,9 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			}()
 
 			queueName := uniqueQueueName("bus-integration")
+			if backend.name == "redis" {
+				queueName = "default"
+			}
 			if !backend.executes {
 				testBusNullScenario(t, b, queueName)
 				return
