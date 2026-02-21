@@ -88,14 +88,14 @@ func TestSQSWorker_ProcessSuccessInvokesHandlerAndDeletes(t *testing.T) {
 	called := 0
 	w := &sqsWorker{
 		handlers: map[string]Handler{
-			"job:ok": func(ctx context.Context, task Job) error {
+			"job:ok": func(ctx context.Context, job Job) error {
 				called++
 				if _, ok := ctx.Deadline(); !ok {
 					t.Fatal("expected timeout context")
 				}
-				opts := task.jobOptions()
-				if task.Type != "job:ok" || opts.queueName != "critical" || opts.attempt != 1 {
-					t.Fatalf("unexpected task values: type=%q queue=%q attempt=%d", task.Type, opts.queueName, opts.attempt)
+				opts := job.jobOptions()
+				if job.Type != "job:ok" || opts.queueName != "critical" || opts.attempt != 1 {
+					t.Fatalf("unexpected job values: type=%q queue=%q attempt=%d", job.Type, opts.queueName, opts.attempt)
 				}
 				if opts.maxRetry == nil || *opts.maxRetry != 3 {
 					t.Fatalf("expected max retry 3, got %+v", opts.maxRetry)

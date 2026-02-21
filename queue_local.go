@@ -17,7 +17,7 @@ type localQueue struct {
 	handlers     map[string]Handler
 	unique       map[string]time.Time
 	pausedQueues map[string]bool
-	workQueue    chan queuedTask
+	workQueue    chan queuedJob
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 	workerWG     sync.WaitGroup
@@ -33,9 +33,9 @@ type workerContextKey string
 
 const workerEnqueueKey workerContextKey = "queue.worker.enqueue.allowed"
 
-type queuedTask struct {
+type queuedJob struct {
 	ctx  context.Context
-	task Job
+	job  Job
 	opts jobOptions
 }
 
@@ -88,7 +88,7 @@ func (d *localQueue) Driver() Driver {
 //	}
 //	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 //		var payload EmailPayload
-//		if err := task.Bind(&payload); err != nil {
+//		if err := job.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload
@@ -143,7 +143,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 	})
 
 	if err := waitGroupWithContext(ctx, &d.delayedWG); err != nil {
-		return fmt.Errorf("workerpool delayed tasks drain failed: %w (%s)", err, d.shutdownStats())
+		return fmt.Errorf("workerpool delayed jobs drain failed: %w (%s)", err, d.shutdownStats())
 	}
 
 	d.queueMu.Lock()
@@ -154,7 +154,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 	d.queueMu.Unlock()
 
 	if err := waitGroupWithContext(ctx, &d.workerWG); err != nil {
-		return fmt.Errorf("workerpool active tasks drain failed: %w (%s)", err, d.shutdownStats())
+		return fmt.Errorf("workerpool active jobs drain failed: %w (%s)", err, d.shutdownStats())
 	}
 	return nil
 }
@@ -173,7 +173,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //	}
 //	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 //		var payload EmailPayload
-//		if err := task.Bind(&payload); err != nil {
+//		if err := job.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload
@@ -184,21 +184,21 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //		OnQueue("default").
 //		Delay(10 * time.Millisecond)
 //	_ = q.DispatchCtx(context.Background(), job)
-func (d *localQueue) Dispatch(ctx context.Context, task Job) error {
+func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
-	if err := task.validate(); err != nil {
+	if err := job.validate(); err != nil {
 		return err
 	}
-	parsed := task.jobOptions()
+	parsed := job.jobOptions()
 	if parsed.uniqueTTL > 0 {
-		if !d.claimUnique(task, parsed.queueName, parsed.uniqueTTL) {
+		if !d.claimUnique(job, parsed.queueName, parsed.uniqueTTL) {
 			return ErrDuplicate
 		}
 	}
 	if parsed.delay <= 0 {
-		return d.enqueueNow(ctx, task, parsed)
+		return d.enqueueNow(ctx, job, parsed)
 	}
 	d.delayedWG.Add(1)
 	d.delayed.Add(1)
@@ -209,7 +209,7 @@ func (d *localQueue) Dispatch(ctx context.Context, task Job) error {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			_ = d.enqueueNow(context.Background(), task, parsed)
+			_ = d.enqueueNow(context.Background(), job, parsed)
 		case <-d.shutdownCh:
 			return
 		}
@@ -217,20 +217,20 @@ func (d *localQueue) Dispatch(ctx context.Context, task Job) error {
 	return nil
 }
 
-func (d *localQueue) enqueueNow(ctx context.Context, task Job, parsed jobOptions) error {
+func (d *localQueue) enqueueNow(ctx context.Context, job Job, parsed jobOptions) error {
 	if d.isPaused(parsed.queueName) {
 		return ErrQueuePaused
 	}
-	if _, ok := d.lookup(task.Type); !ok {
-		return fmt.Errorf("no handler registered for job type %q", task.Type)
+	if _, ok := d.lookup(job.Type); !ok {
+		return fmt.Errorf("no handler registered for job type %q", job.Type)
 	}
 	if d.driver == DriverWorkerpool {
-		return d.enqueueAsync(ctx, task, parsed)
+		return d.enqueueAsync(ctx, job, parsed)
 	}
-	return d.runWithRetry(ctx, task, parsed)
+	return d.runWithRetry(ctx, job, parsed)
 }
 
-func (d *localQueue) enqueueAsync(ctx context.Context, task Job, parsed jobOptions) error {
+func (d *localQueue) enqueueAsync(ctx context.Context, job Job, parsed jobOptions) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown
 	}
@@ -242,7 +242,7 @@ func (d *localQueue) enqueueAsync(ctx context.Context, task Job, parsed jobOptio
 		return err
 	}
 	select {
-	case workQueue <- queuedTask{ctx: ctx, task: task, opts: parsed}:
+	case workQueue <- queuedJob{ctx: ctx, job: job, opts: parsed}:
 		d.enqueued.Add(1)
 		return nil
 	case <-ctx.Done():
@@ -250,7 +250,7 @@ func (d *localQueue) enqueueAsync(ctx context.Context, task Job, parsed jobOptio
 	}
 }
 
-func (d *localQueue) workerQueueForEnqueue() (chan queuedTask, error) {
+func (d *localQueue) workerQueueForEnqueue() (chan queuedJob, error) {
 	d.queueMu.RLock()
 	workQueue := d.workQueue
 	d.queueMu.RUnlock()
@@ -287,7 +287,7 @@ func (d *localQueue) startMemoryWorkersLocked() {
 	}
 	workers := d.cfg.Workers
 	bufferSize := d.cfg.QueueCapacity
-	d.workQueue = make(chan queuedTask, bufferSize)
+	d.workQueue = make(chan queuedJob, bufferSize)
 	workQueue := d.workQueue
 	for i := 0; i < workers; i++ {
 		d.workerWG.Add(1)
@@ -295,9 +295,9 @@ func (d *localQueue) startMemoryWorkersLocked() {
 	}
 }
 
-func (d *localQueue) worker(workQueue <-chan queuedTask) {
+func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	defer d.workerWG.Done()
-	taskTimeout := d.cfg.DefaultTaskTimeout
+	taskTimeout := d.cfg.DefaultJobTimeout
 	for job := range workQueue {
 		func() {
 			defer func() {
@@ -311,20 +311,20 @@ func (d *localQueue) worker(workQueue <-chan queuedTask) {
 				workerCtx, cancel = context.WithTimeout(workerCtx, taskTimeout)
 				defer cancel()
 			}
-			_ = d.runWithRetry(workerCtx, job.task, job.opts)
+			_ = d.runWithRetry(workerCtx, job.job, job.opts)
 		}()
 	}
 }
 
-func (d *localQueue) run(ctx context.Context, task Job) error {
-	handler, ok := d.lookup(task.Type)
+func (d *localQueue) run(ctx context.Context, job Job) error {
+	handler, ok := d.lookup(job.Type)
 	if !ok {
-		return fmt.Errorf("no handler registered for job type %q", task.Type)
+		return fmt.Errorf("no handler registered for job type %q", job.Type)
 	}
-	return handler(ctx, task)
+	return handler(ctx, job)
 }
 
-func (d *localQueue) runWithRetry(ctx context.Context, task Job, parsed jobOptions) error {
+func (d *localQueue) runWithRetry(ctx context.Context, job Job, parsed jobOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -338,7 +338,7 @@ func (d *localQueue) runWithRetry(ctx context.Context, task Job, parsed jobOptio
 		attempts += *parsed.maxRetry
 	}
 	var lastErr error
-	taskForRun := task
+	taskForRun := job
 	if parsed.maxRetry != nil {
 		taskForRun = taskForRun.Retry(*parsed.maxRetry)
 	}
@@ -422,9 +422,9 @@ func (d *localQueue) Stats(_ context.Context) (StatsSnapshot, error) {
 	}, nil
 }
 
-func (d *localQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
+func (d *localQueue) claimUnique(job Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
-	key := queueName + ":" + task.Type + ":" + string(task.PayloadBytes())
+	key := queueName + ":" + job.Type + ":" + string(job.PayloadBytes())
 
 	d.mu.Lock()
 	defer d.mu.Unlock()

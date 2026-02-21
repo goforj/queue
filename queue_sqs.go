@@ -88,27 +88,27 @@ func (q *sqsQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (q *sqsQueue) Dispatch(ctx context.Context, task Job) error {
+func (q *sqsQueue) Dispatch(ctx context.Context, job Job) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := task.validate(); err != nil {
+	if err := job.validate(); err != nil {
 		return err
 	}
-	parsed := task.jobOptions()
+	parsed := job.jobOptions()
 	if parsed.queueName == "" {
 		return fmt.Errorf("job queue is required")
 	}
 	if err := q.ensureClient(ctx); err != nil {
 		return err
 	}
-	if parsed.uniqueTTL > 0 && !q.claimUnique(task, parsed.queueName, parsed.uniqueTTL) {
+	if parsed.uniqueTTL > 0 && !q.claimUnique(job, parsed.queueName, parsed.uniqueTTL) {
 		return ErrDuplicate
 	}
 
 	msg := sqsMessage{
-		Type:          task.Type,
-		Payload:       task.PayloadBytes(),
+		Type:          job.Type,
+		Payload:       job.PayloadBytes(),
 		Queue:         parsed.queueName,
 		PublishedAtMS: time.Now().UnixMilli(),
 	}
@@ -201,9 +201,9 @@ func isQueueDoesNotExist(err error, target **types.QueueDoesNotExist) bool {
 	return false
 }
 
-func (q *sqsQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
+func (q *sqsQueue) claimUnique(job Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
-	key := queueName + ":" + task.Type + ":" + string(task.PayloadBytes())
+	key := queueName + ":" + job.Type + ":" + string(job.PayloadBytes())
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for candidate, expiresAt := range q.unique {

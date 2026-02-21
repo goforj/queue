@@ -42,8 +42,8 @@ type queueBackendRecorder struct {
 }
 
 func (q *queueBackendRecorder) Driver() Driver { return DriverNull }
-func (q *queueBackendRecorder) Dispatch(_ context.Context, task Job) error {
-	q.dispatched = append(q.dispatched, task)
+func (q *queueBackendRecorder) Dispatch(_ context.Context, job Job) error {
+	q.dispatched = append(q.dispatched, job)
 	return nil
 }
 func (q *queueBackendRecorder) Shutdown(context.Context) error {
@@ -51,7 +51,7 @@ func (q *queueBackendRecorder) Shutdown(context.Context) error {
 	return nil
 }
 
-func TestQueueCommon_TaskFromJobAndHelpers(t *testing.T) {
+func TestQueueCommon_JobFromAnyAndHelpers(t *testing.T) {
 	common := &queueCommon{cfg: Config{DefaultQueue: "default"}}
 
 	if _, err := common.jobFromAny(nil); err == nil {
@@ -90,7 +90,7 @@ func TestQueueCommonDispatchAndNativeRuntimeWrappers(t *testing.T) {
 		t.Fatalf("dispatch wrapper failed: %v", err)
 	}
 	if len(inner.dispatched) != 1 || inner.dispatched[0].Type != "emailJob" {
-		t.Fatalf("expected one inferred task dispatch, got %+v", inner.dispatched)
+		t.Fatalf("expected one inferred job dispatch, got %+v", inner.dispatched)
 	}
 
 	q.Register("job:one", func(context.Context, Job) error { return nil })

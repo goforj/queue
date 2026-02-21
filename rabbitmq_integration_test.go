@@ -33,9 +33,9 @@ func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
-	q.Register("job:rabbitmq:bind", func(_ context.Context, task Job) error {
+	q.Register("job:rabbitmq:bind", func(_ context.Context, job Job) error {
 		var in payload
-		if err := task.Bind(&in); err != nil {
+		if err := job.Bind(&in); err != nil {
 			return err
 		}
 		received <- in
@@ -93,7 +93,7 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewJob("job:rabbitmq:opts").
+	job := NewJob("job:rabbitmq:opts").
 		Payload([]byte("opts")).
 		OnQueue("default").
 		Delay(delay).
@@ -184,7 +184,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	}
 	defer producer.Shutdown(context.Background())
 
-	task := NewJob(jobType).
+	job := NewJob(jobType).
 		Payload(scenarioPayload{ID: 1, Name: "delay-restart"}).
 		OnQueue(queueName).
 		Delay(delay)
@@ -215,7 +215,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(15 * time.Second):
-		t.Fatal("timed out waiting for delayed task after worker restart")
+		t.Fatal("timed out waiting for delayed job after worker restart")
 	}
 	if elapsed := time.Since(start); elapsed < delay-150*time.Millisecond {
 		t.Fatalf("expected delayed execution after about %s, got %s", delay, elapsed)
@@ -261,7 +261,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	}
 	defer producer.Shutdown(context.Background())
 
-	task := NewJob(jobType).
+	job := NewJob(jobType).
 		Payload(scenarioPayload{ID: 2, Name: "retry-restart"}).
 		OnQueue(queueName).
 		Retry(1).
@@ -340,7 +340,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewJob(jobType).
+	job := NewJob(jobType).
 		Payload(scenarioPayload{ID: 3, Name: "delay-queue"}).
 		OnQueue(queueName).
 		Delay(delay)

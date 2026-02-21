@@ -245,8 +245,8 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if factory.beforeEach != nil {
 			factory.beforeEach(t)
 		}
-		task := NewJob("job:contract:invalid-payload").Payload(func() {})
-		err := d.DispatchCtx(context.Background(), task.OnQueue("default"))
+		job := NewJob("job:contract:invalid-payload").Payload(func() {})
+		err := d.DispatchCtx(context.Background(), job.OnQueue("default"))
 		if err == nil {
 			t.Fatal("expected payload build error")
 		}
@@ -294,9 +294,9 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 		seen := make(chan payload, 1)
 		startWorker(t, d, func(q Queue) {
-			q.Register("job:contract:bind", func(_ context.Context, task Job) error {
+			q.Register("job:contract:bind", func(_ context.Context, job Job) error {
 				var in payload
-				if err := task.Bind(&in); err != nil {
+				if err := job.Bind(&in); err != nil {
 					return err
 				}
 				seen <- in
@@ -308,7 +308,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		}
 		want := payload{ID: 42, Name: "bind"}
 		if err := d.DispatchCtx(context.Background(), NewJob("job:contract:bind").Payload(want).OnQueue("default")); err != nil {
-			t.Fatalf("dispatch bind task failed: %v", err)
+			t.Fatalf("dispatch bind job failed: %v", err)
 		}
 		select {
 		case got := <-seen:

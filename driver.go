@@ -9,7 +9,7 @@ package queue
 type Driver string
 
 const (
-	// DriverNull drops dispatched tasks and performs no execution.
+	// DriverNull drops dispatched jobs and performs no execution.
 	DriverNull Driver = "null"
 	// DriverSync runs handlers inline in the caller goroutine.
 	DriverSync Driver = "sync"

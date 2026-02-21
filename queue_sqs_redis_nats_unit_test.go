@@ -208,11 +208,11 @@ func TestSQSQueue_ShutdownAndClaimUnique(t *testing.T) {
 		t.Fatal("expected shutdown to reset client and queue cache")
 	}
 
-	task := NewJob("job:sqs").Payload(map[string]any{"id": 1}).OnQueue("default")
-	if !q.claimUnique(task, "default", time.Minute) {
+	job := NewJob("job:sqs").Payload(map[string]any{"id": 1}).OnQueue("default")
+	if !q.claimUnique(job, "default", time.Minute) {
 		t.Fatal("expected first unique claim to succeed")
 	}
-	if q.claimUnique(task, "default", time.Minute) {
+	if q.claimUnique(job, "default", time.Minute) {
 		t.Fatal("expected duplicate unique claim to fail")
 	}
 }

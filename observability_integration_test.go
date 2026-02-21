@@ -211,7 +211,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 						Retry(1).
 						Backoff(20 * time.Millisecond)
 					requireScenarioNoErr(t, "dispatch_retried_task", q.DispatchCtx(context.Background(), retryTask))
-					waitForObservabilityScenario(t, "retried_task_attempts", 12*time.Second, func() bool {
+					waitForObservabilityScenario(t, "retried_job_attempts", 12*time.Second, func() bool {
 						return failedCalls.Load() >= 3
 					})
 				})

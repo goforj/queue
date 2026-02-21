@@ -110,7 +110,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 
 	b.r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, Queue: b.queue, Time: b.r.now()})
 	first := nodes[0]
-	if err := b.r.dispatchEnvelope(ctx, internalTaskChainNode, envelope{
+	if err := b.r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    dispatchID,
 		Kind:          "chain_node",
@@ -166,7 +166,7 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job queue.Job) er
 		return nil
 	}
 	r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
-	return r.dispatchEnvelope(ctx, internalTaskChainNode, envelope{
+	return r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    env.DispatchID,
 		Kind:          "chain_node",

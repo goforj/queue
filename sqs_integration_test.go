@@ -35,9 +35,9 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}
-	q.Register("job:sqs:bind", func(_ context.Context, task Job) error {
+	q.Register("job:sqs:bind", func(_ context.Context, job Job) error {
 		var in payload
-		if err := task.Bind(&in); err != nil {
+		if err := job.Bind(&in); err != nil {
 			return err
 		}
 		received <- in
@@ -96,7 +96,7 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewJob("job:sqs:opts").
+	job := NewJob("job:sqs:opts").
 		Payload([]byte("opts")).
 		OnQueue(queueName).
 		Delay(delay).

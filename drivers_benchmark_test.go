@@ -64,15 +64,15 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	})
 }
 
-func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q Queue, task Job) {
+func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q Queue, job Job) {
 	// Warm up one dispatch so constructor/startup overhead stays out of the loop.
-	if err := q.DispatchCtx(ctx, task); err != nil {
+	if err := q.DispatchCtx(ctx, job); err != nil {
 		b.Fatalf("warmup dispatch failed: %v", err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := q.DispatchCtx(ctx, task); err != nil {
+		if err := q.DispatchCtx(ctx, job); err != nil {
 			b.Fatalf("dispatch failed: %v", err)
 		}
 	}

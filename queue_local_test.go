@@ -18,13 +18,13 @@ func TestLocalQueue_Driver(t *testing.T) {
 func TestLocalQueue_DispatchRunsRegisteredHandler(t *testing.T) {
 	d := newLocalQueue(DriverSync)
 	var calls atomic.Int64
-	d.Register("job:test", func(_ context.Context, task Job) error {
+	d.Register("job:test", func(_ context.Context, job Job) error {
 		calls.Add(1)
-		if task.Type != "job:test" {
-			t.Fatalf("expected job type job:test, got %q", task.Type)
+		if job.Type != "job:test" {
+			t.Fatalf("expected job type job:test, got %q", job.Type)
 		}
-		if string(task.PayloadBytes()) != "hello" {
-			t.Fatalf("expected payload hello, got %q", string(task.PayloadBytes()))
+		if string(job.PayloadBytes()) != "hello" {
+			t.Fatalf("expected payload hello, got %q", string(job.PayloadBytes()))
 		}
 		return nil
 	})

@@ -61,14 +61,14 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 	t.Run("success uses timeout and job options", func(t *testing.T) {
 		called := 0
 		w := newNATSWorker("nats://example:4222").(*natsWorker)
-		w.Register("job:ok", func(ctx context.Context, task Job) error {
+		w.Register("job:ok", func(ctx context.Context, job Job) error {
 			called++
 			if _, ok := ctx.Deadline(); !ok {
 				t.Fatal("expected timeout context")
 			}
-			opts := task.jobOptions()
-			if task.Type != "job:ok" || opts.queueName != "critical" || opts.attempt != 2 {
-				t.Fatalf("unexpected task fields: type=%q queue=%q attempt=%d", task.Type, opts.queueName, opts.attempt)
+			opts := job.jobOptions()
+			if job.Type != "job:ok" || opts.queueName != "critical" || opts.attempt != 2 {
+				t.Fatalf("unexpected job fields: type=%q queue=%q attempt=%d", job.Type, opts.queueName, opts.attempt)
 			}
 			if opts.maxRetry == nil || *opts.maxRetry != 3 {
 				t.Fatalf("expected retry=3, got %+v", opts.maxRetry)

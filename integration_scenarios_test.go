@@ -261,7 +261,7 @@ func TestRedisIntegration_DispatchSmoke(t *testing.T) {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
-	pending := waitForPendingTask(t, inspector, queueName, 3*time.Second)
+	pending := waitForPendingJob(t, inspector, queueName, 3*time.Second)
 	if pending.Type != jobType {
 		t.Fatalf("expected job type %q, got %q", jobType, pending.Type)
 	}
@@ -302,7 +302,7 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
-	scheduled := waitForScheduledTask(t, inspector, queueName, 3*time.Second)
+	scheduled := waitForScheduledJob(t, inspector, queueName, 3*time.Second)
 	if scheduled.Queue != queueName {
 		t.Fatalf("expected queue %q, got %q", queueName, scheduled.Queue)
 	}
@@ -341,9 +341,9 @@ func TestRedisIntegration_DefaultTimeoutApplied(t *testing.T) {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
-	pending := waitForPendingTask(t, inspector, queueName, 3*time.Second)
-	if pending.Timeout != redisDefaultTaskTimeout {
-		t.Fatalf("expected default timeout %s, got %s", redisDefaultTaskTimeout, pending.Timeout)
+	pending := waitForPendingJob(t, inspector, queueName, 3*time.Second)
+	if pending.Timeout != redisDefaultJobTimeout {
+		t.Fatalf("expected default timeout %s, got %s", redisDefaultJobTimeout, pending.Timeout)
 	}
 }
 
@@ -410,9 +410,9 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
-	q.Register("job:bind", func(_ context.Context, task Job) error {
+	q.Register("job:bind", func(_ context.Context, job Job) error {
 		var in payload
-		if err := task.Bind(&in); err != nil {
+		if err := job.Bind(&in); err != nil {
 			return err
 		}
 		received <- in
@@ -716,16 +716,16 @@ func uniqueQueueName(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
-func waitForPendingTask(t *testing.T, inspector *asynq.Inspector, queueName string, timeout time.Duration) *asynq.TaskInfo {
+func waitForPendingJob(t *testing.T, inspector *asynq.Inspector, queueName string, timeout time.Duration) *asynq.TaskInfo {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		tasks, err := inspector.ListPendingTasks(queueName)
+		jobs, err := inspector.ListPendingTasks(queueName)
 		if err != nil {
-			t.Fatalf("list pending tasks failed: %v", err)
+			t.Fatalf("list pending jobs failed: %v", err)
 		}
-		if len(tasks) > 0 {
-			return tasks[0]
+		if len(jobs) > 0 {
+			return jobs[0]
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -733,16 +733,16 @@ func waitForPendingTask(t *testing.T, inspector *asynq.Inspector, queueName stri
 	return nil
 }
 
-func waitForScheduledTask(t *testing.T, inspector *asynq.Inspector, queueName string, timeout time.Duration) *asynq.TaskInfo {
+func waitForScheduledJob(t *testing.T, inspector *asynq.Inspector, queueName string, timeout time.Duration) *asynq.TaskInfo {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		tasks, err := inspector.ListScheduledTasks(queueName)
+		jobs, err := inspector.ListScheduledTasks(queueName)
 		if err != nil {
-			t.Fatalf("list scheduled tasks failed: %v", err)
+			t.Fatalf("list scheduled jobs failed: %v", err)
 		}
-		if len(tasks) > 0 {
-			return tasks[0]
+		if len(jobs) > 0 {
+			return jobs[0]
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -1043,9 +1043,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	var expected atomic.Int32
 
 	t.Run("scenario_register_handler", func(t *testing.T) {
-		w.Register(jobType, func(_ context.Context, task Job) error {
+		w.Register(jobType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			seen.Add(1)
@@ -1066,22 +1066,22 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				task := NewJob(jobType).
+				job := NewJob(jobType).
 					Payload(scenarioPayload{ID: i, Name: fx.name}).
 					OnQueue(fx.queueName)
 				if i%3 == 0 {
-					task = task.Delay(50 * time.Millisecond)
+					job = job.Delay(50 * time.Millisecond)
 				}
 				if i%4 == 0 {
-					task = task.Timeout(taskTimeout)
+					job = job.Timeout(taskTimeout)
 				}
 				if fx.forceTimeout && i%4 != 0 {
-					task = task.Timeout(taskTimeout)
+					job = job.Timeout(taskTimeout)
 				}
 				if fx.supportsBackoff && i%5 == 0 {
-					task = task.Retry(1).Backoff(20 * time.Millisecond)
+					job = job.Retry(1).Backoff(20 * time.Millisecond)
 				}
-				if err := q.DispatchCtx(context.Background(), task); err != nil {
+				if err := q.DispatchCtx(context.Background(), job); err != nil {
 					errCh <- fmt.Errorf("dispatch %d failed: %w", i, err)
 					return
 				}
@@ -1194,17 +1194,17 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		task := NewJob(restartType).
+		job := NewJob(restartType).
 			Payload(scenarioPayload{ID: 9100, Name: "restart"}).
 			OnQueue(fx.queueName).
 			Delay(750 * time.Millisecond)
 		if fx.forceTimeout {
-			task = task.Timeout(taskTimeout)
+			job = job.Timeout(taskTimeout)
 		}
 		if fx.supportsBackoff {
-			task = task.Retry(1).Backoff(250 * time.Millisecond)
+			job = job.Retry(1).Backoff(250 * time.Millisecond)
 		}
-		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), task))
+		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), job))
 
 		requireScenarioNoErr(t, "restart_shutdown_first_worker", (w).Shutdown(context.Background()))
 		w = fx.newWorker(t)
@@ -1234,23 +1234,23 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		var emptyBindErrs atomic.Int32
 		goodDone := make(chan struct{}, 1)
 
-		w.Register(badType, func(_ context.Context, task Job) error {
+		w.Register(badType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				badBindErrs.Add(1)
 			}
 			return nil
 		})
-		w.Register(emptyType, func(_ context.Context, task Job) error {
+		w.Register(emptyType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				emptyBindErrs.Add(1)
 			}
 			return nil
 		})
-		w.Register(goodType, func(_ context.Context, task Job) error {
+		w.Register(goodType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			select {
@@ -1499,9 +1499,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		var processed atomic.Int32
 		const totalTasks = 30
 
-		handler := func(_ context.Context, task Job) error {
+		handler := func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			mu.Lock()
@@ -1515,13 +1515,13 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioNoErr(t, "multi_worker_secondary_start", (worker2).StartWorkers(context.Background()))
 
 		for i := 0; i < totalTasks; i++ {
-			task := NewJob(jobType).
+			job := NewJob(jobType).
 				Payload(scenarioPayload{ID: i, Name: "multi-worker"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
-				task = task.Timeout(taskTimeout)
+				job = job.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "multi_worker_dispatch", q.DispatchCtx(context.Background(), task))
+			requireScenarioNoErr(t, "multi_worker_dispatch", q.DispatchCtx(context.Background(), job))
 		}
 
 		deadline := time.Now().Add(20 * time.Second)
@@ -1538,7 +1538,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		defer mu.Unlock()
 		for i := 0; i < totalTasks; i++ {
 			if seenByID[i] != 1 {
-				t.Fatalf("[multi_worker_no_duplicate_success] task_id=%d count=%d expected=1", i, seenByID[i])
+				t.Fatalf("[multi_worker_no_duplicate_success] job_id=%d count=%d expected=1", i, seenByID[i])
 			}
 		}
 	})
@@ -1553,9 +1553,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		var mu sync.Mutex
 		seen := make(map[int]struct{})
 
-		w.Register(jobType, func(_ context.Context, task Job) error {
+		w.Register(jobType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			attempt := attempts.Add(1)
@@ -1612,14 +1612,14 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		badCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		task := NewJob("job:scenario:fault-dispatch:" + fx.name).
+		job := NewJob("job:scenario:fault-dispatch:" + fx.name).
 			Payload(scenarioPayload{ID: 9700, Name: "fault-dispatch"}).
 			OnQueue(fx.queueName).
 			Retry(1)
 		if fx.forceTimeout {
-			task = task.Timeout(taskTimeout)
+			job = job.Timeout(taskTimeout)
 		}
-		err := qFault.DispatchCtx(badCtx, task)
+		err := qFault.DispatchCtx(badCtx, job)
 		requireScenarioTrue(t, "fault_dispatch_err", err != nil, "expected dispatch error while broker is down")
 
 		requireScenarioNoErr(t, "fault_start_broker", integrationRedis.container.Start(context.Background()))
@@ -1640,9 +1640,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		jobType := "job:scenario:fault-recovery:" + fx.name
 		done := make(chan struct{}, 1)
-		w.Register(jobType, func(_ context.Context, task Job) error {
+		w.Register(jobType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			select {
@@ -1653,13 +1653,13 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 		requireScenarioNoErr(t, "recover_worker_start", (w).StartWorkers(context.Background()))
 
-		task := NewJob(jobType).
+		job := NewJob(jobType).
 			Payload(scenarioPayload{ID: 9701, Name: "fault-recovery"}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
-			task = task.Timeout(taskTimeout)
+			job = job.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "recover_dispatch", q.DispatchCtx(context.Background(), task))
+		requireScenarioNoErr(t, "recover_dispatch", q.DispatchCtx(context.Background(), job))
 		select {
 		case <-done:
 		case <-time.After(12 * time.Second):
@@ -1678,9 +1678,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		jobType := "job:scenario:ordering:" + fx.name
 		const count = 20
 		orderCh := make(chan int, count)
-		w.Register(jobType, func(_ context.Context, task Job) error {
+		w.Register(jobType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			orderCh <- payload.ID
@@ -1688,13 +1688,13 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 
 		for i := 0; i < count; i++ {
-			task := NewJob(jobType).
+			job := NewJob(jobType).
 				Payload(scenarioPayload{ID: i, Name: "ordering"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
-				task = task.Timeout(taskTimeout)
+				job = job.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "ordering_dispatch", q.DispatchCtx(context.Background(), task))
+			requireScenarioNoErr(t, "ordering_dispatch", q.DispatchCtx(context.Background(), job))
 		}
 
 		got := make([]int, 0, count)
@@ -1727,13 +1727,13 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		const total = 80
 		for i := 0; i < total; i++ {
-			task := NewJob(jobType).
+			job := NewJob(jobType).
 				Payload(scenarioPayload{ID: i, Name: "backpressure"}).
 				OnQueue(fx.queueName)
 			if fx.forceTimeout {
-				task = task.Timeout(taskTimeout)
+				job = job.Timeout(taskTimeout)
 			}
-			requireScenarioNoErr(t, "backpressure_dispatch", q.DispatchCtx(context.Background(), task))
+			requireScenarioNoErr(t, "backpressure_dispatch", q.DispatchCtx(context.Background(), job))
 		}
 
 		probeType := "job:scenario:backpressure-probe:" + fx.name
@@ -1767,12 +1767,12 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		jobType := "job:scenario:payload-large:" + fx.name
 		done := make(chan struct{}, 1)
 		expectedLen := 128 * 1024
-		w.Register(jobType, func(_ context.Context, task Job) error {
+		w.Register(jobType, func(_ context.Context, job Job) error {
 			var payload struct {
 				ID   int    `json:"id"`
 				Data string `json:"data"`
 			}
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			if len(payload.Data) != expectedLen {
@@ -1785,16 +1785,16 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		task := NewJob(jobType).
+		job := NewJob(jobType).
 			Payload(struct {
 				ID   int    `json:"id"`
 				Data string `json:"data"`
 			}{ID: 9900, Data: strings.Repeat("x", expectedLen)}).
 			OnQueue(fx.queueName)
 		if fx.forceTimeout {
-			task = task.Timeout(taskTimeout)
+			job = job.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "payload_large_dispatch", q.DispatchCtx(context.Background(), task))
+		requireScenarioNoErr(t, "payload_large_dispatch", q.DispatchCtx(context.Background(), job))
 		select {
 		case <-done:
 		case <-time.After(15 * time.Second):
@@ -1807,9 +1807,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		jobType := "job:scenario:fuzz:" + fx.name
 		var processed atomic.Int32
-		w.Register(jobType, func(_ context.Context, task Job) error {
+		w.Register(jobType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			processed.Add(1)
@@ -1821,31 +1821,31 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		expected := int32(0)
 		const cases = 80
 		for i := 0; i < cases; i++ {
-			task := NewJob(jobType).
+			job := NewJob(jobType).
 				Payload(scenarioPayload{ID: 10000 + i, Name: "fuzz"}).
 				OnQueue(fx.queueName)
 			if r.Intn(2) == 0 {
-				task = task.Delay(time.Duration(20+r.Intn(120)) * time.Millisecond)
+				job = job.Delay(time.Duration(20+r.Intn(120)) * time.Millisecond)
 			}
 			if r.Intn(2) == 0 {
 				timeout := time.Duration(80+r.Intn(260)) * time.Millisecond
 				if fx.forceTimeout && timeout < time.Second {
 					timeout = 2 * time.Second
 				}
-				task = task.Timeout(timeout)
+				job = job.Timeout(timeout)
 			}
 			retrySet := false
 			if r.Intn(2) == 0 {
-				task = task.Retry(r.Intn(3))
+				job = job.Retry(r.Intn(3))
 				retrySet = true
 			}
 			if retrySet && fx.supportsBackoff && r.Intn(2) == 0 {
-				task = task.Backoff(time.Duration(30+r.Intn(160)) * time.Millisecond)
+				job = job.Backoff(time.Duration(30+r.Intn(160)) * time.Millisecond)
 			}
 			if r.Intn(4) == 0 {
-				task = task.UniqueFor(time.Duration(1+r.Intn(2)) * time.Second)
+				job = job.UniqueFor(time.Duration(1+r.Intn(2)) * time.Second)
 			}
-			if err := q.DispatchCtx(context.Background(), task); err != nil {
+			if err := q.DispatchCtx(context.Background(), job); err != nil {
 				t.Fatalf("[fuzz _dispatch_case_%d] dispatch failed: %v", i, err)
 			}
 			expected++
@@ -1869,9 +1869,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		jobType := "job:scenario:soak:" + fx.name
 		var processed atomic.Int32
-		w.Register(jobType, func(_ context.Context, task Job) error {
+		w.Register(jobType, func(_ context.Context, job Job) error {
 			var payload scenarioPayload
-			if err := task.Bind(&payload); err != nil {
+			if err := job.Bind(&payload); err != nil {
 				return err
 			}
 			if payload.ID%7 == 0 {
@@ -1893,29 +1893,29 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				defer wg.Done()
 				for i := 0; i < perProducer; i++ {
 					id := startID + i
-					task := NewJob(jobType).
+					job := NewJob(jobType).
 						Payload(scenarioPayload{ID: id, Name: "soak"}).
 						OnQueue(fx.queueName)
 					if id%5 == 0 {
-						task = task.Delay(30 * time.Millisecond)
+						job = job.Delay(30 * time.Millisecond)
 					}
 					if id%6 == 0 {
 						timeout := 250 * time.Millisecond
 						if fx.forceTimeout {
 							timeout = 2 * time.Second
 						}
-						task = task.Timeout(timeout)
+						job = job.Timeout(timeout)
 					}
 					if id%8 == 0 {
-						task = task.Retry(1)
+						job = job.Retry(1)
 						if fx.supportsBackoff {
-							task = task.Backoff(80 * time.Millisecond)
+							job = job.Backoff(80 * time.Millisecond)
 						}
 					}
 					if id%10 == 0 {
-						task = task.UniqueFor(1 * time.Second)
+						job = job.UniqueFor(1 * time.Second)
 					}
-					if err := q.DispatchCtx(context.Background(), task); err != nil {
+					if err := q.DispatchCtx(context.Background(), job); err != nil {
 						errCh <- err
 						return
 					}

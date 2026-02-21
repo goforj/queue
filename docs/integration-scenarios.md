@@ -76,7 +76,7 @@ What this proves today:
 - Long-run soak mixed-load behavior is available via opt-in (`RUN_SOAK=1`).
 - RabbitMQ delayed/retry durability now uses broker-side delay queues (TTL + dead-letter) so delayed work survives worker restarts.
 - Redis dispatch now applies a default job timeout when none is provided, preventing timeout/deadline-missing runtime edge cases.
-- End-to-end completion for successfully dispatched tasks.
+- End-to-end completion for successfully dispatched jobs.
 
 ## Next scenarios
 

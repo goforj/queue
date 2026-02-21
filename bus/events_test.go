@@ -86,7 +86,7 @@ func TestUnknownCallbackKindEmitsCallbackFailed(t *testing.T) {
 		"job_id":         "j1",
 		"callback_kind":  "unknown_kind",
 	}
-	if err := q.Dispatch(queue.NewJob(internalTaskCallback).Payload(payload)); err == nil {
+	if err := q.Dispatch(queue.NewJob(internalJobCallback).Payload(payload)); err == nil {
 		t.Fatal("expected unknown callback kind error")
 	}
 	if started != 1 {
@@ -135,7 +135,7 @@ func TestCallbackMissingRequiredIDsEmitsCallbackFailed(t *testing.T) {
 	}
 
 	for i, payloadMap := range tests {
-		if err := q.Dispatch(queue.NewJob(internalTaskCallback).Payload(payloadMap)); err == nil {
+		if err := q.Dispatch(queue.NewJob(internalJobCallback).Payload(payloadMap)); err == nil {
 			t.Fatalf("expected callback validation error for case %d", i)
 		}
 	}

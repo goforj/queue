@@ -11,7 +11,7 @@ import (
 )
 
 type redisEnqueueClient interface {
-	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+	Enqueue(job *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 	Close() error
 }
 
@@ -30,7 +30,7 @@ type redisQueue struct {
 	closeOnce  sync.Once
 }
 
-const redisDefaultTaskTimeout = 30 * time.Second
+const redisDefaultJobTimeout = 30 * time.Second
 
 func newRedisQueue(client redisEnqueueClient, inspector redisInspector, ownsClient bool) queueBackend {
 	return &redisQueue{client: client, inspector: inspector, ownsClient: ownsClient}
@@ -65,14 +65,14 @@ func (d *redisQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (d *redisQueue) Dispatch(_ context.Context, task Job) error {
+func (d *redisQueue) Dispatch(_ context.Context, job Job) error {
 	if d.client == nil {
 		return fmt.Errorf("queue client unavailable for redis driver")
 	}
-	if err := task.validate(); err != nil {
+	if err := job.validate(); err != nil {
 		return err
 	}
-	parsed := task.jobOptions()
+	parsed := job.jobOptions()
 	if parsed.queueName == "" {
 		return fmt.Errorf("job queue is required")
 	}
@@ -81,7 +81,7 @@ func (d *redisQueue) Dispatch(_ context.Context, task Job) error {
 	if parsed.timeout != nil {
 		asynqOpts = append(asynqOpts, asynq.Timeout(*parsed.timeout))
 	} else {
-		asynqOpts = append(asynqOpts, asynq.Timeout(redisDefaultTaskTimeout))
+		asynqOpts = append(asynqOpts, asynq.Timeout(redisDefaultJobTimeout))
 	}
 	if parsed.maxRetry != nil {
 		asynqOpts = append(asynqOpts, asynq.MaxRetry(*parsed.maxRetry))
@@ -95,7 +95,7 @@ func (d *redisQueue) Dispatch(_ context.Context, task Job) error {
 	if parsed.uniqueTTL > 0 {
 		asynqOpts = append(asynqOpts, asynq.Unique(parsed.uniqueTTL))
 	}
-	_, err := d.client.Enqueue(asynq.NewTask(task.Type, task.PayloadBytes()), asynqOpts...)
+	_, err := d.client.Enqueue(asynq.NewTask(job.Type, job.PayloadBytes()), asynqOpts...)
 	if errors.Is(err, asynq.ErrDuplicateTask) {
 		return ErrDuplicate
 	}

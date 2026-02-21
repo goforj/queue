@@ -125,12 +125,12 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 	}, benchTask("bench:postgres", "default"))
 }
 
-func runIntegrationDriverBench(b *testing.B, backend string, ctor func(b *testing.B) Queue, task Job) {
+func runIntegrationDriverBench(b *testing.B, backend string, ctor func(b *testing.B) Queue, job Job) {
 	b.Run(backend, func(b *testing.B) {
 		if !integrationBackendEnabled(backend) {
 			b.Skipf("%s integration backend not selected", backend)
 		}
 		q := ctor(b)
-		benchmarkDispatchLoop(b, context.Background(), q, task)
+		benchmarkDispatchLoop(b, context.Background(), q, job)
 	})
 }
