@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -126,5 +127,73 @@ func TestDatabaseQueue_QueueAndWorkerInteropSQLite(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("expected interop task to be processed")
+	}
+}
+
+func TestDatabaseQueue_RebindPostgresPlaceholders(t *testing.T) {
+	d := &databaseQueue{cfg: DatabaseConfig{DriverName: "postgres"}}
+	got := d.rebind("SELECT * FROM q WHERE id=? AND queue_name=?")
+	if got != "SELECT * FROM q WHERE id=$1 AND queue_name=$2" {
+		t.Fatalf("unexpected postgres rebind result: %q", got)
+	}
+
+	d.cfg.DriverName = "sqlite"
+	if passthrough := d.rebind("SELECT * FROM q WHERE id=?"); !strings.Contains(passthrough, "?") {
+		t.Fatalf("expected sqlite rebind passthrough, got %q", passthrough)
+	}
+}
+
+func TestDatabaseQueue_StatsSnapshot(t *testing.T) {
+	dsn := fmt.Sprintf("%s/stats-%d.db", t.TempDir(), time.Now().UnixNano())
+	qi, err := New(Config{
+		Driver:         DriverDatabase,
+		DatabaseDriver: "sqlite",
+		DatabaseDSN:    dsn,
+	})
+	if err != nil {
+		t.Fatalf("new database queue failed: %v", err)
+	}
+	t.Cleanup(func() { _ = qi.Shutdown(context.Background()) })
+
+	rt, ok := qi.(*nativeQueueRuntime)
+	if !ok {
+		t.Fatalf("expected nativeQueueRuntime, got %T", qi)
+	}
+	dq, ok := rt.common.inner.(*databaseQueue)
+	if !ok {
+		t.Fatalf("expected databaseQueue backend, got %T", rt.common.inner)
+	}
+	if err := dq.ensureSchema(context.Background()); err != nil {
+		t.Fatalf("ensure schema failed: %v", err)
+	}
+
+	if err := qi.Dispatch(NewTask("job:pending").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch pending failed: %v", err)
+	}
+	if err := qi.Dispatch(NewTask("job:processing").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch processing failed: %v", err)
+	}
+	if err := qi.Dispatch(NewTask("job:dead").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch dead failed: %v", err)
+	}
+
+	_, _ = dq.db.ExecContext(context.Background(), dq.rebind(`UPDATE queue_jobs SET state='processing' WHERE task_type=?`), "job:processing")
+	_, _ = dq.db.ExecContext(context.Background(), dq.rebind(`UPDATE queue_jobs SET state='dead' WHERE task_type=?`), "job:dead")
+
+	snap, err := dq.Stats(nil)
+	if err != nil {
+		t.Fatalf("stats failed: %v", err)
+	}
+	if got := snap.Pending("default"); got != 1 {
+		t.Fatalf("expected pending=1, got %d", got)
+	}
+	if got := snap.Active("default"); got != 1 {
+		t.Fatalf("expected active=1, got %d", got)
+	}
+	if got := snap.Archived("default"); got != 1 {
+		t.Fatalf("expected archived=1, got %d", got)
+	}
+	if got := snap.Failed("default"); got != 1 {
+		t.Fatalf("expected failed=1, got %d", got)
 	}
 }

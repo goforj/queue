@@ -27,6 +27,9 @@ func TestRabbitMQQueue_HelperBranches(t *testing.T) {
 	if qDefault.conn != nil || qDefault.ch != nil {
 		t.Fatal("expected closeLocked to nil connection/channel")
 	}
+	if err := qDefault.Shutdown(context.Background()); err != nil {
+		t.Fatalf("expected shutdown nil-safe path, got %v", err)
+	}
 }
 
 func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
@@ -54,5 +57,25 @@ func TestRabbitMQQueue_ClaimUniquePrunesExpired(t *testing.T) {
 
 	if ok := q.claimUnique(task, "default", 5*time.Second); !ok {
 		t.Fatal("expected expired key to be pruned and claim to succeed")
+	}
+}
+
+func TestRabbitMQQueue_EnsureConnectedLockedAndErrorClassifier(t *testing.T) {
+	q := newRabbitMQQueue("://bad-url", "default").(*rabbitMQQueue)
+	if err := q.ensureConnectedLocked(); err == nil {
+		t.Fatal("expected ensureConnectedLocked to fail for invalid url")
+	}
+
+	if isRabbitConnectionClosed(nil) {
+		t.Fatal("expected nil error not closed")
+	}
+	if !isRabbitConnectionClosed(amqp.ErrClosed) {
+		t.Fatal("expected amqp.ErrClosed to be treated as closed")
+	}
+	if !isRabbitConnectionClosed(errors.New("channel/connection is not open")) {
+		t.Fatal("expected closed-message string to be treated as closed")
+	}
+	if isRabbitConnectionClosed(errors.New("something else")) {
+		t.Fatal("expected unrelated error not to be treated as closed")
 	}
 }

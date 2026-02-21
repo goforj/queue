@@ -2,8 +2,10 @@ package bus
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,5 +205,127 @@ func TestSQLStorePruneRemovesOldTerminalState(t *testing.T) {
 	}
 	if _, err := s.GetChain(ctx, "chain-active"); err != nil {
 		t.Fatalf("expected active chain retained, got err=%v", err)
+	}
+}
+
+func TestNewSQLStoreValidationAndDefaults(t *testing.T) {
+	if _, err := NewSQLStore(SQLStoreConfig{}); err == nil || !strings.Contains(err.Error(), "driver name is required") {
+		t.Fatalf("expected driver validation error, got %v", err)
+	}
+	if _, err := NewSQLStore(SQLStoreConfig{DriverName: "sqlite"}); err == nil || !strings.Contains(err.Error(), "dsn is required") {
+		t.Fatalf("expected dsn validation error, got %v", err)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "defaults.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	store, err := NewSQLStore(SQLStoreConfig{DB: db})
+	if err != nil {
+		t.Fatalf("new sql store with db: %v", err)
+	}
+	ss, ok := store.(*sqlStore)
+	if !ok {
+		t.Fatalf("expected *sqlStore, got %T", store)
+	}
+	if ss.driverName != "sqlite" {
+		t.Fatalf("expected default driver sqlite, got %q", ss.driverName)
+	}
+	if !ss.autoMigrate {
+		t.Fatal("expected autoMigrate default true")
+	}
+}
+
+func TestSQLStoreFailChainAndCancelBatch(t *testing.T) {
+	s := newSQLiteStore(t)
+	ctx := context.Background()
+
+	if err := s.CreateChain(ctx, ChainRecord{
+		ChainID:    "chain-fail",
+		DispatchID: "d-fail",
+		Queue:      "default",
+		Nodes:      []ChainNode{{NodeID: "n1", Job: wireJob{Type: "monitor:poll"}}},
+		CreatedAt:  time.Now(),
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	if err := s.FailChain(ctx, "chain-fail", errors.New("boom")); err != nil {
+		t.Fatalf("fail chain: %v", err)
+	}
+	st, err := s.GetChain(ctx, "chain-fail")
+	if err != nil {
+		t.Fatalf("get chain: %v", err)
+	}
+	if !st.Failed || st.Failure != "boom" {
+		t.Fatalf("expected failed chain with boom, got %+v", st)
+	}
+
+	if err := s.CreateBatch(ctx, BatchRecord{
+		BatchID:     "batch-cancel",
+		DispatchID:  "d-cancel",
+		Name:        "cancel-me",
+		Queue:       "default",
+		AllowFailed: true,
+		Jobs:        []BatchJob{{JobID: "j1", Job: wireJob{Type: "monitor:poll"}}},
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	if err := s.CancelBatch(ctx, "batch-cancel"); err != nil {
+		t.Fatalf("cancel batch: %v", err)
+	}
+	bs, err := s.GetBatch(ctx, "batch-cancel")
+	if err != nil {
+		t.Fatalf("get batch: %v", err)
+	}
+	if !bs.Cancelled || !bs.Completed {
+		t.Fatalf("expected cancelled completed batch, got %+v", bs)
+	}
+}
+
+func TestSQLStoreBatchTerminalIdempotentAndNotFound(t *testing.T) {
+	s := newSQLiteStore(t)
+	ctx := context.Background()
+
+	if _, _, err := s.MarkBatchJobSucceeded(ctx, "missing-batch", "missing-job"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for missing batch job, got %v", err)
+	}
+
+	if err := s.CreateBatch(ctx, BatchRecord{
+		BatchID:     "batch-idem",
+		DispatchID:  "d-idem",
+		Name:        "idem",
+		Queue:       "default",
+		AllowFailed: true,
+		Jobs:        []BatchJob{{JobID: "j1", Job: wireJob{Type: "monitor:poll"}}},
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+
+	st1, done1, err := s.MarkBatchJobSucceeded(ctx, "batch-idem", "j1")
+	if err != nil {
+		t.Fatalf("first mark succeeded: %v", err)
+	}
+	if !done1 || st1.Processed != 1 || st1.Pending != 0 {
+		t.Fatalf("unexpected first terminal state: done=%v state=%+v", done1, st1)
+	}
+
+	st2, done2, err := s.MarkBatchJobSucceeded(ctx, "batch-idem", "j1")
+	if err != nil {
+		t.Fatalf("second mark succeeded: %v", err)
+	}
+	if !done2 || st2.Processed != 1 || st2.Pending != 0 {
+		t.Fatalf("expected idempotent terminal state, got done=%v state=%+v", done2, st2)
+	}
+}
+
+func TestSQLStoreRebindForPostgres(t *testing.T) {
+	s := &sqlStore{driverName: "postgres"}
+	got := s.rebind("SELECT * FROM t WHERE a=? AND b=?")
+	if got != "SELECT * FROM t WHERE a=$1 AND b=$2" {
+		t.Fatalf("unexpected rebind result: %q", got)
 	}
 }

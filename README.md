@@ -15,7 +15,7 @@
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-337-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-377-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
@@ -458,8 +458,8 @@ Catch registers a callback invoked when batch encounters a failure.
 
 ```go
 batchID, _ := b.Batch(bus.NewJob("a", nil)).
-    Catch(func(context.Context, bus.BatchState, error) error { return nil }).
-    Dispatch(context.Background())
+	Catch(func(context.Context, bus.BatchState, error) error { return nil }).
+	Dispatch(context.Background())
 ```
 
 #### <a id="bus-batchbuilder-dispatch"></a>bus.BatchBuilder.Dispatch
@@ -476,8 +476,8 @@ Finally registers a callback invoked once when batch reaches terminal state.
 
 ```go
 batchID, _ := b.Batch(bus.NewJob("a", nil)).
-    Finally(func(context.Context, bus.BatchState) error { return nil }).
-    Dispatch(context.Background())
+	Finally(func(context.Context, bus.BatchState) error { return nil }).
+	Dispatch(context.Background())
 ```
 
 #### <a id="bus-batchbuilder-name"></a>bus.BatchBuilder.Name
@@ -502,8 +502,8 @@ Progress registers a callback invoked as jobs complete.
 
 ```go
 batchID, _ := b.Batch(bus.NewJob("a", nil)).
-    Progress(func(context.Context, bus.BatchState) error { return nil }).
-    Dispatch(context.Background())
+	Progress(func(context.Context, bus.BatchState) error { return nil }).
+	Dispatch(context.Background())
 ```
 
 #### <a id="bus-batchbuilder-then"></a>bus.BatchBuilder.Then
@@ -512,8 +512,8 @@ Then registers a callback invoked once when batch succeeds.
 
 ```go
 batchID, _ := b.Batch(bus.NewJob("a", nil)).
-    Then(func(context.Context, bus.BatchState) error { return nil }).
-    Dispatch(context.Background())
+	Then(func(context.Context, bus.BatchState) error { return nil }).
+	Dispatch(context.Background())
 ```
 
 ### Chaining
@@ -524,8 +524,8 @@ Catch registers a callback invoked when chain execution fails.
 
 ```go
 chainID, _ := b.Chain(bus.NewJob("a", nil)).
-    Catch(func(context.Context, bus.ChainState, error) error { return nil }).
-    Dispatch(context.Background())
+	Catch(func(context.Context, bus.ChainState, error) error { return nil }).
+	Dispatch(context.Background())
 ```
 
 #### <a id="bus-chainbuilder-dispatch"></a>bus.ChainBuilder.Dispatch
@@ -542,8 +542,8 @@ Finally registers a callback invoked once when chain execution finishes.
 
 ```go
 chainID, _ := b.Chain(bus.NewJob("a", nil)).
-    Finally(func(context.Context, bus.ChainState) error { return nil }).
-    Dispatch(context.Background())
+	Finally(func(context.Context, bus.ChainState) error { return nil }).
+	Dispatch(context.Background())
 ```
 
 #### <a id="bus-chainbuilder-onqueue"></a>bus.ChainBuilder.OnQueue
@@ -552,8 +552,8 @@ OnQueue applies a default queue to chain jobs that do not set one.
 
 ```go
 chainID, _ := b.Chain(
-    bus.NewJob("a", nil),
-    bus.NewJob("b", nil),
+	bus.NewJob("a", nil),
+	bus.NewJob("b", nil),
 ).OnQueue("critical").Dispatch(context.Background())
 ```
 
@@ -569,10 +569,10 @@ b, _ := bus.New(q)
 b.Register("monitor:poll", func(context.Context, bus.Context) error { return nil })
 defer b.Shutdown(context.Background())
 type PollPayload struct {
-    URL string `json:"url"`
+	URL string `json:"url"`
 }
 _, _ = b.Dispatch(context.Background(), bus.NewJob("monitor:poll", PollPayload{
-    URL: "https://goforj.dev/health",
+	URL: "https://goforj.dev/health",
 }))
 ```
 
@@ -591,17 +591,17 @@ NewJob creates a typed bus job payload with optional fluent options.
 
 ```go
 type PollPayload struct {
-    URL string `json:"url"`
+	URL string `json:"url"`
 }
 job := bus.NewJob("monitor:poll", PollPayload{
-    URL: "https://goforj.dev/health",
+	URL: "https://goforj.dev/health",
 }).
-    OnQueue("monitor-critical").
-    Delay(2 * time.Second).
-    Timeout(15 * time.Second).
-    Retry(3).
-    Backoff(500 * time.Millisecond).
-    UniqueFor(30 * time.Second)
+	OnQueue("monitor-critical").
+	Delay(2 * time.Second).
+	Timeout(15 * time.Second).
+	Retry(3).
+	Backoff(500 * time.Millisecond).
+	UniqueFor(30 * time.Second)
 ```
 
 #### <a id="bus-newmemorystore"></a>bus.NewMemoryStore
@@ -618,8 +618,8 @@ NewSQLStore creates a SQL-backed orchestration store.
 
 ```go
 store, _ := bus.NewSQLStore(bus.SQLStoreConfig{
-    DriverName: "sqlite",
-    DSN:        "file:bus.db?_busy_timeout=5000",
+	DriverName: "sqlite",
+	DSN:        "file:bus.db?_busy_timeout=5000",
 })
 ```
 
@@ -641,8 +641,8 @@ MultiObserver fans out one event to multiple observers.
 
 ```go
 observer := bus.MultiObserver(
-    bus.ObserverFunc(func(event bus.Event) {}),
-    bus.ObserverFunc(func(event bus.Event) {}),
+	bus.ObserverFunc(func(event bus.Event) {}),
+	bus.ObserverFunc(func(event bus.Event) {}),
 )
 observer.Observe(bus.Event{Kind: bus.EventDispatchStarted})
 ```
@@ -673,7 +673,7 @@ Bind unmarshals the job payload into dst.
 
 ```go
 type PollPayload struct {
-    URL string `json:"url"`
+	URL string `json:"url"`
 }
 var payload PollPayload
 ```
@@ -734,7 +734,7 @@ Handle wraps matched errors as fatal errors to stop retries.
 
 ```go
 mw := bus.FailOnError{
-    When: func(err error) bool { return err != nil },
+	When: func(err error) bool { return err != nil },
 }
 ```
 
@@ -744,7 +744,7 @@ Handle calls the wrapped middleware function.
 
 ```go
 mw := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
-    return next(ctx, jc)
+	return next(ctx, jc)
 })
 ```
 
@@ -754,7 +754,7 @@ Handle applies limiter checks before executing the next handler.
 
 ```go
 mw := bus.RateLimit{
-    Key: func(context.Context, bus.Context) string { return "emails" },
+	Key: func(context.Context, bus.Context) string { return "emails" },
 }
 ```
 
@@ -772,7 +772,7 @@ Handle skips job execution when Predicate returns true.
 
 ```go
 mw := bus.SkipWhen{
-    Predicate: func(context.Context, bus.Context) bool { return true },
+	Predicate: func(context.Context, bus.Context) bool { return true },
 }
 ```
 
@@ -782,8 +782,8 @@ Handle acquires a lock and prevents concurrent overlap for the same key.
 
 ```go
 mw := bus.WithoutOverlapping{
-    Key: func(context.Context, bus.Context) string { return "job-key" },
-    TTL: 30 * time.Second,
+	Key: func(context.Context, bus.Context) string { return "job-key" },
+	TTL: 30 * time.Second,
 }
 ```
 
@@ -804,13 +804,13 @@ WithMiddleware appends middleware to the runtime execution chain.
 
 ```go
 audit := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
-    return next(ctx, jc)
+	return next(ctx, jc)
 })
 skipHealth := bus.SkipWhen{
-    Predicate: func(_ context.Context, jc bus.Context) bool { return jc.JobType == "health:ping" },
+	Predicate: func(_ context.Context, jc bus.Context) bool { return jc.JobType == "health:ping" },
 }
 fatalize := bus.FailOnError{
-    When: func(err error) bool { return err != nil },
+	When: func(err error) bool { return err != nil },
 }
 b, _ := bus.New(q, bus.WithMiddleware(audit, skipHealth, fatalize))
 ```
@@ -941,8 +941,8 @@ Batch records a batch specification.
 ```go
 fake := bus.NewFake()
 _, _ = fake.Batch(
-    bus.NewJob("a", nil),
-    bus.NewJob("b", nil),
+	bus.NewJob("a", nil),
+	bus.NewJob("b", nil),
 ).Dispatch(context.Background())
 ```
 
@@ -953,8 +953,8 @@ Chain records a chain specification.
 ```go
 fake := bus.NewFake()
 _, _ = fake.Chain(
-    bus.NewJob("a", nil),
-    bus.NewJob("b", nil),
+	bus.NewJob("a", nil),
+	bus.NewJob("b", nil),
 ).Dispatch(context.Background())
 ```
 
@@ -979,23 +979,23 @@ New creates a queue based on Config.Driver.
 ```go
 q, err := queue.NewSync()
 if err != nil {
-    return
+	return
 }
 type EmailPayload struct {
-    ID int `json:"id"`
+	ID int `json:"id"`
 }
 q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    var payload EmailPayload
-    if err := task.Bind(&payload); err != nil {
-        return err
-    }
-    return nil
+	var payload EmailPayload
+	if err := task.Bind(&payload); err != nil {
+		return err
+	}
+	return nil
 })
 defer q.Shutdown(context.Background())
-    context.Background(),
-    queue.NewTask("emails:send").
-        Payload(EmailPayload{ID: 1}).
-        OnQueue("default"),
+	context.Background(),
+	queue.NewTask("emails:send").
+		Payload(EmailPayload{ID: 1}).
+		OnQueue("default"),
 )
 ```
 
@@ -1006,7 +1006,7 @@ NewDatabase creates a SQL-backed queue runtime.
 ```go
 q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
 if err != nil {
-    return
+	return
 }
 ```
 
@@ -1017,7 +1017,7 @@ NewNATS creates a NATS-backed queue runtime.
 ```go
 q, err := queue.NewNATS("nats://127.0.0.1:4222")
 if err != nil {
-    return
+	return
 }
 ```
 
@@ -1028,7 +1028,7 @@ NewNull creates a drop-only queue runtime.
 ```go
 q, err := queue.NewNull()
 if err != nil {
-    return
+	return
 }
 ```
 
@@ -1038,20 +1038,20 @@ NewQueueWithDefaults creates a queue runtime and sets the default queue name.
 
 ```go
 q, err := queue.NewQueueWithDefaults("critical", queue.Config{
-    Driver: queue.DriverSync,
+	Driver: queue.DriverSync,
 })
 if err != nil {
-    return
+	return
 }
 type EmailPayload struct {
-    ID int `json:"id"`
+	ID int `json:"id"`
 }
 q.Register("emails:send", func(ctx context.Context, task queue.Task) error {
-    var payload EmailPayload
-    if err := task.Bind(&payload); err != nil {
-        return err
-    }
-    return nil
+	var payload EmailPayload
+	if err := task.Bind(&payload); err != nil {
+		return err
+	}
+	return nil
 })
 defer q.Shutdown(context.Background())
 ```
@@ -1063,7 +1063,7 @@ NewRabbitMQ creates a RabbitMQ-backed queue runtime.
 ```go
 q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
 if err != nil {
-    return
+	return
 }
 ```
 
@@ -1074,7 +1074,7 @@ NewRedis creates a Redis-backed queue runtime.
 ```go
 q, err := queue.NewRedis("127.0.0.1:6379")
 if err != nil {
-    return
+	return
 }
 ```
 
@@ -1085,7 +1085,7 @@ NewSQS creates an SQS-backed queue runtime.
 ```go
 q, err := queue.NewSQS("us-east-1")
 if err != nil {
-    return
+	return
 }
 ```
 
@@ -1104,7 +1104,7 @@ NewSync creates a synchronous in-process queue runtime.
 ```go
 q, err := queue.NewSync()
 if err != nil {
-    return
+	return
 }
 ```
 
@@ -1115,7 +1115,7 @@ NewWorkerpool creates an in-process workerpool queue runtime.
 ```go
 q, err := queue.NewWorkerpool()
 if err != nil {
-    return
+	return
 }
 ```
 
@@ -1127,9 +1127,9 @@ Active returns active count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-    ByQueue: map[string]queue.QueueCounters{
-        "default": {Active: 2},
-    },
+	ByQueue: map[string]queue.QueueCounters{
+		"default": {Active: 2},
+	},
 }
 fmt.Println(snapshot.Active("default"))
 // Output: 2
@@ -1141,9 +1141,9 @@ Archived returns archived count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-    ByQueue: map[string]queue.QueueCounters{
-        "default": {Archived: 7},
-    },
+	ByQueue: map[string]queue.QueueCounters{
+		"default": {Archived: 7},
+	},
 }
 fmt.Println(snapshot.Archived("default"))
 // Output: 7
@@ -1155,9 +1155,9 @@ Failed returns failed count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-    ByQueue: map[string]queue.QueueCounters{
-        "default": {Failed: 2},
-    },
+	ByQueue: map[string]queue.QueueCounters{
+		"default": {Failed: 2},
+	},
 }
 fmt.Println(snapshot.Failed("default"))
 // Output: 2
@@ -1170,8 +1170,8 @@ MultiObserver fans out events to multiple observers.
 ```go
 events := make(chan queue.Event, 2)
 observer := queue.MultiObserver(
-    queue.ChannelObserver{Events: events},
-    queue.ObserverFunc(func(queue.Event) {}),
+	queue.ChannelObserver{Events: events},
+	queue.ObserverFunc(func(queue.Event) {}),
 )
 observer.Observe(queue.Event{Kind: queue.EventEnqueueAccepted})
 fmt.Println(len(events))
@@ -1196,9 +1196,9 @@ Observe handles a queue runtime event.
 ```go
 var observer queue.Observer
 observer.Observe(queue.Event{
-    Kind:   queue.EventEnqueueAccepted,
-    Driver: queue.DriverSync,
-    Queue:  "default",
+	Kind:   queue.EventEnqueueAccepted,
+	Driver: queue.DriverSync,
+	Queue:  "default",
 })
 ```
 
@@ -1209,22 +1209,22 @@ Observe calls the wrapped function.
 ```go
 logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 observer := queue.ObserverFunc(func(event queue.Event) {
-    logger.Info("queue event",
-        "kind", event.Kind,
-        "driver", event.Driver,
-        "queue", event.Queue,
-        "task_type", event.TaskType,
-        "attempt", event.Attempt,
-        "max_retry", event.MaxRetry,
-        "duration", event.Duration,
-        "err", event.Err,
-    )
+	logger.Info("queue event",
+		"kind", event.Kind,
+		"driver", event.Driver,
+		"queue", event.Queue,
+		"task_type", event.TaskType,
+		"attempt", event.Attempt,
+		"max_retry", event.MaxRetry,
+		"duration", event.Duration,
+		"err", event.Err,
+	)
 })
 observer.Observe(queue.Event{
-    Kind:     queue.EventProcessSucceeded,
-    Driver:   queue.DriverSync,
-    Queue:    "default",
-    TaskType: "emails:send",
+	Kind:     queue.EventProcessSucceeded,
+	Driver:   queue.DriverSync,
+	Queue:    "default",
+	TaskType: "emails:send",
 })
 ```
 
@@ -1235,10 +1235,10 @@ Observe records an event and updates normalized counters.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-    Kind:   queue.EventEnqueueAccepted,
-    Driver: queue.DriverSync,
-    Queue:  "default",
-    Time:   time.Now(),
+	Kind:   queue.EventEnqueueAccepted,
+	Driver: queue.DriverSync,
+	Queue:  "default",
+	Time:   time.Now(),
 })
 ```
 
@@ -1260,10 +1260,10 @@ Paused returns paused count for a queue.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-    Kind:   queue.EventQueuePaused,
-    Driver: queue.DriverSync,
-    Queue:  "default",
-    Time:   time.Now(),
+	Kind:   queue.EventQueuePaused,
+	Driver: queue.DriverSync,
+	Queue:  "default",
+	Time:   time.Now(),
 })
 snapshot := collector.Snapshot()
 fmt.Println(snapshot.Paused("default"))
@@ -1276,9 +1276,9 @@ Pending returns pending count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-    ByQueue: map[string]queue.QueueCounters{
-        "default": {Pending: 3},
-    },
+	ByQueue: map[string]queue.QueueCounters{
+		"default": {Pending: 3},
+	},
 }
 fmt.Println(snapshot.Pending("default"))
 // Output: 3
@@ -1290,9 +1290,9 @@ Processed returns processed count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-    ByQueue: map[string]queue.QueueCounters{
-        "default": {Processed: 11},
-    },
+	ByQueue: map[string]queue.QueueCounters{
+		"default": {Processed: 11},
+	},
 }
 fmt.Println(snapshot.Processed("default"))
 // Output: 11
@@ -1305,10 +1305,10 @@ Queue returns queue counters for a queue name.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-    Kind:   queue.EventEnqueueAccepted,
-    Driver: queue.DriverSync,
-    Queue:  "default",
-    Time:   time.Now(),
+	Kind:   queue.EventEnqueueAccepted,
+	Driver: queue.DriverSync,
+	Queue:  "default",
+	Time:   time.Now(),
 })
 snapshot := collector.Snapshot()
 counters, ok := snapshot.Queue("default")
@@ -1323,10 +1323,10 @@ Queues returns sorted queue names present in the snapshot.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-    Kind:   queue.EventEnqueueAccepted,
-    Driver: queue.DriverSync,
-    Queue:  "critical",
-    Time:   time.Now(),
+	Kind:   queue.EventEnqueueAccepted,
+	Driver: queue.DriverSync,
+	Queue:  "critical",
+	Time:   time.Now(),
 })
 snapshot := collector.Snapshot()
 names := snapshot.Queues()
@@ -1351,9 +1351,9 @@ RetryCount returns retry count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-    ByQueue: map[string]queue.QueueCounters{
-        "default": {Retry: 1},
-    },
+	ByQueue: map[string]queue.QueueCounters{
+		"default": {Retry: 1},
+	},
 }
 fmt.Println(snapshot.RetryCount("default"))
 // Output: 1
@@ -1365,9 +1365,9 @@ Scheduled returns scheduled count for a queue.
 
 ```go
 snapshot := queue.StatsSnapshot{
-    ByQueue: map[string]queue.QueueCounters{
-        "default": {Scheduled: 4},
-    },
+	ByQueue: map[string]queue.QueueCounters{
+		"default": {Scheduled: 4},
+	},
 }
 fmt.Println(snapshot.Scheduled("default"))
 // Output: 4
@@ -1380,25 +1380,25 @@ Snapshot returns a copy of collected counters.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-    Kind:   queue.EventEnqueueAccepted,
-    Driver: queue.DriverSync,
-    Queue:  "default",
-    Time:   time.Now(),
+	Kind:   queue.EventEnqueueAccepted,
+	Driver: queue.DriverSync,
+	Queue:  "default",
+	Time:   time.Now(),
 })
 collector.Observe(queue.Event{
-    Kind:   queue.EventProcessStarted,
-    Driver: queue.DriverSync,
-    Queue:  "default",
-    TaskKey: "task-1",
-    Time:   time.Now(),
+	Kind:   queue.EventProcessStarted,
+	Driver: queue.DriverSync,
+	Queue:  "default",
+	TaskKey: "task-1",
+	Time:   time.Now(),
 })
 collector.Observe(queue.Event{
-    Kind:     queue.EventProcessSucceeded,
-    Driver:   queue.DriverSync,
-    Queue:    "default",
-    TaskKey:  "task-1",
-    Duration: 12 * time.Millisecond,
-    Time:     time.Now(),
+	Kind:     queue.EventProcessSucceeded,
+	Driver:   queue.DriverSync,
+	Queue:    "default",
+	TaskKey:  "task-1",
+	Duration: 12 * time.Millisecond,
+	Time:     time.Now(),
 })
 snapshot := collector.Snapshot()
 counters, _ := snapshot.Queue("default")
@@ -1451,10 +1451,10 @@ Throughput returns rolling throughput windows for a queue name.
 ```go
 collector := queue.NewStatsCollector()
 collector.Observe(queue.Event{
-    Kind:   queue.EventProcessSucceeded,
-    Driver: queue.DriverSync,
-    Queue:  "default",
-    Time:   time.Now(),
+	Kind:   queue.EventProcessSucceeded,
+	Driver: queue.DriverSync,
+	Queue:  "default",
+	Time:   time.Now(),
 })
 snapshot := collector.Snapshot()
 throughput, ok := snapshot.Throughput("default")
@@ -1471,9 +1471,9 @@ Dispatch submits a typed job payload using the default queue.
 ```go
 var q queue.Queue
 err := q.Dispatch(
-    queue.NewTask("emails:send").
-        Payload(map[string]any{"id": 1}).
-        OnQueue("default"),
+	queue.NewTask("emails:send").
+		Payload(map[string]any{"id": 1}).
+		OnQueue("default"),
 )
 ```
 
@@ -1484,8 +1484,8 @@ DispatchCtx submits a typed job payload using the provided context.
 ```go
 var q queue.Queue
 err := q.DispatchCtx(
-    context.Background(),
-    queue.NewTask("emails:send").OnQueue("default"),
+	context.Background(),
+	queue.NewTask("emails:send").OnQueue("default"),
 )
 ```
 
@@ -1550,7 +1550,7 @@ Bind unmarshals task payload JSON into dst.
 
 ```go
 type EmailPayload struct {
-    ID int `json:"id"`
+	ID int `json:"id"`
 }
 task := queue.NewTask("emails:send").Payload(EmailPayload{ID: 1})
 var payload EmailPayload
@@ -1594,17 +1594,17 @@ _Example: payload struct_
 
 ```go
 type Meta struct {
-    Nested bool `json:"nested"`
+	Nested bool `json:"nested"`
 }
 type EmailPayload struct {
-    ID   int    `json:"id"`
-    To   string `json:"to"`
-    Meta Meta   `json:"meta"`
+	ID   int    `json:"id"`
+	To   string `json:"to"`
+	Meta Meta   `json:"meta"`
 }
 taskStruct := queue.NewTask("emails:send").Payload(EmailPayload{
-    ID:   1,
-    To:   "user@example.com",
-    Meta: Meta{Nested: true},
+	ID:   1,
+	To:   "user@example.com",
+	Meta: Meta{Nested: true},
 })
 ```
 
@@ -1612,9 +1612,9 @@ _Example: payload map_
 
 ```go
 taskMap := queue.NewTask("emails:send").Payload(map[string]any{
-    "id":  1,
-    "to":  "user@example.com",
-    "meta": map[string]any{"nested": true},
+	"id":  1,
+	"to":  "user@example.com",
+	"meta": map[string]any{"nested": true},
 })
 ```
 
@@ -1685,8 +1685,8 @@ AssertDispatchedOn fails when taskType was not dispatched on queueName.
 
 ```go
 fake := queue.NewFake()
-    queue.NewTask("emails:send").
-        OnQueue("critical"),
+	queue.NewTask("emails:send").
+		OnQueue("critical"),
 )
 fake.AssertDispatchedOn(nil, "critical", "emails:send")
 ```
@@ -1754,9 +1754,9 @@ NewFake creates a queue fake that records dispatches and provides assertions.
 
 ```go
 fake := queue.NewFake()
-queue.NewTask("emails:send").
-Payload(map[string]any{"id": 1}).
-OnQueue("critical"),
+	queue.NewTask("emails:send").
+		Payload(map[string]any{"id": 1}).
+		OnQueue("critical"),
 )
 records := fake.Records()
 fmt.Println(len(records), records[0].Queue, records[0].Task.Type)

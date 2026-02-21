@@ -157,6 +157,9 @@ func TestObservedQueue_WrapperMethods(t *testing.T) {
 	if err := oq.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers: %v", err)
 	}
+	if err := oq.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
 	snap, err := oq.Stats(context.Background())
 	if err != nil {
 		t.Fatalf("stats: %v", err)
