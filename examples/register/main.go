@@ -46,3 +46,4 @@ func example3() {
 	fake := queue.NewFake()
 	fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 }
+

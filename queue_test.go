@@ -12,8 +12,8 @@ import (
 
 type fakeEnqueuer struct{}
 
-func (f fakeEnqueuer) Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
-	return &asynq.TaskInfo{ID: "fake", Type: task.Type()}, nil
+func (f fakeEnqueuer) Enqueue(job *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+	return &asynq.TaskInfo{ID: "fake", Type: job.Type()}, nil
 }
 
 func (f fakeEnqueuer) Close() error {

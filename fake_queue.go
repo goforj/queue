@@ -84,17 +84,17 @@ func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 			return err
 		}
 	}
-	task, err := f.jobFromAny(job)
+	dispatchJob, err := f.jobFromAny(job)
 	if err != nil {
 		return err
 	}
-	queueName := task.jobOptions().queueName
+	queueName := dispatchJob.jobOptions().queueName
 	if queueName == "" {
 		queueName = f.defaultQueue
 	}
 	f.mu.Lock()
 	f.records = append(f.records, DispatchRecord{
-		Job:   task,
+		Job:   dispatchJob,
 		Queue: queueName,
 	})
 	f.mu.Unlock()
@@ -188,7 +188,7 @@ func (f *FakeQueue) Records() []DispatchRecord {
 func (f *FakeQueue) AssertNothingDispatched(t testing.TB) {
 	t.Helper()
 	if got := len(f.Records()); got != 0 {
-		t.Fatalf("expected no dispatched tasks, got %d", got)
+		t.Fatalf("expected no dispatched jobs, got %d", got)
 	}
 }
 
@@ -203,7 +203,7 @@ func (f *FakeQueue) AssertNothingDispatched(t testing.TB) {
 func (f *FakeQueue) AssertCount(t testing.TB, expected int) {
 	t.Helper()
 	if got := len(f.Records()); got != expected {
-		t.Fatalf("expected %d dispatched tasks, got %d", expected, got)
+		t.Fatalf("expected %d dispatched jobs, got %d", expected, got)
 	}
 }
 
@@ -286,11 +286,11 @@ func (f *FakeQueue) AssertNotDispatched(t testing.TB, jobType string) {
 }
 
 func (f *FakeQueue) jobFromAny(job any) (Job, error) {
-	if task, ok := job.(Job); ok {
-		if task.Type == "" {
+	if job, ok := job.(Job); ok {
+		if job.Type == "" {
 			return Job{}, fmt.Errorf("dispatch job type is required")
 		}
-		return task, nil
+		return job, nil
 	}
 	if job == nil {
 		return Job{}, fmt.Errorf("dispatch job is nil")

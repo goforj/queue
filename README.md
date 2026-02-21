@@ -35,7 +35,7 @@ go get github.com/goforj/queue
 ## bus vs queue
 
 - `bus` is the higher-level API. Use it when you want workflow features like chains, batches, middleware, callbacks, and unified lifecycle events.
-- `queue` is the lower-level runtime API (drivers, tasks, workers).
+- `queue` is the lower-level runtime API (drivers, jobs, workers).
 - If unsure, start with `bus`.
 
 ## Quick Start (Bus)
@@ -161,7 +161,7 @@ q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 
 | Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout |
 | ---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched tasks; useful for disabled queue modes and smoke tests. | - | - | - | - | - | - |
+| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched jobs; useful for disabled queue modes and smoke tests. | - | - | - | - | - | - |
 | <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | ✓ | - | ✓ |
 | <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 | <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | Durable queue with SQL storage. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -1035,7 +1035,7 @@ type EmailPayload struct {
 }
 q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 	var payload EmailPayload
-	if err := task.Bind(&payload); err != nil {
+	if err := job.Bind(&payload); err != nil {
 		return err
 	}
 	return nil
@@ -1097,7 +1097,7 @@ type EmailPayload struct {
 }
 q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 	var payload EmailPayload
-	if err := task.Bind(&payload); err != nil {
+	if err := job.Bind(&payload); err != nil {
 		return err
 	}
 	return nil
@@ -1221,7 +1221,7 @@ Payload sets job payload from common value types.
 _Example: payload bytes_
 
 ```go
-taskBytes := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
+jobBytes := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
 ```
 
 _Example: payload struct_
@@ -1235,7 +1235,7 @@ type EmailPayload struct {
 	To   string `json:"to"`
 	Meta Meta   `json:"meta"`
 }
-taskStruct := queue.NewJob("emails:send").Payload(EmailPayload{
+jobStruct := queue.NewJob("emails:send").Payload(EmailPayload{
 	ID:   1,
 	To:   "user@example.com",
 	Meta: Meta{Nested: true},
@@ -1245,7 +1245,7 @@ taskStruct := queue.NewJob("emails:send").Payload(EmailPayload{
 _Example: payload map_
 
 ```go
-taskMap := queue.NewJob("emails:send").Payload(map[string]any{
+jobMap := queue.NewJob("emails:send").Payload(map[string]any{
 	"id":  1,
 	"to":  "user@example.com",
 	"meta": map[string]any{"nested": true},

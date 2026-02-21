@@ -15,7 +15,7 @@ import (
 type EventKind string
 
 const (
-	// EventEnqueueAccepted indicates a task was accepted for enqueue.
+	// EventEnqueueAccepted indicates a job was accepted for enqueue.
 	EventEnqueueAccepted EventKind = "enqueue_accepted"
 	// EventEnqueueRejected indicates enqueue failed.
 	EventEnqueueRejected EventKind = "enqueue_rejected"
@@ -45,8 +45,8 @@ type Event struct {
 	Kind      EventKind
 	Driver    Driver
 	Queue     string
-	JobType  string
-	JobKey   string
+	JobType   string
+	JobKey    string
 	Attempt   int
 	MaxRetry  int
 	Scheduled bool
@@ -756,14 +756,14 @@ func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
 	return nil
 }
 
-func (q *observedQueue) Dispatch(ctx context.Context, task Job) error {
-	err := q.inner.Dispatch(ctx, task)
-	opts := task.jobOptions()
+func (q *observedQueue) Dispatch(ctx context.Context, job Job) error {
+	err := q.inner.Dispatch(ctx, job)
+	opts := job.jobOptions()
 	base := Event{
 		Driver:    q.driver,
-		Queue:     jobQueueName(task),
-		JobType:  task.Type,
-		JobKey:   jobEventKey(task),
+		Queue:     jobQueueName(job),
+		JobType:   job.Type,
+		JobKey:    jobEventKey(job),
 		MaxRetry:  optionInt(opts.maxRetry),
 		Scheduled: opts.delay > 0,
 		Time:      time.Now(),
@@ -807,18 +807,18 @@ func (q *observedQueue) Driver() Driver {
 }
 
 func wrapObservedHandler(observer Observer, driver Driver, queueName string, jobType string, handler Handler) Handler {
-	return func(ctx context.Context, task Job) error {
-		opts := task.jobOptions()
+	return func(ctx context.Context, job Job) error {
+		opts := job.jobOptions()
 		effectiveQueue := queueName
 		if effectiveQueue == "" {
-			effectiveQueue = jobQueueName(task)
+			effectiveQueue = jobQueueName(job)
 		}
 		start := time.Now()
 		base := Event{
 			Driver:    driver,
 			Queue:     effectiveQueue,
-			JobType:  jobType,
-			JobKey:   jobEventKey(task),
+			JobType:   jobType,
+			JobKey:    jobEventKey(job),
 			Attempt:   opts.attempt,
 			MaxRetry:  optionInt(opts.maxRetry),
 			Scheduled: opts.delay > 0,
@@ -827,7 +827,7 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 		base.Kind = EventProcessStarted
 		safeObserve(observer, base)
 
-		err := handler(ctx, task)
+		err := handler(ctx, job)
 		finish := base
 		finish.Duration = time.Since(start)
 		finish.Time = time.Now()
@@ -865,8 +865,8 @@ func safeObserve(observer Observer, event Event) {
 	observer.Observe(event)
 }
 
-func jobQueueName(task Job) string {
-	queueName := task.jobOptions().queueName
+func jobQueueName(job Job) string {
+	queueName := job.jobOptions().queueName
 	if queueName == "" {
 		return "default"
 	}
@@ -880,8 +880,8 @@ func optionInt(v *int) int {
 	return *v
 }
 
-func jobEventKey(task Job) string {
-	hash := sha1.Sum(append([]byte(task.Type+":"), task.PayloadBytes()...))
+func jobEventKey(job Job) string {
+	hash := sha1.Sum(append([]byte(job.Type+":"), job.PayloadBytes()...))
 	return fmt.Sprintf("%x", hash[:])
 }
 

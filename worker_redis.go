@@ -29,8 +29,8 @@ func (w *redisWorker) Register(jobType string, handler Handler) {
 	if jobType == "" || handler == nil {
 		return
 	}
-	w.mux.HandleFunc(jobType, func(ctx context.Context, task *asynq.Task) error {
-		return handler(ctx, NewJob(task.Type()).Payload(task.Payload()))
+	w.mux.HandleFunc(jobType, func(ctx context.Context, job *asynq.Task) error {
+		return handler(ctx, NewJob(job.Type()).Payload(job.Payload()))
 	})
 }
 

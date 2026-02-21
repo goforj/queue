@@ -93,9 +93,9 @@ type Queue interface {
 // WorkerpoolConfig configures the in-memory workerpool q.
 // @group Config
 type WorkerpoolConfig struct {
-	Workers            int
-	QueueCapacity      int
-	DefaultTaskTimeout time.Duration
+	Workers           int
+	QueueCapacity     int
+	DefaultJobTimeout time.Duration
 }
 
 func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
@@ -134,7 +134,7 @@ type Config struct {
 
 type queueBackend interface {
 	Driver() Driver
-	Dispatch(ctx context.Context, task Job) error
+	Dispatch(ctx context.Context, job Job) error
 	Shutdown(ctx context.Context) error
 }
 
@@ -171,7 +171,7 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //	}
 //	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 //		var payload EmailPayload
-//		if err := task.Bind(&payload); err != nil {
+//		if err := job.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload
@@ -423,11 +423,11 @@ func (q *queueCommon) Dispatch(job any) error {
 }
 
 func (q *queueCommon) DispatchCtx(ctx context.Context, job any) error {
-	task, err := q.jobFromAny(job)
+	dispatchJob, err := q.jobFromAny(job)
 	if err != nil {
 		return err
 	}
-	return q.inner.Dispatch(ctx, task)
+	return q.inner.Dispatch(ctx, dispatchJob)
 }
 
 func (q *nativeQueueRuntime) Driver() Driver         { return q.common.Driver() }
@@ -684,7 +684,7 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 //	}
 //	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 //		var payload EmailPayload
-//		if err := task.Bind(&payload); err != nil {
+//		if err := job.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload
@@ -701,11 +701,11 @@ func NewQueueWithDefaults(defaultQueue string, cfg Config) (Queue, error) {
 }
 
 func (q *queueCommon) jobFromAny(job any) (Job, error) {
-	if task, ok := job.(Job); ok {
-		if task.Type == "" {
+	if job, ok := job.(Job); ok {
+		if job.Type == "" {
 			return Job{}, fmt.Errorf("dispatch job type is required")
 		}
-		return task, nil
+		return job, nil
 	}
 	if job == nil {
 		return Job{}, fmt.Errorf("dispatch job is nil")

@@ -67,5 +67,5 @@ What these prove:
 - Backpressure saturation scenarios prove continued forward progress.
 - Large payload processing is validated end-to-end.
 - Config/job-option fuzz coverage validates mixed option combinations across backends for stability.
-- End-to-end completion for all successfully dispatched tasks.
+- End-to-end completion for all successfully dispatched jobs.
 

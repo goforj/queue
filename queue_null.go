@@ -29,21 +29,21 @@ func (q *nullQueue) StartWorkers(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (q *nullQueue) Dispatch(ctx context.Context, task Job) error {
+func (q *nullQueue) Dispatch(ctx context.Context, job Job) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 	}
-	if err := task.validate(); err != nil {
+	if err := job.validate(); err != nil {
 		return err
 	}
-	opts := task.jobOptions()
+	opts := job.jobOptions()
 	if opts.queueName == "" {
 		return fmt.Errorf("job queue is required")
 	}
 	if opts.uniqueTTL > 0 {
-		if !q.claimUnique(task, opts.queueName, opts.uniqueTTL) {
+		if !q.claimUnique(job, opts.queueName, opts.uniqueTTL) {
 			return ErrDuplicate
 		}
 	}
@@ -54,9 +54,9 @@ func (q *nullQueue) Shutdown(context.Context) error {
 	return nil
 }
 
-func (q *nullQueue) claimUnique(task Job, queueName string, ttl time.Duration) bool {
+func (q *nullQueue) claimUnique(job Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
-	key := queueName + ":" + jobEventKey(task)
+	key := queueName + ":" + jobEventKey(job)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for k, expiresAt := range q.unique {

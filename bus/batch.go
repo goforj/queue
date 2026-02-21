@@ -163,7 +163,7 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 
 	b.r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, Queue: b.queue, Time: b.r.now()})
 	for _, job := range jobs {
-		if err := b.r.dispatchEnvelope(ctx, internalTaskBatchJob, envelope{
+		if err := b.r.dispatchEnvelope(ctx, internalJobBatchJob, envelope{
 			SchemaVersion: schemaVersion,
 			DispatchID:    dispatchID,
 			Kind:          "batch_job",

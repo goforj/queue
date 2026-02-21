@@ -12,7 +12,7 @@ import (
 // Job is a pure queue payload value plus enqueue metadata.
 // @group Job
 //
-// Example: task
+// Example: job
 //
 //	job := queue.NewJob("emails:send").
 //		PayloadJSON(map[string]string{"to": "user@example.com"}).
@@ -52,8 +52,8 @@ func NewJob(jobType string) Job {
 //
 // Example: payload bytes
 //
-//	taskBytes := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
-//	_ = taskBytes
+//	jobBytes := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
+//	_ = jobBytes
 //
 // Example: payload struct
 //
@@ -65,21 +65,21 @@ func NewJob(jobType string) Job {
 //		To   string `json:"to"`
 //		Meta Meta   `json:"meta"`
 //	}
-//	taskStruct := queue.NewJob("emails:send").Payload(EmailPayload{
+//	jobStruct := queue.NewJob("emails:send").Payload(EmailPayload{
 //		ID:   1,
 //		To:   "user@example.com",
 //		Meta: Meta{Nested: true},
 //	})
-//	_ = taskStruct
+//	_ = jobStruct
 //
 // Example: payload map
 //
-//	taskMap := queue.NewJob("emails:send").Payload(map[string]any{
+//	jobMap := queue.NewJob("emails:send").Payload(map[string]any{
 //		"id":  1,
 //		"to":  "user@example.com",
 //		"meta": map[string]any{"nested": true},
 //	})
-//	_ = taskMap
+//	_ = jobMap
 func (t Job) Payload(payload any) Job {
 	encoded, err := encodePayload(payload)
 	if err != nil {
@@ -290,7 +290,7 @@ func (t Job) withAttempt(attempt int) Job {
 //
 //	handler := func(ctx context.Context, job queue.Job) error { return nil }
 //	_ = handler
-type Handler func(ctx context.Context, task Job) error
+type Handler func(ctx context.Context, job Job) error
 
 // ErrDuplicate indicates a duplicate unique job enqueue.
 var ErrDuplicate = errors.New("duplicate job")

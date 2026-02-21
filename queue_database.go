@@ -159,14 +159,14 @@ func (d *databaseQueue) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *databaseQueue) Dispatch(ctx context.Context, task Job) error {
+func (d *databaseQueue) Dispatch(ctx context.Context, job Job) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if d.shuttingDown.Load() {
 		return ErrQueuerShuttingDown
 	}
-	if err := task.validate(); err != nil {
+	if err := job.validate(); err != nil {
 		return err
 	}
 	if !d.started.Load() && d.hasHandlers() {
@@ -174,8 +174,8 @@ func (d *databaseQueue) Dispatch(ctx context.Context, task Job) error {
 			return err
 		}
 	}
-	parsed := task.jobOptions()
-	payloadBytes := task.PayloadBytes()
+	parsed := job.jobOptions()
+	payloadBytes := job.PayloadBytes()
 	if payloadBytes == nil {
 		payloadBytes = []byte{}
 	}
@@ -191,7 +191,7 @@ func (d *databaseQueue) Dispatch(ctx context.Context, task Job) error {
 	}
 
 	if parsed.uniqueTTL > 0 {
-		ok, err := d.acquireUnique(ctx, task, queueName, now.Add(parsed.uniqueTTL))
+		ok, err := d.acquireUnique(ctx, job, queueName, now.Add(parsed.uniqueTTL))
 		if err != nil {
 			return err
 		}
@@ -227,7 +227,7 @@ func (d *databaseQueue) Dispatch(ctx context.Context, task Job) error {
 		ctx,
 		query,
 		queueName,
-		task.Type,
+		job.Type,
 		payloadBytes,
 		timeoutSeconds,
 		maxRetry,
@@ -440,10 +440,10 @@ WHERE id=?`)
 	return err
 }
 
-func (d *databaseQueue) acquireUnique(ctx context.Context, task Job, queueName string, expiresAt time.Time) (bool, error) {
+func (d *databaseQueue) acquireUnique(ctx context.Context, job Job, queueName string, expiresAt time.Time) (bool, error) {
 	now := time.Now().UnixMilli()
 	expiresAtMillis := expiresAt.UnixMilli()
-	key := uniqueJobKey(task, queueName)
+	key := uniqueJobKey(job, queueName)
 	insert := d.rebind(`INSERT INTO queue_unique_locks(lock_key, expires_at) VALUES(?, ?)`)
 	_, err := d.db.ExecContext(ctx, insert, key, expiresAtMillis)
 	if err == nil {
@@ -462,8 +462,8 @@ func (d *databaseQueue) acquireUnique(ctx context.Context, task Job, queueName s
 	return rows == 1, nil
 }
 
-func uniqueJobKey(task Job, queueName string) string {
-	hash := sha256.Sum256(append([]byte(queueName+":"+task.Type+":"), task.PayloadBytes()...))
+func uniqueJobKey(job Job, queueName string) string {
+	hash := sha256.Sum256(append([]byte(queueName+":"+job.Type+":"), job.PayloadBytes()...))
 	return hex.EncodeToString(hash[:])
 }
 

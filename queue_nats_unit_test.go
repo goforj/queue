@@ -27,7 +27,7 @@ func TestNATSQueue_DispatchValidationAndConnectionFailure(t *testing.T) {
 		t.Fatal("expected queue required error")
 	}
 
-	// Valid task should proceed to ensureConn and fail for invalid URL.
+	// Valid job should proceed to ensureConn and fail for invalid URL.
 	err := q.Dispatch(context.Background(), NewJob("job:nats").OnQueue("default"))
 	if err == nil {
 		t.Fatal("expected connection/parse error")
@@ -40,11 +40,11 @@ func TestNATSQueue_ShutdownNilConnAndHelpers(t *testing.T) {
 		t.Fatalf("shutdown with nil conn failed: %v", err)
 	}
 
-	task := NewJob("job:nats").Payload(map[string]any{"id": 1}).OnQueue("default")
-	if !q.claimUnique(task, "default", time.Minute) {
+	job := NewJob("job:nats").Payload(map[string]any{"id": 1}).OnQueue("default")
+	if !q.claimUnique(job, "default", time.Minute) {
 		t.Fatal("expected first unique claim to succeed")
 	}
-	if q.claimUnique(task, "default", time.Minute) {
+	if q.claimUnique(job, "default", time.Minute) {
 		t.Fatal("expected duplicate unique claim to fail")
 	}
 

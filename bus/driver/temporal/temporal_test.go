@@ -51,7 +51,7 @@ func TestDispatch_BasicJobSuccess(t *testing.T) {
 		t.Fatalf("expected job type monitor:poll, got %q", eng.req.JobType)
 	}
 	if eng.req.TaskQueue != "monitor" {
-		t.Fatalf("expected task queue monitor, got %q", eng.req.TaskQueue)
+		t.Fatalf("expected job queue monitor, got %q", eng.req.TaskQueue)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestDispatch_PassesJobOptionsToEngine(t *testing.T) {
 	}
 
 	if eng.req.TaskQueue != "monitor-critical" {
-		t.Fatalf("expected task queue override monitor-critical, got %q", eng.req.TaskQueue)
+		t.Fatalf("expected job queue override monitor-critical, got %q", eng.req.TaskQueue)
 	}
 	if eng.req.Options.Queue != "monitor-critical" {
 		t.Fatalf("expected options queue monitor-critical, got %q", eng.req.Options.Queue)

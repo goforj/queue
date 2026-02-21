@@ -86,7 +86,7 @@ func TestLocalQueue_PauseResumeStatsAndShutdownStats(t *testing.T) {
 		t.Fatalf("resume failed: %v", err)
 	}
 	if err := q.Dispatch(context.Background(), NewJob("job:local:stats").Payload([]byte("x")).OnQueue("default").Delay(80*time.Millisecond)); err != nil {
-		t.Fatalf("dispatch delayed task failed: %v", err)
+		t.Fatalf("dispatch delayed job failed: %v", err)
 	}
 
 	pendingObserved := false
@@ -106,7 +106,7 @@ func TestLocalQueue_PauseResumeStatsAndShutdownStats(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !pendingObserved {
-		t.Fatal("expected delayed task to appear in pending stats")
+		t.Fatal("expected delayed job to appear in pending stats")
 	}
 
 	statsText := q.shutdownStats()

@@ -16,10 +16,10 @@ import (
 const (
 	schemaVersion = 1
 
-	internalTaskJob       = "bus:job"
-	internalTaskChainNode = "bus:chain:node"
-	internalTaskBatchJob  = "bus:batch:job"
-	internalTaskCallback  = "bus:callback"
+	internalJob          = "bus:job"
+	internalJobChainNode = "bus:chain:node"
+	internalJobBatchJob  = "bus:batch:job"
+	internalJobCallback  = "bus:callback"
 )
 
 type Bus interface {
@@ -161,10 +161,10 @@ func NewWithStore(q queue.Queue, store Store, opts ...Option) (Bus, error) {
 		opt(r)
 	}
 
-	q.Register(internalTaskJob, r.handleInternalJob)
-	q.Register(internalTaskChainNode, r.handleInternalChainNode)
-	q.Register(internalTaskBatchJob, r.handleInternalBatchJob)
-	q.Register(internalTaskCallback, r.handleInternalCallback)
+	q.Register(internalJob, r.handleInternalJob)
+	q.Register(internalJobChainNode, r.handleInternalChainNode)
+	q.Register(internalJobBatchJob, r.handleInternalBatchJob)
+	q.Register(internalJobCallback, r.handleInternalCallback)
 	return r, nil
 }
 
@@ -216,7 +216,7 @@ func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error)
 		Job:           wj,
 	}
 	r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
-	if err := r.dispatchEnvelope(ctx, internalTaskJob, env); err != nil {
+	if err := r.dispatchEnvelope(ctx, internalJob, env); err != nil {
 		r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now(), Err: err})
 		return DispatchResult{DispatchID: dispatchID}, err
 	}
@@ -368,7 +368,7 @@ func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind stri
 	if err != nil {
 		cbEnv.Error = err.Error()
 	}
-	return r.dispatchEnvelope(ctx, internalTaskCallback, cbEnv)
+	return r.dispatchEnvelope(ctx, internalJobCallback, cbEnv)
 }
 
 func (r *runtime) handleInternalJob(ctx context.Context, job queue.Job) error {

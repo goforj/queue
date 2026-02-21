@@ -175,7 +175,7 @@ Execution flow:
 3. Bus enqueues internal envelope job(s) via `q.DispatchCtx(...)`.
 4. Queue workers execute bus internal handlers.
 5. Bus executes registered user handler and updates orchestration state.
-6. Bus enqueues next node(s)/callback tasks as needed.
+6. Bus enqueues next node(s)/callback jobs as needed.
 
 ## Event Model (In-Process)
 

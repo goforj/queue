@@ -26,9 +26,9 @@ func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new nats queue failed: %v", err)
 	}
-	q.Register("job:nats:bind", func(_ context.Context, task Job) error {
+	q.Register("job:nats:bind", func(_ context.Context, job Job) error {
 		var in payload
-		if err := task.Bind(&in); err != nil {
+		if err := job.Bind(&in); err != nil {
 			return err
 		}
 		received <- in
@@ -89,14 +89,14 @@ func TestNATSIntegration_OptionBehavior(t *testing.T) {
 	}
 	defer q.Shutdown(context.Background())
 
-	task := NewJob("job:nats:opts").
+	job := NewJob("job:nats:opts").
 		Payload([]byte("opts")).
 		OnQueue("default").
 		Delay(delay).
 		Timeout(timeout).
 		Retry(2).
 		Backoff(backoff)
-	if err := q.DispatchCtx(context.Background(), task); err != nil {
+	if err := q.DispatchCtx(context.Background(), job); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 

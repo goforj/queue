@@ -42,20 +42,20 @@ func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 		t.Fatal("expected queue required error")
 	}
 
-	task := NewJob("job:dup").Payload([]byte(`{"k":"v"}`)).OnQueue("default").UniqueFor(10 * time.Second)
-	_ = q.claimUnique(task, "default", 10*time.Second)
-	if err := q.Dispatch(context.Background(), task); !errors.Is(err, ErrDuplicate) {
+	job := NewJob("job:dup").Payload([]byte(`{"k":"v"}`)).OnQueue("default").UniqueFor(10 * time.Second)
+	_ = q.claimUnique(job, "default", 10*time.Second)
+	if err := q.Dispatch(context.Background(), job); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate before dial path, got %v", err)
 	}
 }
 
 func TestRabbitMQQueue_ClaimUniquePrunesExpired(t *testing.T) {
 	q := newRabbitMQQueue("amqp://example", "default").(*rabbitMQQueue)
-	task := NewJob("job:unique").Payload([]byte(`{"id":1}`)).OnQueue("default")
-	key := "default:" + task.Type + ":" + string(task.PayloadBytes())
+	job := NewJob("job:unique").Payload([]byte(`{"id":1}`)).OnQueue("default")
+	key := "default:" + job.Type + ":" + string(job.PayloadBytes())
 	q.unique[key] = time.Now().Add(-time.Second)
 
-	if ok := q.claimUnique(task, "default", 5*time.Second); !ok {
+	if ok := q.claimUnique(job, "default", 5*time.Second); !ok {
 		t.Fatal("expected expired key to be pruned and claim to succeed")
 	}
 }

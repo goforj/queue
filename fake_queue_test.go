@@ -17,7 +17,7 @@ func TestFakeQueue_Assertions(t *testing.T) {
 	fake.AssertDispatched(t, "emails:send")
 	fake.AssertDispatchedOn(t, "critical", "emails:send")
 	fake.AssertDispatchedTimes(t, "emails:send", 2)
-	fake.AssertNotDispatched(t, "unknown:task")
+	fake.AssertNotDispatched(t, "unknown:job")
 }
 
 func TestFakeQueue_DispatchStructInfersJobType(t *testing.T) {

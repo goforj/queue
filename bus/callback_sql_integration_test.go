@@ -70,7 +70,7 @@ func TestSQLStore_RuntimeBatchThenFinallyDuplicateCallbacksSuppressed(t *testing
 			"batch_id":       batchID,
 			"callback_kind":  callbackKind,
 		}
-		if err := q.Dispatch(queue.NewJob(internalTaskCallback).Payload(cbPayload)); err != nil {
+		if err := q.Dispatch(queue.NewJob(internalJobCallback).Payload(cbPayload)); err != nil {
 			t.Fatalf("dispatch duplicate callback (%s): %v", callbackKind, err)
 		}
 	}
@@ -121,7 +121,7 @@ func TestSQLStore_RuntimeBatchCatchDuplicateCallbackSuppressed(t *testing.T) {
 		"callback_kind":  "batch_catch",
 		"error":          "boom",
 	}
-	if err := q.Dispatch(queue.NewJob(internalTaskCallback).Payload(cbPayload)); err != nil {
+	if err := q.Dispatch(queue.NewJob(internalJobCallback).Payload(cbPayload)); err != nil {
 		t.Fatalf("dispatch duplicate callback: %v", err)
 	}
 	if catchCount != 1 {
