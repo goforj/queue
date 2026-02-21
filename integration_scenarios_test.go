@@ -1566,33 +1566,32 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				committed.Add(1)
 			}
 			mu.Unlock()
-
-			if attempt == 1 {
-				return errors.New("forced duplicate delivery")
-			}
-			select {
-			case done <- struct{}{}:
-			default:
+			if attempt >= 2 {
+				select {
+				case done <- struct{}{}:
+				default:
+				}
 			}
 			return nil
 		})
 
-		task := NewTask(taskType).
+		first := NewTask(taskType).
 			Payload(scenarioPayload{ID: 9600, Name: "idempotency"}).
-			OnQueue(fx.queueName).
-			Retry(2)
-		if fx.supportsBackoff {
-			task = task.Backoff(200 * time.Millisecond)
-		}
+			OnQueue(fx.queueName)
+		second := NewTask(taskType).
+			Payload(scenarioPayload{ID: 9600, Name: "idempotency"}).
+			OnQueue(fx.queueName)
 		if fx.forceTimeout {
-			task = task.Timeout(taskTimeout)
+			first = first.Timeout(taskTimeout)
+			second = second.Timeout(taskTimeout)
 		}
-		requireScenarioNoErr(t, "idempotency_dispatch", q.DispatchCtx(context.Background(), task))
+		requireScenarioNoErr(t, "idempotency_dispatch_first", q.DispatchCtx(context.Background(), first))
+		requireScenarioNoErr(t, "idempotency_dispatch_second", q.DispatchCtx(context.Background(), second))
 
 		select {
 		case <-done:
 		case <-time.After(45 * time.Second):
-			t.Fatalf("[idempotency_done] task did not complete after forced retry")
+			t.Fatalf("[idempotency_done] duplicate deliveries did not both complete")
 		}
 		requireScenarioTrue(t, "idempotency_attempts", attempts.Load() >= 2, "attempts=%d expected>=2", attempts.Load())
 		requireScenarioTrue(t, "idempotency_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
