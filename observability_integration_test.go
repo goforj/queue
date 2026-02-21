@@ -242,10 +242,10 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				requireScenarioTrue(t, "collector_hour_failed", throughput.Hour.Failed >= 1, "hour_failed=%d expected>=1", throughput.Hour.Failed)
 				requireScenarioTrue(t, "collector_getter_processed", snapshot.Processed(fx.queue) == counters.Processed, "getter_processed=%d counters_processed=%d", snapshot.Processed(fx.queue), counters.Processed)
 				requireScenarioTrue(t, "collector_getter_failed", snapshot.Failed(fx.queue) == counters.Failed, "getter_failed=%d counters_failed=%d", snapshot.Failed(fx.queue), counters.Failed)
-				if fx.name != "redis" {
-					requireScenarioTrue(t, "collector_getter_retry", snapshot.Retry(fx.queue) == counters.Retry, "getter_retry=%d counters_retry=%d", snapshot.Retry(fx.queue), counters.Retry)
-				}
-			})
+					if fx.name != "redis" {
+						requireScenarioTrue(t, "collector_getter_retry", snapshot.RetryCount(fx.queue) == counters.Retry, "getter_retry=%d counters_retry=%d", snapshot.RetryCount(fx.queue), counters.Retry)
+					}
+				})
 
 			t.Run("scenario_assert_snapshotqueue", func(t *testing.T) {
 				snapFromQueue, err := SnapshotQueue(context.Background(), q, collector)
