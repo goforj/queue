@@ -15,24 +15,78 @@ import (
 // Queue is the queue abstraction exposed to callers.
 type Queue interface {
 	// Driver returns the active queue driver.
+	// @group Queue
+	//
+	// Example: inspect queue driver
+	//
+	//	var q queue.Queue
+	//	driver := q.Driver()
+	//	_ = driver
 	Driver() Driver
 
 	// Dispatch submits a typed job payload using the default queue.
+	// @group Queue
+	//
+	// Example: dispatch typed task
+	//
+	//	var q queue.Queue
+	//	err := q.Dispatch(
+	//		queue.NewTask("emails:send").
+	//			Payload(map[string]any{"id": 1}).
+	//			OnQueue("default"),
+	//	)
+	//	_ = err
 	Dispatch(job any) error
 
 	// DispatchCtx submits a typed job payload using the provided context.
+	// @group Queue
+	//
+	// Example: dispatch with context
+	//
+	//	var q queue.Queue
+	//	err := q.DispatchCtx(
+	//		context.Background(),
+	//		queue.NewTask("emails:send").OnQueue("default"),
+	//	)
+	//	_ = err
 	DispatchCtx(ctx context.Context, job any) error
 
 	// Register associates a handler with a task type.
+	// @group Queue
+	//
+	// Example: register a handler
+	//
+	//	var q queue.Queue
+	//	q.Register("emails:send", func(context.Context, queue.Task) error { return nil })
 	Register(taskType string, handler Handler)
 
 	// StartWorkers starts worker execution.
+	// @group Queue
+	//
+	// Example: start workers
+	//
+	//	var q queue.Queue
+	//	err := q.StartWorkers(context.Background())
+	//	_ = err
 	StartWorkers(ctx context.Context) error
 
 	// Workers sets desired worker concurrency before StartWorkers.
+	// @group Queue
+	//
+	// Example: set worker count
+	//
+	//	var q queue.Queue
+	//	q = q.Workers(4)
 	Workers(count int) Queue
 
 	// Shutdown drains running work and releases resources.
+	// @group Queue
+	//
+	// Example: shutdown runtime
+	//
+	//	var q queue.Queue
+	//	err := q.Shutdown(context.Background())
+	//	_ = err
 	Shutdown(ctx context.Context) error
 }
 

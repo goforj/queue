@@ -11,8 +11,25 @@ import (
 )
 
 func main() {
+	example1()
+	example2()
+	example3()
+	example4()
+}
+
+func example1() {
 	// Observe handles a queue runtime event.
 
+	// Example: observe runtime event
+	var observer queue.Observer
+	observer.Observe(queue.Event{
+		Kind:   queue.EventEnqueueAccepted,
+		Driver: queue.DriverSync,
+		Queue:  "default",
+	})
+}
+
+func example2() {
 	// Example: observer func logging hook
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	observer := queue.ObserverFunc(func(event queue.Event) {
@@ -33,6 +50,18 @@ func main() {
 		Queue:    "default",
 		TaskType: "emails:send",
 	})
+}
+
+func example3() {
+	// Example: channel observer
+	ch := make(chan queue.Event, 1)
+	observer := queue.ChannelObserver{Events: ch}
+	observer.Observe(queue.Event{Kind: queue.EventProcessStarted, Queue: "default"})
+	event := <-ch
+	_ = event
+}
+
+func example4() {
 	// Example: observe event
 	collector := queue.NewStatsCollector()
 	collector.Observe(queue.Event{
@@ -42,3 +71,4 @@ func main() {
 		Time:   time.Now(),
 	})
 }
+

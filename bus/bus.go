@@ -92,10 +92,16 @@ func WithClock(clock func() time.Time) Option {
 //
 // Example: add middleware
 //
-//	mw := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
+//	audit := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
 //		return next(ctx, jc)
 //	})
-//	b, _ := bus.New(q, bus.WithMiddleware(mw))
+//	skipHealth := bus.SkipWhen{
+//		Predicate: func(_ context.Context, jc bus.Context) bool { return jc.JobType == "health:ping" },
+//	}
+//	fatalize := bus.FailOnError{
+//		When: func(err error) bool { return err != nil },
+//	}
+//	b, _ := bus.New(q, bus.WithMiddleware(audit, skipHealth, fatalize))
 //	_ = b
 func WithMiddleware(middlewares ...Middleware) Option {
 	return func(r *runtime) {
@@ -283,7 +289,7 @@ func (r *runtime) StartWorkers(ctx context.Context) error { return r.q.StartWork
 // Example: shutdown workers
 //
 //	_ = b.Shutdown(context.Background())
-func (r *runtime) Shutdown(ctx context.Context) error     { return r.q.Shutdown(ctx) }
+func (r *runtime) Shutdown(ctx context.Context) error { return r.q.Shutdown(ctx) }
 
 // FindBatch returns persisted batch state by id.
 // @group Runtime

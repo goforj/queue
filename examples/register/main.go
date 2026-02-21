@@ -9,8 +9,20 @@ import (
 )
 
 func main() {
+	example1()
+	example2()
+	example3()
+}
+
+func example1() {
 	// Register associates a handler with a task type.
 
+	// Example: register a handler
+	var q queue.Queue
+	q.Register("emails:send", func(context.Context, queue.Task) error { return nil })
+}
+
+func example2() {
 	// Example: local register
 	q, err := queue.NewSync()
 	if err != nil {
@@ -28,3 +40,10 @@ func main() {
 		return nil
 	})
 }
+
+func example3() {
+	// Example: register no-op on fake
+	fake := queue.NewFake()
+	fake.Register("emails:send", func(context.Context, queue.Task) error { return nil })
+}
+

@@ -47,9 +47,23 @@ func NewFake() *FakeQueue {
 }
 
 // Driver returns the active queue driver.
+// @group Testing
+//
+// Example: fake driver
+//
+//	fake := queue.NewFake()
+//	driver := fake.Driver()
+//	_ = driver
 func (f *FakeQueue) Driver() Driver { return DriverNull }
 
-// Dispatch submits a typed job payload using the default queue.
+// Dispatch records a typed job payload in-memory using the fake default queue.
+// @group Testing
+//
+// Example: dispatch to fake queue
+//
+//	fake := queue.NewFake()
+//	err := fake.Dispatch(queue.NewTask("emails:send").OnQueue("default"))
+//	_ = err
 func (f *FakeQueue) Dispatch(job any) error {
 	return f.DispatchCtx(context.Background(), job)
 }
@@ -88,9 +102,22 @@ func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 }
 
 // Register associates a handler with a task type.
+// @group Testing
+//
+// Example: register no-op on fake
+//
+//	fake := queue.NewFake()
+//	fake.Register("emails:send", func(context.Context, queue.Task) error { return nil })
 func (f *FakeQueue) Register(string, Handler) {}
 
 // StartWorkers starts worker execution.
+// @group Testing
+//
+// Example: start fake workers
+//
+//	fake := queue.NewFake()
+//	err := fake.StartWorkers(context.Background())
+//	_ = err
 func (f *FakeQueue) StartWorkers(context.Context) error { return nil }
 
 // Workers sets desired worker concurrency before StartWorkers.
@@ -105,6 +132,13 @@ func (f *FakeQueue) StartWorkers(context.Context) error { return nil }
 func (f *FakeQueue) Workers(int) Queue { return f }
 
 // Shutdown drains running work and releases resources.
+// @group Testing
+//
+// Example: shutdown fake queue
+//
+//	fake := queue.NewFake()
+//	err := fake.Shutdown(context.Background())
+//	_ = err
 func (f *FakeQueue) Shutdown(context.Context) error { return nil }
 
 // Reset clears all recorded dispatches.
