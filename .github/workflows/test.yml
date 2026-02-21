@@ -27,7 +27,7 @@ jobs:
           set -euo pipefail
           matrix_line="$(awk '/backend: \[/{print; exit}' .github/workflows/test.yml)"
           test -n "$matrix_line"
-          for backend in redis mysql postgres sqlite nats sqs rabbitmq; do
+          for backend in null sync workerpool redis mysql postgres sqlite nats sqs rabbitmq; do
             if ! echo "$matrix_line" | grep -Eq "(^|[^a-z])${backend}([^a-z]|$)"; then
               echo "missing required integration backend in matrix: ${backend}"
               exit 1
@@ -83,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
+        backend: [null, sync, workerpool, redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -108,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
+        backend: [null, sync, workerpool, redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

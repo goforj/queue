@@ -339,7 +339,7 @@ func (s StatsSnapshot) Scheduled(name string) int64 {
 	return counters.Scheduled
 }
 
-// Retry returns retry count for a queue.
+// RetryCount returns retry count for a queue.
 // @group Observability
 //
 // Example: retry count getter
@@ -349,9 +349,9 @@ func (s StatsSnapshot) Scheduled(name string) int64 {
 //			"default": {Retry: 1},
 //		},
 //	}
-//	fmt.Println(snapshot.Retry("default"))
+//	fmt.Println(snapshot.RetryCount("default"))
 //	// Output: 1
-func (s StatsSnapshot) Retry(name string) int64 {
+func (s StatsSnapshot) RetryCount(name string) int64 {
 	counters, ok := s.Queue(name)
 	if !ok {
 		return 0
