@@ -646,27 +646,40 @@ func startNATSContainer(ctx context.Context) (testcontainers.Container, string, 
 }
 
 func startSQSContainer(ctx context.Context) (testcontainers.Container, string, error) {
-	req := testcontainers.ContainerRequest{
-		Image:        "localstack/localstack:3.0",
-		ExposedPorts: []string{"4566/tcp"},
-		Env: map[string]string{
-			"SERVICES": "sqs",
-		},
-		WaitingFor: wait.ForListeningPort("4566/tcp").WithStartupTimeout(120 * time.Second),
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		req := testcontainers.ContainerRequest{
+			Image:        "localstack/localstack:3.8",
+			ExposedPorts: []string{"4566/tcp"},
+			Env: map[string]string{
+				"SERVICES":           "sqs",
+				"AWS_DEFAULT_REGION": "us-east-1",
+			},
+			WaitingFor: wait.ForListeningPort("4566/tcp").WithStartupTimeout(120 * time.Second),
+		}
+		c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
+		if err != nil {
+			lastErr = err
+		} else {
+			host, hostErr := c.Host(ctx)
+			if hostErr != nil {
+				_ = c.Terminate(ctx)
+				lastErr = hostErr
+			} else {
+				port, portErr := c.MappedPort(ctx, "4566/tcp")
+				if portErr != nil {
+					_ = c.Terminate(ctx)
+					lastErr = portErr
+				} else {
+					return c, fmt.Sprintf("http://%s:%s", host, port.Port()), nil
+				}
+			}
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
 	}
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
-	if err != nil {
-		return nil, "", err
-	}
-	host, err := c.Host(ctx)
-	if err != nil {
-		return nil, "", err
-	}
-	port, err := c.MappedPort(ctx, "4566/tcp")
-	if err != nil {
-		return nil, "", err
-	}
-	return c, fmt.Sprintf("http://%s:%s", host, port.Port()), nil
+	return nil, "", fmt.Errorf("start sqs container after retries: %w", lastErr)
 }
 
 func startRabbitMQContainer(ctx context.Context) (testcontainers.Container, string, error) {
