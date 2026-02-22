@@ -37,6 +37,10 @@ const (
 	EventQueuePaused EventKind = "queue_paused"
 	// EventQueueResumed indicates queue consumption was resumed.
 	EventQueueResumed EventKind = "queue_resumed"
+	// EventProcessRecovered indicates a stale in-flight job was requeued for recovery.
+	EventProcessRecovered EventKind = "process_recovered"
+	// EventRepublishFailed indicates an internal delay/retry republish attempt failed.
+	EventRepublishFailed EventKind = "republish_failed"
 )
 
 // Event is emitted through Observer hooks for queue/worker activity.

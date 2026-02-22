@@ -15,6 +15,9 @@ func TestNATSWorker_NewRegisterAndShutdown(t *testing.T) {
 	if w.url != "nats://example:4222" {
 		t.Fatalf("expected url to be preserved, got %q", w.url)
 	}
+	if w.workers <= 0 {
+		t.Fatalf("expected positive default workers, got %d", w.workers)
+	}
 
 	w.Register("", func(context.Context, Job) error { return nil })
 	w.Register("job:nil", nil)
@@ -96,13 +99,21 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 	})
 
 	t.Run("failed handler with retries calls republish path", func(t *testing.T) {
-		w := newNATSWorker("nats://example:4222").(*natsWorker)
+		var events []Event
+		w := newNATSWorkerWithConfig(natsWorkerConfig{
+			URL:      "nats://example:4222",
+			Workers:  1,
+			Observer: ObserverFunc(func(e Event) { events = append(events, e) }),
+		}).(*natsWorker)
 		w.Register("job:fail", func(context.Context, Job) error { return errors.New("boom") })
 		body, err := json.Marshal(natsMessage{Type: "job:fail", Queue: "default", Attempt: 0, MaxRetry: 2, BackoffMillis: 5})
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
 		w.processMessage(&nats.Msg{Data: body})
+		if len(events) == 0 || events[0].Kind != EventRepublishFailed || events[0].Driver != DriverNATS {
+			t.Fatalf("expected republish_failed nats event, got %+v", events)
+		}
 	})
 
 	t.Run("failed handler at max retries stops", func(t *testing.T) {

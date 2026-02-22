@@ -19,20 +19,23 @@ import (
 )
 
 const (
-	defaultProcessingRecoveryGrace = 2 * time.Second
+	defaultProcessingRecoveryGrace  = 2 * time.Second
 	defaultProcessingLeaseNoTimeout = 5 * time.Minute
 )
 
 // DatabaseConfig configures the SQL-backed database q.
 // @group Config
 type DatabaseConfig struct {
-	DB           *sql.DB
-	DriverName   string
-	DSN          string
-	Workers      int
-	PollInterval time.Duration
-	DefaultQueue string
-	AutoMigrate  bool
+	DB                       *sql.DB
+	DriverName               string
+	DSN                      string
+	Workers                  int
+	PollInterval             time.Duration
+	DefaultQueue             string
+	AutoMigrate              bool
+	ProcessingRecoveryGrace  time.Duration
+	ProcessingLeaseNoTimeout time.Duration
+	Observer                 Observer
 }
 
 func (c DatabaseConfig) normalize() DatabaseConfig {
@@ -45,6 +48,12 @@ func (c DatabaseConfig) normalize() DatabaseConfig {
 	}
 	if !c.AutoMigrate {
 		c.AutoMigrate = true
+	}
+	if c.ProcessingRecoveryGrace <= 0 {
+		c.ProcessingRecoveryGrace = defaultProcessingRecoveryGrace
+	}
+	if c.ProcessingLeaseNoTimeout <= 0 {
+		c.ProcessingLeaseNoTimeout = defaultProcessingLeaseNoTimeout
 	}
 	return c
 }
@@ -65,6 +74,7 @@ type databaseQueue struct {
 
 	started      atomic.Bool
 	shuttingDown atomic.Bool
+	observer     Observer
 }
 
 type dbJob struct {
@@ -100,6 +110,7 @@ func newDatabaseQueue(cfg DatabaseConfig) (queueBackend, error) {
 		handlers:   make(map[string]Handler),
 		shutdownCh: make(chan struct{}),
 		ownsDB:     cfg.DB != nil && cfg.DriverName != "" && cfg.DSN != "",
+		observer:   cfg.Observer,
 	}
 	if cfg.DriverName == "sqlite" {
 		d.db.SetMaxOpenConns(1)
@@ -390,8 +401,8 @@ func (d *databaseQueue) claimOne(ctx context.Context) (*dbJob, error) {
 }
 
 func (d *databaseQueue) recoverStaleProcessing(ctx context.Context, nowMillis int64) error {
-	graceMillis := defaultProcessingRecoveryGrace.Milliseconds()
-	noTimeoutCutoff := nowMillis - defaultProcessingLeaseNoTimeout.Milliseconds()
+	graceMillis := d.cfg.ProcessingRecoveryGrace.Milliseconds()
+	noTimeoutCutoff := nowMillis - d.cfg.ProcessingLeaseNoTimeout.Milliseconds()
 	if noTimeoutCutoff < 0 {
 		noTimeoutCutoff = 0
 	}
@@ -402,7 +413,7 @@ WHERE state='processing' AND processing_started_at IS NOT NULL AND (
     OR
     ((timeout_seconds IS NULL OR timeout_seconds <= 0) AND processing_started_at <= ?)
 )`)
-	_, err := d.db.ExecContext(
+	res, err := d.db.ExecContext(
 		ctx,
 		query,
 		nowMillis,
@@ -412,7 +423,21 @@ WHERE state='processing' AND processing_started_at IS NOT NULL AND (
 		nowMillis,
 		noTimeoutCutoff,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if d.observer != nil {
+		if rows, rowsErr := res.RowsAffected(); rowsErr == nil && rows > 0 {
+			for i := int64(0); i < rows; i++ {
+				safeObserve(d.observer, Event{
+					Kind:   EventProcessRecovered,
+					Driver: DriverDatabase,
+					Time:   time.Now(),
+				})
+			}
+		}
+	}
+	return nil
 }
 
 func (d *databaseQueue) selectPendingJob(ctx context.Context, tx *sql.Tx, now int64) (*dbJob, error) {

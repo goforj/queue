@@ -124,7 +124,12 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 
 	t.Run("future delivery publish path with nil channel nacks", func(t *testing.T) {
 		acks := &ackRecorder{}
-		w := &rabbitMQWorker{handlers: map[string]Handler{}, cfg: rabbitMQWorkerConfig{DefaultQueue: "default"}}
+		var events []Event
+		w := &rabbitMQWorker{
+			handlers: map[string]Handler{},
+			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
+			observer: ObserverFunc(func(e Event) { events = append(events, e) }),
+		}
 		body, err := json.Marshal(rabbitMQMessage{Type: "job:future", Queue: "default", AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli()})
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -132,6 +137,9 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 4})
 		if acks.acks != 0 || acks.nacks != 1 {
 			t.Fatalf("expected nack once, got ack=%d nack=%d", acks.acks, acks.nacks)
+		}
+		if len(events) == 0 || events[0].Kind != EventRepublishFailed || events[0].Driver != DriverRabbitMQ {
+			t.Fatalf("expected republish_failed rabbitmq event, got %+v", events)
 		}
 	})
 

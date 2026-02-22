@@ -274,3 +274,57 @@ func TestDatabaseQueue_RecoverStaleProcessing(t *testing.T) {
 		t.Fatalf("expected fresh job to remain processing, got %q", fresh.state)
 	}
 }
+
+func TestDatabaseConfig_NormalizeRecoveryDefaults(t *testing.T) {
+	cfg := (DatabaseConfig{}).normalize()
+	if cfg.ProcessingRecoveryGrace <= 0 {
+		t.Fatalf("expected positive recovery grace, got %s", cfg.ProcessingRecoveryGrace)
+	}
+	if cfg.ProcessingLeaseNoTimeout <= 0 {
+		t.Fatalf("expected positive no-timeout lease, got %s", cfg.ProcessingLeaseNoTimeout)
+	}
+}
+
+func TestDatabaseQueue_RecoverStaleProcessing_EmitsObserverEvent(t *testing.T) {
+	var events []Event
+	d := &databaseQueue{
+		cfg: DatabaseConfig{
+			DriverName:               "sqlite",
+			ProcessingRecoveryGrace:  10 * time.Millisecond,
+			ProcessingLeaseNoTimeout: time.Second,
+		}.normalize(),
+		db:       nil,
+		observer: ObserverFunc(func(e Event) { events = append(events, e) }),
+	}
+	// Attach a real sqlite DB via helper queue to reuse schema setup.
+	qi := newSQLiteQueueForTest(t)
+	rt := qi.(*nativeQueueRuntime)
+	dq := rt.common.inner.(*databaseQueue)
+	d.db = dq.db
+	if err := d.ensureSchema(context.Background()); err != nil {
+		t.Fatalf("ensure schema failed: %v", err)
+	}
+	now := time.Now().UnixMilli()
+	insert := d.rebind(`INSERT INTO queue_jobs
+		(queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt, available_at, state, created_at, updated_at, processing_started_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if _, err := d.db.ExecContext(context.Background(), insert,
+		"default", "job:recover-event", []byte("{}"),
+		int64(1), 0, int64(0), 0, now-1000, "processing", now-2000, now-2000, now-5000,
+	); err != nil {
+		t.Fatalf("insert stale job failed: %v", err)
+	}
+	if err := d.recoverStaleProcessing(context.Background(), now); err != nil {
+		t.Fatalf("recover stale processing failed: %v", err)
+	}
+	found := false
+	for _, e := range events {
+		if e.Kind == EventProcessRecovered && e.Driver == DriverDatabase {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected process_recovered observer event")
+	}
+}
