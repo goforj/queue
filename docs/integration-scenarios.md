@@ -120,3 +120,27 @@ Observability contract
 - `smoke`: always-on integration scenarios (current baseline).
 - `chaos`: scheduled fault-injection scenarios (`scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, and race-heavy scenarios).
 - `soak`: extended runtime scenarios; isolated from normal CI when needed.
+
+## Timing guardrails
+
+Selected scenarios emit duration lines in the test output (for example: `[sqs][scenario_worker_restart_recovery] duration=1.118s`).
+
+CI (`.github/workflows/soak.yml`) collects these logs and publishes parsed duration summaries as artifacts and job summaries for:
+- `integration-evidence`
+- `integration-soak`
+- `integration-chaos`
+
+Duration thresholds can be tuned via environment variables. Override precedence is:
+
+1. `SCENARIO_DURATION_LIMIT_SECONDS_<SCENARIO>_<BACKEND>`
+2. `SCENARIO_DURATION_LIMIT_SECONDS_<SCENARIO>`
+3. `SCENARIO_DURATION_LIMIT_SECONDS_<BACKEND>`
+4. `SCENARIO_DURATION_LIMIT_SECONDS`
+
+Names are normalized to uppercase with non-alphanumeric characters converted to `_`.
+
+Examples:
+- `SCENARIO_DURATION_LIMIT_SECONDS=90`
+- `SCENARIO_DURATION_LIMIT_SECONDS_SQS=60`
+- `SCENARIO_DURATION_LIMIT_SECONDS_SCENARIO_WORKER_RESTART_RECOVERY=30`
+- `SCENARIO_DURATION_LIMIT_SECONDS_SCENARIO_WORKER_RESTART_RECOVERY_SQS=45`
