@@ -15,6 +15,7 @@ import (
 type sqsWorkerClientStub struct {
 	sendInputs   []*sqs.SendMessageInput
 	deleteInputs []*sqs.DeleteMessageInput
+	sendErr      error
 }
 
 func (s *sqsWorkerClientStub) GetQueueUrl(context.Context, *sqs.GetQueueUrlInput, ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error) {
@@ -36,6 +37,9 @@ func (s *sqsWorkerClientStub) DeleteMessage(_ context.Context, params *sqs.Delet
 
 func (s *sqsWorkerClientStub) SendMessage(_ context.Context, params *sqs.SendMessageInput, _ ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
 	s.sendInputs = append(s.sendInputs, params)
+	if s.sendErr != nil {
+		return nil, s.sendErr
+	}
 	return &sqs.SendMessageOutput{}, nil
 }
 
@@ -80,6 +84,35 @@ func TestSQSWorker_ProcessFutureMessageRepublishesAndDeletes(t *testing.T) {
 	}
 	if got := decodeSQSBody(t, stub.sendInputs[0]); got.Type != "job:future" {
 		t.Fatalf("expected republish type job:future, got %q", got.Type)
+	}
+}
+
+func TestSQSWorker_ProcessFutureMessageRepublishFailureDoesNotDelete(t *testing.T) {
+	stub := &sqsWorkerClientStub{sendErr: errors.New("send failed")}
+	w := &sqsWorker{
+		handlers: map[string]Handler{},
+		client:   stub,
+		queueURL: "https://example.local/queue/default",
+	}
+
+	body, err := json.Marshal(sqsMessage{
+		Type:          "job:future",
+		Queue:         "default",
+		AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	w.process(context.Background(), sqstypes.Message{
+		Body:          aws.String(string(body)),
+		ReceiptHandle: aws.String("rh-1"),
+	})
+
+	if len(stub.sendInputs) != 1 {
+		t.Fatalf("expected one republish attempt, got %d", len(stub.sendInputs))
+	}
+	if len(stub.deleteInputs) != 0 {
+		t.Fatalf("expected no delete when republish fails, got %d", len(stub.deleteInputs))
 	}
 }
 
@@ -169,6 +202,36 @@ func TestSQSWorker_ProcessFailureRetryAndTerminal(t *testing.T) {
 		}
 		if stub.sendInputs[0].DelaySeconds <= 0 || stub.sendInputs[0].DelaySeconds > 900 {
 			t.Fatalf("expected bounded delay seconds in (0,900], got %d", stub.sendInputs[0].DelaySeconds)
+		}
+	})
+
+	t.Run("retry republish failure does not delete", func(t *testing.T) {
+		stub := &sqsWorkerClientStub{sendErr: errors.New("send failed")}
+		w := &sqsWorker{
+			handlers: map[string]Handler{
+				"job:retry": func(context.Context, Job) error { return errors.New("boom") },
+			},
+			client:   stub,
+			queueURL: "https://example.local/queue/default",
+		}
+
+		body, err := json.Marshal(sqsMessage{
+			Type:          "job:retry",
+			Queue:         "default",
+			Attempt:       0,
+			MaxRetry:      2,
+			BackoffMillis: (2 * time.Second).Milliseconds(),
+		})
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		w.process(context.Background(), sqstypes.Message{Body: aws.String(string(body)), ReceiptHandle: aws.String("rh-rf")})
+
+		if len(stub.sendInputs) != 1 {
+			t.Fatalf("expected one republish attempt, got %d", len(stub.sendInputs))
+		}
+		if len(stub.deleteInputs) != 0 {
+			t.Fatalf("expected no delete when retry republish fails, got %d", len(stub.deleteInputs))
 		}
 	})
 

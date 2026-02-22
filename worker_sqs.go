@@ -154,7 +154,9 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	if incoming.AvailableAtMS > 0 {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
-			w.republish(ctx, incoming)
+			if err := w.republish(ctx, incoming); err != nil {
+				return
+			}
 			w.delete(ctx, message)
 			return
 		}
@@ -195,14 +197,16 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	} else {
 		incoming.AvailableAtMS = 0
 	}
-	w.republish(ctx, incoming)
+	if err := w.republish(ctx, incoming); err != nil {
+		return
+	}
 	w.delete(ctx, message)
 }
 
-func (w *sqsWorker) republish(ctx context.Context, message sqsMessage) {
+func (w *sqsWorker) republish(ctx context.Context, message sqsMessage) error {
 	body, err := json.Marshal(message)
 	if err != nil {
-		return
+		return err
 	}
 	input := &sqs.SendMessageInput{
 		QueueUrl:    &w.queueURL,
@@ -218,7 +222,8 @@ func (w *sqsWorker) republish(ctx context.Context, message sqsMessage) {
 			input.DelaySeconds = seconds
 		}
 	}
-	_, _ = w.client.SendMessage(ctx, input)
+	_, err = w.client.SendMessage(ctx, input)
+	return err
 }
 
 func (w *sqsWorker) delete(ctx context.Context, message sqstypes.Message) {

@@ -79,3 +79,15 @@ func TestRabbitMQQueue_EnsureConnectedLockedAndErrorClassifier(t *testing.T) {
 		t.Fatal("expected unrelated error not to be treated as closed")
 	}
 }
+
+func TestRabbitPhysicalQueueName(t *testing.T) {
+	if got := rabbitPhysicalQueueName("default", "critical"); got != "critical" {
+		t.Fatalf("expected message queue to win, got %q", got)
+	}
+	if got := rabbitPhysicalQueueName("default", ""); got != "default" {
+		t.Fatalf("expected default queue fallback, got %q", got)
+	}
+	if got := rabbitPhysicalQueueName("", ""); got != "default" {
+		t.Fatalf("expected hard default fallback, got %q", got)
+	}
+}

@@ -208,10 +208,7 @@ func (w *rabbitMQWorker) publish(message rabbitMQMessage) error {
 	if err != nil {
 		return err
 	}
-	queueName := w.cfg.DefaultQueue
-	if queueName == "" {
-		queueName = "default"
-	}
+	queueName := rabbitPhysicalQueueName(w.cfg.DefaultQueue, message.Queue)
 	delay := time.Duration(0)
 	if message.AvailableAtMS > 0 {
 		delay = time.Until(time.UnixMilli(message.AvailableAtMS))
