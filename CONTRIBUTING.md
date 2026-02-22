@@ -21,6 +21,7 @@ CI matrix
 - Ensure the integration backend matrix in `.github/workflows/test.yml` includes the backend.
 - The `integration-matrix-guard` job enforces required backend entries.
 - Nightly/manual soak scenario runs are defined in `.github/workflows/soak.yml` with `RUN_SOAK=1`.
+- Duration guardrail env overrides for integration scenarios are documented in `docs/integration-scenarios.md` (`SCENARIO_DURATION_LIMIT_SECONDS*` with scenario/backend-specific precedence).
 
 ## Integration scenarios
 
@@ -68,4 +69,3 @@ What these prove:
 - Large payload processing is validated end-to-end.
 - Config/job-option fuzz coverage validates mixed option combinations across backends for stability.
 - End-to-end completion for all successfully dispatched jobs.
-
