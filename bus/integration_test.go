@@ -346,7 +346,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			}()
 
 			queueName := uniqueQueueName("bus-integration")
-			if backend.name == "redis" {
+			if backend.name == "redis" || backend.name == "rabbitmq" {
 				queueName = "default"
 			}
 			if !backend.executes {
