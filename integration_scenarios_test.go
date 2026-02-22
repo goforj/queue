@@ -756,15 +756,16 @@ type scenarioFixture struct {
 	newQueue  func(t *testing.T) Queue
 	newWorker func(t *testing.T) runtimeWorkerBackend
 
-	supportsBackoff              bool
-	forceTimeout                 bool
-	supportsRestart              bool
-	supportsPoisonRetry          bool
-	supportsDispatchCtxCancel    bool
-	supportsDeterministicNoDupes bool
-	supportsOrderingContract     bool
-	supportsBrokerFault          bool
-	supportsShutdownDelayRetry   bool
+	supportsBackoff                  bool
+	forceTimeout                     bool
+	supportsRestart                  bool
+	supportsRestartDelayedDurability bool
+	supportsPoisonRetry              bool
+	supportsDispatchCtxCancel        bool
+	supportsDeterministicNoDupes     bool
+	supportsOrderingContract         bool
+	supportsBrokerFault              bool
+	supportsShutdownDelayRetry       bool
 }
 
 type scenarioPayload struct {
@@ -793,15 +794,16 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 					RedisAddr: integrationRedis.addr,
 				}, 4)
 			},
-			supportsBackoff:              false,
-			forceTimeout:                 true,
-			supportsRestart:              true,
-			supportsPoisonRetry:          false,
-			supportsDispatchCtxCancel:    false,
-			supportsDeterministicNoDupes: true,
-			supportsOrderingContract:     true,
-			supportsBrokerFault:          true,
-			supportsShutdownDelayRetry:   true,
+			supportsBackoff:                  false,
+			forceTimeout:                     true,
+			supportsRestart:                  true,
+			supportsRestartDelayedDurability: true,
+			supportsPoisonRetry:              false,
+			supportsDispatchCtxCancel:        false,
+			supportsDeterministicNoDupes:     true,
+			supportsOrderingContract:         true,
+			supportsBrokerFault:              true,
+			supportsShutdownDelayRetry:       true,
 		},
 		{
 			name:      "mysql",
@@ -824,14 +826,15 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
 				}, 4)
 			},
-			supportsBackoff:              true,
-			supportsRestart:              true,
-			supportsPoisonRetry:          true,
-			supportsDispatchCtxCancel:    true,
-			supportsDeterministicNoDupes: true,
-			supportsOrderingContract:     false,
-			supportsBrokerFault:          false,
-			supportsShutdownDelayRetry:   true,
+			supportsBackoff:                  true,
+			supportsRestart:                  true,
+			supportsRestartDelayedDurability: true,
+			supportsPoisonRetry:              true,
+			supportsDispatchCtxCancel:        true,
+			supportsDeterministicNoDupes:     true,
+			supportsOrderingContract:         false,
+			supportsBrokerFault:              false,
+			supportsShutdownDelayRetry:       true,
 		},
 		{
 			name:      "postgres",
@@ -854,14 +857,15 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
 				}, 4)
 			},
-			supportsBackoff:              true,
-			supportsRestart:              true,
-			supportsPoisonRetry:          true,
-			supportsDispatchCtxCancel:    true,
-			supportsDeterministicNoDupes: true,
-			supportsOrderingContract:     false,
-			supportsBrokerFault:          false,
-			supportsShutdownDelayRetry:   true,
+			supportsBackoff:                  true,
+			supportsRestart:                  true,
+			supportsRestartDelayedDurability: true,
+			supportsPoisonRetry:              true,
+			supportsDispatchCtxCancel:        true,
+			supportsDeterministicNoDupes:     true,
+			supportsOrderingContract:         false,
+			supportsBrokerFault:              false,
+			supportsShutdownDelayRetry:       true,
 		},
 		{
 			name:      "sqlite",
@@ -882,14 +886,15 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				t.Fatal("sqlite worker fixture must be created from test-local DSN")
 				return nil
 			},
-			supportsBackoff:              true,
-			supportsRestart:              false,
-			supportsPoisonRetry:          true,
-			supportsDispatchCtxCancel:    true,
-			supportsDeterministicNoDupes: true,
-			supportsOrderingContract:     false,
-			supportsBrokerFault:          false,
-			supportsShutdownDelayRetry:   true,
+			supportsBackoff:                  true,
+			supportsRestart:                  false,
+			supportsRestartDelayedDurability: false,
+			supportsPoisonRetry:              true,
+			supportsDispatchCtxCancel:        true,
+			supportsDeterministicNoDupes:     true,
+			supportsOrderingContract:         false,
+			supportsBrokerFault:              false,
+			supportsShutdownDelayRetry:       true,
 		},
 		{
 			name:      "nats",
@@ -910,14 +915,15 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 					NATSURL: integrationNATS.url,
 				}, 4)
 			},
-			supportsBackoff:              true,
-			supportsRestart:              false,
-			supportsPoisonRetry:          true,
-			supportsDispatchCtxCancel:    false,
-			supportsDeterministicNoDupes: false,
-			supportsOrderingContract:     false,
-			supportsBrokerFault:          false,
-			supportsShutdownDelayRetry:   false,
+			supportsBackoff:                  true,
+			supportsRestart:                  false,
+			supportsRestartDelayedDurability: false,
+			supportsPoisonRetry:              true,
+			supportsDispatchCtxCancel:        false,
+			supportsDeterministicNoDupes:     false,
+			supportsOrderingContract:         false,
+			supportsBrokerFault:              false,
+			supportsShutdownDelayRetry:       false,
 		},
 		{
 			name:      "sqs",
@@ -925,6 +931,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
 					Driver:       DriverSQS,
+					DefaultQueue: "scenario_sqs",
 					SQSEndpoint:  integrationSQS.endpoint,
 					SQSRegion:    integrationSQS.region,
 					SQSAccessKey: integrationSQS.accessKey,
@@ -938,28 +945,31 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				return newQueueBackedWorker(t, Config{
 					Driver:       DriverSQS,
+					DefaultQueue: "scenario_sqs",
 					SQSEndpoint:  integrationSQS.endpoint,
 					SQSRegion:    integrationSQS.region,
 					SQSAccessKey: integrationSQS.accessKey,
 					SQSSecretKey: integrationSQS.secretKey,
 				}, 4)
 			},
-			supportsBackoff:              true,
-			supportsRestart:              false,
-			supportsPoisonRetry:          true,
-			supportsDispatchCtxCancel:    true,
-			supportsDeterministicNoDupes: true,
-			supportsOrderingContract:     false,
-			supportsBrokerFault:          false,
-			supportsShutdownDelayRetry:   false,
+			supportsBackoff:                  true,
+			supportsRestart:                  true,
+			supportsRestartDelayedDurability: false,
+			supportsPoisonRetry:              true,
+			supportsDispatchCtxCancel:        true,
+			supportsDeterministicNoDupes:     true,
+			supportsOrderingContract:         false,
+			supportsBrokerFault:              false,
+			supportsShutdownDelayRetry:       false,
 		},
 		{
 			name:      "rabbitmq",
 			queueName: "scenario_rabbitmq",
 			newQueue: func(t *testing.T) Queue {
 				q, err := New(Config{
-					Driver:      DriverRabbitMQ,
-					RabbitMQURL: integrationRabbitMQ.url,
+					Driver:       DriverRabbitMQ,
+					DefaultQueue: "scenario_rabbitmq",
+					RabbitMQURL:  integrationRabbitMQ.url,
 				})
 				if err != nil {
 					t.Fatalf("new rabbitmq queue failed: %v", err)
@@ -968,18 +978,20 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
 				return newQueueBackedWorker(t, Config{
-					Driver:      DriverRabbitMQ,
-					RabbitMQURL: integrationRabbitMQ.url,
+					Driver:       DriverRabbitMQ,
+					DefaultQueue: "scenario_rabbitmq",
+					RabbitMQURL:  integrationRabbitMQ.url,
 				}, 4)
 			},
-			supportsBackoff:              true,
-			supportsRestart:              true,
-			supportsPoisonRetry:          true,
-			supportsDispatchCtxCancel:    false,
-			supportsDeterministicNoDupes: true,
-			supportsOrderingContract:     false,
-			supportsBrokerFault:          false,
-			supportsShutdownDelayRetry:   true,
+			supportsBackoff:                  true,
+			supportsRestart:                  true,
+			supportsRestartDelayedDurability: true,
+			supportsPoisonRetry:              true,
+			supportsDispatchCtxCancel:        false,
+			supportsDeterministicNoDupes:     true,
+			supportsOrderingContract:         false,
+			supportsBrokerFault:              false,
+			supportsShutdownDelayRetry:       true,
 		},
 	}
 
@@ -1013,6 +1025,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				}
 				fx.supportsBackoff = true
 				fx.supportsRestart = true
+				fx.supportsRestartDelayedDurability = true
 				fx.supportsPoisonRetry = true
 				fx.supportsDispatchCtxCancel = true
 				fx.supportsDeterministicNoDupes = true
@@ -1180,6 +1193,49 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	t.Run("scenario_worker_restart_recovery", func(t *testing.T) {
 		if !fx.supportsRestart {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
+		}
+		requireScenarioNoErr(t, "restart_basic_worker_start", (w).StartWorkers(context.Background()))
+
+		restartType := "job:scenario:restart-basic:" + fx.name
+		done := make(chan struct{}, 1)
+
+		w.Register(restartType, func(_ context.Context, _ Job) error {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		requireScenarioNoErr(t, "restart_basic_shutdown_first_worker", (w).Shutdown(context.Background()))
+		job := NewJob(restartType).
+			Payload(scenarioPayload{ID: 9099, Name: "restart-basic"}).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			job = job.Timeout(jobTimeout)
+		}
+		requireScenarioNoErr(t, "restart_basic_dispatch_while_worker_down", q.DispatchCtx(context.Background(), job))
+
+		w = fx.newWorker(t)
+		w.Register(restartType, func(_ context.Context, _ Job) error {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		requireScenarioNoErr(t, "restart_basic_start_second_worker", (w).StartWorkers(context.Background()))
+
+		select {
+		case <-done:
+		case <-time.After(12 * time.Second):
+			t.Fatalf("[restart_basic_recovery_processing] queued job did not process after worker restart")
+		}
+	})
+
+	t.Run("scenario_worker_restart_delay_recovery", func(t *testing.T) {
+		if !fx.supportsRestartDelayedDurability {
+			t.Skip("backend does not provide deterministic delayed/retry restart durability in this runtime")
 		}
 		requireScenarioNoErr(t, "restart_scenario_worker_start", (w).StartWorkers(context.Background()))
 
