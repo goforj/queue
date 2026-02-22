@@ -1194,12 +1194,37 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if !fx.supportsRestart {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
-		requireScenarioNoErr(t, "restart_basic_worker_start", (w).StartWorkers(context.Background()))
+		restartQ := q
+		restartW := w
+		restartQueueName := fx.queueName
+		if fx.name == "sqs" {
+			// SQS can retain duplicate deliveries from earlier scenarios long enough to
+			// interfere with restart timing. Use an isolated physical queue for this
+			// recovery invariant subtest so the result reflects restart behavior.
+			restartQueueName = uniqueQueueName("scenario-sqs-restart-basic")
+			restartCfg := Config{
+				Driver:       DriverSQS,
+				DefaultQueue: restartQueueName,
+				SQSEndpoint:  integrationSQS.endpoint,
+				SQSRegion:    integrationSQS.region,
+				SQSAccessKey: integrationSQS.accessKey,
+				SQSSecretKey: integrationSQS.secretKey,
+			}
+			var err error
+			restartQ, err = New(restartCfg)
+			if err != nil {
+				t.Fatalf("[restart_basic_new_queue] %v", err)
+			}
+			restartW = newQueueBackedWorker(t, restartCfg, 4)
+			t.Cleanup(func() { _ = restartQ.Shutdown(context.Background()) })
+			t.Cleanup(func() { _ = restartW.Shutdown(context.Background()) })
+		}
+		requireScenarioNoErr(t, "restart_basic_worker_start", (restartW).StartWorkers(context.Background()))
 
 		restartType := "job:scenario:restart-basic:" + fx.name
 		done := make(chan struct{}, 1)
 
-		w.Register(restartType, func(_ context.Context, _ Job) error {
+		restartW.Register(restartType, func(_ context.Context, _ Job) error {
 			select {
 			case done <- struct{}{}:
 			default:
@@ -1207,24 +1232,38 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		requireScenarioNoErr(t, "restart_basic_shutdown_first_worker", (w).Shutdown(context.Background()))
+		requireScenarioNoErr(t, "restart_basic_shutdown_first_worker", (restartW).Shutdown(context.Background()))
 		job := NewJob(restartType).
 			Payload(scenarioPayload{ID: 9099, Name: "restart-basic"}).
-			OnQueue(fx.queueName)
+			OnQueue(restartQueueName)
 		if fx.forceTimeout {
 			job = job.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "restart_basic_dispatch_while_worker_down", q.DispatchCtx(context.Background(), job))
+		requireScenarioNoErr(t, "restart_basic_dispatch_while_worker_down", restartQ.DispatchCtx(context.Background(), job))
 
-		w = fx.newWorker(t)
-		w.Register(restartType, func(_ context.Context, _ Job) error {
+		if fx.name == "sqs" {
+			restartCfg := Config{
+				Driver:       DriverSQS,
+				DefaultQueue: restartQueueName,
+				SQSEndpoint:  integrationSQS.endpoint,
+				SQSRegion:    integrationSQS.region,
+				SQSAccessKey: integrationSQS.accessKey,
+				SQSSecretKey: integrationSQS.secretKey,
+			}
+			restartW = newQueueBackedWorker(t, restartCfg, 4)
+			t.Cleanup(func() { _ = restartW.Shutdown(context.Background()) })
+		} else {
+			restartW = fx.newWorker(t)
+			w = restartW
+		}
+		restartW.Register(restartType, func(_ context.Context, _ Job) error {
 			select {
 			case done <- struct{}{}:
 			default:
 			}
 			return nil
 		})
-		requireScenarioNoErr(t, "restart_basic_start_second_worker", (w).StartWorkers(context.Background()))
+		requireScenarioNoErr(t, "restart_basic_start_second_worker", (restartW).StartWorkers(context.Background()))
 
 		select {
 		case <-done:
