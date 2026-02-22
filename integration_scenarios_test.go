@@ -1158,7 +1158,13 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		}
 		requireScenarioNoErr(t, "poison_dispatch", q.DispatchCtx(context.Background(), poison))
 
-		deadline := time.Now().Add(10 * time.Second)
+		poisonWait := 10 * time.Second
+		if fx.name == "mysql" || fx.name == "postgres" || fx.name == "sqlite" {
+			// DB-backed workers can need extra time to recover from transient driver/connection
+			// errors in CI before retry attempts resume.
+			poisonWait = 30 * time.Second
+		}
+		deadline := time.Now().Add(poisonWait)
 		for time.Now().Before(deadline) {
 			if poisonCalls.Load() >= 3 {
 				break
