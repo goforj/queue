@@ -20,6 +20,12 @@ func newRabbitMQIntegrationConfig() Config {
 	}
 }
 
+func newRabbitMQIntegrationConfigForQueue(queueName string) Config {
+	cfg := newRabbitMQIntegrationConfig()
+	cfg.DefaultQueue = queueName
+	return cfg
+}
+
 func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 	if !integrationBackendEnabled("rabbitmq") {
 		t.Skip("rabbitmq integration backend not selected")
@@ -153,6 +159,50 @@ func TestRabbitMQIntegration_UniqueDuplicate(t *testing.T) {
 	}
 }
 
+func TestRabbitMQIntegration_RoutesToJobQueue(t *testing.T) {
+	if !integrationBackendEnabled("rabbitmq") {
+		t.Skip("rabbitmq integration backend not selected")
+	}
+	queueName := uniqueQueueName("rabbitmq-route")
+	jobType := "job:rabbitmq:route"
+	done := make(chan struct{}, 1)
+
+	consumer, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
+	if err != nil {
+		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
+	}
+	consumer.Register(jobType, func(_ context.Context, job Job) error {
+		if opts := job.jobOptions(); opts.queueName != queueName {
+			t.Fatalf("expected queue %q, got %q", queueName, opts.queueName)
+		}
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	if err := consumer.Workers(1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
+	}
+	defer consumer.Shutdown(context.Background())
+
+	producer, err := New(newRabbitMQIntegrationConfig())
+	if err != nil {
+		t.Fatalf("new rabbitmq producer queue failed: %v", err)
+	}
+	defer producer.Shutdown(context.Background())
+
+	if err := producer.DispatchCtx(context.Background(), NewJob(jobType).OnQueue(queueName)); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for routed rabbitmq job")
+	}
+}
+
 func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	if !integrationBackendEnabled("rabbitmq") {
 		t.Skip("rabbitmq integration backend not selected")
@@ -163,7 +213,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	start := time.Now()
 	done := make(chan struct{}, 1)
 
-	consumer1, err := New(newRabbitMQIntegrationConfig())
+	consumer1, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
@@ -196,7 +246,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 		t.Fatalf("rabbitmq consumer queue shutdown failed: %v", err)
 	}
 
-	consumer2, err := New(newRabbitMQIntegrationConfig())
+	consumer2, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
@@ -233,7 +283,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	done := make(chan struct{}, 1)
 	var calls atomic.Int32
 
-	consumer1, err := New(newRabbitMQIntegrationConfig())
+	consumer1, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
@@ -279,7 +329,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		t.Fatalf("rabbitmq consumer queue shutdown failed: %v", err)
 	}
 
-	consumer2, err := New(newRabbitMQIntegrationConfig())
+	consumer2, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
@@ -318,7 +368,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	start := time.Now()
 	done := make(chan struct{}, 1)
 
-	consumer, err := New(newRabbitMQIntegrationConfig())
+	consumer, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
@@ -359,7 +409,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	}
 	defer ch.Close()
 
-	delayQueue := fmt.Sprintf("%s.delay", "default")
+	delayQueue := fmt.Sprintf("%s.delay", queueName)
 	deadline := time.Now().Add(5 * time.Second)
 	sawBuffered := false
 	for time.Now().Before(deadline) {

@@ -18,6 +18,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const (
+	defaultProcessingRecoveryGrace = 2 * time.Second
+	defaultProcessingLeaseNoTimeout = 5 * time.Minute
+)
+
 // DatabaseConfig configures the SQL-backed database q.
 // @group Config
 type DatabaseConfig struct {
@@ -344,6 +349,9 @@ func (d *databaseQueue) processJob(job *dbJob) {
 
 func (d *databaseQueue) claimOne(ctx context.Context) (*dbJob, error) {
 	now := time.Now().UnixMilli()
+	if err := d.recoverStaleProcessing(ctx, now); err != nil {
+		return nil, err
+	}
 	maxAttempts := 1
 	if d.usesOptimisticClaimLoop() {
 		maxAttempts = 5
@@ -379,6 +387,32 @@ func (d *databaseQueue) claimOne(ctx context.Context) (*dbJob, error) {
 		return job, nil
 	}
 	return nil, nil
+}
+
+func (d *databaseQueue) recoverStaleProcessing(ctx context.Context, nowMillis int64) error {
+	graceMillis := defaultProcessingRecoveryGrace.Milliseconds()
+	noTimeoutCutoff := nowMillis - defaultProcessingLeaseNoTimeout.Milliseconds()
+	if noTimeoutCutoff < 0 {
+		noTimeoutCutoff = 0
+	}
+	query := d.rebind(`UPDATE queue_jobs
+SET state='pending', available_at=?, processing_started_at=NULL, updated_at=?, last_error=?
+WHERE state='processing' AND processing_started_at IS NOT NULL AND (
+    (timeout_seconds IS NOT NULL AND timeout_seconds > 0 AND (processing_started_at + (timeout_seconds * 1000) + ?) <= ?)
+    OR
+    ((timeout_seconds IS NULL OR timeout_seconds <= 0) AND processing_started_at <= ?)
+)`)
+	_, err := d.db.ExecContext(
+		ctx,
+		query,
+		nowMillis,
+		nowMillis,
+		"recovered stale processing job",
+		graceMillis,
+		nowMillis,
+		noTimeoutCutoff,
+	)
+	return err
 }
 
 func (d *databaseQueue) selectPendingJob(ctx context.Context, tx *sql.Tx, now int64) (*dbJob, error) {

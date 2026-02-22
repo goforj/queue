@@ -197,3 +197,80 @@ func TestDatabaseQueue_StatsSnapshot(t *testing.T) {
 		t.Fatalf("expected failed=1, got %d", got)
 	}
 }
+
+func TestDatabaseQueue_RecoverStaleProcessing(t *testing.T) {
+	dsn := fmt.Sprintf("%s/recover-%d.db", t.TempDir(), time.Now().UnixNano())
+	qi, err := New(Config{
+		Driver:         DriverDatabase,
+		DatabaseDriver: "sqlite",
+		DatabaseDSN:    dsn,
+	})
+	if err != nil {
+		t.Fatalf("new database queue failed: %v", err)
+	}
+	t.Cleanup(func() { _ = qi.Shutdown(context.Background()) })
+
+	rt, ok := qi.(*nativeQueueRuntime)
+	if !ok {
+		t.Fatalf("expected nativeQueueRuntime, got %T", qi)
+	}
+	dq, ok := rt.common.inner.(*databaseQueue)
+	if !ok {
+		t.Fatalf("expected databaseQueue backend, got %T", rt.common.inner)
+	}
+	if err := dq.ensureSchema(context.Background()); err != nil {
+		t.Fatalf("ensure schema failed: %v", err)
+	}
+
+	now := time.Now().UnixMilli()
+	insert := dq.rebind(`INSERT INTO queue_jobs
+		(queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt, available_at, state, created_at, updated_at, processing_started_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+
+	_, err = dq.db.ExecContext(context.Background(), insert,
+		"default", "job:stale-timeout", []byte("{}"),
+		int64(1), 0, int64(0), 0, now-1000, "processing", now-10000, now-10000, now-10000,
+	)
+	if err != nil {
+		t.Fatalf("insert stale timeout job failed: %v", err)
+	}
+
+	_, err = dq.db.ExecContext(context.Background(), insert,
+		"default", "job:fresh-timeout", []byte("{}"),
+		int64(60), 0, int64(0), 0, now-1000, "processing", now-1000, now-1000, now-500,
+	)
+	if err != nil {
+		t.Fatalf("insert fresh timeout job failed: %v", err)
+	}
+
+	if err := dq.recoverStaleProcessing(context.Background(), now); err != nil {
+		t.Fatalf("recover stale processing failed: %v", err)
+	}
+
+	type rowState struct {
+		state             string
+		processingStarted *int64
+		lastError         *string
+	}
+	read := func(jobType string) rowState {
+		var s rowState
+		row := dq.db.QueryRowContext(context.Background(), dq.rebind(`SELECT state, processing_started_at, last_error FROM queue_jobs WHERE job_type=?`), jobType)
+		if err := row.Scan(&s.state, &s.processingStarted, &s.lastError); err != nil {
+			t.Fatalf("scan %s: %v", jobType, err)
+		}
+		return s
+	}
+
+	stale := read("job:stale-timeout")
+	if stale.state != "pending" {
+		t.Fatalf("expected stale job to be requeued pending, got %q", stale.state)
+	}
+	if stale.processingStarted != nil {
+		t.Fatalf("expected stale processing_started_at cleared, got %v", *stale.processingStarted)
+	}
+
+	fresh := read("job:fresh-timeout")
+	if fresh.state != "processing" {
+		t.Fatalf("expected fresh job to remain processing, got %q", fresh.state)
+	}
+}
