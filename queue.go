@@ -114,9 +114,11 @@ type Config struct {
 
 	DefaultQueue string
 
-	Database       *sql.DB
-	DatabaseDriver string
-	DatabaseDSN    string
+	Database                         *sql.DB
+	DatabaseDriver                   string
+	DatabaseDSN                      string
+	DatabaseProcessingRecoveryGrace  time.Duration
+	DatabaseProcessingLeaseNoTimeout time.Duration
 
 	RedisAddr     string
 	RedisPassword string
@@ -150,10 +152,13 @@ func newSyncQueue() queueBackend {
 
 func (cfg Config) databaseConfig() DatabaseConfig {
 	return DatabaseConfig{
-		DB:           cfg.Database,
-		DriverName:   cfg.DatabaseDriver,
-		DSN:          cfg.DatabaseDSN,
-		DefaultQueue: cfg.DefaultQueue,
+		DB:                       cfg.Database,
+		DriverName:               cfg.DatabaseDriver,
+		DSN:                      cfg.DatabaseDSN,
+		DefaultQueue:             cfg.DefaultQueue,
+		ProcessingRecoveryGrace:  cfg.DatabaseProcessingRecoveryGrace,
+		ProcessingLeaseNoTimeout: cfg.DatabaseProcessingLeaseNoTimeout,
+		Observer:                 cfg.Observer,
 	}
 }
 
@@ -649,7 +654,11 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 			asynq.NewServeMux(),
 		), nil
 	case DriverNATS:
-		return newNATSWorker(cfg.NATSURL), nil
+		return newNATSWorkerWithConfig(natsWorkerConfig{
+			URL:      cfg.NATSURL,
+			Workers:  defaultWorkerCount(concurrency),
+			Observer: cfg.Observer,
+		}), nil
 	case DriverSQS:
 		return newSQSWorker(sqsWorkerConfig{
 			DefaultQueue: cfg.DefaultQueue,
@@ -657,11 +666,15 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 			SQSEndpoint:  cfg.SQSEndpoint,
 			SQSAccessKey: cfg.SQSAccessKey,
 			SQSSecretKey: cfg.SQSSecretKey,
+			Workers:      defaultWorkerCount(concurrency),
+			Observer:     cfg.Observer,
 		}), nil
 	case DriverRabbitMQ:
 		return newRabbitMQWorker(rabbitMQWorkerConfig{
 			DefaultQueue: cfg.DefaultQueue,
 			RabbitMQURL:  cfg.RabbitMQURL,
+			Workers:      defaultWorkerCount(concurrency),
+			Observer:     cfg.Observer,
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)

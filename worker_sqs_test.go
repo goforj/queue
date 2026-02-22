@@ -116,6 +116,31 @@ func TestSQSWorker_ProcessFutureMessageRepublishFailureDoesNotDelete(t *testing.
 	}
 }
 
+func TestSQSWorker_RepublishFailureEmitsObserverEvent(t *testing.T) {
+	stub := &sqsWorkerClientStub{sendErr: errors.New("send failed")}
+	var events []Event
+	w := &sqsWorker{
+		handlers: map[string]Handler{},
+		client:   stub,
+		queueURL: "https://example.local/queue/default",
+		observer: ObserverFunc(func(e Event) { events = append(events, e) }),
+	}
+
+	body, err := json.Marshal(sqsMessage{
+		Type:          "job:future",
+		Queue:         "critical",
+		AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	w.process(context.Background(), sqstypes.Message{Body: aws.String(string(body)), ReceiptHandle: aws.String("rh-obs")})
+
+	if len(events) == 0 || events[0].Kind != EventRepublishFailed || events[0].Driver != DriverSQS || events[0].Queue != "critical" {
+		t.Fatalf("expected republish_failed event for sqs, got %+v", events)
+	}
+}
+
 func TestSQSWorker_ProcessSuccessInvokesHandlerAndDeletes(t *testing.T) {
 	stub := &sqsWorkerClientStub{}
 	called := 0

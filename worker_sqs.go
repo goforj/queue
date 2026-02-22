@@ -25,6 +25,8 @@ type sqsWorkerConfig struct {
 	SQSEndpoint  string
 	SQSAccessKey string
 	SQSSecretKey string
+	Workers      int
+	Observer     Observer
 }
 
 type sqsWorker struct {
@@ -39,15 +41,18 @@ type sqsWorker struct {
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	startStop sync.Mutex
+	observer  Observer
 }
 
 func newSQSWorker(cfg sqsWorkerConfig) runtimeWorkerBackend {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
 	}
+	cfg.Workers = defaultWorkerCount(cfg.Workers)
 	return &sqsWorker{
 		cfg:      cfg,
 		handlers: make(map[string]Handler),
+		observer: cfg.Observer,
 	}
 }
 
@@ -94,8 +99,10 @@ func (w *sqsWorker) StartWorkers(ctx context.Context) error {
 	loopCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
 	w.started = true
-	w.wg.Add(1)
-	go w.loop(loopCtx)
+	for i := 0; i < w.cfg.Workers; i++ {
+		w.wg.Add(1)
+		go w.loop(loopCtx)
+	}
 	return nil
 }
 
@@ -155,6 +162,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
 			if err := w.republish(ctx, incoming); err != nil {
+				w.observeRepublishFailure(incoming, err)
 				return
 			}
 			w.delete(ctx, message)
@@ -198,6 +206,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 		incoming.AvailableAtMS = 0
 	}
 	if err := w.republish(ctx, incoming); err != nil {
+		w.observeRepublishFailure(incoming, err)
 		return
 	}
 	w.delete(ctx, message)
@@ -233,5 +242,18 @@ func (w *sqsWorker) delete(ctx context.Context, message sqstypes.Message) {
 	_, _ = w.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      &w.queueURL,
 		ReceiptHandle: message.ReceiptHandle,
+	})
+}
+
+func (w *sqsWorker) observeRepublishFailure(message sqsMessage, err error) {
+	safeObserve(w.observer, Event{
+		Kind:     EventRepublishFailed,
+		Driver:   DriverSQS,
+		Queue:    normalizeQueueName(message.Queue),
+		JobType:  message.Type,
+		Attempt:  message.Attempt,
+		MaxRetry: message.MaxRetry,
+		Err:      err,
+		Time:     time.Now(),
 	})
 }

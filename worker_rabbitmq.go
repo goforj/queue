@@ -24,21 +24,26 @@ type rabbitMQWorker struct {
 	conn *amqp.Connection
 	ch   *amqp.Channel
 
-	pubMu sync.Mutex
+	pubMu    sync.Mutex
+	observer Observer
 }
 
 type rabbitMQWorkerConfig struct {
 	DefaultQueue string
 	RabbitMQURL  string
+	Workers      int
+	Observer     Observer
 }
 
 func newRabbitMQWorker(cfg rabbitMQWorkerConfig) runtimeWorkerBackend {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
 	}
+	cfg.Workers = defaultWorkerCount(cfg.Workers)
 	return &rabbitMQWorker{
 		cfg:      cfg,
 		handlers: make(map[string]Handler),
+		observer: cfg.Observer,
 	}
 }
 
@@ -77,6 +82,7 @@ func (w *rabbitMQWorker) StartWorkers(ctx context.Context) error {
 		_ = conn.Close()
 		return err
 	}
+	_ = ch.Qos(w.cfg.Workers, 0, false)
 	deliveries, err := ch.Consume(w.cfg.DefaultQueue, "", false, false, false, false, nil)
 	if err != nil {
 		_ = ch.Close()
@@ -89,8 +95,10 @@ func (w *rabbitMQWorker) StartWorkers(ctx context.Context) error {
 	w.ch = ch
 	w.started = true
 
-	w.wg.Add(1)
-	go w.loop(loopCtx, deliveries)
+	for i := 0; i < w.cfg.Workers; i++ {
+		w.wg.Add(1)
+		go w.loop(loopCtx, deliveries)
+	}
 	return nil
 }
 
@@ -145,6 +153,7 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
 			if err := w.publish(incoming); err != nil {
+				w.observeRepublishFailure(incoming, err)
 				_ = delivery.Nack(false, true)
 				return
 			}
@@ -191,10 +200,24 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 		incoming.AvailableAtMS = 0
 	}
 	if err := w.publish(incoming); err != nil {
+		w.observeRepublishFailure(incoming, err)
 		_ = delivery.Nack(false, true)
 		return
 	}
 	_ = delivery.Ack(false)
+}
+
+func (w *rabbitMQWorker) observeRepublishFailure(message rabbitMQMessage, err error) {
+	safeObserve(w.observer, Event{
+		Kind:     EventRepublishFailed,
+		Driver:   DriverRabbitMQ,
+		Queue:    normalizeQueueName(message.Queue),
+		JobType:  message.Type,
+		Attempt:  message.Attempt,
+		MaxRetry: message.MaxRetry,
+		Err:      err,
+		Time:     time.Now(),
+	})
 }
 
 func (w *rabbitMQWorker) publish(message rabbitMQMessage) error {

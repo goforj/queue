@@ -10,20 +10,37 @@ import (
 )
 
 type natsWorker struct {
-	url string
+	url     string
+	workers int
 
 	mu       sync.RWMutex
 	handlers map[string]Handler
 
-	conn  *nats.Conn
-	sub   *nats.Subscription
-	start sync.Once
+	conn     *nats.Conn
+	sub      *nats.Subscription
+	start    sync.Once
+	sem      chan struct{}
+	running  sync.WaitGroup
+	observer Observer
+}
+
+type natsWorkerConfig struct {
+	URL      string
+	Workers  int
+	Observer Observer
 }
 
 func newNATSWorker(url string) runtimeWorkerBackend {
+	return newNATSWorkerWithConfig(natsWorkerConfig{URL: url})
+}
+
+func newNATSWorkerWithConfig(cfg natsWorkerConfig) runtimeWorkerBackend {
+	cfg.Workers = defaultWorkerCount(cfg.Workers)
 	return &natsWorker{
-		url:      url,
+		url:      cfg.URL,
+		workers:  cfg.Workers,
 		handlers: make(map[string]Handler),
+		observer: cfg.Observer,
 	}
 }
 
@@ -47,8 +64,17 @@ func (w *natsWorker) StartWorkers(ctx context.Context) error {
 			startErr = err
 			return
 		}
+		w.sem = make(chan struct{}, w.workers)
 		sub, err := nc.Subscribe("queue.*", func(message *nats.Msg) {
-			w.processMessage(message)
+			w.sem <- struct{}{}
+			w.running.Add(1)
+			go func() {
+				defer func() {
+					<-w.sem
+					w.running.Done()
+				}()
+				w.processMessage(message)
+			}()
 		})
 		if err != nil {
 			nc.Close()
@@ -69,6 +95,7 @@ func (w *natsWorker) Shutdown(_ context.Context) error {
 		_ = w.conn.Drain()
 		w.conn.Close()
 	}
+	w.running.Wait()
 	return nil
 }
 
@@ -81,7 +108,9 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
 			time.AfterFunc(remaining, func() {
-				w.republish(incoming)
+				if err := w.republish(incoming); err != nil {
+					w.observeRepublishFailure(incoming, err)
+				}
 			})
 			return
 		}
@@ -120,16 +149,31 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 	} else {
 		incoming.AvailableAtMS = 0
 	}
-	w.republish(incoming)
+	if err := w.republish(incoming); err != nil {
+		w.observeRepublishFailure(incoming, err)
+	}
 }
 
-func (w *natsWorker) republish(message natsMessage) {
+func (w *natsWorker) republish(message natsMessage) error {
 	if w.conn == nil {
-		return
+		return nats.ErrConnectionClosed
 	}
 	payload, err := json.Marshal(message)
 	if err != nil {
-		return
+		return err
 	}
-	_ = w.conn.Publish(natsSubject(message.Queue), payload)
+	return w.conn.Publish(natsSubject(message.Queue), payload)
+}
+
+func (w *natsWorker) observeRepublishFailure(message natsMessage, err error) {
+	safeObserve(w.observer, Event{
+		Kind:     EventRepublishFailed,
+		Driver:   DriverNATS,
+		Queue:    normalizeQueueName(message.Queue),
+		JobType:  message.Type,
+		Attempt:  message.Attempt,
+		MaxRetry: message.MaxRetry,
+		Err:      err,
+		Time:     time.Now(),
+	})
 }
