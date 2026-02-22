@@ -19,13 +19,6 @@
 <!-- test-count:embed:end -->
 </p>
 
-<p align="center">
-  <a href="https://github.com/goforj/queue/actions/workflows/test.yml"><img src="https://img.shields.io/badge/integration%20matrix-7%2F7%20backends-brightgreen" alt="Integration matrix backends"></a>
-  <a href="https://github.com/goforj/queue/actions/workflows/soak.yml"><img src="https://img.shields.io/badge/soak%2Fchaos-7%2F7%20backends-brightgreen" alt="Soak & chaos backends"></a>
-  <img src="https://img.shields.io/badge/integration%20backends-redis%20|%20database%20|%20nats%20|%20sqs%20|%20rabbitmq%20|%20sync%20|%20workerpool-blue" alt="Integration backends">
-  <img src="https://img.shields.io/badge/integration%20local-docker%20required-orange" alt="Integration local requirement">
-</p>
-
 ## Installation
 
 ```bash
