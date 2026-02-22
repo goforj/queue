@@ -6,8 +6,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  integration-soak:
+  integration-evidence:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -22,17 +23,95 @@ jobs:
           go-version: "stable"
 
       - name: Install dependencies
-        run: go mod tidy
+        run: go mod download
+
+      - name: Run shared integration scenario matrix (evidence)
+        env:
+          RUN_INTEGRATION: "1"
+          INTEGRATION_BACKEND: ${{ matrix.backend }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          go test -tags=integration ./... \
+            -run '^TestIntegrationScenarios_AllBackends$' \
+            -count=1 -v \
+            | tee ".artifacts/integration-scenarios-${{ matrix.backend }}.log"
+
+      - name: Summarize evidence durations
+        if: always()
+        run: |
+          .github/scripts/extract_scenario_durations.sh \
+            ".artifacts/integration-scenarios-${{ matrix.backend }}.log" \
+            ".artifacts/integration-scenarios-${{ matrix.backend }}-durations.md"
+          {
+            echo "### integration-evidence / ${{ matrix.backend }}"
+            cat ".artifacts/integration-scenarios-${{ matrix.backend }}-durations.md"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload evidence logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-evidence-${{ matrix.backend }}
+          path: .artifacts/*
+          if-no-files-found: warn
+
+  integration-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install dependencies
+        run: go mod download
 
       - name: Run integration soak scenario suite
         env:
           RUN_INTEGRATION: "1"
           RUN_SOAK: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
-        run: go test -tags integration ./... -run '^TestIntegrationScenarios_AllBackends$'
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          go test -tags=integration ./... \
+            -run '^TestIntegrationScenarios_AllBackends$' \
+            -count=1 -v \
+            | tee ".artifacts/integration-soak-${{ matrix.backend }}.log"
+
+      - name: Summarize soak durations
+        if: always()
+        run: |
+          .github/scripts/extract_scenario_durations.sh \
+            ".artifacts/integration-soak-${{ matrix.backend }}.log" \
+            ".artifacts/integration-soak-${{ matrix.backend }}-durations.md"
+          {
+            echo "### integration-soak / ${{ matrix.backend }}"
+            cat ".artifacts/integration-soak-${{ matrix.backend }}-durations.md"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-soak-${{ matrix.backend }}
+          path: .artifacts/*
+          if-no-files-found: warn
 
   integration-chaos:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -47,10 +126,36 @@ jobs:
           go-version: "stable"
 
       - name: Install dependencies
-        run: go mod tidy
+        run: go mod download
 
       - name: Run integration chaos scenario subset
         env:
           RUN_INTEGRATION: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
-        run: go test -tags integration ./... -run "TestIntegrationScenarios_AllBackends/.*/scenario_(enqueue_during_broker_fault|consume_after_broker_recovery|shutdown_during_delay_retry|multi_worker_contention)$"
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          go test -tags=integration ./... \
+            -run "TestIntegrationScenarios_AllBackends/.*/scenario_(enqueue_during_broker_fault|consume_after_broker_recovery|shutdown_during_delay_retry|multi_worker_contention)$" \
+            -count=1 -v \
+            | tee ".artifacts/integration-chaos-${{ matrix.backend }}.log"
+
+      - name: Summarize chaos durations
+        if: always()
+        run: |
+          .github/scripts/extract_scenario_durations.sh \
+            ".artifacts/integration-chaos-${{ matrix.backend }}.log" \
+            ".artifacts/integration-chaos-${{ matrix.backend }}-durations.md"
+          {
+            echo "### integration-chaos / ${{ matrix.backend }}"
+            cat ".artifacts/integration-chaos-${{ matrix.backend }}-durations.md"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload chaos logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-chaos-${{ matrix.backend }}
+          path: .artifacts/*
+          if-no-files-found: warn
