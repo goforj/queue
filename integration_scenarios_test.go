@@ -1194,6 +1194,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if !fx.supportsRestart {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
+		start := time.Now()
 		restartQ := q
 		restartW := w
 		restartQueueName := fx.queueName
@@ -1270,12 +1271,20 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		case <-time.After(12 * time.Second):
 			t.Fatalf("[restart_basic_recovery_processing] queued job did not process after worker restart")
 		}
+		elapsed := time.Since(start)
+		reportScenarioDuration(t, fx.name, "scenario_worker_restart_recovery", elapsed)
+		limit := 20 * time.Second
+		if fx.name == "sqs" {
+			limit = 30 * time.Second
+		}
+		requireScenarioDurationLTE(t, fx.name, "scenario_worker_restart_recovery", elapsed, limit)
 	})
 
 	t.Run("scenario_worker_restart_delay_recovery", func(t *testing.T) {
 		if !fx.supportsRestartDelayedDurability {
 			t.Skip("backend does not provide deterministic delayed/retry restart durability in this runtime")
 		}
+		start := time.Now()
 		requireScenarioNoErr(t, "restart_scenario_worker_start", (w).StartWorkers(context.Background()))
 
 		restartType := "job:scenario:restart:" + fx.name
@@ -1317,6 +1326,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		case <-time.After(12 * time.Second):
 			t.Fatalf("[restart_recovery_processing] job did not recover after worker restart")
 		}
+		elapsed := time.Since(start)
+		reportScenarioDuration(t, fx.name, "scenario_worker_restart_delay_recovery", elapsed)
+		requireScenarioDurationLTE(t, fx.name, "scenario_worker_restart_delay_recovery", elapsed, 20*time.Second)
 	})
 
 	t.Run("scenario_bind_invalid_json", func(t *testing.T) {
@@ -1492,6 +1504,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if !fx.supportsRestart || !fx.supportsShutdownDelayRetry {
 			t.Skip("backend does not provide deterministic restart durability in this runtime")
 		}
+		start := time.Now()
 		requireScenarioNoErr(t, "shutdown_delay_worker_start", (w).StartWorkers(context.Background()))
 
 		delayedType := "job:scenario:shutdown-delay:" + fx.name
@@ -1577,6 +1590,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				t.Fatalf("[shutdown_retry_processed] retry job did not process after restart")
 			}
 		}
+		elapsed := time.Since(start)
+		reportScenarioDuration(t, fx.name, "scenario_shutdown_during_delay_retry", elapsed)
+		requireScenarioDurationLTE(t, fx.name, "scenario_shutdown_during_delay_retry", elapsed, 25*time.Second)
 	})
 
 	t.Run("scenario_multi_worker_contention", func(t *testing.T) {
@@ -1639,6 +1655,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_duplicate_delivery_idempotency", func(t *testing.T) {
+		start := time.Now()
 		requireScenarioNoErr(t, "idempotency_worker_start", (w).StartWorkers(context.Background()))
 
 		jobType := "job:scenario:idempotency:" + fx.name
@@ -1690,6 +1707,11 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		}
 		requireScenarioTrue(t, "idempotency_attempts", attempts.Load() >= 2, "attempts=%d expected>=2", attempts.Load())
 		requireScenarioTrue(t, "idempotency_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
+		elapsed := time.Since(start)
+		reportScenarioDuration(t, fx.name, "scenario_duplicate_delivery_idempotency", elapsed)
+		if fx.name == "sqs" {
+			requireScenarioDurationLTE(t, fx.name, "scenario_duplicate_delivery_idempotency", elapsed, 45*time.Second)
+		}
 	})
 
 	t.Run("scenario_dispatch_during_broker_fault", func(t *testing.T) {
