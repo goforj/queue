@@ -122,7 +122,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("future delivery publish path with nil channel still acks", func(t *testing.T) {
+	t.Run("future delivery publish path with nil channel nacks", func(t *testing.T) {
 		acks := &ackRecorder{}
 		w := &rabbitMQWorker{handlers: map[string]Handler{}, cfg: rabbitMQWorkerConfig{DefaultQueue: "default"}}
 		body, err := json.Marshal(rabbitMQMessage{Type: "job:future", Queue: "default", AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli()})
@@ -130,12 +130,12 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 			t.Fatalf("marshal: %v", err)
 		}
 		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 4})
-		if acks.acks != 1 || acks.nacks != 0 {
-			t.Fatalf("expected ack once, got ack=%d nack=%d", acks.acks, acks.nacks)
+		if acks.acks != 0 || acks.nacks != 1 {
+			t.Fatalf("expected nack once, got ack=%d nack=%d", acks.acks, acks.nacks)
 		}
 	})
 
-	t.Run("failed handler retries then acks", func(t *testing.T) {
+	t.Run("failed handler retries then nacks when republish fails", func(t *testing.T) {
 		acks := &ackRecorder{}
 		w := &rabbitMQWorker{
 			handlers: map[string]Handler{
@@ -148,8 +148,8 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 			t.Fatalf("marshal: %v", err)
 		}
 		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 5})
-		if acks.acks != 1 || acks.nacks != 0 {
-			t.Fatalf("expected ack once, got ack=%d nack=%d", acks.acks, acks.nacks)
+		if acks.acks != 0 || acks.nacks != 1 {
+			t.Fatalf("expected nack once, got ack=%d nack=%d", acks.acks, acks.nacks)
 		}
 	})
 
@@ -174,14 +174,14 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 
 func TestRabbitMQWorker_PublishNilChannelAndImmediateDelay(t *testing.T) {
 	w := &rabbitMQWorker{cfg: rabbitMQWorkerConfig{DefaultQueue: ""}}
-	if err := w.publish(rabbitMQMessage{Type: "job:nilch", Queue: "default"}); err != nil {
-		t.Fatalf("publish with nil channel should be noop, got %v", err)
+	if err := w.publish(rabbitMQMessage{Type: "job:nilch", Queue: "default"}); !errors.Is(err, amqp.ErrClosed) {
+		t.Fatalf("publish with nil channel should return amqp.ErrClosed, got %v", err)
 	}
 	if err := w.publish(rabbitMQMessage{
 		Type:          "job:past",
 		Queue:         "default",
 		AvailableAtMS: time.Now().Add(-10 * time.Millisecond).UnixMilli(),
-	}); err != nil {
-		t.Fatalf("publish past delay with nil channel should be noop, got %v", err)
+	}); !errors.Is(err, amqp.ErrClosed) {
+		t.Fatalf("publish past delay with nil channel should return amqp.ErrClosed, got %v", err)
 	}
 }

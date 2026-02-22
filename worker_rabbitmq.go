@@ -202,7 +202,7 @@ func (w *rabbitMQWorker) publish(message rabbitMQMessage) error {
 	ch := w.ch
 	w.startStop.Unlock()
 	if ch == nil {
-		return nil
+		return amqp.ErrClosed
 	}
 	body, err := json.Marshal(message)
 	if err != nil {
