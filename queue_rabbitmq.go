@@ -99,7 +99,8 @@ func (q *rabbitMQQueue) Dispatch(ctx context.Context, job Job) error {
 	if err := q.ensureConnectedLocked(); err != nil {
 		return err
 	}
-	if err := q.enqueueLocked(ctx, q.defaultQueue, body); err != nil {
+	targetQueue := rabbitPhysicalQueueName(q.defaultQueue, parsed.queueName)
+	if err := q.enqueueLocked(ctx, targetQueue, body); err != nil {
 		if !isRabbitConnectionClosed(err) {
 			return err
 		}
@@ -107,7 +108,7 @@ func (q *rabbitMQQueue) Dispatch(ctx context.Context, job Job) error {
 		if reconnectErr := q.ensureConnectedLocked(); reconnectErr != nil {
 			return reconnectErr
 		}
-		return q.enqueueLocked(ctx, q.defaultQueue, body)
+		return q.enqueueLocked(ctx, targetQueue, body)
 	}
 	return nil
 }
@@ -183,4 +184,14 @@ func isRabbitConnectionClosed(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "channel/connection is not open")
+}
+
+func rabbitPhysicalQueueName(defaultQueue, messageQueue string) string {
+	if messageQueue != "" {
+		return messageQueue
+	}
+	if defaultQueue != "" {
+		return defaultQueue
+	}
+	return "default"
 }
