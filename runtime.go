@@ -112,6 +112,17 @@ func (o *runtimeOptions) apply(opts []RuntimeOption) {
 
 // WithWorkflowObserver installs a workflow lifecycle observer.
 // @group Queue
+//
+// Example: workflow observer
+//
+//	observer := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
+//		_ = event.Kind
+//	})
+//	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithWorkflowObserver(observer))
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func WithWorkflowObserver(observer WorkflowObserver) RuntimeOption {
 	return func(o *runtimeOptions) {
 		o.busOpts = append(o.busOpts, bus.WithObserver(observer))
@@ -136,6 +147,17 @@ func WithWorkflowClock(clock func() time.Time) RuntimeOption {
 
 // WithMiddleware appends queue workflow middleware.
 // @group Queue
+//
+// Example: middleware
+//
+//	mw := queue.MiddlewareFunc(func(ctx context.Context, j queue.Context, next queue.Next) error {
+//		return next(ctx, j)
+//	})
+//	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithMiddleware(mw))
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func WithMiddleware(middlewares ...Middleware) RuntimeOption {
 	return func(o *runtimeOptions) {
 		o.busOpts = append(o.busOpts, bus.WithMiddleware(middlewares...))
@@ -170,24 +192,56 @@ func newQueueFromRuntime(q QueueRuntime, opts ...RuntimeOption) (*Queue, error) 
 
 // NewNull creates a Queue on the null backend.
 // @group Constructors
+//
+// Example: null backend
+//
+//	q, err := queue.NewNull()
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewNull() (*Queue, error) {
 	return New(Config{Driver: DriverNull})
 }
 
 // NewSync creates a Queue on the synchronous in-process backend.
 // @group Constructors
+//
+// Example: sync backend
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewSync() (*Queue, error) {
 	return New(Config{Driver: DriverSync})
 }
 
 // NewWorkerpool creates a Queue on the in-process workerpool backend.
 // @group Constructors
+//
+// Example: workerpool backend
+//
+//	q, err := queue.NewWorkerpool()
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewWorkerpool() (*Queue, error) {
 	return New(Config{Driver: DriverWorkerpool})
 }
 
 // NewDatabase creates a Queue on the SQL backend.
 // @group Constructors
+//
+// Example: database backend
+//
+//	q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewDatabase(driverName, dsn string) (*Queue, error) {
 	return New(Config{
 		Driver:         DriverDatabase,
@@ -198,6 +252,14 @@ func NewDatabase(driverName, dsn string) (*Queue, error) {
 
 // NewRedis creates a Queue on the Redis backend.
 // @group Constructors
+//
+// Example: redis backend
+//
+//	q, err := queue.NewRedis("127.0.0.1:6379")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewRedis(addr string) (*Queue, error) {
 	return New(Config{
 		Driver:    DriverRedis,
@@ -207,6 +269,14 @@ func NewRedis(addr string) (*Queue, error) {
 
 // NewNATS creates a Queue on the NATS backend.
 // @group Constructors
+//
+// Example: nats backend
+//
+//	q, err := queue.NewNATS("nats://127.0.0.1:4222")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewNATS(url string) (*Queue, error) {
 	return New(Config{
 		Driver:  DriverNATS,
@@ -216,6 +286,14 @@ func NewNATS(url string) (*Queue, error) {
 
 // NewSQS creates a Queue on the SQS backend.
 // @group Constructors
+//
+// Example: sqs backend
+//
+//	q, err := queue.NewSQS("us-east-1")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewSQS(region string) (*Queue, error) {
 	return New(Config{
 		Driver:    DriverSQS,
@@ -225,6 +303,14 @@ func NewSQS(region string) (*Queue, error) {
 
 // NewRabbitMQ creates a Queue on the RabbitMQ backend.
 // @group Constructors
+//
+// Example: rabbitmq backend
+//
+//	q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewRabbitMQ(url string) (*Queue, error) {
 	return New(Config{
 		Driver:      DriverRabbitMQ,
@@ -234,6 +320,24 @@ func NewRabbitMQ(url string) (*Queue, error) {
 
 // Register binds a handler for a high-level job type.
 // @group Queue
+//
+// Example: register
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	type EmailPayload struct {
+//		ID int `json:"id"`
+//	}
+//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+//		var payload EmailPayload
+//		if err := j.Bind(&payload); err != nil {
+//			return err
+//		}
+//		_ = payload
+//		return nil
+//	})
 func (r *Queue) Register(jobType string, handler func(context.Context, Context) error) {
 	if r == nil {
 		return
@@ -243,6 +347,15 @@ func (r *Queue) Register(jobType string, handler func(context.Context, Context) 
 
 // Driver reports the configured backend driver for the underlying queue runtime.
 // @group Queue
+//
+// Example: driver
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	fmt.Println(q.Driver())
+//	// Output: sync
 func (r *Queue) Driver() Driver {
 	if r == nil || r.q == nil {
 		return ""
@@ -252,6 +365,14 @@ func (r *Queue) Driver() Driver {
 
 // Workers sets desired worker concurrency before StartWorkers.
 // @group Queue
+//
+// Example: workers
+//
+//	q, err := queue.NewWorkerpool()
+//	if err != nil {
+//		return
+//	}
+//	q.Workers(4)
 func (r *Queue) Workers(count int) *Queue {
 	if r == nil || r.q == nil {
 		return r
@@ -262,6 +383,16 @@ func (r *Queue) Workers(count int) *Queue {
 
 // Dispatch enqueues a high-level job.
 // @group Queue
+//
+// Example: dispatch
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+//	job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
+//	_, _ = q.Dispatch(context.Background(), job)
 func (r *Queue) Dispatch(ctx context.Context, job Job) (DispatchResult, error) {
 	if r == nil {
 		return DispatchResult{}, fmt.Errorf("runtime is nil")
@@ -275,6 +406,19 @@ func (r *Queue) Dispatch(ctx context.Context, job Job) (DispatchResult, error) {
 
 // Chain creates a chain builder for sequential workflow execution.
 // @group Queue
+//
+// Example: chain
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	q.Register("first", func(ctx context.Context, j queue.Context) error { return nil })
+//	q.Register("second", func(ctx context.Context, j queue.Context) error { return nil })
+//	_, _ = q.Chain(
+//		queue.NewJob("first"),
+//		queue.NewJob("second"),
+//	).OnQueue("default").Dispatch(context.Background())
 func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 	if r == nil {
 		return &chainBuilderAdapter{}
@@ -292,6 +436,18 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 
 // Batch creates a batch builder for fan-out workflow execution.
 // @group Queue
+//
+// Example: batch
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+//	_, _ = q.Batch(
+//		queue.NewJob("emails:send").Payload(map[string]any{"id": 1}),
+//		queue.NewJob("emails:send").Payload(map[string]any{"id": 2}),
+//	).Name("send-emails").OnQueue("default").Dispatch(context.Background())
 func (r *Queue) Batch(jobs ...Job) BatchBuilder {
 	if r == nil {
 		return &batchBuilderAdapter{}
@@ -309,6 +465,14 @@ func (r *Queue) Batch(jobs ...Job) BatchBuilder {
 
 // StartWorkers starts worker processing.
 // @group Queue
+//
+// Example: start workers
+//
+//	q, err := queue.NewWorkerpool()
+//	if err != nil {
+//		return
+//	}
+//	_ = q.StartWorkers(context.Background())
 func (r *Queue) StartWorkers(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -318,6 +482,15 @@ func (r *Queue) StartWorkers(ctx context.Context) error {
 
 // Shutdown drains workers and closes underlying resources.
 // @group Queue
+//
+// Example: shutdown
+//
+//	q, err := queue.NewWorkerpool()
+//	if err != nil {
+//		return
+//	}
+//	_ = q.StartWorkers(context.Background())
+//	_ = q.Shutdown(context.Background())
 func (r *Queue) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -327,6 +500,19 @@ func (r *Queue) Shutdown(ctx context.Context) error {
 
 // FindChain returns current chain state by ID.
 // @group Queue
+//
+// Example: find chain
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	q.Register("first", func(ctx context.Context, j queue.Context) error { return nil })
+//	chainID, err := q.Chain(queue.NewJob("first")).Dispatch(context.Background())
+//	if err != nil {
+//		return
+//	}
+//	_, _ = q.FindChain(context.Background(), chainID)
 func (r *Queue) FindChain(ctx context.Context, chainID string) (ChainState, error) {
 	if r == nil {
 		return ChainState{}, fmt.Errorf("runtime is nil")
@@ -336,6 +522,19 @@ func (r *Queue) FindChain(ctx context.Context, chainID string) (ChainState, erro
 
 // FindBatch returns current batch state by ID.
 // @group Queue
+//
+// Example: find batch
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+//	batchID, err := q.Batch(queue.NewJob("emails:send")).Dispatch(context.Background())
+//	if err != nil {
+//		return
+//	}
+//	_, _ = q.FindBatch(context.Background(), batchID)
 func (r *Queue) FindBatch(ctx context.Context, batchID string) (BatchState, error) {
 	if r == nil {
 		return BatchState{}, fmt.Errorf("runtime is nil")
@@ -345,6 +544,14 @@ func (r *Queue) FindBatch(ctx context.Context, batchID string) (BatchState, erro
 
 // Prune deletes old workflow state records.
 // @group Queue
+//
+// Example: prune workflow state
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	_ = q.Prune(context.Background(), time.Now().Add(-24*time.Hour))
 func (r *Queue) Prune(ctx context.Context, before time.Time) error {
 	if r == nil {
 		return fmt.Errorf("runtime is nil")
@@ -354,6 +561,16 @@ func (r *Queue) Prune(ctx context.Context, before time.Time) error {
 
 // Pause pauses consumption for a queue when supported by the underlying driver.
 // @group Queue
+//
+// Example: pause queue
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	if queue.SupportsPause(q.UnderlyingQueue()) {
+//		_ = q.Pause(context.Background(), "default")
+//	}
 func (r *Queue) Pause(ctx context.Context, queueName string) error {
 	if r == nil || r.q == nil {
 		return fmt.Errorf("runtime is nil")
@@ -367,6 +584,16 @@ func (r *Queue) Pause(ctx context.Context, queueName string) error {
 
 // Resume resumes consumption for a queue when supported by the underlying driver.
 // @group Queue
+//
+// Example: resume queue
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	if queue.SupportsPause(q.UnderlyingQueue()) {
+//		_ = q.Resume(context.Background(), "default")
+//	}
 func (r *Queue) Resume(ctx context.Context, queueName string) error {
 	if r == nil || r.q == nil {
 		return fmt.Errorf("runtime is nil")
@@ -380,6 +607,16 @@ func (r *Queue) Resume(ctx context.Context, queueName string) error {
 
 // Stats returns a normalized snapshot when supported by the underlying driver.
 // @group Queue
+//
+// Example: stats
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	if queue.SupportsNativeStats(q.UnderlyingQueue()) {
+//		_, _ = q.Stats(context.Background())
+//	}
 func (r *Queue) Stats(ctx context.Context) (StatsSnapshot, error) {
 	if r == nil || r.q == nil {
 		return StatsSnapshot{}, fmt.Errorf("runtime is nil")
@@ -393,6 +630,16 @@ func (r *Queue) Stats(ctx context.Context) (StatsSnapshot, error) {
 
 // UnderlyingQueue returns the low-level queue runtime used by this high-level runtime.
 // @group Queue
+//
+// Example: underlying queue
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	raw := q.UnderlyingQueue()
+//	fmt.Println(raw.Driver())
+//	// Output: sync
 func (r *Queue) UnderlyingQueue() QueueRuntime {
 	if r == nil {
 		return nil

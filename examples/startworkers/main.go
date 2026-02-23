@@ -14,10 +14,11 @@ func main() {
 	example1()
 	example2()
 	example3()
+	example4()
 }
 
 func example1() {
-	// StartWorkers starts worker execution.
+	// StartWorkers starts worker processing.
 
 	// Example: start workers
 	var q queue.QueueRuntime
@@ -39,5 +40,14 @@ func example3() {
 	fake := queue.NewFake()
 	err := fake.StartWorkers(context.Background())
 	_ = err
+}
+
+func example4() {
+	// Example: start workers
+	q, err := queue.NewWorkerpool()
+	if err != nil {
+		return
+	}
+	_ = q.StartWorkers(context.Background())
 }
 

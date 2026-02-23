@@ -561,7 +561,11 @@ func renderAPI(funcs []*FuncDoc) string {
 
 	// ---------------- Details ----------------
 	for _, pkg := range packages {
-		buf.WriteString("## " + pkg + " API\n\n")
+		if singlePackage {
+			buf.WriteString("## API\n\n")
+		} else {
+			buf.WriteString("## " + pkg + " API\n\n")
+		}
 		groupNames := make([]string, 0, len(byPackageGroup[pkg]))
 		for g := range byPackageGroup[pkg] {
 			groupNames = append(groupNames, g)

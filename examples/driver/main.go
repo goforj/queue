@@ -14,10 +14,11 @@ func main() {
 	example1()
 	example2()
 	example3()
+	example4()
 }
 
 func example1() {
-	// Driver returns the active queue driver.
+	// Driver reports the configured backend driver for the underlying queue runtime.
 
 	// Example: inspect queue driver
 	var q queue.QueueRuntime
@@ -34,6 +35,16 @@ func example2() {
 
 func example3() {
 	// Example: local driver
+	q, err := queue.NewSync()
+	if err != nil {
+		return
+	}
+	fmt.Println(q.Driver())
+	// Output: sync
+}
+
+func example4() {
+	// Example: driver
 	q, err := queue.NewSync()
 	if err != nil {
 		return
