@@ -64,11 +64,7 @@ func newLocalQueueWithConfig(driver Driver, cfg WorkerpoolConfig) *localQueue {
 //	if err != nil {
 //		return
 //	}
-//	driverAware, ok := q.(interface{ Driver() queue.Driver })
-//	if !ok {
-//		return
-//	}
-//	fmt.Println(driverAware.Driver())
+//	fmt.Println(q.Driver())
 //	// Output: sync
 func (d *localQueue) Driver() Driver {
 	return d.driver
@@ -86,9 +82,9 @@ func (d *localQueue) Driver() Driver {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
 //		var payload EmailPayload
-//		if err := job.Bind(&payload); err != nil {
+//		if err := j.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload
@@ -171,9 +167,9 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
 //		var payload EmailPayload
-//		if err := job.Bind(&payload); err != nil {
+//		if err := j.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload
@@ -183,7 +179,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //		Payload(EmailPayload{ID: 1}).
 //		OnQueue("default").
 //		Delay(10 * time.Millisecond)
-//	_ = q.DispatchCtx(context.Background(), job)
+//	_, _ = q.Dispatch(context.Background(), job)
 func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown

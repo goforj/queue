@@ -16,6 +16,11 @@ import (
 	"strings"
 )
 
+const (
+	manualExampleTag    = "examplegen:manual"
+	generatedExampleTag = "examplegen:generated"
+)
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Println("Error:", err)
@@ -32,6 +37,9 @@ func run() error {
 
 	examplesDir := filepath.Join(root, "examples")
 	if err := os.MkdirAll(examplesDir, 0o755); err != nil {
+		return err
+	}
+	if err := pruneGeneratedExamples(examplesDir); err != nil {
 		return err
 	}
 
@@ -85,6 +93,36 @@ func run() error {
 		//env.Dump(fd)
 	}
 
+	return nil
+}
+
+func pruneGeneratedExamples(examplesDir string) error {
+	entries, err := os.ReadDir(examplesDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(examplesDir, e.Name())
+		mainPath := filepath.Join(dir, "main.go")
+		data, readErr := os.ReadFile(mainPath)
+		if readErr != nil {
+			// If there's no main.go (or unreadable), treat it as manual and leave it alone.
+			continue
+		}
+		text := string(data)
+		if strings.Contains(text, manualExampleTag) {
+			continue
+		}
+		if !strings.Contains(text, generatedExampleTag) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -423,6 +461,7 @@ func writeMain(base string, fd *FuncDoc, importPath string) error {
 	// Build tag
 	buf.WriteString("//go:build ignore\n")
 	buf.WriteString("// +build ignore\n\n")
+	buf.WriteString("// " + generatedExampleTag + "\n\n")
 
 	buf.WriteString("package main\n\n")
 

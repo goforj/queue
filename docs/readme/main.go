@@ -453,11 +453,13 @@ func selectPackage(pkgs map[string]*ast.Package) (string, error) {
 
 func renderAPI(funcs []*FuncDoc) string {
 	byPackageGroup := map[string]map[string][]*FuncDoc{}
+	labelCounts := map[string]int{}
 	for _, fd := range funcs {
 		if byPackageGroup[fd.Package] == nil {
 			byPackageGroup[fd.Package] = map[string][]*FuncDoc{}
 		}
 		byPackageGroup[fd.Package][fd.Group] = append(byPackageGroup[fd.Package][fd.Group], fd)
+		labelCounts[displayName(fd)]++
 	}
 
 	packages := make([]string, 0, len(byPackageGroup))
@@ -466,6 +468,13 @@ func renderAPI(funcs []*FuncDoc) string {
 	}
 	sort.Strings(packages)
 	singlePackage := len(packages) == 1
+	qualifiedLabel := func(fd *FuncDoc) string {
+		label := displayName(fd)
+		if singlePackage || labelCounts[label] <= 1 {
+			return label
+		}
+		return fd.Package + "." + label
+	}
 
 	var buf bytes.Buffer
 
@@ -497,7 +506,7 @@ func renderAPI(funcs []*FuncDoc) string {
 			var links []string
 			for _, fn := range byPackageGroup[pkg][group] {
 				anchor := anchorFor(fn)
-				label := displayName(fn)
+				label := qualifiedLabel(fn)
 				links = append(links, fmt.Sprintf("[%s](#%s)", label, anchor))
 			}
 
@@ -533,7 +542,7 @@ func renderAPI(funcs []*FuncDoc) string {
 			for _, fn := range byPackageGroup[pkg][group] {
 				anchor := anchorFor(fn)
 
-				header := fn.Package + "." + displayName(fn)
+				header := qualifiedLabel(fn)
 				if fn.Behavior != "" {
 					header += " · " + fn.Behavior
 				}

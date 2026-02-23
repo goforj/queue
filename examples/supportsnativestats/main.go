@@ -1,6 +1,8 @@
 //go:build ignore
 // +build ignore
 
+// examplegen:generated
+
 package main
 
 import (
@@ -13,6 +15,6 @@ func main() {
 
 	// Example: check native stats support
 	q, _ := queue.NewSync()
-	fmt.Println(queue.SupportsNativeStats(q))
+	fmt.Println(queue.SupportsNativeStats(q.UnderlyingQueue()))
 	// Output: true
 }

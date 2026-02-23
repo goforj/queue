@@ -24,11 +24,11 @@ func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
 	var chainCalls atomic.Int32
 	var batchCalls atomic.Int32
 
-	rt.Register("emails:send", func(_ context.Context, jc Context) error {
+	rt.Register("emails:send", func(_ context.Context, j Context) error {
 		var payload struct {
 			ID int `json:"id"`
 		}
-		if err := jc.Bind(&payload); err != nil {
+		if err := j.Bind(&payload); err != nil {
 			return err
 		}
 		if payload.ID != 1 {

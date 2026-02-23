@@ -21,6 +21,8 @@ import (
 const (
 	defaultProcessingRecoveryGrace  = 2 * time.Second
 	defaultProcessingLeaseNoTimeout = 5 * time.Minute
+	databaseFinalizeRetryCount      = 3
+	databaseFinalizeRetryDelay      = 25 * time.Millisecond
 )
 
 // DatabaseConfig configures the SQL-backed database q.
@@ -334,7 +336,7 @@ func (d *databaseQueue) workerLoop() {
 func (d *databaseQueue) processJob(job *dbJob) {
 	handler, ok := d.lookup(job.jobType)
 	if !ok {
-		_ = d.markFailed(context.Background(), job, fmt.Errorf("no handler registered for job type %q", job.jobType))
+		d.markFailedWithRetry(job, fmt.Errorf("no handler registered for job type %q", job.jobType))
 		return
 	}
 	ctx := context.Background()
@@ -352,10 +354,30 @@ func (d *databaseQueue) processJob(job *dbJob) {
 			withAttempt(job.attempt),
 	)
 	if err == nil {
-		_ = d.markDone(context.Background(), job)
+		d.markDoneWithRetry(job)
 		return
 	}
-	_ = d.markFailed(context.Background(), job, err)
+	d.markFailedWithRetry(job, err)
+}
+
+func (d *databaseQueue) markDoneWithRetry(job *dbJob) {
+	for i := 0; i < databaseFinalizeRetryCount; i++ {
+		if err := d.markDone(context.Background(), job); err == nil {
+			return
+		} else if i < databaseFinalizeRetryCount-1 {
+			time.Sleep(databaseFinalizeRetryDelay)
+		}
+	}
+}
+
+func (d *databaseQueue) markFailedWithRetry(job *dbJob, runErr error) {
+	for i := 0; i < databaseFinalizeRetryCount; i++ {
+		if err := d.markFailed(context.Background(), job, runErr); err == nil {
+			return
+		} else if i < databaseFinalizeRetryCount-1 {
+			time.Sleep(databaseFinalizeRetryDelay)
+		}
+	}
 }
 
 func (d *databaseQueue) claimOne(ctx context.Context) (*dbJob, error) {

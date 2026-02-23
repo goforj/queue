@@ -15,7 +15,7 @@
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-385-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-383-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
@@ -38,11 +38,11 @@ import (
 func main() {
 	q, _ := queue.NewWorkerpool()
 
-	q.Register("emails:send", func(ctx context.Context, jc queue.Context) error {
+	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
 		var payload struct {
 			To string `json:"to"`
 		}
-		_ = jc.Bind(&payload)
+		_ = j.Bind(&payload)
 		fmt.Println("send to", payload.To)
 		return nil
 	})
@@ -75,17 +75,17 @@ type EmailPayload struct {
 func main() {
 	q, _ := queue.NewWorkerpool()
 
-	q.Register("reports:generate", func(ctx context.Context, jc queue.Context) error {
+	q.Register("reports:generate", func(ctx context.Context, j queue.Context) error {
 		return nil
 	})
-	q.Register("reports:upload", func(ctx context.Context, jc queue.Context) error {
+	q.Register("reports:upload", func(ctx context.Context, j queue.Context) error {
 		var payload EmailPayload
-		if err := jc.Bind(&payload); err != nil {
+		if err := j.Bind(&payload); err != nil {
 			return err
 		}
 		return nil
 	})
-	q.Register("users:notify_report_ready", func(ctx context.Context, jc queue.Context) error {
+	q.Register("users:notify_report_ready", func(ctx context.Context, j queue.Context) error {
 		return nil
 	})
 
@@ -168,8 +168,8 @@ q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 Use `queue.WithMiddleware(...)` to apply cross-cutting workflow behavior (logging, filtering, error policy) to chains/batches/dispatch orchestration.
 
 ```go
-audit := queue.MiddlewareFunc(func(ctx context.Context, jc queue.Context, next queue.Next) error {
-    return next(ctx, jc)
+audit := queue.MiddlewareFunc(func(ctx context.Context, j queue.Context, next queue.Next) error {
+    return next(ctx, j)
 })
 
 q, _ := queue.New(
@@ -336,36 +336,36 @@ _ = q
 ### Events reference
 
 | Type | EventKind | Meaning |
-| --- | --- | --- |
-| `queue` | enqueue_accepted | Job accepted by driver for enqueue. |
-| `queue` | enqueue_rejected | Job enqueue failed. |
-| `queue` | enqueue_duplicate | Duplicate job rejected due to uniqueness key. |
-| `queue` | enqueue_canceled | Context cancellation prevented enqueue. |
-| `queue` | process_started | Worker began processing job. |
-| `queue` | process_succeeded | Handler returned success. |
-| `queue` | process_failed | Handler returned error. |
-| `queue` | process_retried | Driver scheduled retry attempt. |
-| `queue` | process_archived | Job moved to terminal failure state. |
-| `queue` | queue_paused | Queue was paused (driver supports pause). |
-| `queue` | queue_resumed | Queue was resumed. |
-| `workflow` | dispatch_started | Workflow runtime accepted a dispatch request and created a dispatch record. |
-| `workflow` | dispatch_succeeded | Dispatch was successfully enqueued to the underlying queue runtime. |
-| `workflow` | dispatch_failed | Dispatch failed before job execution could start. |
-| `workflow` | job_started | A workflow job handler started execution. |
-| `workflow` | job_succeeded | A workflow job handler completed successfully. |
-| `workflow` | job_failed | A workflow job handler returned an error. |
-| `workflow` | chain_started | A chain workflow was created and started. |
-| `workflow` | chain_advanced | Chain progressed from one node to the next node. |
-| `workflow` | chain_completed | Chain reached terminal success. |
-| `workflow` | chain_failed | Chain reached terminal failure. |
-| `workflow` | batch_started | A batch workflow was created and started. |
-| `workflow` | batch_progressed | Batch state changed as jobs completed/failed. |
-| `workflow` | batch_completed | Batch reached terminal success (or allowed-failure completion). |
-| `workflow` | batch_failed | Batch reached terminal failure. |
-| `workflow` | batch_cancelled | Batch was cancelled before normal completion. |
-| `workflow` | callback_started | Chain/batch callback execution started. |
-| `workflow` | callback_succeeded | Chain/batch callback completed successfully. |
-| `workflow` | callback_failed | Chain/batch callback returned an error. |
+| ---: | --- | --- |
+| **queue** | enqueue_accepted | Job accepted by driver for enqueue. |
+| **queue** | enqueue_rejected | Job enqueue failed. |
+| **queue** | enqueue_duplicate | Duplicate job rejected due to uniqueness key. |
+| **queue** | enqueue_canceled | Context cancellation prevented enqueue. |
+| **queue** | process_started | Worker began processing job. |
+| **queue** | process_succeeded | Handler returned success. |
+| **queue** | process_failed | Handler returned error. |
+| **queue** | process_retried | Driver scheduled retry attempt. |
+| **queue** | process_archived | Job moved to terminal failure state. |
+| **queue** | queue_paused | Queue was paused (driver supports pause). |
+| **queue** | queue_resumed | Queue was resumed. |
+| **workflow** | dispatch_started | Workflow runtime accepted a dispatch request and created a dispatch record. |
+| **workflow** | dispatch_succeeded | Dispatch was successfully enqueued to the underlying queue runtime. |
+| **workflow** | dispatch_failed | Dispatch failed before job execution could start. |
+| **workflow** | job_started | A workflow job handler started execution. |
+| **workflow** | job_succeeded | A workflow job handler completed successfully. |
+| **workflow** | job_failed | A workflow job handler returned an error. |
+| **workflow** | chain_started | A chain workflow was created and started. |
+| **workflow** | chain_advanced | Chain progressed from one node to the next node. |
+| **workflow** | chain_completed | Chain reached terminal success. |
+| **workflow** | chain_failed | Chain reached terminal failure. |
+| **workflow** | batch_started | A batch workflow was created and started. |
+| **workflow** | batch_progressed | Batch state changed as jobs completed/failed. |
+| **workflow** | batch_completed | Batch reached terminal success (or allowed-failure completion). |
+| **workflow** | batch_failed | Batch reached terminal failure. |
+| **workflow** | batch_cancelled | Batch was cancelled before normal completion. |
+| **workflow** | callback_started | Chain/batch callback execution started. |
+| **workflow** | callback_succeeded | Chain/batch callback completed successfully. |
+| **workflow** | callback_failed | Chain/batch callback returned an error. |
 
 ## Testing By Audience
 
@@ -417,7 +417,7 @@ The API section below is autogenerated; do not edit between the markers.
 | **Constructors** | [New](#queue-new) [NewDatabase](#queue-newdatabase) [NewNATS](#queue-newnats) [NewNull](#queue-newnull) [NewQueue](#queue-newqueue) [NewQueueWithDefaults](#queue-newqueuewithdefaults) [NewRabbitMQ](#queue-newrabbitmq) [NewRedis](#queue-newredis) [NewSQS](#queue-newsqs) [NewStatsCollector](#queue-newstatscollector) [NewSync](#queue-newsync) [NewWorkerpool](#queue-newworkerpool) |
 | **Job** | [Job.Backoff](#queue-job-backoff) [Job.Bind](#queue-job-bind) [Job.Delay](#queue-job-delay) [NewJob](#queue-newjob) [Job.OnQueue](#queue-job-onqueue) [Job.Payload](#queue-job-payload) [Job.PayloadBytes](#queue-job-payloadbytes) [Job.PayloadJSON](#queue-job-payloadjson) [Job.Retry](#queue-job-retry) [Job.Timeout](#queue-job-timeout) [Job.UniqueFor](#queue-job-uniquefor) |
 | **Observability** | [StatsSnapshot.Active](#queue-statssnapshot-active) [StatsSnapshot.Archived](#queue-statssnapshot-archived) [StatsSnapshot.Failed](#queue-statssnapshot-failed) [MultiObserver](#queue-multiobserver) [ChannelObserver.Observe](#queue-channelobserver-observe) [Observer.Observe](#queue-observer-observe) [ObserverFunc.Observe](#queue-observerfunc-observe) [StatsCollector.Observe](#queue-statscollector-observe) [Pause](#queue-pause) [StatsSnapshot.Paused](#queue-statssnapshot-paused) [StatsSnapshot.Pending](#queue-statssnapshot-pending) [StatsSnapshot.Processed](#queue-statssnapshot-processed) [StatsSnapshot.Queue](#queue-statssnapshot-queue) [StatsSnapshot.Queues](#queue-statssnapshot-queues) [Resume](#queue-resume) [StatsSnapshot.RetryCount](#queue-statssnapshot-retrycount) [StatsSnapshot.Scheduled](#queue-statssnapshot-scheduled) [Snapshot](#queue-snapshot) [StatsCollector.Snapshot](#queue-statscollector-snapshot) [SupportsNativeStats](#queue-supportsnativestats) [SupportsPause](#queue-supportspause) [StatsSnapshot.Throughput](#queue-statssnapshot-throughput) |
-| **Queue** | [Queue.Batch](#queue-queue-batch) [Queue.Chain](#queue-queue-chain) [Queue.Dispatch](#queue-queue-dispatch) [Queue.Driver](#queue-queue-driver) [Queue.FindBatch](#queue-queue-findbatch) [Queue.FindChain](#queue-queue-findchain) [Queue.Pause](#queue-queue-pause) [Queue.Prune](#queue-queue-prune) [Queue.Register](#queue-queue-register) [Queue.Resume](#queue-queue-resume) [Queue.Shutdown](#queue-queue-shutdown) [Queue.StartWorkers](#queue-queue-startworkers) [Queue.Stats](#queue-queue-stats) [Queue.UnderlyingQueue](#queue-queue-underlyingqueue) [WithWorkflowClock](#queue-withworkflowclock) [WithWorkflowMiddleware](#queue-withworkflowmiddleware) [WithWorkflowObserver](#queue-withworkflowobserver) [WithWorkflowStore](#queue-withworkflowstore) [Queue.Workers](#queue-queue-workers) |
+| **Queue** | [Queue.Batch](#queue-queue-batch) [Queue.Chain](#queue-queue-chain) [Queue.Dispatch](#queue-queue-dispatch) [Queue.Driver](#queue-queue-driver) [Queue.FindBatch](#queue-queue-findbatch) [Queue.FindChain](#queue-queue-findchain) [Queue.Pause](#queue-queue-pause) [Queue.Prune](#queue-queue-prune) [Queue.Register](#queue-queue-register) [Queue.Resume](#queue-queue-resume) [Queue.Shutdown](#queue-queue-shutdown) [Queue.StartWorkers](#queue-queue-startworkers) [Queue.Stats](#queue-queue-stats) [Queue.UnderlyingQueue](#queue-queue-underlyingqueue) [WithMiddleware](#queue-withmiddleware) [WithWorkflowClock](#queue-withworkflowclock) [WithWorkflowObserver](#queue-withworkflowobserver) [WithWorkflowStore](#queue-withworkflowstore) [Queue.Workers](#queue-queue-workers) |
 | **Queue Runtime** | [QueueRuntime.Dispatch](#queue-queueruntime-dispatch) [QueueRuntime.DispatchCtx](#queue-queueruntime-dispatchctx) [QueueRuntime.Driver](#queue-queueruntime-driver) [QueueRuntime.Register](#queue-queueruntime-register) [QueueRuntime.Shutdown](#queue-queueruntime-shutdown) [QueueRuntime.StartWorkers](#queue-queueruntime-startworkers) [QueueRuntime.Workers](#queue-queueruntime-workers) |
 | **Testing** | [FakeQueue.AssertCount](#queue-fakequeue-assertcount) [FakeQueue.AssertDispatched](#queue-fakequeue-assertdispatched) [FakeQueue.AssertDispatchedOn](#queue-fakequeue-assertdispatchedon) [FakeQueue.AssertDispatchedTimes](#queue-fakequeue-assertdispatchedtimes) [FakeQueue.AssertNotDispatched](#queue-fakequeue-assertnotdispatched) [FakeQueue.AssertNothingDispatched](#queue-fakequeue-assertnothingdispatched) [FakeQueue.BusDispatch](#queue-fakequeue-busdispatch) [FakeQueue.BusRegister](#queue-fakequeue-busregister) [FakeQueue.Dispatch](#queue-fakequeue-dispatch) [FakeQueue.DispatchCtx](#queue-fakequeue-dispatchctx) [FakeQueue.Driver](#queue-fakequeue-driver) [NewFake](#queue-newfake) [FakeQueue.Records](#queue-fakequeue-records) [FakeQueue.Register](#queue-fakequeue-register) [FakeQueue.Reset](#queue-fakequeue-reset) [FakeQueue.Shutdown](#queue-fakequeue-shutdown) [FakeQueue.StartWorkers](#queue-fakequeue-startworkers) [FakeQueue.Workers](#queue-fakequeue-workers) |
 
@@ -427,7 +427,7 @@ The API section below is autogenerated; do not edit between the markers.
 
 ### Constructors
 
-#### <a id="queue-new"></a>queue.New
+#### <a id="queue-new"></a>New
 
 New creates the high-level Queue API based on Config.Driver.
 
@@ -439,9 +439,9 @@ if err != nil {
 type EmailPayload struct {
 	ID int `json:"id"`
 }
-q.Register("emails:send", func(ctx context.Context, jc queue.Context) error {
+q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
 	var payload EmailPayload
-	if err := jc.Bind(&payload); err != nil {
+	if err := j.Bind(&payload); err != nil {
 		return err
 	}
 	return nil
@@ -455,24 +455,24 @@ _, _ = q.Dispatch(
 )
 ```
 
-#### <a id="queue-newdatabase"></a>queue.NewDatabase
+#### <a id="queue-newdatabase"></a>NewDatabase
 
 NewDatabase creates a Queue on the SQL backend.
 
-#### <a id="queue-newnats"></a>queue.NewNATS
+#### <a id="queue-newnats"></a>NewNATS
 
 NewNATS creates a Queue on the NATS backend.
 
-#### <a id="queue-newnull"></a>queue.NewNull
+#### <a id="queue-newnull"></a>NewNull
 
 NewNull creates a Queue on the null backend.
 
-#### <a id="queue-newqueue"></a>queue.NewQueue
+#### <a id="queue-newqueue"></a>NewQueue
 
 NewQueue creates the low-level queue runtime (driver-facing API) based on Config.Driver.
 Use this only for driver-focused/advanced runtime access; application code should prefer New.
 
-#### <a id="queue-newqueuewithdefaults"></a>queue.NewQueueWithDefaults
+#### <a id="queue-newqueuewithdefaults"></a>NewQueueWithDefaults
 
 NewQueueWithDefaults creates a queue runtime and sets the default queue name.
 
@@ -496,19 +496,19 @@ q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 defer q.Shutdown(context.Background())
 ```
 
-#### <a id="queue-newrabbitmq"></a>queue.NewRabbitMQ
+#### <a id="queue-newrabbitmq"></a>NewRabbitMQ
 
 NewRabbitMQ creates a Queue on the RabbitMQ backend.
 
-#### <a id="queue-newredis"></a>queue.NewRedis
+#### <a id="queue-newredis"></a>NewRedis
 
 NewRedis creates a Queue on the Redis backend.
 
-#### <a id="queue-newsqs"></a>queue.NewSQS
+#### <a id="queue-newsqs"></a>NewSQS
 
 NewSQS creates a Queue on the SQS backend.
 
-#### <a id="queue-newstatscollector"></a>queue.NewStatsCollector
+#### <a id="queue-newstatscollector"></a>NewStatsCollector
 
 NewStatsCollector creates an event collector for queue counters.
 
@@ -516,17 +516,17 @@ NewStatsCollector creates an event collector for queue counters.
 collector := queue.NewStatsCollector()
 ```
 
-#### <a id="queue-newsync"></a>queue.NewSync
+#### <a id="queue-newsync"></a>NewSync
 
 NewSync creates a Queue on the synchronous in-process backend.
 
-#### <a id="queue-newworkerpool"></a>queue.NewWorkerpool
+#### <a id="queue-newworkerpool"></a>NewWorkerpool
 
 NewWorkerpool creates a Queue on the in-process workerpool backend.
 
 ### Job
 
-#### <a id="queue-job-backoff"></a>queue.Job.Backoff
+#### <a id="queue-job-backoff"></a>Job.Backoff
 
 Backoff sets delay between retries.
 
@@ -534,19 +534,26 @@ Backoff sets delay between retries.
 job := queue.NewJob("emails:send").Backoff(500 * time.Millisecond)
 ```
 
-#### <a id="queue-job-bind"></a>queue.Job.Bind
+#### <a id="queue-job-bind"></a>Job.Bind
 
 Bind unmarshals job payload JSON into dst.
 
 ```go
 type EmailPayload struct {
-	ID int `json:"id"`
+	ID int    `json:"id"`
+	To string `json:"to"`
 }
-job := queue.NewJob("emails:send").Payload(EmailPayload{ID: 1})
+job := queue.NewJob("emails:send").Payload(EmailPayload{
+	ID: 1,
+	To: "user@example.com",
+})
 var payload EmailPayload
+if err := job.Bind(&payload); err != nil {
+	return
+}
 ```
 
-#### <a id="queue-job-delay"></a>queue.Job.Delay
+#### <a id="queue-job-delay"></a>Job.Delay
 
 Delay defers execution by duration.
 
@@ -554,7 +561,7 @@ Delay defers execution by duration.
 job := queue.NewJob("emails:send").Delay(300 * time.Millisecond)
 ```
 
-#### <a id="queue-newjob"></a>queue.NewJob
+#### <a id="queue-newjob"></a>NewJob
 
 NewJob creates a job value with a required job type.
 
@@ -562,7 +569,7 @@ NewJob creates a job value with a required job type.
 job := queue.NewJob("emails:send")
 ```
 
-#### <a id="queue-job-onqueue"></a>queue.Job.OnQueue
+#### <a id="queue-job-onqueue"></a>Job.OnQueue
 
 OnQueue sets the target queue name.
 
@@ -570,7 +577,7 @@ OnQueue sets the target queue name.
 job := queue.NewJob("emails:send").OnQueue("critical")
 ```
 
-#### <a id="queue-job-payload"></a>queue.Job.Payload
+#### <a id="queue-job-payload"></a>Job.Payload
 
 Payload sets job payload from common value types.
 
@@ -608,7 +615,7 @@ jobMap := queue.NewJob("emails:send").Payload(map[string]any{
 })
 ```
 
-#### <a id="queue-job-payloadbytes"></a>queue.Job.PayloadBytes
+#### <a id="queue-job-payloadbytes"></a>Job.PayloadBytes
 
 PayloadBytes returns a copy of job payload bytes.
 
@@ -617,7 +624,7 @@ job := queue.NewJob("emails:send").Payload([]byte(`{"id":1}`))
 payload := job.PayloadBytes()
 ```
 
-#### <a id="queue-job-payloadjson"></a>queue.Job.PayloadJSON
+#### <a id="queue-job-payloadjson"></a>Job.PayloadJSON
 
 PayloadJSON marshals payload as JSON.
 
@@ -625,7 +632,7 @@ PayloadJSON marshals payload as JSON.
 job := queue.NewJob("emails:send").PayloadJSON(map[string]int{"id": 1})
 ```
 
-#### <a id="queue-job-retry"></a>queue.Job.Retry
+#### <a id="queue-job-retry"></a>Job.Retry
 
 Retry sets max retry attempts.
 
@@ -633,7 +640,7 @@ Retry sets max retry attempts.
 job := queue.NewJob("emails:send").Retry(4)
 ```
 
-#### <a id="queue-job-timeout"></a>queue.Job.Timeout
+#### <a id="queue-job-timeout"></a>Job.Timeout
 
 Timeout sets per-job execution timeout.
 
@@ -641,7 +648,7 @@ Timeout sets per-job execution timeout.
 job := queue.NewJob("emails:send").Timeout(10 * time.Second)
 ```
 
-#### <a id="queue-job-uniquefor"></a>queue.Job.UniqueFor
+#### <a id="queue-job-uniquefor"></a>Job.UniqueFor
 
 UniqueFor enables uniqueness dedupe within the given TTL.
 
@@ -651,7 +658,7 @@ job := queue.NewJob("emails:send").UniqueFor(45 * time.Second)
 
 ### Observability
 
-#### <a id="queue-statssnapshot-active"></a>queue.StatsSnapshot.Active
+#### <a id="queue-statssnapshot-active"></a>StatsSnapshot.Active
 
 Active returns active count for a queue.
 
@@ -665,7 +672,7 @@ fmt.Println(snapshot.Active("default"))
 // Output: 2
 ```
 
-#### <a id="queue-statssnapshot-archived"></a>queue.StatsSnapshot.Archived
+#### <a id="queue-statssnapshot-archived"></a>StatsSnapshot.Archived
 
 Archived returns archived count for a queue.
 
@@ -679,7 +686,7 @@ fmt.Println(snapshot.Archived("default"))
 // Output: 7
 ```
 
-#### <a id="queue-statssnapshot-failed"></a>queue.StatsSnapshot.Failed
+#### <a id="queue-statssnapshot-failed"></a>StatsSnapshot.Failed
 
 Failed returns failed count for a queue.
 
@@ -693,7 +700,7 @@ fmt.Println(snapshot.Failed("default"))
 // Output: 2
 ```
 
-#### <a id="queue-multiobserver"></a>queue.MultiObserver
+#### <a id="queue-multiobserver"></a>MultiObserver
 
 MultiObserver fans out events to multiple observers.
 
@@ -708,7 +715,7 @@ fmt.Println(len(events))
 // Output: 1
 ```
 
-#### <a id="queue-channelobserver-observe"></a>queue.ChannelObserver.Observe
+#### <a id="queue-channelobserver-observe"></a>ChannelObserver.Observe
 
 Observe forwards an event to the configured channel.
 
@@ -719,7 +726,7 @@ observer.Observe(queue.Event{Kind: queue.EventProcessStarted, Queue: "default"})
 event := <-ch
 ```
 
-#### <a id="queue-observer-observe"></a>queue.Observer.Observe
+#### <a id="queue-observer-observe"></a>Observer.Observe
 
 Observe handles a queue runtime event.
 
@@ -732,7 +739,7 @@ observer.Observe(queue.Event{
 })
 ```
 
-#### <a id="queue-observerfunc-observe"></a>queue.ObserverFunc.Observe
+#### <a id="queue-observerfunc-observe"></a>ObserverFunc.Observe
 
 Observe calls the wrapped function.
 
@@ -758,7 +765,7 @@ observer.Observe(queue.Event{
 })
 ```
 
-#### <a id="queue-statscollector-observe"></a>queue.StatsCollector.Observe
+#### <a id="queue-statscollector-observe"></a>StatsCollector.Observe
 
 Observe records an event and updates normalized counters.
 
@@ -772,7 +779,7 @@ collector.Observe(queue.Event{
 })
 ```
 
-#### <a id="queue-pause"></a>queue.Pause
+#### <a id="queue-pause"></a>Pause
 
 Pause pauses queue consumption for drivers that support it.
 
@@ -783,7 +790,7 @@ fmt.Println(snapshot.Paused("default"))
 // Output: 1
 ```
 
-#### <a id="queue-statssnapshot-paused"></a>queue.StatsSnapshot.Paused
+#### <a id="queue-statssnapshot-paused"></a>StatsSnapshot.Paused
 
 Paused returns paused count for a queue.
 
@@ -800,7 +807,7 @@ fmt.Println(snapshot.Paused("default"))
 // Output: 1
 ```
 
-#### <a id="queue-statssnapshot-pending"></a>queue.StatsSnapshot.Pending
+#### <a id="queue-statssnapshot-pending"></a>StatsSnapshot.Pending
 
 Pending returns pending count for a queue.
 
@@ -814,7 +821,7 @@ fmt.Println(snapshot.Pending("default"))
 // Output: 3
 ```
 
-#### <a id="queue-statssnapshot-processed"></a>queue.StatsSnapshot.Processed
+#### <a id="queue-statssnapshot-processed"></a>StatsSnapshot.Processed
 
 Processed returns processed count for a queue.
 
@@ -828,7 +835,7 @@ fmt.Println(snapshot.Processed("default"))
 // Output: 11
 ```
 
-#### <a id="queue-statssnapshot-queue"></a>queue.StatsSnapshot.Queue
+#### <a id="queue-statssnapshot-queue"></a>StatsSnapshot.Queue
 
 Queue returns queue counters for a queue name.
 
@@ -846,7 +853,7 @@ fmt.Println(ok, counters.Pending)
 // Output: true 1
 ```
 
-#### <a id="queue-statssnapshot-queues"></a>queue.StatsSnapshot.Queues
+#### <a id="queue-statssnapshot-queues"></a>StatsSnapshot.Queues
 
 Queues returns sorted queue names present in the snapshot.
 
@@ -864,7 +871,7 @@ fmt.Println(len(names), names[0])
 // Output: 1 critical
 ```
 
-#### <a id="queue-resume"></a>queue.Resume
+#### <a id="queue-resume"></a>Resume
 
 Resume resumes queue consumption for drivers that support it.
 
@@ -876,7 +883,7 @@ fmt.Println(snapshot.Paused("default"))
 // Output: 0
 ```
 
-#### <a id="queue-statssnapshot-retrycount"></a>queue.StatsSnapshot.RetryCount
+#### <a id="queue-statssnapshot-retrycount"></a>StatsSnapshot.RetryCount
 
 RetryCount returns retry count for a queue.
 
@@ -890,7 +897,7 @@ fmt.Println(snapshot.RetryCount("default"))
 // Output: 1
 ```
 
-#### <a id="queue-statssnapshot-scheduled"></a>queue.StatsSnapshot.Scheduled
+#### <a id="queue-statssnapshot-scheduled"></a>StatsSnapshot.Scheduled
 
 Scheduled returns scheduled count for a queue.
 
@@ -904,7 +911,7 @@ fmt.Println(snapshot.Scheduled("default"))
 // Output: 4
 ```
 
-#### <a id="queue-snapshot"></a>queue.Snapshot
+#### <a id="queue-snapshot"></a>Snapshot
 
 Snapshot returns driver-native stats, falling back to collector data.
 
@@ -916,7 +923,7 @@ fmt.Println(ok)
 // Output: true
 ```
 
-#### <a id="queue-statscollector-snapshot"></a>queue.StatsCollector.Snapshot
+#### <a id="queue-statscollector-snapshot"></a>StatsCollector.Snapshot
 
 Snapshot returns a copy of collected counters.
 
@@ -955,27 +962,27 @@ fmt.Printf("hour=%+v\n", throughput.Hour)
 // hour={Processed:1 Failed:0}
 ```
 
-#### <a id="queue-supportsnativestats"></a>queue.SupportsNativeStats
+#### <a id="queue-supportsnativestats"></a>SupportsNativeStats
 
 SupportsNativeStats reports whether a queue runtime exposes native stats snapshots.
 
 ```go
 q, _ := queue.NewSync()
-fmt.Println(queue.SupportsNativeStats(q))
+fmt.Println(queue.SupportsNativeStats(q.UnderlyingQueue()))
 // Output: true
 ```
 
-#### <a id="queue-supportspause"></a>queue.SupportsPause
+#### <a id="queue-supportspause"></a>SupportsPause
 
 SupportsPause reports whether a queue runtime supports Pause/Resume.
 
 ```go
 q, _ := queue.NewSync()
-fmt.Println(queue.SupportsPause(q))
+fmt.Println(queue.SupportsPause(q.UnderlyingQueue()))
 // Output: true
 ```
 
-#### <a id="queue-statssnapshot-throughput"></a>queue.StatsSnapshot.Throughput
+#### <a id="queue-statssnapshot-throughput"></a>StatsSnapshot.Throughput
 
 Throughput returns rolling throughput windows for a queue name.
 
@@ -995,85 +1002,85 @@ fmt.Printf("ok=%v hour=%+v day=%+v week=%+v\n", ok, throughput.Hour, throughput.
 
 ### Queue
 
-#### <a id="queue-queue-batch"></a>queue.Queue.Batch
+#### <a id="queue-queue-batch"></a>Queue.Batch
 
 Batch creates a batch builder for fan-out workflow execution.
 
-#### <a id="queue-queue-chain"></a>queue.Queue.Chain
+#### <a id="queue-queue-chain"></a>Queue.Chain
 
 Chain creates a chain builder for sequential workflow execution.
 
-#### <a id="queue-queue-dispatch"></a>queue.Queue.Dispatch
+#### <a id="queue-queue-dispatch"></a>Queue.Dispatch
 
 Dispatch enqueues a high-level job.
 
-#### <a id="queue-queue-driver"></a>queue.Queue.Driver
+#### <a id="queue-queue-driver"></a>Queue.Driver
 
 Driver reports the configured backend driver for the underlying queue runtime.
 
-#### <a id="queue-queue-findbatch"></a>queue.Queue.FindBatch
+#### <a id="queue-queue-findbatch"></a>Queue.FindBatch
 
 FindBatch returns current batch state by ID.
 
-#### <a id="queue-queue-findchain"></a>queue.Queue.FindChain
+#### <a id="queue-queue-findchain"></a>Queue.FindChain
 
 FindChain returns current chain state by ID.
 
-#### <a id="queue-queue-pause"></a>queue.Queue.Pause
+#### <a id="queue-queue-pause"></a>Queue.Pause
 
 Pause pauses consumption for a queue when supported by the underlying driver.
 
-#### <a id="queue-queue-prune"></a>queue.Queue.Prune
+#### <a id="queue-queue-prune"></a>Queue.Prune
 
 Prune deletes old workflow state records.
 
-#### <a id="queue-queue-register"></a>queue.Queue.Register
+#### <a id="queue-queue-register"></a>Queue.Register
 
 Register binds a handler for a high-level job type.
 
-#### <a id="queue-queue-resume"></a>queue.Queue.Resume
+#### <a id="queue-queue-resume"></a>Queue.Resume
 
 Resume resumes consumption for a queue when supported by the underlying driver.
 
-#### <a id="queue-queue-shutdown"></a>queue.Queue.Shutdown
+#### <a id="queue-queue-shutdown"></a>Queue.Shutdown
 
 Shutdown drains workers and closes underlying resources.
 
-#### <a id="queue-queue-startworkers"></a>queue.Queue.StartWorkers
+#### <a id="queue-queue-startworkers"></a>Queue.StartWorkers
 
 StartWorkers starts worker processing.
 
-#### <a id="queue-queue-stats"></a>queue.Queue.Stats
+#### <a id="queue-queue-stats"></a>Queue.Stats
 
 Stats returns a normalized snapshot when supported by the underlying driver.
 
-#### <a id="queue-queue-underlyingqueue"></a>queue.Queue.UnderlyingQueue
+#### <a id="queue-queue-underlyingqueue"></a>Queue.UnderlyingQueue
 
 UnderlyingQueue returns the low-level queue runtime used by this high-level runtime.
 
-#### <a id="queue-withworkflowclock"></a>queue.WithWorkflowClock
+#### <a id="queue-withmiddleware"></a>WithMiddleware
+
+WithMiddleware appends queue workflow middleware.
+
+#### <a id="queue-withworkflowclock"></a>WithWorkflowClock
 
 WithWorkflowClock overrides the workflow runtime clock.
 
-#### <a id="queue-withworkflowmiddleware"></a>queue.WithWorkflowMiddleware
-
-WithWorkflowMiddleware appends workflow middleware.
-
-#### <a id="queue-withworkflowobserver"></a>queue.WithWorkflowObserver
+#### <a id="queue-withworkflowobserver"></a>WithWorkflowObserver
 
 WithWorkflowObserver installs a workflow lifecycle observer.
 
-#### <a id="queue-withworkflowstore"></a>queue.WithWorkflowStore
+#### <a id="queue-withworkflowstore"></a>WithWorkflowStore
 
 WithWorkflowStore overrides the workflow orchestration store.
 
-#### <a id="queue-queue-workers"></a>queue.Queue.Workers
+#### <a id="queue-queue-workers"></a>Queue.Workers
 
 Workers sets desired worker concurrency before StartWorkers.
 
 ### Queue Runtime
 
-#### <a id="queue-queueruntime-dispatch"></a>queue.QueueRuntime.Dispatch
+#### <a id="queue-queueruntime-dispatch"></a>QueueRuntime.Dispatch
 
 Dispatch submits a typed job payload using the default queue.
 
@@ -1086,7 +1093,7 @@ err := q.Dispatch(
 )
 ```
 
-#### <a id="queue-queueruntime-dispatchctx"></a>queue.QueueRuntime.DispatchCtx
+#### <a id="queue-queueruntime-dispatchctx"></a>QueueRuntime.DispatchCtx
 
 DispatchCtx submits a typed job payload using the provided context.
 
@@ -1098,7 +1105,7 @@ err := q.DispatchCtx(
 )
 ```
 
-#### <a id="queue-queueruntime-driver"></a>queue.QueueRuntime.Driver
+#### <a id="queue-queueruntime-driver"></a>QueueRuntime.Driver
 
 Driver returns the active queue driver.
 
@@ -1107,7 +1114,7 @@ var q queue.QueueRuntime
 driver := q.Driver()
 ```
 
-#### <a id="queue-queueruntime-register"></a>queue.QueueRuntime.Register
+#### <a id="queue-queueruntime-register"></a>QueueRuntime.Register
 
 Register associates a handler with a job type.
 
@@ -1116,7 +1123,7 @@ var q queue.QueueRuntime
 q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 ```
 
-#### <a id="queue-queueruntime-shutdown"></a>queue.QueueRuntime.Shutdown
+#### <a id="queue-queueruntime-shutdown"></a>QueueRuntime.Shutdown
 
 Shutdown drains running work and releases resources.
 
@@ -1125,7 +1132,7 @@ var q queue.QueueRuntime
 err := q.Shutdown(context.Background())
 ```
 
-#### <a id="queue-queueruntime-startworkers"></a>queue.QueueRuntime.StartWorkers
+#### <a id="queue-queueruntime-startworkers"></a>QueueRuntime.StartWorkers
 
 StartWorkers starts worker execution.
 
@@ -1134,7 +1141,7 @@ var q queue.QueueRuntime
 err := q.StartWorkers(context.Background())
 ```
 
-#### <a id="queue-queueruntime-workers"></a>queue.QueueRuntime.Workers
+#### <a id="queue-queueruntime-workers"></a>QueueRuntime.Workers
 
 Workers sets desired worker concurrency before StartWorkers.
 
@@ -1145,7 +1152,7 @@ q = q.Workers(4)
 
 ### Testing
 
-#### <a id="queue-fakequeue-assertcount"></a>queue.FakeQueue.AssertCount
+#### <a id="queue-fakequeue-assertcount"></a>FakeQueue.AssertCount
 
 AssertCount fails when dispatch count is not expected.
 
@@ -1154,7 +1161,7 @@ fake := queue.NewFake()
 fake.AssertCount(nil, 1)
 ```
 
-#### <a id="queue-fakequeue-assertdispatched"></a>queue.FakeQueue.AssertDispatched
+#### <a id="queue-fakequeue-assertdispatched"></a>FakeQueue.AssertDispatched
 
 AssertDispatched fails when jobType was not dispatched.
 
@@ -1163,7 +1170,7 @@ fake := queue.NewFake()
 fake.AssertDispatched(nil, "emails:send")
 ```
 
-#### <a id="queue-fakequeue-assertdispatchedon"></a>queue.FakeQueue.AssertDispatchedOn
+#### <a id="queue-fakequeue-assertdispatchedon"></a>FakeQueue.AssertDispatchedOn
 
 AssertDispatchedOn fails when jobType was not dispatched on queueName.
 
@@ -1175,7 +1182,7 @@ fake := queue.NewFake()
 fake.AssertDispatchedOn(nil, "critical", "emails:send")
 ```
 
-#### <a id="queue-fakequeue-assertdispatchedtimes"></a>queue.FakeQueue.AssertDispatchedTimes
+#### <a id="queue-fakequeue-assertdispatchedtimes"></a>FakeQueue.AssertDispatchedTimes
 
 AssertDispatchedTimes fails when jobType dispatch count does not match expected.
 
@@ -1184,7 +1191,7 @@ fake := queue.NewFake()
 fake.AssertDispatchedTimes(nil, "emails:send", 2)
 ```
 
-#### <a id="queue-fakequeue-assertnotdispatched"></a>queue.FakeQueue.AssertNotDispatched
+#### <a id="queue-fakequeue-assertnotdispatched"></a>FakeQueue.AssertNotDispatched
 
 AssertNotDispatched fails when jobType was dispatched.
 
@@ -1193,7 +1200,7 @@ fake := queue.NewFake()
 fake.AssertNotDispatched(nil, "emails:cancel")
 ```
 
-#### <a id="queue-fakequeue-assertnothingdispatched"></a>queue.FakeQueue.AssertNothingDispatched
+#### <a id="queue-fakequeue-assertnothingdispatched"></a>FakeQueue.AssertNothingDispatched
 
 AssertNothingDispatched fails when any dispatch was recorded.
 
@@ -1202,15 +1209,15 @@ fake := queue.NewFake()
 fake.AssertNothingDispatched(nil)
 ```
 
-#### <a id="queue-fakequeue-busdispatch"></a>queue.FakeQueue.BusDispatch
+#### <a id="queue-fakequeue-busdispatch"></a>FakeQueue.BusDispatch
 
 BusDispatch satisfies the internal orchestration runtime adapter.
 
-#### <a id="queue-fakequeue-busregister"></a>queue.FakeQueue.BusRegister
+#### <a id="queue-fakequeue-busregister"></a>FakeQueue.BusRegister
 
 BusRegister satisfies the internal orchestration runtime adapter.
 
-#### <a id="queue-fakequeue-dispatch"></a>queue.FakeQueue.Dispatch
+#### <a id="queue-fakequeue-dispatch"></a>FakeQueue.Dispatch
 
 Dispatch records a typed job payload in-memory using the fake default queue.
 
@@ -1219,7 +1226,7 @@ fake := queue.NewFake()
 err := fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 ```
 
-#### <a id="queue-fakequeue-dispatchctx"></a>queue.FakeQueue.DispatchCtx
+#### <a id="queue-fakequeue-dispatchctx"></a>FakeQueue.DispatchCtx
 
 DispatchCtx submits a typed job payload using the provided context.
 
@@ -1231,7 +1238,7 @@ fmt.Println(err == nil)
 // Output: true
 ```
 
-#### <a id="queue-fakequeue-driver"></a>queue.FakeQueue.Driver
+#### <a id="queue-fakequeue-driver"></a>FakeQueue.Driver
 
 Driver returns the active queue driver.
 
@@ -1240,7 +1247,7 @@ fake := queue.NewFake()
 driver := fake.Driver()
 ```
 
-#### <a id="queue-newfake"></a>queue.NewFake
+#### <a id="queue-newfake"></a>NewFake
 
 NewFake creates a queue fake that records dispatches and provides assertions.
 
@@ -1255,7 +1262,7 @@ fmt.Println(len(records), records[0].Queue, records[0].Job.Type)
 // Output: 1 critical emails:send
 ```
 
-#### <a id="queue-fakequeue-records"></a>queue.FakeQueue.Records
+#### <a id="queue-fakequeue-records"></a>FakeQueue.Records
 
 Records returns a copy of all dispatch records.
 
@@ -1266,7 +1273,7 @@ fmt.Println(len(records), records[0].Job.Type)
 // Output: 1 emails:send
 ```
 
-#### <a id="queue-fakequeue-register"></a>queue.FakeQueue.Register
+#### <a id="queue-fakequeue-register"></a>FakeQueue.Register
 
 Register associates a handler with a job type.
 
@@ -1275,7 +1282,7 @@ fake := queue.NewFake()
 fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 ```
 
-#### <a id="queue-fakequeue-reset"></a>queue.FakeQueue.Reset
+#### <a id="queue-fakequeue-reset"></a>FakeQueue.Reset
 
 Reset clears all recorded dispatches.
 
@@ -1289,7 +1296,7 @@ fmt.Println(len(fake.Records()))
 // 0
 ```
 
-#### <a id="queue-fakequeue-shutdown"></a>queue.FakeQueue.Shutdown
+#### <a id="queue-fakequeue-shutdown"></a>FakeQueue.Shutdown
 
 Shutdown drains running work and releases resources.
 
@@ -1298,7 +1305,7 @@ fake := queue.NewFake()
 err := fake.Shutdown(context.Background())
 ```
 
-#### <a id="queue-fakequeue-startworkers"></a>queue.FakeQueue.StartWorkers
+#### <a id="queue-fakequeue-startworkers"></a>FakeQueue.StartWorkers
 
 StartWorkers starts worker execution.
 
@@ -1307,7 +1314,7 @@ fake := queue.NewFake()
 err := fake.StartWorkers(context.Background())
 ```
 
-#### <a id="queue-fakequeue-workers"></a>queue.FakeQueue.Workers
+#### <a id="queue-fakequeue-workers"></a>FakeQueue.Workers
 
 Workers sets desired worker concurrency before StartWorkers.
 

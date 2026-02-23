@@ -1,6 +1,8 @@
 //go:build ignore
 // +build ignore
 
+// examplegen:manual
+
 package main
 
 import (
@@ -59,23 +61,23 @@ func main() {
 		panic(err)
 	}
 
-	q.Register("emails:send", func(ctx context.Context, jc queue.Context) error {
+	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
 		var payload struct {
 			To string `json:"to"`
 		}
-		if err := jc.Bind(&payload); err != nil {
+		if err := j.Bind(&payload); err != nil {
 			return err
 		}
 		fmt.Println("sending", payload.To)
 		return nil
 	})
-	q.Register("emails:flaky", func(ctx context.Context, jc queue.Context) error {
+	q.Register("emails:flaky", func(ctx context.Context, j queue.Context) error {
 		if flakyAttempts.Add(1) == 1 {
 			return errors.New("transient smtp error")
 		}
 		return nil
 	})
-	q.Register("emails:fail", func(ctx context.Context, jc queue.Context) error {
+	q.Register("emails:fail", func(ctx context.Context, j queue.Context) error {
 		return errors.New("terminal failure")
 	})
 
@@ -101,14 +103,8 @@ func main() {
 	cancel()
 	_, _ = q.Dispatch(cancelCtx, queue.NewJob("emails:send").OnQueue("default"))
 
-	_, _ = q.Dispatch(
-		ctx,
-		queue.NewJob("emails:flaky").OnQueue("default").Retry(1),
-	)
-	_, _ = q.Dispatch(
-		ctx,
-		queue.NewJob("emails:fail").OnQueue("default").Retry(0),
-	)
+	_, _ = q.Dispatch(ctx, queue.NewJob("emails:flaky").OnQueue("default").Retry(1))
+	_, _ = q.Dispatch(ctx, queue.NewJob("emails:fail").OnQueue("default").Retry(0))
 
 	_, _ = q.Chain(
 		queue.NewJob("emails:send").Payload(map[string]any{"to": "chain1@example.com"}).OnQueue("default"),
@@ -126,6 +122,5 @@ func main() {
 		return nil
 	}).Dispatch(ctx)
 
-	// Let the in-process workerpool drain so emitted events are visible before exit.
 	time.Sleep(500 * time.Millisecond)
 }
