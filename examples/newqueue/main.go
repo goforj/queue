@@ -11,11 +11,13 @@ import (
 )
 
 func main() {
-	// NewQueueWithDefaults creates a queue runtime and sets the default queue name.
+	// NewQueue creates the low-level queue runtime (driver-facing API) based on Config.Driver.
+	// Use this only for driver-focused/advanced runtime access; application code should prefer New.
 
-	// Example: new queue with default queue
-	q, err := queue.NewQueueWithDefaults("critical", queue.Config{
-		Driver: queue.DriverSync,
+	// Example: new queue runtime with default queue
+	q, err := queue.NewQueue(queue.Config{
+		Driver:       queue.DriverSync,
+		DefaultQueue: "critical",
 	})
 	if err != nil {
 		return

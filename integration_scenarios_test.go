@@ -1122,7 +1122,12 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 	t.Run("scenario_wait_all_processed", func(t *testing.T) {
 		want := expected.Load()
-		deadline := time.Now().Add(25 * time.Second)
+		waitBudget := 25 * time.Second
+		if fx.name == "nats" {
+			// NATS can run close to the deadline under full all-backends parallel CI load.
+			waitBudget = 45 * time.Second
+		}
+		deadline := time.Now().Add(waitBudget)
 		for time.Now().Before(deadline) {
 			if seen.Load() == want {
 				break

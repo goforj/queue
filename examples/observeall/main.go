@@ -55,7 +55,7 @@ func main() {
 			Driver:   queue.DriverWorkerpool,
 			Observer: runtimeObserver,
 		},
-		queue.WithWorkflowObserver(workflowObserver),
+		queue.WithObserver(workflowObserver),
 	)
 	if err != nil {
 		panic(err)

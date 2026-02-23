@@ -93,6 +93,13 @@ type Example struct {
 	Line  int
 }
 
+func includeInReadmeAPI(fd *FuncDoc) bool {
+	if fd.Package == "queue" && fd.Owner == "FakeQueue" && (fd.Name == "BusRegister" || fd.Name == "BusDispatch") {
+		return false
+	}
+	return true
+}
+
 //
 // ------------------------------------------------------------
 // Parsing
@@ -467,6 +474,9 @@ func renderAPI(funcs []*FuncDoc) string {
 	bareCounts := map[string]int{}
 	ownerQualifiedCounts := map[string]int{}
 	for _, fd := range funcs {
+		if !includeInReadmeAPI(fd) {
+			continue
+		}
 		if byPackageGroup[fd.Package] == nil {
 			byPackageGroup[fd.Package] = map[string][]*FuncDoc{}
 		}
@@ -511,6 +521,9 @@ func renderAPI(funcs []*FuncDoc) string {
 		sort.Strings(groupNames)
 
 		for _, group := range groupNames {
+			if group == "Testing" {
+				continue
+			}
 			groupFns := byPackageGroup[pkg][group]
 			sort.Slice(groupFns, func(i, j int) bool {
 				left := groupFns[i]

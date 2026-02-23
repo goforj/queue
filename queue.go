@@ -191,13 +191,37 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //			Payload(EmailPayload{ID: 1}).
 //			OnQueue("default"),
 //	)
-func New(cfg Config, opts ...RuntimeOption) (*Queue, error) {
+func New(cfg Config, opts ...Option) (*Queue, error) {
 	return newHighLevelQueue(cfg, opts...)
 }
 
 // NewQueue creates the low-level queue runtime (driver-facing API) based on Config.Driver.
 // Use this only for driver-focused/advanced runtime access; application code should prefer New.
 // @group Constructors
+//
+// Example: new queue runtime with default queue
+//
+//	q, err := queue.NewQueue(queue.Config{
+//		Driver:       queue.DriverSync,
+//		DefaultQueue: "critical",
+//	})
+//	if err != nil {
+//		return
+//	}
+//	type EmailPayload struct {
+//		ID int `json:"id"`
+//	}
+//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+//		var payload EmailPayload
+//		if err := job.Bind(&payload); err != nil {
+//			return err
+//		}
+//		_ = payload
+//		return nil
+//	})
+//	_ = q.StartWorkers(context.Background())
+//	defer q.Shutdown(context.Background())
+//	_ = q.Dispatch(queue.NewJob("emails:send").Payload(EmailPayload{ID: 1}))
 func NewQueue(cfg Config) (QueueRuntime, error) {
 	cfg = cfg.normalize()
 
@@ -610,38 +634,6 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}
-}
-
-// NewQueueWithDefaults creates a queue runtime and sets the default queue name.
-// @group Constructors
-//
-// Example: new queue with default queue
-//
-//	q, err := queue.NewQueueWithDefaults("critical", queue.Config{
-//		Driver: queue.DriverSync,
-//	})
-//	if err != nil {
-//		return
-//	}
-//	type EmailPayload struct {
-//		ID int `json:"id"`
-//	}
-//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
-//		var payload EmailPayload
-//		if err := job.Bind(&payload); err != nil {
-//			return err
-//		}
-//		_ = payload
-//		return nil
-//	})
-//	_ = q.StartWorkers(context.Background())
-//	defer q.Shutdown(context.Background())
-//	_ = q.Dispatch(queue.NewJob("emails:send").Payload(EmailPayload{ID: 1}))
-func NewQueueWithDefaults(defaultQueue string, cfg Config) (QueueRuntime, error) {
-	if cfg.DefaultQueue == "" {
-		cfg.DefaultQueue = defaultQueue
-	}
-	return NewQueue(cfg)
 }
 
 func (q *queueCommon) jobFromAny(job any) (Job, error) {

@@ -143,7 +143,7 @@ func TestNewRuntime_WithWorkflowObserver(t *testing.T) {
 	var observed atomic.Int32
 	rt, err := New(
 		Config{Driver: DriverSync},
-		WithWorkflowObserver(WorkflowObserverFunc(func(WorkflowEvent) {
+		WithObserver(WorkflowObserverFunc(func(WorkflowEvent) {
 			observed.Add(1)
 		})),
 	)

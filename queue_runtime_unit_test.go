@@ -207,9 +207,9 @@ func TestQueueConstructorsAndBackendDriverMethods(t *testing.T) {
 }
 
 func TestNewQueueWithDefaultsAndNewExternalWorker(t *testing.T) {
-	q, err := NewQueueWithDefaults("critical", Config{Driver: DriverSync})
+	q, err := NewQueue(Config{Driver: DriverSync, DefaultQueue: "critical"})
 	if err != nil {
-		t.Fatalf("new queue with defaults failed: %v", err)
+		t.Fatalf("new queue failed: %v", err)
 	}
 	if q.Driver() != DriverSync {
 		t.Fatalf("expected sync driver, got %q", q.Driver())

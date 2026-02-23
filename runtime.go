@@ -94,15 +94,15 @@ type WorkflowStore = bus.Store
 // @group Queue
 var ErrWorkflowNotFound = bus.ErrNotFound
 
-// RuntimeOption configures the high-level workflow runtime.
+// Option configures the high-level workflow runtime.
 // @group Queue
-type RuntimeOption func(*runtimeOptions)
+type Option func(*runtimeOptions)
 
 type runtimeOptions struct {
 	busOpts []bus.Option
 }
 
-func (o *runtimeOptions) apply(opts []RuntimeOption) {
+func (o *runtimeOptions) apply(opts []Option) {
 	for _, opt := range opts {
 		if opt != nil {
 			opt(o)
@@ -110,7 +110,7 @@ func (o *runtimeOptions) apply(opts []RuntimeOption) {
 	}
 }
 
-// WithWorkflowObserver installs a workflow lifecycle observer.
+// WithObserver installs a workflow lifecycle observer.
 // @group Queue
 //
 // Example: workflow observer
@@ -118,28 +118,48 @@ func (o *runtimeOptions) apply(opts []RuntimeOption) {
 //	observer := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
 //		_ = event.Kind
 //	})
-//	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithWorkflowObserver(observer))
+//	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))
 //	if err != nil {
 //		return
 //	}
 //	_ = q
-func WithWorkflowObserver(observer WorkflowObserver) RuntimeOption {
+func WithObserver(observer WorkflowObserver) Option {
 	return func(o *runtimeOptions) {
 		o.busOpts = append(o.busOpts, bus.WithObserver(observer))
 	}
 }
 
-// WithWorkflowStore overrides the workflow orchestration store.
+// WithStore overrides the workflow orchestration store.
 // @group Queue
-func WithWorkflowStore(store WorkflowStore) RuntimeOption {
+//
+// Example: workflow store
+//
+//	var store queue.WorkflowStore
+//	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithStore(store))
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func WithStore(store WorkflowStore) Option {
 	return func(o *runtimeOptions) {
 		o.busOpts = append(o.busOpts, bus.WithStore(store))
 	}
 }
 
-// WithWorkflowClock overrides the workflow runtime clock.
+// WithClock overrides the workflow runtime clock.
 // @group Queue
-func WithWorkflowClock(clock func() time.Time) RuntimeOption {
+//
+// Example: workflow clock
+//
+//	q, err := queue.New(
+//		queue.Config{Driver: queue.DriverSync},
+//		queue.WithClock(func() time.Time { return time.Unix(0, 0) }),
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func WithClock(clock func() time.Time) Option {
 	return func(o *runtimeOptions) {
 		o.busOpts = append(o.busOpts, bus.WithClock(clock))
 	}
@@ -158,7 +178,7 @@ func WithWorkflowClock(clock func() time.Time) RuntimeOption {
 //		return
 //	}
 //	_ = q
-func WithMiddleware(middlewares ...Middleware) RuntimeOption {
+func WithMiddleware(middlewares ...Middleware) Option {
 	return func(o *runtimeOptions) {
 		o.busOpts = append(o.busOpts, bus.WithMiddleware(middlewares...))
 	}
@@ -172,7 +192,7 @@ type Queue struct {
 	b bus.Bus
 }
 
-func newHighLevelQueue(cfg Config, opts ...RuntimeOption) (*Queue, error) {
+func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 	q, err := NewQueue(cfg)
 	if err != nil {
 		return nil, err
@@ -180,7 +200,7 @@ func newHighLevelQueue(cfg Config, opts ...RuntimeOption) (*Queue, error) {
 	return newQueueFromRuntime(q, opts...)
 }
 
-func newQueueFromRuntime(q QueueRuntime, opts ...RuntimeOption) (*Queue, error) {
+func newQueueFromRuntime(q QueueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
 	b, err := bus.New(q, ro.busOpts...)

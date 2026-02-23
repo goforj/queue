@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
+    inputs:
+      ga_soak_minutes:
+        description: "Requested GA soak duration (minutes) for soak-ga job metadata"
+        required: false
+        default: "15"
+        type: string
 
 jobs:
   integration-evidence:
@@ -106,6 +112,96 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integration-soak-${{ matrix.backend }}
+          path: .artifacts/*
+          if-no-files-found: warn
+
+  soak-ga:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [redis, rabbitmq]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run GA soak scenario suite (timed)
+        env:
+          RUN_INTEGRATION: "1"
+          RUN_SOAK: "1"
+          INTEGRATION_BACKEND: ${{ matrix.backend }}
+          REQUESTED_SOAK_MINUTES: ${{ github.event.inputs.ga_soak_minutes || '15' }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          start_epoch="$(date +%s)"
+          {
+            echo "backend=${{ matrix.backend }}"
+            echo "requested_soak_minutes=${REQUESTED_SOAK_MINUTES}"
+            echo "started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > ".artifacts/soak-ga-${{ matrix.backend }}-meta.txt"
+
+          go test -tags=integration ./... \
+            -run '^TestIntegrationScenarios_AllBackends$' \
+            -count=1 -v \
+            | tee ".artifacts/soak-ga-${{ matrix.backend }}.log"
+
+          end_epoch="$(date +%s)"
+          elapsed_seconds="$((end_epoch - start_epoch))"
+          {
+            echo "ended_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "elapsed_seconds=${elapsed_seconds}"
+          } >> ".artifacts/soak-ga-${{ matrix.backend }}-meta.txt"
+
+      - name: Summarize GA soak durations and metadata
+        if: always()
+        env:
+          REQUESTED_SOAK_MINUTES: ${{ github.event.inputs.ga_soak_minutes || '15' }}
+        run: |
+          set -euo pipefail
+          .github/scripts/extract_scenario_durations.sh \
+            ".artifacts/soak-ga-${{ matrix.backend }}.log" \
+            ".artifacts/soak-ga-${{ matrix.backend }}-durations.md"
+
+          elapsed_seconds="$(grep '^elapsed_seconds=' ".artifacts/soak-ga-${{ matrix.backend }}-meta.txt" | cut -d= -f2 || true)"
+          if [[ -z "${elapsed_seconds}" ]]; then
+            elapsed_seconds="unknown"
+          fi
+
+          summary_file=".artifacts/soak-ga-${{ matrix.backend }}-summary.md"
+          {
+            echo "## GA Soak Summary"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Backend | \`${{ matrix.backend }}\` |"
+            echo "| Requested soak duration | \`${REQUESTED_SOAK_MINUTES}m\` |"
+            echo "| Observed wall time | \`${elapsed_seconds}s\` |"
+            echo "| Log artifact | \`soak-ga-${{ matrix.backend }}.log\` |"
+            echo
+            cat ".artifacts/soak-ga-${{ matrix.backend }}-durations.md"
+          } > "${summary_file}"
+
+          {
+            echo "### soak-ga / ${{ matrix.backend }}"
+            cat "${summary_file}"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload GA soak logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-ga-${{ matrix.backend }}
           path: .artifacts/*
           if-no-files-found: warn
 
