@@ -568,7 +568,7 @@ func (r *Queue) Prune(ctx context.Context, before time.Time) error {
 //	if err != nil {
 //		return
 //	}
-//	if queue.SupportsPause(q.UnderlyingQueue()) {
+//	if queue.SupportsPause(q) {
 //		_ = q.Pause(context.Background(), "default")
 //	}
 func (r *Queue) Pause(ctx context.Context, queueName string) error {
@@ -591,7 +591,7 @@ func (r *Queue) Pause(ctx context.Context, queueName string) error {
 //	if err != nil {
 //		return
 //	}
-//	if queue.SupportsPause(q.UnderlyingQueue()) {
+//	if queue.SupportsPause(q) {
 //		_ = q.Resume(context.Background(), "default")
 //	}
 func (r *Queue) Resume(ctx context.Context, queueName string) error {
@@ -614,7 +614,7 @@ func (r *Queue) Resume(ctx context.Context, queueName string) error {
 //	if err != nil {
 //		return
 //	}
-//	if queue.SupportsNativeStats(q.UnderlyingQueue()) {
+//	if queue.SupportsNativeStats(q) {
 //		_, _ = q.Stats(context.Background())
 //	}
 func (r *Queue) Stats(ctx context.Context) (StatsSnapshot, error) {
@@ -626,25 +626,6 @@ func (r *Queue) Stats(ctx context.Context) (StatsSnapshot, error) {
 		return StatsSnapshot{}, fmt.Errorf("stats provider is not available for driver %q", r.q.Driver())
 	}
 	return provider.Stats(ctx)
-}
-
-// UnderlyingQueue returns the low-level queue runtime used by this high-level runtime.
-// @group Queue
-//
-// Example: underlying queue
-//
-//	q, err := queue.NewSync()
-//	if err != nil {
-//		return
-//	}
-//	raw := q.UnderlyingQueue()
-//	fmt.Println(raw.Driver())
-//	// Output: sync
-func (r *Queue) UnderlyingQueue() QueueRuntime {
-	if r == nil {
-		return nil
-	}
-	return r.q
 }
 
 // ChainBuilder is the high-level chain workflow builder.

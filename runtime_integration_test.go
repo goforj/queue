@@ -425,7 +425,7 @@ func integrationQueueDefaultName(t *testing.T, q *Queue) string {
 	if q == nil {
 		t.Fatal("queue is nil")
 	}
-	under := q.UnderlyingQueue()
+	under := q.q
 	if under == nil {
 		t.Fatal("underlying queue runtime is nil")
 	}

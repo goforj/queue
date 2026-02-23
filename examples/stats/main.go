@@ -18,7 +18,7 @@ func main() {
 	if err != nil {
 		return
 	}
-	if queue.SupportsNativeStats(q.UnderlyingQueue()) {
+	if queue.SupportsNativeStats(q) {
 		_, _ = q.Stats(context.Background())
 	}
 }
