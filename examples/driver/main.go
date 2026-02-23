@@ -1,6 +1,8 @@
 //go:build ignore
 // +build ignore
 
+// examplegen:generated
+
 package main
 
 import (
@@ -36,11 +38,7 @@ func example3() {
 	if err != nil {
 		return
 	}
-	driverAware, ok := q.(interface{ Driver() queue.Driver })
-	if !ok {
-		return
-	}
-	fmt.Println(driverAware.Driver())
+	fmt.Println(q.Driver())
 	// Output: sync
 }
 

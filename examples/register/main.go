@@ -1,6 +1,8 @@
 //go:build ignore
 // +build ignore
 
+// examplegen:generated
+
 package main
 
 import (
@@ -31,9 +33,9 @@ func example2() {
 	type EmailPayload struct {
 		ID int `json:"id"`
 	}
-	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
 		var payload EmailPayload
-		if err := job.Bind(&payload); err != nil {
+		if err := j.Bind(&payload); err != nil {
 			return err
 		}
 		_ = payload

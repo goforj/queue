@@ -1,6 +1,8 @@
 //go:build ignore
 // +build ignore
 
+// examplegen:generated
+
 package main
 
 import "github.com/goforj/queue"

@@ -1,6 +1,8 @@
 //go:build ignore
 // +build ignore
 
+// examplegen:generated
+
 package main
 
 import (
@@ -13,6 +15,6 @@ func main() {
 
 	// Example: check pause support
 	q, _ := queue.NewSync()
-	fmt.Println(queue.SupportsPause(q))
+	fmt.Println(queue.SupportsPause(q.UnderlyingQueue()))
 	// Output: true
 }

@@ -261,9 +261,9 @@ func testQueueWorkflowDispatchScenario(t *testing.T, q *Queue, queueName string)
 	seen := make(chan string, 1)
 	jobType := uniqueQueueJobType("queue:dispatch")
 
-	q.Register(jobType, func(_ context.Context, jc Context) error {
+	q.Register(jobType, func(_ context.Context, j Context) error {
 		var p payload
-		if err := jc.Bind(&p); err != nil {
+		if err := j.Bind(&p); err != nil {
 			return err
 		}
 		select {
@@ -338,9 +338,9 @@ func testQueueWorkflowBatchScenario(t *testing.T, q *Queue, queueName string) {
 	}
 	var processed atomic.Int32
 	jobType := uniqueQueueJobType("queue:batch:work")
-	q.Register(jobType, func(_ context.Context, jc Context) error {
+	q.Register(jobType, func(_ context.Context, j Context) error {
 		var p batchPayload
-		if err := jc.Bind(&p); err != nil {
+		if err := j.Bind(&p); err != nil {
 			return err
 		}
 		processed.Add(1)

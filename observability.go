@@ -920,7 +920,7 @@ func Pause(ctx context.Context, q QueueRuntime, queueName string) error {
 // Example: check pause support
 //
 //	q, _ := queue.NewSync()
-//	fmt.Println(queue.SupportsPause(q))
+//	fmt.Println(queue.SupportsPause(q.UnderlyingQueue()))
 //	// Output: true
 func SupportsPause(q QueueRuntime) bool {
 	if q == nil {
@@ -936,7 +936,7 @@ func SupportsPause(q QueueRuntime) bool {
 // Example: check native stats support
 //
 //	q, _ := queue.NewSync()
-//	fmt.Println(queue.SupportsNativeStats(q))
+//	fmt.Println(queue.SupportsNativeStats(q.UnderlyingQueue()))
 //	// Output: true
 func SupportsNativeStats(q QueueRuntime) bool {
 	if q == nil {
