@@ -337,9 +337,13 @@ func TestSQSWorker_StartWorkersInvalidEndpoint(t *testing.T) {
 		DefaultQueue: "default",
 		SQSRegion:    "us-east-1",
 		SQSEndpoint:  "://bad-endpoint",
+		SQSAccessKey: "test",
+		SQSSecretKey: "test",
 	}).(*sqsWorker)
 
-	if err := backend.StartWorkers(context.Background()); err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := backend.StartWorkers(ctx); err == nil {
 		t.Fatal("expected start workers error for invalid endpoint")
 	}
 	if backend.started {

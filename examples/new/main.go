@@ -9,19 +9,19 @@ import (
 )
 
 func main() {
-	// New creates a queue based on Config.Driver.
+	// New creates the high-level Queue API based on Config.Driver.
 
-	// Example: new queue from config
-	q, err := queue.NewSync()
+	// Example: create a queue and dispatch a workflow-capable job
+	q, err := queue.New(queue.Config{Driver: queue.DriverWorkerpool})
 	if err != nil {
 		return
 	}
 	type EmailPayload struct {
 		ID int `json:"id"`
 	}
-	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+	q.Register("emails:send", func(ctx context.Context, jc queue.Context) error {
 		var payload EmailPayload
-		if err := job.Bind(&payload); err != nil {
+		if err := jc.Bind(&payload); err != nil {
 			return err
 		}
 		_ = payload
@@ -29,7 +29,7 @@ func main() {
 	})
 	_ = q.Workers(1).StartWorkers(context.Background())
 	defer q.Shutdown(context.Background())
-	_ = q.DispatchCtx(
+	_, _ = q.Dispatch(
 		context.Background(),
 		queue.NewJob("emails:send").
 			Payload(EmailPayload{ID: 1}).

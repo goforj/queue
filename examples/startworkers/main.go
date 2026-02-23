@@ -18,7 +18,7 @@ func example1() {
 	// StartWorkers starts worker execution.
 
 	// Example: start workers
-	var q queue.Queue
+	var q queue.QueueRuntime
 	err := q.StartWorkers(context.Background())
 	_ = err
 }

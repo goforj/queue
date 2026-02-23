@@ -16,10 +16,10 @@ func main() {
 }
 
 func example1() {
-	// Dispatch submits a typed job payload using the default queue.
+	// Dispatch records a typed job payload in-memory using the fake default queue.
 
 	// Example: dispatch typed job
-	var q queue.Queue
+	var q queue.QueueRuntime
 	err := q.Dispatch(
 		queue.NewJob("emails:send").
 			Payload(map[string]any{"id": 1}).

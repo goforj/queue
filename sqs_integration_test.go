@@ -31,7 +31,7 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	received := make(chan payload, 1)
 	queueName := uniqueQueueName("sqs-bind")
 
-	q, err := New(newSQSIntegrationConfig(queueName))
+	q, err := NewQueue(newSQSIntegrationConfig(queueName))
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 	deadlineSeen := make(chan bool, 1)
 	queueName := uniqueQueueName("sqs-opts")
 
-	q, err := New(newSQSIntegrationConfig(queueName))
+	q, err := NewQueue(newSQSIntegrationConfig(queueName))
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestSQSIntegration_UniqueDuplicate(t *testing.T) {
 		t.Skip("sqs integration backend not selected")
 	}
 	queueName := uniqueQueueName("sqs-unique")
-	q, err := New(newSQSIntegrationConfig(queueName))
+	q, err := NewQueue(newSQSIntegrationConfig(queueName))
 	if err != nil {
 		t.Fatalf("new sqs queue failed: %v", err)
 	}

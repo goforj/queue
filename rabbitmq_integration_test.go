@@ -35,7 +35,7 @@ func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 	}
 	received := make(chan payload, 1)
 
-	q, err := New(newRabbitMQIntegrationConfig())
+	q, err := NewQueue(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 	var calls atomic.Int32
 	deadlineSeen := make(chan bool, 1)
 
-	q, err := New(newRabbitMQIntegrationConfig())
+	q, err := NewQueue(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestRabbitMQIntegration_UniqueDuplicate(t *testing.T) {
 	if !integrationBackendEnabled("rabbitmq") {
 		t.Skip("rabbitmq integration backend not selected")
 	}
-	q, err := New(newRabbitMQIntegrationConfig())
+	q, err := NewQueue(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestRabbitMQIntegration_RoutesToJobQueue(t *testing.T) {
 	jobType := "job:rabbitmq:route"
 	done := make(chan struct{}, 1)
 
-	consumer, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
+	consumer, err := NewQueue(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestRabbitMQIntegration_RoutesToJobQueue(t *testing.T) {
 	}
 	defer consumer.Shutdown(context.Background())
 
-	producer, err := New(newRabbitMQIntegrationConfig())
+	producer, err := NewQueue(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq producer queue failed: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 	start := time.Now()
 	done := make(chan struct{}, 1)
 
-	consumer1, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
+	consumer1, err := NewQueue(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
 
-	producer, err := New(newRabbitMQIntegrationConfig())
+	producer, err := NewQueue(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 		t.Fatalf("rabbitmq consumer queue shutdown failed: %v", err)
 	}
 
-	consumer2, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
+	consumer2, err := NewQueue(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 	done := make(chan struct{}, 1)
 	var calls atomic.Int32
 
-	consumer1, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
+	consumer1, err := NewQueue(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
 
-	producer, err := New(newRabbitMQIntegrationConfig())
+	producer, err := NewQueue(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		t.Fatalf("rabbitmq consumer queue shutdown failed: %v", err)
 	}
 
-	consumer2, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
+	consumer2, err := NewQueue(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue 2 failed: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	start := time.Now()
 	done := make(chan struct{}, 1)
 
-	consumer, err := New(newRabbitMQIntegrationConfigForQueue(queueName))
+	consumer, err := NewQueue(newRabbitMQIntegrationConfigForQueue(queueName))
 	if err != nil {
 		t.Fatalf("new rabbitmq consumer queue failed: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 	}
 	defer consumer.Shutdown(context.Background())
 
-	q, err := New(newRabbitMQIntegrationConfig())
+	q, err := NewQueue(newRabbitMQIntegrationConfig())
 	if err != nil {
 		t.Fatalf("new rabbitmq queue failed: %v", err)
 	}

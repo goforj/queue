@@ -18,7 +18,7 @@ func example1() {
 	// Register associates a handler with a job type.
 
 	// Example: register a handler
-	var q queue.Queue
+	var q queue.QueueRuntime
 	q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 }
 

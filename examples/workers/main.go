@@ -17,7 +17,7 @@ func example1() {
 	// Workers sets desired worker concurrency before StartWorkers.
 
 	// Example: set worker count
-	var q queue.Queue
+	var q queue.QueueRuntime
 	q = q.Workers(4)
 }
 

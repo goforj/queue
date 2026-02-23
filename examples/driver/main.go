@@ -18,7 +18,7 @@ func example1() {
 	// Driver returns the active queue driver.
 
 	// Example: inspect queue driver
-	var q queue.Queue
+	var q queue.QueueRuntime
 	driver := q.Driver()
 	_ = driver
 }

@@ -20,7 +20,7 @@ func (f fakeEnqueuer) Close() error {
 	return nil
 }
 
-func queueDriver(q Queue) Driver {
+func queueDriver(q QueueRuntime) Driver {
 	if driverAware, ok := q.(interface{ Driver() Driver }); ok {
 		return driverAware.Driver()
 	}
@@ -28,7 +28,7 @@ func queueDriver(q Queue) Driver {
 }
 
 func TestNewSyncQueue(t *testing.T) {
-	q, err := NewSync()
+	q, err := NewQueue(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestNewSyncQueue(t *testing.T) {
 }
 
 func TestNewNullQueue(t *testing.T) {
-	q, err := NewNull()
+	q, err := NewQueue(Config{Driver: DriverNull})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestNewNullQueue(t *testing.T) {
 }
 
 func TestNewWorkerpoolQueue(t *testing.T) {
-	q, err := NewWorkerpool()
+	q, err := NewQueue(Config{Driver: DriverWorkerpool})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestNewWorkerpoolQueue(t *testing.T) {
 }
 
 func TestNewRedisQueue(t *testing.T) {
-	q, err := NewRedis("127.0.0.1:6379")
+	q, err := NewQueue(Config{Driver: DriverRedis, RedisAddr: "127.0.0.1:6379"})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestNewRedisQueue(t *testing.T) {
 }
 
 func TestNewNATSQueue(t *testing.T) {
-	q, err := NewNATS("nats://127.0.0.1:4222")
+	q, err := NewQueue(Config{Driver: DriverNATS, NATSURL: "nats://127.0.0.1:4222"})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestNewNATSQueue(t *testing.T) {
 }
 
 func TestNewSQSQueue(t *testing.T) {
-	q, err := NewSQS("us-east-1")
+	q, err := NewQueue(Config{Driver: DriverSQS, SQSRegion: "us-east-1"})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestNewSQSQueue(t *testing.T) {
 }
 
 func TestNewRabbitMQQueue(t *testing.T) {
-	q, err := NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
+	q, err := NewQueue(Config{Driver: DriverRabbitMQ, RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/"})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -98,7 +98,11 @@ func TestNewRabbitMQQueue(t *testing.T) {
 }
 
 func TestNewDatabaseQueue(t *testing.T) {
-	q, err := NewDatabase("sqlite", t.TempDir()+"/queue.db")
+	q, err := NewQueue(Config{
+		Driver:         DriverDatabase,
+		DatabaseDriver: "sqlite",
+		DatabaseDSN:    t.TempDir() + "/queue.db",
+	})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -133,7 +137,7 @@ func TestNew_SelectsByConfig(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			q, err := New(tc.cfg)
+			q, err := NewQueue(tc.cfg)
 			if err != nil {
 				t.Fatalf("new q failed: %v", err)
 			}
@@ -145,7 +149,7 @@ func TestNew_SelectsByConfig(t *testing.T) {
 }
 
 func TestNew_UnknownDriverFails(t *testing.T) {
-	q, err := New(Config{Driver: Driver("unknown")})
+	q, err := NewQueue(Config{Driver: Driver("unknown")})
 	if err == nil {
 		t.Fatal("expected unknown driver error")
 	}
@@ -155,7 +159,7 @@ func TestNew_UnknownDriverFails(t *testing.T) {
 }
 
 func TestRedisQueue_DispatchWithoutClientFails(t *testing.T) {
-	q, err := New(Config{Driver: DriverRedis})
+	q, err := NewQueue(Config{Driver: DriverRedis})
 	if err == nil {
 		t.Fatal("expected constructor error for missing redis addr")
 	}
@@ -168,7 +172,7 @@ func TestRedisQueue_DispatchWithoutClientFails(t *testing.T) {
 }
 
 func TestNATSQueue_DispatchWithoutURLFails(t *testing.T) {
-	q, err := New(Config{Driver: DriverNATS})
+	q, err := NewQueue(Config{Driver: DriverNATS})
 	if err == nil {
 		t.Fatal("expected constructor error for missing nats url")
 	}
@@ -181,7 +185,7 @@ func TestNATSQueue_DispatchWithoutURLFails(t *testing.T) {
 }
 
 func TestRabbitMQQueue_DispatchWithoutURLFails(t *testing.T) {
-	q, err := New(Config{Driver: DriverRabbitMQ})
+	q, err := NewQueue(Config{Driver: DriverRabbitMQ})
 	if err == nil {
 		t.Fatal("expected constructor error for missing rabbitmq url")
 	}
@@ -202,7 +206,7 @@ func TestRedisQueue_BackoffUnsupported(t *testing.T) {
 }
 
 func TestQueue_ShutdownNoopForSyncAndRedis(t *testing.T) {
-	syncQueue, err := New(Config{Driver: DriverSync})
+	syncQueue, err := NewQueue(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("sync constructor failed: %v", err)
 	}
@@ -210,7 +214,7 @@ func TestQueue_ShutdownNoopForSyncAndRedis(t *testing.T) {
 		t.Fatalf("sync shutdown failed: %v", err)
 	}
 
-	redisQueue, err := New(Config{
+	redisQueue, err := NewQueue(Config{
 		Driver:    DriverRedis,
 		RedisAddr: "127.0.0.1:6379",
 	})
@@ -223,7 +227,7 @@ func TestQueue_ShutdownNoopForSyncAndRedis(t *testing.T) {
 }
 
 func TestQueueRuntime_StartWorkersFromQueueConfig(t *testing.T) {
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver: DriverWorkerpool,
 	})
 	if err != nil {
@@ -238,7 +242,7 @@ func TestQueueRuntime_StartWorkersFromQueueConfig(t *testing.T) {
 }
 
 func TestQueueRuntime_StartWorkers_Idempotent(t *testing.T) {
-	q, err := New(Config{Driver: DriverSync})
+	q, err := NewQueue(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -251,7 +255,7 @@ func TestQueueRuntime_StartWorkers_Idempotent(t *testing.T) {
 }
 
 func TestQueueRuntime_StartWorkersSharesInProcessRuntime(t *testing.T) {
-	q, err := New(Config{Driver: DriverSync})
+	q, err := NewQueue(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -272,7 +276,7 @@ func TestQueueRuntime_StartWorkersSharesInProcessRuntime(t *testing.T) {
 }
 
 func TestQueueRuntime_PathInvariant_NativeRuntimeSelected(t *testing.T) {
-	q, err := New(Config{Driver: DriverSync})
+	q, err := NewQueue(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -293,7 +297,7 @@ func TestQueueRuntime_PathInvariant_NativeRuntimeSelected(t *testing.T) {
 }
 
 func TestQueueRuntime_PathInvariant_ExternalRuntimeSelected(t *testing.T) {
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:    DriverRedis,
 		RedisAddr: "127.0.0.1:6379",
 	})

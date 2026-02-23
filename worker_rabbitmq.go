@@ -33,6 +33,7 @@ type rabbitMQWorkerConfig struct {
 	RabbitMQURL  string
 	Workers      int
 	Observer     Observer
+	DialTimeout  time.Duration
 }
 
 func newRabbitMQWorker(cfg rabbitMQWorkerConfig) runtimeWorkerBackend {
@@ -68,7 +69,11 @@ func (w *rabbitMQWorker) StartWorkers(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	conn, err := dialRabbitMQWithRetry(w.cfg.RabbitMQURL, 15*time.Second)
+	dialTimeout := w.cfg.DialTimeout
+	if dialTimeout <= 0 {
+		dialTimeout = 15 * time.Second
+	}
+	conn, err := dialRabbitMQWithRetry(w.cfg.RabbitMQURL, dialTimeout)
 	if err != nil {
 		return err
 	}

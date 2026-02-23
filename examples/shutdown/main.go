@@ -18,7 +18,7 @@ func example1() {
 	// Shutdown drains running work and releases resources.
 
 	// Example: shutdown runtime
-	var q queue.Queue
+	var q queue.QueueRuntime
 	err := q.Shutdown(context.Background())
 	_ = err
 }

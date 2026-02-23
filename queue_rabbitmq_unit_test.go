@@ -62,6 +62,7 @@ func TestRabbitMQQueue_ClaimUniquePrunesExpired(t *testing.T) {
 
 func TestRabbitMQQueue_EnsureConnectedLockedAndErrorClassifier(t *testing.T) {
 	q := newRabbitMQQueue("://bad-url", "default").(*rabbitMQQueue)
+	q.dialTimeout = 5 * time.Millisecond
 	if err := q.ensureConnectedLocked(); err == nil {
 		t.Fatal("expected ensureConnectedLocked to fail for invalid url")
 	}

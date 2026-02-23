@@ -27,6 +27,7 @@ type rabbitMQMessage struct {
 type rabbitMQQueue struct {
 	url          string
 	defaultQueue string
+	dialTimeout  time.Duration
 
 	mu     sync.Mutex
 	conn   *amqp.Connection
@@ -136,7 +137,11 @@ func (q *rabbitMQQueue) ensureConnectedLocked() error {
 		return nil
 	}
 	q.closeLocked()
-	conn, err := dialRabbitMQWithRetry(q.url, 10*time.Second)
+	dialTimeout := q.dialTimeout
+	if dialTimeout <= 0 {
+		dialTimeout = 10 * time.Second
+	}
+	conn, err := dialRabbitMQWithRetry(q.url, dialTimeout)
 	if err != nil {
 		return err
 	}

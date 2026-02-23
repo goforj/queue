@@ -183,13 +183,13 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 	fx := []struct {
 		name     string
 		executes bool
-		newQ     func(t *testing.T) queue.Queue
+		newQ     func(t *testing.T) queue.QueueRuntime
 	}{
 		{
 			name:     "null",
 			executes: false,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{Driver: queue.DriverNull})
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{Driver: queue.DriverNull})
 				if err != nil {
 					t.Fatalf("new null queue failed: %v", err)
 				}
@@ -199,8 +199,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "sync",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{Driver: queue.DriverSync})
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 				if err != nil {
 					t.Fatalf("new sync queue failed: %v", err)
 				}
@@ -210,8 +210,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "workerpool",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{Driver: queue.DriverWorkerpool})
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{Driver: queue.DriverWorkerpool})
 				if err != nil {
 					t.Fatalf("new workerpool queue failed: %v", err)
 				}
@@ -221,8 +221,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "redis",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{
 					Driver:    queue.DriverRedis,
 					RedisAddr: integrationRedis.addr,
 				})
@@ -235,8 +235,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "mysql",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{
 					Driver:         queue.DriverDatabase,
 					DatabaseDriver: "mysql",
 					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
@@ -250,8 +250,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "postgres",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{
 					Driver:         queue.DriverDatabase,
 					DatabaseDriver: "pgx",
 					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
@@ -265,8 +265,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "sqlite",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{
 					Driver:         queue.DriverDatabase,
 					DatabaseDriver: "sqlite",
 					DatabaseDSN:    fmt.Sprintf("%s/bus-integration-%d.db", t.TempDir(), time.Now().UnixNano()),
@@ -280,8 +280,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "nats",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{
 					Driver:  queue.DriverNATS,
 					NATSURL: integrationNATS.url,
 				})
@@ -294,8 +294,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "sqs",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{
 					Driver:       queue.DriverSQS,
 					SQSEndpoint:  integrationSQS.endpoint,
 					SQSRegion:    integrationSQS.region,
@@ -311,8 +311,8 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		{
 			name:     "rabbitmq",
 			executes: true,
-			newQ: func(t *testing.T) queue.Queue {
-				q, err := queue.New(queue.Config{
+			newQ: func(t *testing.T) queue.QueueRuntime {
+				q, err := queue.NewQueue(queue.Config{
 					Driver:      queue.DriverRabbitMQ,
 					RabbitMQURL: integrationRabbitMQ.url,
 				})
@@ -330,6 +330,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			if !integrationBackendEnabled(backend.name) {
 				t.Skipf("%s integration backend not selected", backend.name)
 			}
+			t.Parallel()
 
 			q := backend.newQ(t)
 			b, err := bus.New(q)

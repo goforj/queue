@@ -3,15 +3,10 @@ package bus
 import (
 	"context"
 	"testing"
-
-	"github.com/goforj/queue"
 )
 
 func TestRuntimeCleansChainCallbacksAfterFinally(t *testing.T) {
-	q, err := queue.NewSync()
-	if err != nil {
-		t.Fatalf("new sync queue: %v", err)
-	}
+	q := newSyncTestRuntime()
 	bi, err := New(q)
 	if err != nil {
 		t.Fatalf("new bus: %v", err)
@@ -37,10 +32,7 @@ func TestRuntimeCleansChainCallbacksAfterFinally(t *testing.T) {
 }
 
 func TestRuntimeCleansBatchCallbacksAfterFinally(t *testing.T) {
-	q, err := queue.NewSync()
-	if err != nil {
-		t.Fatalf("new sync queue: %v", err)
-	}
+	q := newSyncTestRuntime()
 	bi, err := New(q)
 	if err != nil {
 		t.Fatalf("new bus: %v", err)

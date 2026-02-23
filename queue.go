@@ -9,27 +9,28 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goforj/queue/internal/busruntime"
 	"github.com/hibiken/asynq"
 )
 
-// Queue is the queue abstraction exposed to callers.
-type Queue interface {
+// QueueRuntime is the low-level queue runtime abstraction exposed to callers.
+type QueueRuntime interface {
 	// Driver returns the active queue driver.
-	// @group Queue
+	// @group Queue Runtime
 	//
 	// Example: inspect queue driver
 	//
-	//	var q queue.Queue
+	//	var q queue.QueueRuntime
 	//	driver := q.Driver()
 	//	_ = driver
 	Driver() Driver
 
 	// Dispatch submits a typed job payload using the default queue.
-	// @group Queue
+	// @group Queue Runtime
 	//
 	// Example: dispatch typed job
 	//
-	//	var q queue.Queue
+	//	var q queue.QueueRuntime
 	//	err := q.Dispatch(
 	//		queue.NewJob("emails:send").
 	//			Payload(map[string]any{"id": 1}).
@@ -39,11 +40,11 @@ type Queue interface {
 	Dispatch(job any) error
 
 	// DispatchCtx submits a typed job payload using the provided context.
-	// @group Queue
+	// @group Queue Runtime
 	//
 	// Example: dispatch with context
 	//
-	//	var q queue.Queue
+	//	var q queue.QueueRuntime
 	//	err := q.DispatchCtx(
 	//		context.Background(),
 	//		queue.NewJob("emails:send").OnQueue("default"),
@@ -52,39 +53,39 @@ type Queue interface {
 	DispatchCtx(ctx context.Context, job any) error
 
 	// Register associates a handler with a job type.
-	// @group Queue
+	// @group Queue Runtime
 	//
 	// Example: register a handler
 	//
-	//	var q queue.Queue
+	//	var q queue.QueueRuntime
 	//	q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 	Register(jobType string, handler Handler)
 
 	// StartWorkers starts worker execution.
-	// @group Queue
+	// @group Queue Runtime
 	//
 	// Example: start workers
 	//
-	//	var q queue.Queue
+	//	var q queue.QueueRuntime
 	//	err := q.StartWorkers(context.Background())
 	//	_ = err
 	StartWorkers(ctx context.Context) error
 
 	// Workers sets desired worker concurrency before StartWorkers.
-	// @group Queue
+	// @group Queue Runtime
 	//
 	// Example: set worker count
 	//
-	//	var q queue.Queue
+	//	var q queue.QueueRuntime
 	//	q = q.Workers(4)
-	Workers(count int) Queue
+	Workers(count int) QueueRuntime
 
 	// Shutdown drains running work and releases resources.
-	// @group Queue
+	// @group Queue Runtime
 	//
 	// Example: shutdown runtime
 	//
-	//	var q queue.Queue
+	//	var q queue.QueueRuntime
 	//	err := q.Shutdown(context.Background())
 	//	_ = err
 	Shutdown(ctx context.Context) error
@@ -106,7 +107,7 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 	return c
 }
 
-// Config configures queue runtime creation for New.
+// Config configures queue creation for New and NewQueue.
 // @group Config
 type Config struct {
 	Driver   Driver
@@ -162,21 +163,21 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 	}
 }
 
-// New creates a queue based on Config.Driver.
+// New creates the high-level Queue API based on Config.Driver.
 // @group Constructors
 //
-// Example: new queue from config
+// Example: create a queue and dispatch a workflow-capable job
 //
-//	q, err := queue.NewSync()
+//	q, err := queue.New(queue.Config{Driver: queue.DriverWorkerpool})
 //	if err != nil {
 //		return
 //	}
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+//	q.Register("emails:send", func(ctx context.Context, jc queue.Context) error {
 //		var payload EmailPayload
-//		if err := job.Bind(&payload); err != nil {
+//		if err := jc.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload
@@ -184,13 +185,20 @@ func (cfg Config) databaseConfig() DatabaseConfig {
 //	})
 //	_ = q.Workers(1).StartWorkers(context.Background())
 //	defer q.Shutdown(context.Background())
-//	_ = q.DispatchCtx(
+//	_, _ = q.Dispatch(
 //		context.Background(),
 //		queue.NewJob("emails:send").
 //			Payload(EmailPayload{ID: 1}).
 //			OnQueue("default"),
 //	)
-func New(cfg Config) (Queue, error) {
+func New(cfg Config, opts ...RuntimeOption) (*Queue, error) {
+	return newHighLevelQueue(cfg, opts...)
+}
+
+// NewQueue creates the low-level queue runtime (driver-facing API) based on Config.Driver.
+// Use this only for driver-focused/advanced runtime access; application code should prefer New.
+// @group Constructors
+func NewQueue(cfg Config) (QueueRuntime, error) {
 	cfg = cfg.normalize()
 
 	var q queueBackend
@@ -247,134 +255,6 @@ func New(cfg Config) (Queue, error) {
 		common:     common,
 		registered: make(map[string]Handler),
 	}, nil
-}
-
-// NewNull creates a drop-only queue runtime.
-// @group Constructors
-//
-// Example: new null queue
-//
-//	q, err := queue.NewNull()
-//	if err != nil {
-//		return
-//	}
-//	_ = q.Dispatch(queue.NewJob("emails:send").Payload(map[string]int{"id": 1}).OnQueue("default"))
-func NewNull() (Queue, error) {
-	return New(Config{Driver: DriverNull})
-}
-
-// NewSync creates a synchronous in-process queue runtime.
-// @group Constructors
-//
-// Example: new sync queue
-//
-//	q, err := queue.NewSync()
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewSync() (Queue, error) {
-	return New(Config{Driver: DriverSync})
-}
-
-// NewWorkerpool creates an in-process workerpool queue runtime.
-// @group Constructors
-//
-// Example: new workerpool queue
-//
-//	q, err := queue.NewWorkerpool()
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewWorkerpool() (Queue, error) {
-	return New(Config{Driver: DriverWorkerpool})
-}
-
-// NewDatabase creates a SQL-backed queue runtime.
-// @group Constructors
-//
-// Example: new database queue
-//
-//	q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewDatabase(driverName, dsn string) (Queue, error) {
-	return New(Config{
-		Driver:         DriverDatabase,
-		DatabaseDriver: driverName,
-		DatabaseDSN:    dsn,
-	})
-}
-
-// NewRedis creates a Redis-backed queue runtime.
-// @group Constructors
-//
-// Example: new redis queue
-//
-//	q, err := queue.NewRedis("127.0.0.1:6379")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewRedis(addr string) (Queue, error) {
-	return New(Config{
-		Driver:    DriverRedis,
-		RedisAddr: addr,
-	})
-}
-
-// NewNATS creates a NATS-backed queue runtime.
-// @group Constructors
-//
-// Example: new nats queue
-//
-//	q, err := queue.NewNATS("nats://127.0.0.1:4222")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewNATS(url string) (Queue, error) {
-	return New(Config{
-		Driver:  DriverNATS,
-		NATSURL: url,
-	})
-}
-
-// NewSQS creates an SQS-backed queue runtime.
-// @group Constructors
-//
-// Example: new sqs queue
-//
-//	q, err := queue.NewSQS("us-east-1")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewSQS(region string) (Queue, error) {
-	return New(Config{
-		Driver:    DriverSQS,
-		SQSRegion: region,
-	})
-}
-
-// NewRabbitMQ creates a RabbitMQ-backed queue runtime.
-// @group Constructors
-//
-// Example: new rabbitmq queue
-//
-//	q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewRabbitMQ(url string) (Queue, error) {
-	return New(Config{
-		Driver:      DriverRabbitMQ,
-		RabbitMQURL: url,
-	})
 }
 
 func (cfg Config) normalize() Config {
@@ -445,6 +325,34 @@ func (q *externalQueueRuntime) Driver() Driver         { return q.common.Driver(
 func (q *externalQueueRuntime) Dispatch(job any) error { return q.common.Dispatch(job) }
 func (q *externalQueueRuntime) DispatchCtx(ctx context.Context, job any) error {
 	return q.common.DispatchCtx(ctx, job)
+}
+
+func (q *nativeQueueRuntime) BusRegister(jobType string, handler busruntime.Handler) {
+	if handler == nil {
+		q.Register(jobType, nil)
+		return
+	}
+	q.Register(jobType, func(ctx context.Context, job Job) error {
+		return handler(ctx, job)
+	})
+}
+
+func (q *externalQueueRuntime) BusRegister(jobType string, handler busruntime.Handler) {
+	if handler == nil {
+		q.Register(jobType, nil)
+		return
+	}
+	q.Register(jobType, func(ctx context.Context, job Job) error {
+		return handler(ctx, job)
+	})
+}
+
+func (q *nativeQueueRuntime) BusDispatch(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	return q.common.dispatchBusJob(ctx, jobType, payload, opts)
+}
+
+func (q *externalQueueRuntime) BusDispatch(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	return q.common.dispatchBusJob(ctx, jobType, payload, opts)
 }
 
 func (q *nativeQueueRuntime) Register(jobType string, handler Handler) {
@@ -536,7 +444,7 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
-func (q *nativeQueueRuntime) Workers(count int) Queue {
+func (q *nativeQueueRuntime) Workers(count int) QueueRuntime {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started && count > 0 {
@@ -545,7 +453,7 @@ func (q *nativeQueueRuntime) Workers(count int) Queue {
 	return q
 }
 
-func (q *externalQueueRuntime) Workers(count int) Queue {
+func (q *externalQueueRuntime) Workers(count int) QueueRuntime {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started && count > 0 {
@@ -640,6 +548,29 @@ func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Han
 	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, handler)
 }
 
+func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	job := NewJob(jobType).Payload(payload)
+	if opts.Queue != "" {
+		job = job.OnQueue(opts.Queue)
+	}
+	if opts.Delay > 0 {
+		job = job.Delay(opts.Delay)
+	}
+	if opts.Timeout > 0 {
+		job = job.Timeout(opts.Timeout)
+	}
+	if opts.Retry > 0 {
+		job = job.Retry(opts.Retry)
+	}
+	if opts.Backoff > 0 {
+		job = job.Backoff(opts.Backoff)
+	}
+	if opts.UniqueFor > 0 {
+		job = job.UniqueFor(opts.UniqueFor)
+	}
+	return q.inner.Dispatch(ctx, job)
+}
+
 func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error) {
 	switch cfg.Driver {
 	case DriverRedis:
@@ -706,11 +637,11 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 //	_ = q.StartWorkers(context.Background())
 //	defer q.Shutdown(context.Background())
 //	_ = q.Dispatch(queue.NewJob("emails:send").Payload(EmailPayload{ID: 1}))
-func NewQueueWithDefaults(defaultQueue string, cfg Config) (Queue, error) {
+func NewQueueWithDefaults(defaultQueue string, cfg Config) (QueueRuntime, error) {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = defaultQueue
 	}
-	return New(cfg)
+	return NewQueue(cfg)
 }
 
 func (q *queueCommon) jobFromAny(job any) (Job, error) {

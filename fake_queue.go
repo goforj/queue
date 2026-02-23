@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"github.com/goforj/queue/internal/busruntime"
 )
 
 // DispatchRecord captures one dispatch observed by FakeQueue.
@@ -129,7 +131,7 @@ func (f *FakeQueue) StartWorkers(context.Context) error { return nil }
 //	q := fake.Workers(4)
 //	fmt.Println(q != nil)
 //	// Output: true
-func (f *FakeQueue) Workers(int) Queue { return f }
+func (f *FakeQueue) Workers(int) QueueRuntime { return f }
 
 // Shutdown drains running work and releases resources.
 // @group Testing
@@ -140,6 +142,35 @@ func (f *FakeQueue) Workers(int) Queue { return f }
 //	err := fake.Shutdown(context.Background())
 //	_ = err
 func (f *FakeQueue) Shutdown(context.Context) error { return nil }
+
+// BusRegister satisfies the internal orchestration runtime adapter.
+// @group Testing
+func (f *FakeQueue) BusRegister(string, busruntime.Handler) {}
+
+// BusDispatch satisfies the internal orchestration runtime adapter.
+// @group Testing
+func (f *FakeQueue) BusDispatch(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	job := NewJob(jobType).Payload(payload)
+	if opts.Queue != "" {
+		job = job.OnQueue(opts.Queue)
+	}
+	if opts.Delay > 0 {
+		job = job.Delay(opts.Delay)
+	}
+	if opts.Timeout > 0 {
+		job = job.Timeout(opts.Timeout)
+	}
+	if opts.Retry > 0 {
+		job = job.Retry(opts.Retry)
+	}
+	if opts.Backoff > 0 {
+		job = job.Backoff(opts.Backoff)
+	}
+	if opts.UniqueFor > 0 {
+		job = job.UniqueFor(opts.UniqueFor)
+	}
+	return f.DispatchCtx(ctx, job)
+}
 
 // Reset clears all recorded dispatches.
 // @group Testing

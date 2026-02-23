@@ -12,7 +12,7 @@ import (
 )
 
 func TestMiddlewareOrder(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestMiddlewareOrder(t *testing.T) {
 }
 
 func TestSkipWhenMiddlewareSkipsHandler(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestSkipWhenMiddlewareSkipsHandler(t *testing.T) {
 }
 
 func TestFailOnErrorWrapsFatal(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -120,7 +120,7 @@ func (s *stubRateLimiter) Allow(_ context.Context, key string) (bool, time.Durat
 }
 
 func TestRateLimitDeniedPreventsHandler(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestRateLimitDeniedPreventsHandler(t *testing.T) {
 }
 
 func TestRateLimitLimiterErrorPropagates(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestRateLimitLimiterErrorPropagates(t *testing.T) {
 }
 
 func TestRetryPolicyPassesThrough(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -229,7 +229,7 @@ func (s *stubLocker) Acquire(_ context.Context, key string, ttl time.Duration) (
 }
 
 func TestWithoutOverlappingDeniedPreventsHandler(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestWithoutOverlappingDeniedPreventsHandler(t *testing.T) {
 }
 
 func TestWithoutOverlappingAcquireErrorPropagates(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestWithoutOverlappingAcquireErrorPropagates(t *testing.T) {
 }
 
 func TestWithoutOverlappingReleasesLockAfterHandler(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestWithoutOverlappingReleasesLockAfterHandler(t *testing.T) {
 }
 
 func TestWithoutOverlappingReleasesLockAfterHandlerError(t *testing.T) {
-	q, err := queue.NewSync()
+	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
