@@ -896,18 +896,35 @@ func normalizeQueueName(name string) string {
 	return name
 }
 
+func resolveQueueRuntime(v any) QueueRuntime {
+	switch q := v.(type) {
+	case nil:
+		return nil
+	case QueueRuntime:
+		return q
+	case *Queue:
+		if q == nil {
+			return nil
+		}
+		return q.q
+	default:
+		return nil
+	}
+}
+
 // Pause pauses queue consumption for drivers that support it.
 // @group Observability
 //
 // Example: pause queue
 //
 //	q, _ := queue.NewSync()
-//	_ = queue.Pause(context.Background(), q.UnderlyingQueue(), "default")
-//	snapshot, _ := queue.Snapshot(context.Background(), q.UnderlyingQueue(), nil)
+//	_ = queue.Pause(context.Background(), q, "default")
+//	snapshot, _ := queue.Snapshot(context.Background(), q, nil)
 //	fmt.Println(snapshot.Paused("default"))
 //	// Output: 1
-func Pause(ctx context.Context, q QueueRuntime, queueName string) error {
-	controller, ok := q.(QueueController)
+func Pause(ctx context.Context, q any, queueName string) error {
+	raw := resolveQueueRuntime(q)
+	controller, ok := raw.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
 	}
@@ -920,13 +937,14 @@ func Pause(ctx context.Context, q QueueRuntime, queueName string) error {
 // Example: check pause support
 //
 //	q, _ := queue.NewSync()
-//	fmt.Println(queue.SupportsPause(q.UnderlyingQueue()))
+//	fmt.Println(queue.SupportsPause(q))
 //	// Output: true
-func SupportsPause(q QueueRuntime) bool {
-	if q == nil {
+func SupportsPause(q any) bool {
+	raw := resolveQueueRuntime(q)
+	if raw == nil {
 		return false
 	}
-	_, ok := q.(QueueController)
+	_, ok := raw.(QueueController)
 	return ok
 }
 
@@ -936,13 +954,14 @@ func SupportsPause(q QueueRuntime) bool {
 // Example: check native stats support
 //
 //	q, _ := queue.NewSync()
-//	fmt.Println(queue.SupportsNativeStats(q.UnderlyingQueue()))
+//	fmt.Println(queue.SupportsNativeStats(q))
 //	// Output: true
-func SupportsNativeStats(q QueueRuntime) bool {
-	if q == nil {
+func SupportsNativeStats(q any) bool {
+	raw := resolveQueueRuntime(q)
+	if raw == nil {
 		return false
 	}
-	_, ok := q.(StatsProvider)
+	_, ok := raw.(StatsProvider)
 	return ok
 }
 
@@ -952,14 +971,14 @@ func SupportsNativeStats(q QueueRuntime) bool {
 // Example: resume queue
 //
 //	q, _ := queue.NewSync()
-//	raw := q.UnderlyingQueue()
-//	_ = queue.Pause(context.Background(), raw, "default")
-//	_ = queue.Resume(context.Background(), raw, "default")
-//	snapshot, _ := queue.Snapshot(context.Background(), raw, nil)
+//	_ = queue.Pause(context.Background(), q, "default")
+//	_ = queue.Resume(context.Background(), q, "default")
+//	snapshot, _ := queue.Snapshot(context.Background(), q, nil)
 //	fmt.Println(snapshot.Paused("default"))
 //	// Output: 0
-func Resume(ctx context.Context, q QueueRuntime, queueName string) error {
-	controller, ok := q.(QueueController)
+func Resume(ctx context.Context, q any, queueName string) error {
+	raw := resolveQueueRuntime(q)
+	controller, ok := raw.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
 	}
@@ -976,8 +995,9 @@ func Resume(ctx context.Context, q QueueRuntime, queueName string) error {
 //	_, ok := snapshot.Queue("default")
 //	fmt.Println(ok)
 //	// Output: true
-func Snapshot(ctx context.Context, q QueueRuntime, collector *StatsCollector) (StatsSnapshot, error) {
-	if provider, ok := q.(StatsProvider); ok {
+func Snapshot(ctx context.Context, q any, collector *StatsCollector) (StatsSnapshot, error) {
+	raw := resolveQueueRuntime(q)
+	if provider, ok := raw.(StatsProvider); ok {
 		snapshot, err := provider.Stats(ctx)
 		if err == nil {
 			return snapshot, nil

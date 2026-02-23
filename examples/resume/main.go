@@ -17,14 +17,14 @@ func main() {
 }
 
 func example1() {
-	// Resume resumes consumption for a queue when supported by the underlying driver.
+	// Resume resumes queue consumption for drivers that support it.
 
 	// Example: resume queue
 	q, err := queue.NewSync()
 	if err != nil {
 		return
 	}
-	if queue.SupportsPause(q.UnderlyingQueue()) {
+	if queue.SupportsPause(q) {
 		_ = q.Resume(context.Background(), "default")
 	}
 }
@@ -32,10 +32,9 @@ func example1() {
 func example2() {
 	// Example: resume queue
 	q, _ := queue.NewSync()
-	raw := q.UnderlyingQueue()
-	_ = queue.Pause(context.Background(), raw, "default")
-	_ = queue.Resume(context.Background(), raw, "default")
-	snapshot, _ := queue.Snapshot(context.Background(), raw, nil)
+	_ = queue.Pause(context.Background(), q, "default")
+	_ = queue.Resume(context.Background(), q, "default")
+	snapshot, _ := queue.Snapshot(context.Background(), q, nil)
 	fmt.Println(snapshot.Paused("default"))
 	// Output: 0
 }

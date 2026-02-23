@@ -15,6 +15,6 @@ func main() {
 
 	// Example: check pause support
 	q, _ := queue.NewSync()
-	fmt.Println(queue.SupportsPause(q.UnderlyingQueue()))
+	fmt.Println(queue.SupportsPause(q))
 	// Output: true
 }

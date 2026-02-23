@@ -15,6 +15,6 @@ func main() {
 
 	// Example: check native stats support
 	q, _ := queue.NewSync()
-	fmt.Println(queue.SupportsNativeStats(q.UnderlyingQueue()))
+	fmt.Println(queue.SupportsNativeStats(q))
 	// Output: true
 }
