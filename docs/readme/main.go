@@ -164,6 +164,17 @@ func displayName(fd *FuncDoc) string {
 	return fd.Name
 }
 
+func bareName(fd *FuncDoc) string {
+	return fd.Name
+}
+
+func ownerQualifiedName(fd *FuncDoc) string {
+	if fd.Owner == "" {
+		return fd.Name
+	}
+	return fd.Owner + "." + fd.Name
+}
+
 func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
 	fset := token.NewFileSet()
 
@@ -453,13 +464,15 @@ func selectPackage(pkgs map[string]*ast.Package) (string, error) {
 
 func renderAPI(funcs []*FuncDoc) string {
 	byPackageGroup := map[string]map[string][]*FuncDoc{}
-	labelCounts := map[string]int{}
+	bareCounts := map[string]int{}
+	ownerQualifiedCounts := map[string]int{}
 	for _, fd := range funcs {
 		if byPackageGroup[fd.Package] == nil {
 			byPackageGroup[fd.Package] = map[string][]*FuncDoc{}
 		}
 		byPackageGroup[fd.Package][fd.Group] = append(byPackageGroup[fd.Package][fd.Group], fd)
-		labelCounts[displayName(fd)]++
+		bareCounts[bareName(fd)]++
+		ownerQualifiedCounts[ownerQualifiedName(fd)]++
 	}
 
 	packages := make([]string, 0, len(byPackageGroup))
@@ -469,11 +482,15 @@ func renderAPI(funcs []*FuncDoc) string {
 	sort.Strings(packages)
 	singlePackage := len(packages) == 1
 	qualifiedLabel := func(fd *FuncDoc) string {
-		label := displayName(fd)
-		if singlePackage || labelCounts[label] <= 1 {
-			return label
+		bare := bareName(fd)
+		if bareCounts[bare] <= 1 {
+			return bare
 		}
-		return fd.Package + "." + label
+		ownerQualified := ownerQualifiedName(fd)
+		if singlePackage || ownerQualifiedCounts[ownerQualified] <= 1 {
+			return ownerQualified
+		}
+		return fd.Package + "." + ownerQualified
 	}
 
 	var buf bytes.Buffer
@@ -494,19 +511,41 @@ func renderAPI(funcs []*FuncDoc) string {
 		sort.Strings(groupNames)
 
 		for _, group := range groupNames {
-			sort.Slice(byPackageGroup[pkg][group], func(i, j int) bool {
-				left := byPackageGroup[pkg][group][i]
-				right := byPackageGroup[pkg][group][j]
+			groupFns := byPackageGroup[pkg][group]
+			sort.Slice(groupFns, func(i, j int) bool {
+				left := groupFns[i]
+				right := groupFns[j]
 				if left.Name == right.Name {
 					return left.Owner < right.Owner
 				}
 				return left.Name < right.Name
 			})
 
+			groupBareCounts := map[string]int{}
+			groupOwnerQualifiedCounts := map[string]int{}
+			for _, fn := range groupFns {
+				groupBareCounts[bareName(fn)]++
+				groupOwnerQualifiedCounts[ownerQualifiedName(fn)]++
+			}
+			indexLabel := func(fn *FuncDoc) string {
+				bare := bareName(fn)
+				if groupBareCounts[bare] <= 1 {
+					return bare
+				}
+				ownerQualified := ownerQualifiedName(fn)
+				if groupOwnerQualifiedCounts[ownerQualified] <= 1 {
+					return ownerQualified
+				}
+				if singlePackage {
+					return ownerQualified
+				}
+				return fn.Package + "." + ownerQualified
+			}
+
 			var links []string
-			for _, fn := range byPackageGroup[pkg][group] {
+			for _, fn := range groupFns {
 				anchor := anchorFor(fn)
-				label := qualifiedLabel(fn)
+				label := indexLabel(fn)
 				links = append(links, fmt.Sprintf("[%s](#%s)", label, anchor))
 			}
 
