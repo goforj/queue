@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	// Pause pauses consumption for a queue when supported by the underlying driver.
+	// Pause pauses queue consumption for drivers that support it.
 
 	// Example: pause queue
 	q, _ := queue.NewSync()

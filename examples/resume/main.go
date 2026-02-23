@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	// Resume resumes consumption for a queue when supported by the underlying driver.
+	// Resume resumes queue consumption for drivers that support it.
 
 	// Example: resume queue
 	q, _ := queue.NewSync()
