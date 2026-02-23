@@ -10,11 +10,11 @@ import (
 )
 
 func main() {
-	// SnapshotQueue returns driver-native stats, falling back to collector data.
+	// Queue.Stats returns driver-native stats.
 
-	// Example: snapshot from queue runtime
+	// Example: snapshot from queue
 	q, _ := queue.NewSync()
-	snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
+	snapshot, _ := q.Stats(context.Background())
 	_, ok := snapshot.Queue("default")
 	fmt.Println(ok)
 	// Output: true

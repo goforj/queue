@@ -65,7 +65,7 @@ func TestRabbitMQWorker_StartWorkersFastPaths(t *testing.T) {
 
 func TestRabbitMQWorker_StartWorkersNilContextDialFailure(t *testing.T) {
 	w := &rabbitMQWorker{
-		cfg:      rabbitMQWorkerConfig{RabbitMQURL: "://bad-url"},
+		cfg:      rabbitMQWorkerConfig{RabbitMQURL: "://bad-url", DialTimeout: 5 * time.Millisecond},
 		handlers: map[string]Handler{},
 	}
 	if err := w.StartWorkers(nil); err == nil {

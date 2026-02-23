@@ -109,7 +109,6 @@ var (
 func parseFuncs(root string) ([]*FuncDoc, error) {
 	dirs := []string{
 		root,
-		filepath.Join(root, "bus"),
 	}
 
 	var out []*FuncDoc
@@ -466,13 +465,16 @@ func renderAPI(funcs []*FuncDoc) string {
 		packages = append(packages, p)
 	}
 	sort.Strings(packages)
+	singlePackage := len(packages) == 1
 
 	var buf bytes.Buffer
 
 	// ---------------- Index ----------------
 	buf.WriteString("## API Index\n\n")
 	for _, pkg := range packages {
-		buf.WriteString("### " + pkg + "\n\n")
+		if !singlePackage {
+			buf.WriteString("### " + pkg + "\n\n")
+		}
 		buf.WriteString("| Group | Functions |\n")
 		buf.WriteString("|------:|:-----------|\n")
 
@@ -596,7 +598,7 @@ func replaceAPISection(readme, api string) (string, error) {
 }
 
 func countTests(root string) (int, error) {
-	cmd := exec.Command("go", "test", "./...", "-run", "Test", "-count=1", "-json")
+	cmd := exec.Command("go", "test", "./...", "-count=1", "-json")
 	cmd.Dir = root
 
 	var out bytes.Buffer

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func startTestQueue(t *testing.T, q Queue) {
+func startTestQueue(t *testing.T, q QueueRuntime) {
 	t.Helper()
 	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)
@@ -18,7 +18,7 @@ func startTestQueue(t *testing.T, q Queue) {
 
 func TestStatsCollector_CapturesQueueProcessing(t *testing.T) {
 	collector := NewStatsCollector()
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:   DriverSync,
 		Observer: collector,
 	})
@@ -47,7 +47,7 @@ func TestStatsCollector_CapturesQueueProcessing(t *testing.T) {
 
 func TestStatsCollector_CapturesProcessingFailure(t *testing.T) {
 	collector := NewStatsCollector()
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:   DriverSync,
 		Observer: collector,
 	})
@@ -119,7 +119,7 @@ func TestStatsSnapshot_Getters(t *testing.T) {
 }
 
 func TestObserverPanic_DoesNotBreakDispatch(t *testing.T) {
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver: DriverSync,
 		Observer: ObserverFunc(func(Event) {
 			panic("observer panic")
@@ -137,7 +137,7 @@ func TestObserverPanic_DoesNotBreakDispatch(t *testing.T) {
 
 func TestObserverPanic_DoesNotBreakHandlerExecution(t *testing.T) {
 	var called atomic.Int64
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver: DriverSync,
 		Observer: ObserverFunc(func(Event) {
 			panic("observer panic")

@@ -20,7 +20,7 @@ Notes:
 
 - The codebase currently uses `Queue` terminology (no public `Dispatcher` API).
 - Public `Worker` API currently has `Driver`, `Register`, `Start`, `Shutdown` (no `Pause`/`Resume` on `Worker` in this snapshot).
-- Queue-level pause/resume helpers exist in observability helpers (`PauseQueue`/`ResumeQueue`) and are driver-capability dependent.
+- Queue-level pause/resume helpers exist in observability helpers (`Pause`/`Resume`) and are driver-capability dependent.
 
 ## Product intent
 
@@ -127,9 +127,9 @@ Primary types:
 
 Helper APIs:
 
-- `PauseQueue(ctx, q, queueName)`
-- `ResumeQueue(ctx, q, queueName)`
-- `SnapshotQueue(ctx, q, collector)`
+- `Pause(ctx, q, queueName)`
+- `Resume(ctx, q, queueName)`
+- `Snapshot(ctx, q, collector)`
 - `SupportsPause(q Queue) bool`
 - `SupportsNativeStats(q Queue) bool`
 - `MultiObserver(...)`
@@ -147,7 +147,7 @@ Safety:
 
 In this snapshot:
 
-- Queue-level pause helpers exist (`PauseQueue` / `ResumeQueue`) and are only available where the queue driver implements control support.
+- Queue-level pause helpers exist (`Pause` / `Resume`) and are only available where the queue driver implements control support.
 - Worker-level pause controls are not part of the public `Worker` interface in this snapshot.
 
 This distinction is important for UX/design decisions going forward.

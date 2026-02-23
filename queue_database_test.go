@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-func newSQLiteQueueForTest(t *testing.T) Queue {
+func newSQLiteQueueForTest(t *testing.T) QueueRuntime {
 	t.Helper()
 	dbPath := fmt.Sprintf("%s/queue-%d.db", t.TempDir(), time.Now().UnixNano())
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:         DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    dbPath,
@@ -92,7 +92,7 @@ func TestDatabaseQueue_RetryWithBackoff(t *testing.T) {
 
 func TestDatabaseQueue_QueueAndWorkerInteropSQLite(t *testing.T) {
 	dsn := fmt.Sprintf("%s/interop-%d.db", t.TempDir(), time.Now().UnixNano())
-	consumer, err := New(Config{
+	consumer, err := NewQueue(Config{
 		Driver:         DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    dsn,
@@ -102,7 +102,7 @@ func TestDatabaseQueue_QueueAndWorkerInteropSQLite(t *testing.T) {
 	}
 	defer consumer.Shutdown(context.Background())
 
-	producer, err := New(Config{
+	producer, err := NewQueue(Config{
 		Driver:         DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    dsn,
@@ -145,7 +145,7 @@ func TestDatabaseQueue_RebindPostgresPlaceholders(t *testing.T) {
 
 func TestDatabaseQueue_StatsSnapshot(t *testing.T) {
 	dsn := fmt.Sprintf("%s/stats-%d.db", t.TempDir(), time.Now().UnixNano())
-	qi, err := New(Config{
+	qi, err := NewQueue(Config{
 		Driver:         DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    dsn,
@@ -200,7 +200,7 @@ func TestDatabaseQueue_StatsSnapshot(t *testing.T) {
 
 func TestDatabaseQueue_RecoverStaleProcessing(t *testing.T) {
 	dsn := fmt.Sprintf("%s/recover-%d.db", t.TempDir(), time.Now().UnixNano())
-	qi, err := New(Config{
+	qi, err := NewQueue(Config{
 		Driver:         DriverDatabase,
 		DatabaseDriver: "sqlite",
 		DatabaseDSN:    dsn,

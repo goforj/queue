@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/busruntime"
 )
 
 type ChainBuilder interface {
@@ -143,7 +143,7 @@ func nodeID(chainID string, idx int) string {
 	return chainID + "_" + newID("n")
 }
 
-func (r *runtime) handleInternalChainNode(ctx context.Context, job queue.Job) error {
+func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err

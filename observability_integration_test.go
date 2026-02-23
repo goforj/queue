@@ -17,15 +17,15 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 		queue    string
 		native   bool
 		workers  int
-		newQueue func(t *testing.T, collector *StatsCollector) Queue
+		newQueue func(t *testing.T, collector *StatsCollector) QueueRuntime
 	}{
 		{
 			name:    "redis",
 			queue:   "default",
 			native:  true,
 			workers: 2,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:    DriverRedis,
 					RedisAddr: integrationRedis.addr,
 					Observer:  collector,
@@ -41,8 +41,8 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			queue:   "obs_mysql",
 			native:  true,
 			workers: 2,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "mysql",
 					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
@@ -59,8 +59,8 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			queue:   "obs_postgres",
 			native:  true,
 			workers: 2,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "pgx",
 					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
@@ -77,9 +77,9 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			queue:   "obs_sqlite",
 			native:  true,
 			workers: 2,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
 				dsn := fmt.Sprintf("%s/obs-%d.db", t.TempDir(), time.Now().UnixNano())
-				q, err := New(Config{
+				q, err := NewQueue(Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "sqlite",
 					DatabaseDSN:    dsn,
@@ -95,8 +95,8 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			name:    "nats",
 			queue:   "obs_nats",
 			workers: 2,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:   DriverNATS,
 					NATSURL:  integrationNATS.url,
 					Observer: collector,
@@ -111,8 +111,8 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			name:    "sqs",
 			queue:   "obs_sqs",
 			workers: 2,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:       DriverSQS,
 					DefaultQueue: "obs_sqs",
 					SQSEndpoint:  integrationSQS.endpoint,
@@ -131,8 +131,8 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			name:    "rabbitmq",
 			queue:   "obs_rabbitmq",
 			workers: 2,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:       DriverRabbitMQ,
 					DefaultQueue: "obs_rabbitmq",
 					RabbitMQURL:  integrationRabbitMQ.url,
@@ -248,7 +248,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			})
 
 			t.Run("scenario_assert_snapshotqueue", func(t *testing.T) {
-				snapFromQueue, err := SnapshotQueue(context.Background(), q, collector)
+				snapFromQueue, err := Snapshot(context.Background(), q, collector)
 				requireScenarioNoErr(t, "snapshot_queue", err)
 				nativeCounters, queueOK := snapFromQueue.Queue(fx.queue)
 				requireScenarioTrue(t, "snapshot_queue_present", queueOK, "queue=%q not found in snapshot", fx.queue)
@@ -259,7 +259,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 						requireScenarioTrue(t, "snapshot_native_redis_failed", nativeCounters.Failed >= 1, "failed=%d expected>=1", nativeCounters.Failed)
 					case "mysql", "postgres", "sqlite":
 						waitForObservabilityScenario(t, "snapshot_native_db_drained", 8*time.Second, func() bool {
-							latest, latestErr := SnapshotQueue(context.Background(), q, collector)
+							latest, latestErr := Snapshot(context.Background(), q, collector)
 							if latestErr != nil {
 								return false
 							}
@@ -282,7 +282,7 @@ func TestObservabilityIntegration_RedisPauseResume(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	collector := NewStatsCollector()
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:    DriverRedis,
 		RedisAddr: integrationRedis.addr,
 		Observer:  collector,
@@ -293,10 +293,10 @@ func TestObservabilityIntegration_RedisPauseResume(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	queueName := uniqueQueueName("obs-pause")
-	if err := PauseQueue(context.Background(), q, queueName); err != nil {
+	if err := Pause(context.Background(), q, queueName); err != nil {
 		t.Fatalf("pause queue failed: %v", err)
 	}
-	if err := ResumeQueue(context.Background(), q, queueName); err != nil {
+	if err := Resume(context.Background(), q, queueName); err != nil {
 		t.Fatalf("resume queue failed: %v", err)
 	}
 
@@ -311,7 +311,7 @@ func TestObservabilityIntegration_RedisPauseResume(t *testing.T) {
 }
 
 func TestSnapshotQueue_NoProviderNoCollector(t *testing.T) {
-	_, snapshotErr := SnapshotQueue(context.Background(), noStatsQueue{}, nil)
+	_, snapshotErr := Snapshot(context.Background(), noStatsQueue{}, nil)
 	if snapshotErr == nil {
 		t.Fatal("expected snapshot error when provider and collector are unavailable")
 	}
@@ -324,13 +324,13 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 	fixtures := []struct {
 		name     string
 		supports bool
-		newQueue func(t *testing.T, collector *StatsCollector) Queue
+		newQueue func(t *testing.T, collector *StatsCollector) QueueRuntime
 	}{
 		{
 			name:     "redis",
 			supports: true,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:    DriverRedis,
 					RedisAddr: integrationRedis.addr,
 					Observer:  collector,
@@ -344,8 +344,8 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 		{
 			name:     "mysql",
 			supports: false,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "mysql",
 					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
@@ -360,8 +360,8 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 		{
 			name:     "postgres",
 			supports: false,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "pgx",
 					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
@@ -376,8 +376,8 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 		{
 			name:     "sqlite",
 			supports: false,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:         DriverDatabase,
 					DatabaseDriver: "sqlite",
 					DatabaseDSN:    fmt.Sprintf("%s/pause-%d.db", t.TempDir(), time.Now().UnixNano()),
@@ -392,8 +392,8 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 		{
 			name:     "nats",
 			supports: false,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:   DriverNATS,
 					NATSURL:  integrationNATS.url,
 					Observer: collector,
@@ -407,8 +407,8 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 		{
 			name:     "sqs",
 			supports: false,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:       DriverSQS,
 					SQSEndpoint:  integrationSQS.endpoint,
 					SQSRegion:    integrationSQS.region,
@@ -425,8 +425,8 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 		{
 			name:     "rabbitmq",
 			supports: false,
-			newQueue: func(t *testing.T, collector *StatsCollector) Queue {
-				q, err := New(Config{
+			newQueue: func(t *testing.T, collector *StatsCollector) QueueRuntime {
+				q, err := NewQueue(Config{
 					Driver:      DriverRabbitMQ,
 					RabbitMQURL: integrationRabbitMQ.url,
 					Observer:    collector,
@@ -450,8 +450,8 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			defer q.Shutdown(context.Background())
 
 			queueName := uniqueQueueName("obs-pause-" + fx.name)
-			pauseErr := PauseQueue(context.Background(), q, queueName)
-			resumeErr := ResumeQueue(context.Background(), q, queueName)
+			pauseErr := Pause(context.Background(), q, queueName)
+			resumeErr := Resume(context.Background(), q, queueName)
 
 			if fx.supports {
 				requireScenarioNoErr(t, "pause_supported", pauseErr)
@@ -485,7 +485,7 @@ type noStatsQueue struct{}
 
 func (noStatsQueue) Driver() Driver                     { return DriverSync }
 func (noStatsQueue) StartWorkers(context.Context) error { return nil }
-func (noStatsQueue) Workers(int) Queue                  { return noStatsQueue{} }
+func (noStatsQueue) Workers(int) QueueRuntime           { return noStatsQueue{} }
 func (noStatsQueue) Shutdown(context.Context) error     { return nil }
 func (noStatsQueue) Register(string, Handler)           {}
 func (noStatsQueue) Dispatch(any) error                 { return nil }

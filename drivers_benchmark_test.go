@@ -11,7 +11,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	ctx := context.Background()
 
 	b.Run("null", func(b *testing.B) {
-		q, err := NewNull()
+		q, err := NewQueue(Config{Driver: DriverNull})
 		if err != nil {
 			b.Fatalf("new null queue failed: %v", err)
 		}
@@ -19,7 +19,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	})
 
 	b.Run("sync", func(b *testing.B) {
-		q, err := NewSync()
+		q, err := NewQueue(Config{Driver: DriverSync})
 		if err != nil {
 			b.Fatalf("new sync queue failed: %v", err)
 		}
@@ -32,7 +32,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	})
 
 	b.Run("workerpool", func(b *testing.B) {
-		q, err := NewWorkerpool()
+		q, err := NewQueue(Config{Driver: DriverWorkerpool})
 		if err != nil {
 			b.Fatalf("new workerpool queue failed: %v", err)
 		}
@@ -46,7 +46,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 
 	b.Run("database-sqlite", func(b *testing.B) {
 		dsn := "file:" + filepath.Join(b.TempDir(), "queue-bench.db") + "?_busy_timeout=5000"
-		q, err := New(Config{
+		q, err := NewQueue(Config{
 			Driver:         DriverDatabase,
 			DatabaseDriver: "sqlite",
 			DatabaseDSN:    dsn,
@@ -64,7 +64,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	})
 }
 
-func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q Queue, job Job) {
+func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q QueueRuntime, job Job) {
 	// Warm up one dispatch so constructor/startup overhead stays out of the loop.
 	if err := q.DispatchCtx(ctx, job); err != nil {
 		b.Fatalf("warmup dispatch failed: %v", err)

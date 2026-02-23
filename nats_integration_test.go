@@ -19,7 +19,7 @@ func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	}
 	received := make(chan payload, 1)
 
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:  DriverNATS,
 		NATSURL: integrationNATS.url,
 	})
@@ -66,7 +66,7 @@ func TestNATSIntegration_OptionBehavior(t *testing.T) {
 	var calls atomic.Int32
 	deadlineSeen := make(chan bool, 1)
 
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:  DriverNATS,
 		NATSURL: integrationNATS.url,
 	})
@@ -126,7 +126,7 @@ func TestNATSIntegration_UniqueDuplicate(t *testing.T) {
 	if !integrationBackendEnabled("nats") {
 		t.Skip("nats integration backend not selected")
 	}
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:  DriverNATS,
 		NATSURL: integrationNATS.url,
 	})

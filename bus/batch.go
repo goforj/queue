@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/busruntime"
 )
 
 type BatchBuilder interface {
@@ -195,7 +195,7 @@ type batchCallbacks struct {
 	finally  func(ctx context.Context, st BatchState) error
 }
 
-func (r *runtime) handleInternalBatchJob(ctx context.Context, job queue.Job) error {
+func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
@@ -303,7 +303,7 @@ func (r *runtime) callbackOnce(ctx context.Context, key string) (bool, error) {
 	return r.store.MarkCallbackInvoked(ctx, key)
 }
 
-func (r *runtime) handleInternalCallback(ctx context.Context, job queue.Job) error {
+func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err

@@ -16,8 +16,8 @@ func TestQueueContract_Redis(t *testing.T) {
 	factory := contractFactory{
 		name:           "redis",
 		expectedDriver: DriverRedis,
-		newQueue: func(t *testing.T) Queue {
-			q, err := New(Config{
+		newQueue: func(t *testing.T) QueueRuntime {
+			q, err := NewQueue(Config{
 				Driver:    DriverRedis,
 				RedisAddr: integrationRedis.addr,
 			})
@@ -51,8 +51,8 @@ func TestQueueContract_DatabaseMySQL(t *testing.T) {
 	factory := contractFactory{
 		name:           "database-mysql",
 		expectedDriver: DriverDatabase,
-		newQueue: func(_ *testing.T) Queue {
-			q, err := New(Config{
+		newQueue: func(_ *testing.T) QueueRuntime {
+			q, err := NewQueue(Config{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
@@ -87,8 +87,8 @@ func TestQueueContract_DatabasePostgres(t *testing.T) {
 	factory := contractFactory{
 		name:           "database-postgres",
 		expectedDriver: DriverDatabase,
-		newQueue: func(_ *testing.T) Queue {
-			q, err := New(Config{
+		newQueue: func(_ *testing.T) QueueRuntime {
+			q, err := NewQueue(Config{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
@@ -117,14 +117,14 @@ func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 	factory := contractFactory{
 		name:           "database-sqlite",
 		expectedDriver: DriverDatabase,
-		newQueue: func(t *testing.T) Queue {
+		newQueue: func(t *testing.T) QueueRuntime {
 			cfg := DatabaseConfig{
 				DriverName:   "sqlite",
 				DSN:          fmt.Sprintf("%s/contract-integration-%d.db", t.TempDir(), time.Now().UnixNano()),
 				Workers:      1,
 				PollInterval: 10 * time.Millisecond,
 			}
-			q, err := New(Config{
+			q, err := NewQueue(Config{
 				Driver:         DriverDatabase,
 				DatabaseDriver: cfg.DriverName,
 				DatabaseDSN:    cfg.DSN,
@@ -150,8 +150,8 @@ func TestQueueContract_NATS(t *testing.T) {
 	factory := contractFactory{
 		name:           "nats",
 		expectedDriver: DriverNATS,
-		newQueue: func(_ *testing.T) Queue {
-			q, err := New(Config{
+		newQueue: func(_ *testing.T) QueueRuntime {
+			q, err := NewQueue(Config{
 				Driver:  DriverNATS,
 				NATSURL: integrationNATS.url,
 			})
@@ -176,8 +176,8 @@ func TestQueueContract_SQS(t *testing.T) {
 	factory := contractFactory{
 		name:           "sqs",
 		expectedDriver: DriverSQS,
-		newQueue: func(_ *testing.T) Queue {
-			q, err := New(Config{
+		newQueue: func(_ *testing.T) QueueRuntime {
+			q, err := NewQueue(Config{
 				Driver:       DriverSQS,
 				SQSEndpoint:  integrationSQS.endpoint,
 				SQSRegion:    integrationSQS.region,
@@ -205,8 +205,8 @@ func TestQueueContract_RabbitMQ(t *testing.T) {
 	factory := contractFactory{
 		name:           "rabbitmq",
 		expectedDriver: DriverRabbitMQ,
-		newQueue: func(_ *testing.T) Queue {
-			q, err := New(Config{
+		newQueue: func(_ *testing.T) QueueRuntime {
+			q, err := NewQueue(Config{
 				Driver:      DriverRabbitMQ,
 				RabbitMQURL: integrationRabbitMQ.url,
 			})

@@ -5,32 +5,28 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/busruntime"
 )
 
 type failingDispatchQueue struct {
 	err       error
-	handlers  map[string]queue.Handler
+	handlers  map[string]busruntime.Handler
 	workerCnt int
 }
 
-func (q *failingDispatchQueue) Driver() queue.Driver { return queue.DriverSync }
-func (q *failingDispatchQueue) Dispatch(job any) error {
-	return q.DispatchCtx(context.Background(), job)
-}
-func (q *failingDispatchQueue) DispatchCtx(context.Context, any) error { return q.err }
-func (q *failingDispatchQueue) Register(jobType string, handler queue.Handler) {
+func (q *failingDispatchQueue) StartWorkers(context.Context) error { return nil }
+func (q *failingDispatchQueue) Shutdown(context.Context) error     { return nil }
+
+func (q *failingDispatchQueue) BusRegister(jobType string, handler busruntime.Handler) {
 	if q.handlers == nil {
-		q.handlers = make(map[string]queue.Handler)
+		q.handlers = make(map[string]busruntime.Handler)
 	}
 	q.handlers[jobType] = handler
 }
-func (q *failingDispatchQueue) StartWorkers(context.Context) error { return nil }
-func (q *failingDispatchQueue) Workers(count int) queue.Queue {
-	q.workerCnt = count
-	return q
+
+func (q *failingDispatchQueue) BusDispatch(context.Context, string, []byte, busruntime.JobOptions) error {
+	return q.err
 }
-func (q *failingDispatchQueue) Shutdown(context.Context) error { return nil }
 
 func TestDispatchEnqueueFailureEmitsStartedThenFailed(t *testing.T) {
 	q := &failingDispatchQueue{err: errors.New("enqueue failed")}
@@ -58,10 +54,7 @@ func TestDispatchEnqueueFailureEmitsStartedThenFailed(t *testing.T) {
 }
 
 func TestUnknownCallbackKindEmitsCallbackFailed(t *testing.T) {
-	q, err := queue.NewSync()
-	if err != nil {
-		t.Fatalf("new sync queue: %v", err)
-	}
+	q := newSyncTestRuntime()
 	var started int
 	var failed int
 	b, err := New(q, WithObserver(ObserverFunc(func(e Event) {
@@ -86,7 +79,7 @@ func TestUnknownCallbackKindEmitsCallbackFailed(t *testing.T) {
 		"job_id":         "j1",
 		"callback_kind":  "unknown_kind",
 	}
-	if err := q.Dispatch(queue.NewJob(internalJobCallback).Payload(payload)); err == nil {
+	if err := q.DispatchJSON(context.Background(), internalJobCallback, payload); err == nil {
 		t.Fatal("expected unknown callback kind error")
 	}
 	if started != 1 {
@@ -98,10 +91,7 @@ func TestUnknownCallbackKindEmitsCallbackFailed(t *testing.T) {
 }
 
 func TestCallbackMissingRequiredIDsEmitsCallbackFailed(t *testing.T) {
-	q, err := queue.NewSync()
-	if err != nil {
-		t.Fatalf("new sync queue: %v", err)
-	}
+	q := newSyncTestRuntime()
 	var failed int
 	b, err := New(q, WithObserver(ObserverFunc(func(e Event) {
 		if e.Kind == EventCallbackFailed {
@@ -135,7 +125,7 @@ func TestCallbackMissingRequiredIDsEmitsCallbackFailed(t *testing.T) {
 	}
 
 	for i, payloadMap := range tests {
-		if err := q.Dispatch(queue.NewJob(internalJobCallback).Payload(payloadMap)); err == nil {
+		if err := q.DispatchJSON(context.Background(), internalJobCallback, payloadMap); err == nil {
 			t.Fatalf("expected callback validation error for case %d", i)
 		}
 	}
@@ -246,10 +236,7 @@ func TestBatchEnqueueFailureInvokesCatchAndFinally(t *testing.T) {
 }
 
 func TestChainDispatchFailureStillReturnsChainID(t *testing.T) {
-	q, err := queue.NewSync()
-	if err != nil {
-		t.Fatalf("new sync queue: %v", err)
-	}
+	q := newSyncTestRuntime()
 	b, err := New(q)
 	if err != nil {
 		t.Fatalf("new bus: %v", err)
@@ -269,10 +256,7 @@ func TestChainDispatchFailureStillReturnsChainID(t *testing.T) {
 }
 
 func TestBatchDispatchFailureStillReturnsBatchID(t *testing.T) {
-	q, err := queue.NewSync()
-	if err != nil {
-		t.Fatalf("new sync queue: %v", err)
-	}
+	q := newSyncTestRuntime()
 	b, err := New(q)
 	if err != nil {
 		t.Fatalf("new bus: %v", err)

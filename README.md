@@ -15,7 +15,7 @@
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-384-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-385-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
@@ -25,20 +25,47 @@
 go get github.com/goforj/queue
 ```
 
-## bus vs queue
+## Quick Start
 
-- `bus` is the higher-level API. Use it when you want workflow features like chains, batches, middleware, callbacks, and unified lifecycle events.
-- `queue` is the lower-level runtime API (drivers, jobs, workers).
-- If unsure, start with `bus`.
+```go
+import (
+	"context"
+	"fmt"
 
-## Quick Start (Bus)
+	"github.com/goforj/queue"
+)
+
+func main() {
+	q, _ := queue.NewWorkerpool()
+
+	q.Register("emails:send", func(ctx context.Context, jc queue.Context) error {
+		var payload struct {
+			To string `json:"to"`
+		}
+		_ = jc.Bind(&payload)
+		fmt.Println("send to", payload.To)
+		return nil
+	})
+
+	_ = q.StartWorkers(context.Background())
+	defer q.Shutdown(context.Background())
+
+	_, _ = q.Dispatch(
+		context.Background(),
+		queue.NewJob("emails:send").
+			Payload(map[string]any{"to": "user@example.com"}).
+			OnQueue("default"),
+	)
+}
+```
+
+## Quick Start (Advanced: Workflows)
 
 ```go
 import (
 	"context"
 
 	"github.com/goforj/queue"
-	"github.com/goforj/queue/bus"
 )
 
 type EmailPayload struct {
@@ -47,57 +74,33 @@ type EmailPayload struct {
 
 func main() {
 	q, _ := queue.NewWorkerpool()
-	b, _ := bus.New(q)
 
-	b.Register("reports:generate", func(ctx context.Context, jc bus.Context) error {
+	q.Register("reports:generate", func(ctx context.Context, jc queue.Context) error {
 		return nil
 	})
-	b.Register("reports:upload", func(ctx context.Context, jc bus.Context) error {
+	q.Register("reports:upload", func(ctx context.Context, jc queue.Context) error {
 		var payload EmailPayload
 		if err := jc.Bind(&payload); err != nil {
 			return err
 		}
 		return nil
 	})
-	b.Register("users:notify_report_ready", func(ctx context.Context, jc bus.Context) error {
-		return nil
-	})
-
-	_ = b.StartWorkers(context.Background())
-	defer b.Shutdown(context.Background())
-
-	chainID, _ := b.Chain(
-		// 1) generate report data
-		bus.NewJob("reports:generate", map[string]any{"report_id": "rpt_123"}),
-		// 2) upload report artifact after generate succeeds
-		bus.NewJob("reports:upload", EmailPayload{ID: 123}),
-		// 3) notify user only after upload succeeds
-		bus.NewJob("users:notify_report_ready", map[string]any{"user_id": 123}),
-	).OnQueue("critical").Dispatch(context.Background())
-	_ = chainID
-}
-```
-
-## Quick Start (Queue only)
-
-```go
-import (
-	"context"
-
-	"github.com/goforj/queue"
-)
-
-func main() {
-	q, _ := queue.NewWorkerpool()
-
-	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+	q.Register("users:notify_report_ready", func(ctx context.Context, jc queue.Context) error {
 		return nil
 	})
 
 	_ = q.Workers(2).StartWorkers(context.Background())
 	defer q.Shutdown(context.Background())
 
-	_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
+	chainID, _ := q.Chain(
+		// 1) generate report data
+		queue.NewJob("reports:generate").Payload(map[string]any{"report_id": "rpt_123"}),
+		// 2) upload report artifact after generate succeeds
+		queue.NewJob("reports:upload").Payload(EmailPayload{ID: 123}),
+		// 3) notify user only after upload succeeds
+		queue.NewJob("users:notify_report_ready").Payload(map[string]any{"user_id": 123}),
+	).OnQueue("critical").Dispatch(context.Background())
+	_ = chainID
 }
 ```
 
@@ -160,40 +163,37 @@ q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 | <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 | <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-## Bus middleware example
+## Middleware
+
+Use `queue.WithMiddleware(...)` to apply cross-cutting workflow behavior (logging, filtering, error policy) to chains/batches/dispatch orchestration.
 
 ```go
-audit := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
+audit := queue.MiddlewareFunc(func(ctx context.Context, jc queue.Context, next queue.Next) error {
     return next(ctx, jc)
 })
 
-skipHealth := bus.SkipWhen{
-    Predicate: func(_ context.Context, jc bus.Context) bool { return jc.JobType == "health:ping" },
-}
-
-fatalize := bus.FailOnError{
-    When: func(err error) bool { return err != nil },
-}
-
-q, _ := queue.NewWorkerpool()
-b, _ := bus.New(q, bus.WithMiddleware(audit, skipHealth, fatalize))
-_ = b
+q, _ := queue.New(
+    queue.Config{Driver: queue.DriverWorkerpool},
+    queue.WithMiddleware(audit),
+)
+_ = q
 ```
 
 ## Core Concepts
 
 | Concept | Purpose | Primary API |
 | --- | --- | --- |
-| Job | Typed work unit for app handlers | `bus.NewJob`, `Dispatch` |
+| Job | Typed work unit for app handlers | `queue.NewJob`, `Dispatch` |
 | Chain | Ordered workflow (A then B then C) | `Chain(...).Dispatch(...)` |
 | Batch | Parallel workflow with callbacks | `Batch(...).Then/Catch/Finally` |
-| Middleware | Cross-cutting execution policy | `WithMiddleware(...)` |
-| Events | Lifecycle hooks and observability | `WithObserver(...)` |
-| Backends | Driver/runtime transport | `queue.New*` constructors |
+| Middleware | Cross-cutting execution policy | `Queue` middleware (`queue.WithMiddleware`) |
+| Events | Lifecycle hooks and observability | queue runtime events (`queue.Observer`) + workflow events (advanced plumbing) |
+| Backends | Driver/runtime transport | `queue.New(...)` / `queue.NewQueue(...)` |
 
 ## Queue Backends
 
-Use `queue` constructors to choose transport/runtime. Your bus handlers and jobs remain unchanged.
+Use `queue` constructors/config to choose transport/runtime. `Queue` composes these backends for workflow features.
+Use `queue.NewQueue(...)` only when you need the advanced low-level `QueueRuntime` API.
 
 | Backend | Constructor |
 | ---: | --- |
@@ -219,9 +219,11 @@ observer := queue.MultiObserver(
     }),
 )
 
-q, _ := queue.NewWorkerpool()
-b, _ := bus.New(q, bus.WithObserver(observer))
-_ = b
+q, _ := queue.New(queue.Config{
+    Driver:   queue.DriverWorkerpool,
+    Observer: observer,
+})
+_ = q
 ```
 
 ### Distributed counters and source of truth
@@ -229,8 +231,8 @@ _ = b
 - `StatsCollector` counters are process-local and event-driven.
 - In multi-process deployments, aggregate metrics externally (OTel/Prometheus/etc.).
 - Prefer backend-native stats when available.
-- `queue.SupportsNativeStats(q)` indicates native driver snapshot support.
-- `queue.SnapshotQueue(ctx, q, collector, queueName)` merges native + collector where possible.
+- `queue.SupportsNativeStats(q.UnderlyingQueue())` indicates native driver snapshot support.
+- `queue.Snapshot(ctx, q.UnderlyingQueue(), collector)` merges native + collector where possible.
 
 ### Compose observers
 
@@ -255,11 +257,13 @@ q, _ := queue.New(queue.Config{
 _ = q
 ```
 
-### Queue kitchen sink event logging
+### Kitchen sink event logging (runtime + workflow)
+
+Runnable example: `examples/observeall/main.go`
 
 ```go
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-observer := queue.ObserverFunc(func(event queue.Event) {
+runtimeObserver := queue.ObserverFunc(func(event queue.Event) {
 	attemptInfo := fmt.Sprintf("attempt=%d/%d", event.Attempt, event.MaxRetry+1)
 	jobInfo := fmt.Sprintf("job=%s key=%s queue=%s driver=%s", event.JobType, event.JobKey, event.Queue, event.Driver)
 
@@ -290,71 +294,30 @@ observer := queue.ObserverFunc(func(event queue.Event) {
 		logger.Info("Queue event", "msg", fmt.Sprintf("kind=%s %s", event.Kind, jobInfo))
 	}
 })
-
-q, _ := queue.New(queue.Config{
-	Driver:    queue.DriverRedis,
-	RedisAddr: "127.0.0.1:6379",
-	Observer:  observer,
+workflowObserver := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
+	logger.Info("workflow event",
+		"kind", event.Kind,
+		"dispatch_id", event.DispatchID,
+		"job_id", event.JobID,
+		"chain_id", event.ChainID,
+		"batch_id", event.BatchID,
+		"job_type", event.JobType,
+		"queue", event.Queue,
+		"attempt", event.Attempt,
+		"duration", event.Duration,
+		"err", event.Err,
+	)
 })
+
+q, _ := queue.New(
+	queue.Config{
+		Driver:    queue.DriverRedis,
+		RedisAddr: "127.0.0.1:6379",
+		Observer:  runtimeObserver,
+	},
+	queue.WithWorkflowObserver(workflowObserver),
+)
 _ = q
-```
-
-### Bus kitchen sink event logging
-
-```go
-logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-observer := bus.ObserverFunc(func(event bus.Event) {
-	ids := fmt.Sprintf("dispatch=%s job=%s chain=%s batch=%s", event.DispatchID, event.JobID, event.ChainID, event.BatchID)
-	jobInfo := fmt.Sprintf("job_type=%s queue=%s attempt=%d", event.JobType, event.Queue, event.Attempt)
-
-	switch event.Kind {
-	case bus.EventDispatchStarted:
-		logger.Info("Dispatch started", "msg", fmt.Sprintf("%s %s", ids, jobInfo), "at", event.Time.Format(time.RFC3339Nano))
-	case bus.EventDispatchSucceeded:
-		logger.Info("Dispatch enqueued", "msg", fmt.Sprintf("%s %s", ids, jobInfo))
-	case bus.EventDispatchFailed:
-		logger.Error("Dispatch failed", "msg", fmt.Sprintf("%s %s", ids, jobInfo), "error", event.Err)
-	case bus.EventJobStarted:
-		logger.Info("Job started", "msg", fmt.Sprintf("%s %s", ids, jobInfo))
-	case bus.EventJobSucceeded:
-		logger.Info("Job succeeded", "msg", fmt.Sprintf("%s %s duration=%s", ids, jobInfo, event.Duration))
-	case bus.EventJobFailed:
-		logger.Error("Job failed", "msg", fmt.Sprintf("%s %s duration=%s", ids, jobInfo, event.Duration), "error", event.Err)
-	case bus.EventChainStarted:
-		logger.Info("Chain started", "msg", ids)
-	case bus.EventChainAdvanced:
-		logger.Info("Chain advanced", "msg", ids)
-	case bus.EventChainCompleted:
-		logger.Info("Chain completed", "msg", ids)
-	case bus.EventChainFailed:
-		logger.Error("Chain failed", "msg", ids, "error", event.Err)
-	case bus.EventBatchStarted:
-		logger.Info("Batch started", "msg", ids)
-	case bus.EventBatchProgressed:
-		logger.Info("Batch progressed", "msg", ids)
-	case bus.EventBatchCompleted:
-		logger.Info("Batch completed", "msg", ids)
-	case bus.EventBatchFailed:
-		logger.Error("Batch failed", "msg", ids, "error", event.Err)
-	case bus.EventBatchCancelled:
-		logger.Warn("Batch cancelled", "msg", ids)
-	case bus.EventCallbackStarted:
-		logger.Info("Callback started", "msg", ids)
-	case bus.EventCallbackSucceeded:
-		logger.Info("Callback succeeded", "msg", ids)
-	case bus.EventCallbackFailed:
-		logger.Error("Callback failed", "msg", ids, "error", event.Err)
-	default:
-		logger.Info("Bus event", "msg", fmt.Sprintf("kind=%s %s %s", event.Kind, ids, jobInfo))
-	}
-})
-
-q, _ := queue.New(queue.Config{
-	Driver:    queue.DriverRedis,
-	RedisAddr: "127.0.0.1:6379",
-})
-b, _ := bus.New(q, bus.WithObserver(observer))
-_ = b
 ```
 
 ### Observability capabilities by driver
@@ -370,44 +333,39 @@ _ = b
 | sqs | - | - |
 | rabbitmq | - | - |
 
-### Queue events reference
+### Events reference
 
-| EventKind | Meaning |
-| --- | --- |
-| enqueue_accepted | Job accepted by driver for enqueue. |
-| enqueue_rejected | Job enqueue failed. |
-| enqueue_duplicate | Duplicate job rejected due to uniqueness key. |
-| enqueue_canceled | Context cancellation prevented enqueue. |
-| process_started | Worker began processing job. |
-| process_succeeded | Handler returned success. |
-| process_failed | Handler returned error. |
-| process_retried | Driver scheduled retry attempt. |
-| process_archived | Job moved to terminal failure state. |
-| queue_paused | Queue was paused (driver supports pause). |
-| queue_resumed | Queue was resumed. |
-
-### Bus events reference
-
-| EventKind | Meaning |
-| --- | --- |
-| dispatch_started | Bus accepted a dispatch request and created a dispatch record. |
-| dispatch_succeeded | Dispatch was successfully enqueued to the underlying queue runtime. |
-| dispatch_failed | Dispatch failed before job execution could start. |
-| job_started | A bus job handler started execution. |
-| job_succeeded | A bus job handler completed successfully. |
-| job_failed | A bus job handler returned an error. |
-| chain_started | A chain workflow was created and started. |
-| chain_advanced | Chain progressed from one node to the next node. |
-| chain_completed | Chain reached terminal success. |
-| chain_failed | Chain reached terminal failure. |
-| batch_started | A batch workflow was created and started. |
-| batch_progressed | Batch state changed as jobs completed/failed. |
-| batch_completed | Batch reached terminal success (or allowed-failure completion). |
-| batch_failed | Batch reached terminal failure. |
-| batch_cancelled | Batch was cancelled before normal completion. |
-| callback_started | Chain/batch callback execution started. |
-| callback_succeeded | Chain/batch callback completed successfully. |
-| callback_failed | Chain/batch callback returned an error. |
+| Type | EventKind | Meaning |
+| --- | --- | --- |
+| `queue` | enqueue_accepted | Job accepted by driver for enqueue. |
+| `queue` | enqueue_rejected | Job enqueue failed. |
+| `queue` | enqueue_duplicate | Duplicate job rejected due to uniqueness key. |
+| `queue` | enqueue_canceled | Context cancellation prevented enqueue. |
+| `queue` | process_started | Worker began processing job. |
+| `queue` | process_succeeded | Handler returned success. |
+| `queue` | process_failed | Handler returned error. |
+| `queue` | process_retried | Driver scheduled retry attempt. |
+| `queue` | process_archived | Job moved to terminal failure state. |
+| `queue` | queue_paused | Queue was paused (driver supports pause). |
+| `queue` | queue_resumed | Queue was resumed. |
+| `workflow` | dispatch_started | Workflow runtime accepted a dispatch request and created a dispatch record. |
+| `workflow` | dispatch_succeeded | Dispatch was successfully enqueued to the underlying queue runtime. |
+| `workflow` | dispatch_failed | Dispatch failed before job execution could start. |
+| `workflow` | job_started | A workflow job handler started execution. |
+| `workflow` | job_succeeded | A workflow job handler completed successfully. |
+| `workflow` | job_failed | A workflow job handler returned an error. |
+| `workflow` | chain_started | A chain workflow was created and started. |
+| `workflow` | chain_advanced | Chain progressed from one node to the next node. |
+| `workflow` | chain_completed | Chain reached terminal success. |
+| `workflow` | chain_failed | Chain reached terminal failure. |
+| `workflow` | batch_started | A batch workflow was created and started. |
+| `workflow` | batch_progressed | Batch state changed as jobs completed/failed. |
+| `workflow` | batch_completed | Batch reached terminal success (or allowed-failure completion). |
+| `workflow` | batch_failed | Batch reached terminal failure. |
+| `workflow` | batch_cancelled | Batch was cancelled before normal completion. |
+| `workflow` | callback_started | Chain/batch callback execution started. |
+| `workflow` | callback_succeeded | Chain/batch callback completed successfully. |
+| `workflow` | callback_failed | Chain/batch callback returned an error. |
 
 ## Testing By Audience
 
@@ -454,557 +412,15 @@ The API section below is autogenerated; do not edit between the markers.
 
 ## API Index
 
-### bus
-
 | Group | Functions |
 |------:|:-----------|
-| **Batching** | [BatchBuilder.AllowFailures](#bus-batchbuilder-allowfailures) [BatchBuilder.Catch](#bus-batchbuilder-catch) [BatchBuilder.Dispatch](#bus-batchbuilder-dispatch) [BatchBuilder.Finally](#bus-batchbuilder-finally) [BatchBuilder.Name](#bus-batchbuilder-name) [BatchBuilder.OnQueue](#bus-batchbuilder-onqueue) [BatchBuilder.Progress](#bus-batchbuilder-progress) [BatchBuilder.Then](#bus-batchbuilder-then) |
-| **Chaining** | [ChainBuilder.Catch](#bus-chainbuilder-catch) [ChainBuilder.Dispatch](#bus-chainbuilder-dispatch) [ChainBuilder.Finally](#bus-chainbuilder-finally) [ChainBuilder.OnQueue](#bus-chainbuilder-onqueue) |
-| **Constructors** | [New](#bus-new) [NewFake](#bus-newfake) [NewJob](#bus-newjob) [NewMemoryStore](#bus-newmemorystore) [NewSQLStore](#bus-newsqlstore) [NewWithStore](#bus-newwithstore) |
-| **Events** | [MultiObserver](#bus-multiobserver) [ObserverFunc.Observe](#bus-observerfunc-observe) |
-| **Job** | [Job.Backoff](#bus-job-backoff) [Context.Bind](#bus-context-bind) [Job.Delay](#bus-job-delay) [Job.OnQueue](#bus-job-onqueue) [Context.PayloadBytes](#bus-context-payloadbytes) [Job.Retry](#bus-job-retry) [Job.Timeout](#bus-job-timeout) [Job.UniqueFor](#bus-job-uniquefor) |
-| **Middleware** | [FailOnError.Handle](#bus-failonerror-handle) [MiddlewareFunc.Handle](#bus-middlewarefunc-handle) [RateLimit.Handle](#bus-ratelimit-handle) [RetryPolicy.Handle](#bus-retrypolicy-handle) [SkipWhen.Handle](#bus-skipwhen-handle) [WithoutOverlapping.Handle](#bus-withoutoverlapping-handle) |
-| **Options** | [WithClock](#bus-withclock) [WithMiddleware](#bus-withmiddleware) [WithObserver](#bus-withobserver) [WithStore](#bus-withstore) |
-| **Testing** | [Fake.AssertBatchCount](#bus-fake-assertbatchcount) [Fake.AssertBatched](#bus-fake-assertbatched) [Fake.AssertChained](#bus-fake-assertchained) [Fake.AssertCount](#bus-fake-assertcount) [Fake.AssertDispatched](#bus-fake-assertdispatched) [Fake.AssertDispatchedOn](#bus-fake-assertdispatchedon) [Fake.AssertDispatchedTimes](#bus-fake-assertdispatchedtimes) [Fake.AssertNotDispatched](#bus-fake-assertnotdispatched) [Fake.AssertNothingBatched](#bus-fake-assertnothingbatched) [Fake.AssertNothingDispatched](#bus-fake-assertnothingdispatched) [Fake.Batch](#bus-fake-batch) [Fake.Chain](#bus-fake-chain) [Fake.Dispatch](#bus-fake-dispatch) |
-
-### queue
-
-| Group | Functions |
-|------:|:-----------|
-| **Constructors** | [New](#queue-new) [NewDatabase](#queue-newdatabase) [NewNATS](#queue-newnats) [NewNull](#queue-newnull) [NewQueueWithDefaults](#queue-newqueuewithdefaults) [NewRabbitMQ](#queue-newrabbitmq) [NewRedis](#queue-newredis) [NewSQS](#queue-newsqs) [NewStatsCollector](#queue-newstatscollector) [NewSync](#queue-newsync) [NewWorkerpool](#queue-newworkerpool) |
+| **Constructors** | [New](#queue-new) [NewDatabase](#queue-newdatabase) [NewNATS](#queue-newnats) [NewNull](#queue-newnull) [NewQueue](#queue-newqueue) [NewQueueWithDefaults](#queue-newqueuewithdefaults) [NewRabbitMQ](#queue-newrabbitmq) [NewRedis](#queue-newredis) [NewSQS](#queue-newsqs) [NewStatsCollector](#queue-newstatscollector) [NewSync](#queue-newsync) [NewWorkerpool](#queue-newworkerpool) |
 | **Job** | [Job.Backoff](#queue-job-backoff) [Job.Bind](#queue-job-bind) [Job.Delay](#queue-job-delay) [NewJob](#queue-newjob) [Job.OnQueue](#queue-job-onqueue) [Job.Payload](#queue-job-payload) [Job.PayloadBytes](#queue-job-payloadbytes) [Job.PayloadJSON](#queue-job-payloadjson) [Job.Retry](#queue-job-retry) [Job.Timeout](#queue-job-timeout) [Job.UniqueFor](#queue-job-uniquefor) |
-| **Observability** | [StatsSnapshot.Active](#queue-statssnapshot-active) [StatsSnapshot.Archived](#queue-statssnapshot-archived) [StatsSnapshot.Failed](#queue-statssnapshot-failed) [MultiObserver](#queue-multiobserver) [ChannelObserver.Observe](#queue-channelobserver-observe) [Observer.Observe](#queue-observer-observe) [ObserverFunc.Observe](#queue-observerfunc-observe) [StatsCollector.Observe](#queue-statscollector-observe) [PauseQueue](#queue-pausequeue) [StatsSnapshot.Paused](#queue-statssnapshot-paused) [StatsSnapshot.Pending](#queue-statssnapshot-pending) [StatsSnapshot.Processed](#queue-statssnapshot-processed) [StatsSnapshot.Queue](#queue-statssnapshot-queue) [StatsSnapshot.Queues](#queue-statssnapshot-queues) [ResumeQueue](#queue-resumequeue) [StatsSnapshot.RetryCount](#queue-statssnapshot-retrycount) [StatsSnapshot.Scheduled](#queue-statssnapshot-scheduled) [StatsCollector.Snapshot](#queue-statscollector-snapshot) [SnapshotQueue](#queue-snapshotqueue) [SupportsNativeStats](#queue-supportsnativestats) [SupportsPause](#queue-supportspause) [StatsSnapshot.Throughput](#queue-statssnapshot-throughput) |
-| **Queue** | [Queue.Dispatch](#queue-queue-dispatch) [Queue.DispatchCtx](#queue-queue-dispatchctx) [Queue.Driver](#queue-queue-driver) [Queue.Register](#queue-queue-register) [Queue.Shutdown](#queue-queue-shutdown) [Queue.StartWorkers](#queue-queue-startworkers) [Queue.Workers](#queue-queue-workers) |
-| **Testing** | [FakeQueue.AssertCount](#queue-fakequeue-assertcount) [FakeQueue.AssertDispatched](#queue-fakequeue-assertdispatched) [FakeQueue.AssertDispatchedOn](#queue-fakequeue-assertdispatchedon) [FakeQueue.AssertDispatchedTimes](#queue-fakequeue-assertdispatchedtimes) [FakeQueue.AssertNotDispatched](#queue-fakequeue-assertnotdispatched) [FakeQueue.AssertNothingDispatched](#queue-fakequeue-assertnothingdispatched) [FakeQueue.Dispatch](#queue-fakequeue-dispatch) [FakeQueue.DispatchCtx](#queue-fakequeue-dispatchctx) [FakeQueue.Driver](#queue-fakequeue-driver) [NewFake](#queue-newfake) [FakeQueue.Records](#queue-fakequeue-records) [FakeQueue.Register](#queue-fakequeue-register) [FakeQueue.Reset](#queue-fakequeue-reset) [FakeQueue.Shutdown](#queue-fakequeue-shutdown) [FakeQueue.StartWorkers](#queue-fakequeue-startworkers) [FakeQueue.Workers](#queue-fakequeue-workers) |
+| **Observability** | [StatsSnapshot.Active](#queue-statssnapshot-active) [StatsSnapshot.Archived](#queue-statssnapshot-archived) [StatsSnapshot.Failed](#queue-statssnapshot-failed) [MultiObserver](#queue-multiobserver) [ChannelObserver.Observe](#queue-channelobserver-observe) [Observer.Observe](#queue-observer-observe) [ObserverFunc.Observe](#queue-observerfunc-observe) [StatsCollector.Observe](#queue-statscollector-observe) [Pause](#queue-pause) [StatsSnapshot.Paused](#queue-statssnapshot-paused) [StatsSnapshot.Pending](#queue-statssnapshot-pending) [StatsSnapshot.Processed](#queue-statssnapshot-processed) [StatsSnapshot.Queue](#queue-statssnapshot-queue) [StatsSnapshot.Queues](#queue-statssnapshot-queues) [Resume](#queue-resume) [StatsSnapshot.RetryCount](#queue-statssnapshot-retrycount) [StatsSnapshot.Scheduled](#queue-statssnapshot-scheduled) [Snapshot](#queue-snapshot) [StatsCollector.Snapshot](#queue-statscollector-snapshot) [SupportsNativeStats](#queue-supportsnativestats) [SupportsPause](#queue-supportspause) [StatsSnapshot.Throughput](#queue-statssnapshot-throughput) |
+| **Queue** | [Queue.Batch](#queue-queue-batch) [Queue.Chain](#queue-queue-chain) [Queue.Dispatch](#queue-queue-dispatch) [Queue.Driver](#queue-queue-driver) [Queue.FindBatch](#queue-queue-findbatch) [Queue.FindChain](#queue-queue-findchain) [Queue.Pause](#queue-queue-pause) [Queue.Prune](#queue-queue-prune) [Queue.Register](#queue-queue-register) [Queue.Resume](#queue-queue-resume) [Queue.Shutdown](#queue-queue-shutdown) [Queue.StartWorkers](#queue-queue-startworkers) [Queue.Stats](#queue-queue-stats) [Queue.UnderlyingQueue](#queue-queue-underlyingqueue) [WithWorkflowClock](#queue-withworkflowclock) [WithWorkflowMiddleware](#queue-withworkflowmiddleware) [WithWorkflowObserver](#queue-withworkflowobserver) [WithWorkflowStore](#queue-withworkflowstore) [Queue.Workers](#queue-queue-workers) |
+| **Queue Runtime** | [QueueRuntime.Dispatch](#queue-queueruntime-dispatch) [QueueRuntime.DispatchCtx](#queue-queueruntime-dispatchctx) [QueueRuntime.Driver](#queue-queueruntime-driver) [QueueRuntime.Register](#queue-queueruntime-register) [QueueRuntime.Shutdown](#queue-queueruntime-shutdown) [QueueRuntime.StartWorkers](#queue-queueruntime-startworkers) [QueueRuntime.Workers](#queue-queueruntime-workers) |
+| **Testing** | [FakeQueue.AssertCount](#queue-fakequeue-assertcount) [FakeQueue.AssertDispatched](#queue-fakequeue-assertdispatched) [FakeQueue.AssertDispatchedOn](#queue-fakequeue-assertdispatchedon) [FakeQueue.AssertDispatchedTimes](#queue-fakequeue-assertdispatchedtimes) [FakeQueue.AssertNotDispatched](#queue-fakequeue-assertnotdispatched) [FakeQueue.AssertNothingDispatched](#queue-fakequeue-assertnothingdispatched) [FakeQueue.BusDispatch](#queue-fakequeue-busdispatch) [FakeQueue.BusRegister](#queue-fakequeue-busregister) [FakeQueue.Dispatch](#queue-fakequeue-dispatch) [FakeQueue.DispatchCtx](#queue-fakequeue-dispatchctx) [FakeQueue.Driver](#queue-fakequeue-driver) [NewFake](#queue-newfake) [FakeQueue.Records](#queue-fakequeue-records) [FakeQueue.Register](#queue-fakequeue-register) [FakeQueue.Reset](#queue-fakequeue-reset) [FakeQueue.Shutdown](#queue-fakequeue-shutdown) [FakeQueue.StartWorkers](#queue-fakequeue-startworkers) [FakeQueue.Workers](#queue-fakequeue-workers) |
 
-
-
-## bus API
-
-### Batching
-
-#### <a id="bus-batchbuilder-allowfailures"></a>bus.BatchBuilder.AllowFailures
-
-AllowFailures keeps the batch running when individual jobs fail.
-
-```go
-batchID, _ := b.Batch(bus.NewJob("a", nil)).AllowFailures().Dispatch(context.Background())
-```
-
-#### <a id="bus-batchbuilder-catch"></a>bus.BatchBuilder.Catch
-
-Catch registers a callback invoked when batch encounters a failure.
-
-```go
-batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	Catch(func(context.Context, bus.BatchState, error) error { return nil }).
-	Dispatch(context.Background())
-```
-
-#### <a id="bus-batchbuilder-dispatch"></a>bus.BatchBuilder.Dispatch
-
-Dispatch creates and starts the batch workflow.
-
-```go
-batchID, _ := b.Batch(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
-```
-
-#### <a id="bus-batchbuilder-finally"></a>bus.BatchBuilder.Finally
-
-Finally registers a callback invoked once when batch reaches terminal state.
-
-```go
-batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	Finally(func(context.Context, bus.BatchState) error { return nil }).
-	Dispatch(context.Background())
-```
-
-#### <a id="bus-batchbuilder-name"></a>bus.BatchBuilder.Name
-
-Name sets a display name for the batch.
-
-```go
-batchID, _ := b.Batch(bus.NewJob("a", nil)).Name("nightly").Dispatch(context.Background())
-```
-
-#### <a id="bus-batchbuilder-onqueue"></a>bus.BatchBuilder.OnQueue
-
-OnQueue applies a default queue to batch jobs that do not set one.
-
-```go
-batchID, _ := b.Batch(bus.NewJob("a", nil)).OnQueue("critical").Dispatch(context.Background())
-```
-
-#### <a id="bus-batchbuilder-progress"></a>bus.BatchBuilder.Progress
-
-Progress registers a callback invoked as jobs complete.
-
-```go
-batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	Progress(func(context.Context, bus.BatchState) error { return nil }).
-	Dispatch(context.Background())
-```
-
-#### <a id="bus-batchbuilder-then"></a>bus.BatchBuilder.Then
-
-Then registers a callback invoked once when batch succeeds.
-
-```go
-batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	Then(func(context.Context, bus.BatchState) error { return nil }).
-	Dispatch(context.Background())
-```
-
-### Chaining
-
-#### <a id="bus-chainbuilder-catch"></a>bus.ChainBuilder.Catch
-
-Catch registers a callback invoked when chain execution fails.
-
-```go
-chainID, _ := b.Chain(bus.NewJob("a", nil)).
-	Catch(func(context.Context, bus.ChainState, error) error { return nil }).
-	Dispatch(context.Background())
-```
-
-#### <a id="bus-chainbuilder-dispatch"></a>bus.ChainBuilder.Dispatch
-
-Dispatch creates and starts the chain workflow.
-
-```go
-chainID, _ := b.Chain(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
-```
-
-#### <a id="bus-chainbuilder-finally"></a>bus.ChainBuilder.Finally
-
-Finally registers a callback invoked once when chain execution finishes.
-
-```go
-chainID, _ := b.Chain(bus.NewJob("a", nil)).
-	Finally(func(context.Context, bus.ChainState) error { return nil }).
-	Dispatch(context.Background())
-```
-
-#### <a id="bus-chainbuilder-onqueue"></a>bus.ChainBuilder.OnQueue
-
-OnQueue applies a default queue to chain jobs that do not set one.
-
-```go
-chainID, _ := b.Chain(
-	bus.NewJob("a", nil),
-	bus.NewJob("b", nil),
-).OnQueue("critical").Dispatch(context.Background())
-```
-
-### Constructors
-
-#### <a id="bus-new"></a>bus.New
-
-New creates a bus runtime using an in-memory orchestration store.
-
-```go
-q, _ := queue.NewSync()
-b, _ := bus.New(q)
-b.Register("monitor:poll", func(context.Context, bus.Context) error { return nil })
-defer b.Shutdown(context.Background())
-type PollPayload struct {
-	URL string `json:"url"`
-}
-_, _ = b.Dispatch(context.Background(), bus.NewJob("monitor:poll", PollPayload{
-	URL: "https://goforj.dev/health",
-}))
-```
-
-#### <a id="bus-newfake"></a>bus.NewFake
-
-NewFake creates a bus fake that records dispatch, chain, and batch calls.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Dispatch(context.Background(), bus.NewJob("monitor:poll", nil))
-```
-
-#### <a id="bus-newjob"></a>bus.NewJob
-
-NewJob creates a typed bus job payload with optional fluent options.
-
-```go
-type PollPayload struct {
-	URL string `json:"url"`
-}
-job := bus.NewJob("monitor:poll", PollPayload{
-	URL: "https://goforj.dev/health",
-}).
-	OnQueue("monitor-critical").
-	Delay(2 * time.Second).
-	Timeout(15 * time.Second).
-	Retry(3).
-	Backoff(500 * time.Millisecond).
-	UniqueFor(30 * time.Second)
-```
-
-#### <a id="bus-newmemorystore"></a>bus.NewMemoryStore
-
-NewMemoryStore creates an in-memory orchestration store implementation.
-
-```go
-store := bus.NewMemoryStore()
-```
-
-#### <a id="bus-newsqlstore"></a>bus.NewSQLStore
-
-NewSQLStore creates a SQL-backed orchestration store.
-
-```go
-store, _ := bus.NewSQLStore(bus.SQLStoreConfig{
-	DriverName: "sqlite",
-	DSN:        "file:bus.db?_busy_timeout=5000",
-})
-```
-
-#### <a id="bus-newwithstore"></a>bus.NewWithStore
-
-NewWithStore creates a bus runtime with a custom orchestration store.
-
-```go
-q, _ := queue.NewSync()
-store := bus.NewMemoryStore()
-b, _ := bus.NewWithStore(q, store)
-```
-
-### Events
-
-#### <a id="bus-multiobserver"></a>bus.MultiObserver
-
-MultiObserver fans out one event to multiple observers.
-
-```go
-observer := bus.MultiObserver(
-	bus.ObserverFunc(func(event bus.Event) {}),
-	bus.ObserverFunc(func(event bus.Event) {}),
-)
-observer.Observe(bus.Event{Kind: bus.EventDispatchStarted})
-```
-
-#### <a id="bus-observerfunc-observe"></a>bus.ObserverFunc.Observe
-
-Observe calls the wrapped observer function.
-
-```go
-observer := bus.ObserverFunc(func(event bus.Event) {
-})
-observer.Observe(bus.Event{Kind: bus.EventDispatchStarted})
-```
-
-### Job
-
-#### <a id="bus-job-backoff"></a>bus.Job.Backoff
-
-Backoff sets retry backoff for this job.
-
-```go
-job := bus.NewJob("emails:send", nil).Backoff(500 * time.Millisecond)
-```
-
-#### <a id="bus-context-bind"></a>bus.Context.Bind
-
-Bind unmarshals the job payload into dst.
-
-```go
-type PollPayload struct {
-	URL string `json:"url"`
-}
-var payload PollPayload
-```
-
-#### <a id="bus-job-delay"></a>bus.Job.Delay
-
-Delay defers job execution.
-
-```go
-job := bus.NewJob("emails:send", nil).Delay(2 * time.Second)
-```
-
-#### <a id="bus-job-onqueue"></a>bus.Job.OnQueue
-
-OnQueue sets the target queue for this job.
-
-```go
-job := bus.NewJob("emails:send", nil).OnQueue("critical")
-```
-
-#### <a id="bus-context-payloadbytes"></a>bus.Context.PayloadBytes
-
-PayloadBytes returns a copy of raw job payload bytes.
-
-```go
-raw := jc.PayloadBytes()
-```
-
-#### <a id="bus-job-retry"></a>bus.Job.Retry
-
-Retry sets max retry attempts for this job.
-
-```go
-job := bus.NewJob("emails:send", nil).Retry(5)
-```
-
-#### <a id="bus-job-timeout"></a>bus.Job.Timeout
-
-Timeout sets execution timeout for this job.
-
-```go
-job := bus.NewJob("emails:send", nil).Timeout(15 * time.Second)
-```
-
-#### <a id="bus-job-uniquefor"></a>bus.Job.UniqueFor
-
-UniqueFor sets dedupe TTL for this job.
-
-```go
-job := bus.NewJob("emails:send", nil).UniqueFor(30 * time.Second)
-```
-
-### Middleware
-
-#### <a id="bus-failonerror-handle"></a>bus.FailOnError.Handle
-
-Handle wraps matched errors as fatal errors to stop retries.
-
-```go
-mw := bus.FailOnError{
-	When: func(err error) bool { return err != nil },
-}
-```
-
-#### <a id="bus-middlewarefunc-handle"></a>bus.MiddlewareFunc.Handle
-
-Handle calls the wrapped middleware function.
-
-```go
-mw := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
-	return next(ctx, jc)
-})
-```
-
-#### <a id="bus-ratelimit-handle"></a>bus.RateLimit.Handle
-
-Handle applies limiter checks before executing the next handler.
-
-```go
-mw := bus.RateLimit{
-	Key: func(context.Context, bus.Context) string { return "emails" },
-}
-```
-
-#### <a id="bus-retrypolicy-handle"></a>bus.RetryPolicy.Handle
-
-Handle passes execution through without modification.
-
-```go
-policy := bus.RetryPolicy{}
-```
-
-#### <a id="bus-skipwhen-handle"></a>bus.SkipWhen.Handle
-
-Handle skips job execution when Predicate returns true.
-
-```go
-mw := bus.SkipWhen{
-	Predicate: func(context.Context, bus.Context) bool { return true },
-}
-```
-
-#### <a id="bus-withoutoverlapping-handle"></a>bus.WithoutOverlapping.Handle
-
-Handle acquires a lock and prevents concurrent overlap for the same key.
-
-```go
-mw := bus.WithoutOverlapping{
-	Key: func(context.Context, bus.Context) string { return "job-key" },
-	TTL: 30 * time.Second,
-}
-```
-
-### Options
-
-#### <a id="bus-withclock"></a>bus.WithClock
-
-WithClock overrides the runtime clock used for event/state timestamps.
-
-```go
-fixed := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-b, _ := bus.New(q, bus.WithClock(func() time.Time { return fixed }))
-```
-
-#### <a id="bus-withmiddleware"></a>bus.WithMiddleware
-
-WithMiddleware appends middleware to the runtime execution chain.
-
-```go
-audit := bus.MiddlewareFunc(func(ctx context.Context, jc bus.Context, next bus.Next) error {
-	return next(ctx, jc)
-})
-skipHealth := bus.SkipWhen{
-	Predicate: func(_ context.Context, jc bus.Context) bool { return jc.JobType == "health:ping" },
-}
-fatalize := bus.FailOnError{
-	When: func(err error) bool { return err != nil },
-}
-b, _ := bus.New(q, bus.WithMiddleware(audit, skipHealth, fatalize))
-```
-
-#### <a id="bus-withobserver"></a>bus.WithObserver
-
-WithObserver installs an event observer for dispatch/job/chain/batch lifecycle hooks.
-
-```go
-observer := bus.ObserverFunc(func(event bus.Event) {
-})
-b, _ := bus.New(q, bus.WithObserver(observer))
-```
-
-#### <a id="bus-withstore"></a>bus.WithStore
-
-WithStore overrides the orchestration store used for chain/batch/callback state.
-
-```go
-store := bus.NewMemoryStore()
-b, _ := bus.New(q, bus.WithStore(store))
-```
-
-### Testing
-
-#### <a id="bus-fake-assertbatchcount"></a>bus.Fake.AssertBatchCount
-
-AssertBatchCount fails if total recorded batch count does not match n.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Batch(bus.NewJob("a", nil)).Dispatch(context.Background())
-fake.AssertBatchCount(nil, 1)
-```
-
-#### <a id="bus-fake-assertbatched"></a>bus.Fake.AssertBatched
-
-AssertBatched fails unless at least one recorded batch matches predicate.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Batch(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
-fake.AssertBatched(nil, func(spec bus.BatchSpec) bool { return len(spec.JobTypes) == 2 })
-```
-
-#### <a id="bus-fake-assertchained"></a>bus.Fake.AssertChained
-
-AssertChained fails if no recorded chain matches expected job type order.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Chain(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
-fake.AssertChained(nil, []string{"a", "b"})
-```
-
-#### <a id="bus-fake-assertcount"></a>bus.Fake.AssertCount
-
-AssertCount fails if total dispatched count does not match n.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-fake.AssertCount(nil, 1)
-```
-
-#### <a id="bus-fake-assertdispatched"></a>bus.Fake.AssertDispatched
-
-AssertDispatched fails if the given job type was never dispatched.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-fake.AssertDispatched(nil, "emails:send")
-```
-
-#### <a id="bus-fake-assertdispatchedon"></a>bus.Fake.AssertDispatchedOn
-
-AssertDispatchedOn fails if a job type was not dispatched on queueName.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil).OnQueue("critical"))
-fake.AssertDispatchedOn(nil, "critical", "emails:send")
-```
-
-#### <a id="bus-fake-assertdispatchedtimes"></a>bus.Fake.AssertDispatchedTimes
-
-AssertDispatchedTimes fails if dispatched count for job type does not match n.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-fake.AssertDispatchedTimes(nil, "emails:send", 2)
-```
-
-#### <a id="bus-fake-assertnotdispatched"></a>bus.Fake.AssertNotDispatched
-
-AssertNotDispatched fails if the given job type was dispatched.
-
-```go
-fake := bus.NewFake()
-fake.AssertNotDispatched(nil, "emails:send")
-```
-
-#### <a id="bus-fake-assertnothingbatched"></a>bus.Fake.AssertNothingBatched
-
-AssertNothingBatched fails if any batch was recorded.
-
-```go
-fake := bus.NewFake()
-fake.AssertNothingBatched(nil)
-```
-
-#### <a id="bus-fake-assertnothingdispatched"></a>bus.Fake.AssertNothingDispatched
-
-AssertNothingDispatched fails if any job was dispatched.
-
-```go
-fake := bus.NewFake()
-fake.AssertNothingDispatched(nil)
-```
-
-#### <a id="bus-fake-batch"></a>bus.Fake.Batch
-
-Batch records a batch specification.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Batch(
-	bus.NewJob("a", nil),
-	bus.NewJob("b", nil),
-).Dispatch(context.Background())
-```
-
-#### <a id="bus-fake-chain"></a>bus.Fake.Chain
-
-Chain records a chain specification.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Chain(
-	bus.NewJob("a", nil),
-	bus.NewJob("b", nil),
-).Dispatch(context.Background())
-```
-
-#### <a id="bus-fake-dispatch"></a>bus.Fake.Dispatch
-
-Dispatch records a dispatched job.
-
-```go
-fake := bus.NewFake()
-_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-```
 
 
 ## queue API
@@ -1013,24 +429,25 @@ _, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
 
 #### <a id="queue-new"></a>queue.New
 
-New creates a queue based on Config.Driver.
+New creates the high-level Queue API based on Config.Driver.
 
 ```go
-q, err := queue.NewSync()
+q, err := queue.New(queue.Config{Driver: queue.DriverWorkerpool})
 if err != nil {
 	return
 }
 type EmailPayload struct {
 	ID int `json:"id"`
 }
-q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
+q.Register("emails:send", func(ctx context.Context, jc queue.Context) error {
 	var payload EmailPayload
-	if err := job.Bind(&payload); err != nil {
+	if err := jc.Bind(&payload); err != nil {
 		return err
 	}
 	return nil
 })
 defer q.Shutdown(context.Background())
+_, _ = q.Dispatch(
 	context.Background(),
 	queue.NewJob("emails:send").
 		Payload(EmailPayload{ID: 1}).
@@ -1040,36 +457,20 @@ defer q.Shutdown(context.Background())
 
 #### <a id="queue-newdatabase"></a>queue.NewDatabase
 
-NewDatabase creates a SQL-backed queue runtime.
-
-```go
-q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
-if err != nil {
-	return
-}
-```
+NewDatabase creates a Queue on the SQL backend.
 
 #### <a id="queue-newnats"></a>queue.NewNATS
 
-NewNATS creates a NATS-backed queue runtime.
-
-```go
-q, err := queue.NewNATS("nats://127.0.0.1:4222")
-if err != nil {
-	return
-}
-```
+NewNATS creates a Queue on the NATS backend.
 
 #### <a id="queue-newnull"></a>queue.NewNull
 
-NewNull creates a drop-only queue runtime.
+NewNull creates a Queue on the null backend.
 
-```go
-q, err := queue.NewNull()
-if err != nil {
-	return
-}
-```
+#### <a id="queue-newqueue"></a>queue.NewQueue
+
+NewQueue creates the low-level queue runtime (driver-facing API) based on Config.Driver.
+Use this only for driver-focused/advanced runtime access; application code should prefer New.
 
 #### <a id="queue-newqueuewithdefaults"></a>queue.NewQueueWithDefaults
 
@@ -1097,36 +498,15 @@ defer q.Shutdown(context.Background())
 
 #### <a id="queue-newrabbitmq"></a>queue.NewRabbitMQ
 
-NewRabbitMQ creates a RabbitMQ-backed queue runtime.
-
-```go
-q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
-if err != nil {
-	return
-}
-```
+NewRabbitMQ creates a Queue on the RabbitMQ backend.
 
 #### <a id="queue-newredis"></a>queue.NewRedis
 
-NewRedis creates a Redis-backed queue runtime.
-
-```go
-q, err := queue.NewRedis("127.0.0.1:6379")
-if err != nil {
-	return
-}
-```
+NewRedis creates a Queue on the Redis backend.
 
 #### <a id="queue-newsqs"></a>queue.NewSQS
 
-NewSQS creates an SQS-backed queue runtime.
-
-```go
-q, err := queue.NewSQS("us-east-1")
-if err != nil {
-	return
-}
-```
+NewSQS creates a Queue on the SQS backend.
 
 #### <a id="queue-newstatscollector"></a>queue.NewStatsCollector
 
@@ -1138,25 +518,11 @@ collector := queue.NewStatsCollector()
 
 #### <a id="queue-newsync"></a>queue.NewSync
 
-NewSync creates a synchronous in-process queue runtime.
-
-```go
-q, err := queue.NewSync()
-if err != nil {
-	return
-}
-```
+NewSync creates a Queue on the synchronous in-process backend.
 
 #### <a id="queue-newworkerpool"></a>queue.NewWorkerpool
 
-NewWorkerpool creates an in-process workerpool queue runtime.
-
-```go
-q, err := queue.NewWorkerpool()
-if err != nil {
-	return
-}
-```
+NewWorkerpool creates a Queue on the in-process workerpool backend.
 
 ### Job
 
@@ -1406,13 +772,13 @@ collector.Observe(queue.Event{
 })
 ```
 
-#### <a id="queue-pausequeue"></a>queue.PauseQueue
+#### <a id="queue-pause"></a>queue.Pause
 
-PauseQueue pauses queue consumption for drivers that support it.
+Pause pauses queue consumption for drivers that support it.
 
 ```go
 q, _ := queue.NewSync()
-snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
+snapshot, _ := queue.Snapshot(context.Background(), q.UnderlyingQueue(), nil)
 fmt.Println(snapshot.Paused("default"))
 // Output: 1
 ```
@@ -1498,13 +864,14 @@ fmt.Println(len(names), names[0])
 // Output: 1 critical
 ```
 
-#### <a id="queue-resumequeue"></a>queue.ResumeQueue
+#### <a id="queue-resume"></a>queue.Resume
 
-ResumeQueue resumes queue consumption for drivers that support it.
+Resume resumes queue consumption for drivers that support it.
 
 ```go
 q, _ := queue.NewSync()
-snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
+raw := q.UnderlyingQueue()
+snapshot, _ := queue.Snapshot(context.Background(), raw, nil)
 fmt.Println(snapshot.Paused("default"))
 // Output: 0
 ```
@@ -1535,6 +902,18 @@ snapshot := queue.StatsSnapshot{
 }
 fmt.Println(snapshot.Scheduled("default"))
 // Output: 4
+```
+
+#### <a id="queue-snapshot"></a>queue.Snapshot
+
+Snapshot returns driver-native stats, falling back to collector data.
+
+```go
+q, _ := queue.NewSync()
+snapshot, _ := q.Stats(context.Background())
+_, ok := snapshot.Queue("default")
+fmt.Println(ok)
+// Output: true
 ```
 
 #### <a id="queue-statscollector-snapshot"></a>queue.StatsCollector.Snapshot
@@ -1576,18 +955,6 @@ fmt.Printf("hour=%+v\n", throughput.Hour)
 // hour={Processed:1 Failed:0}
 ```
 
-#### <a id="queue-snapshotqueue"></a>queue.SnapshotQueue
-
-SnapshotQueue returns driver-native stats, falling back to collector data.
-
-```go
-q, _ := queue.NewSync()
-snapshot, _ := queue.SnapshotQueue(context.Background(), q, nil)
-_, ok := snapshot.Queue("default")
-fmt.Println(ok)
-// Output: true
-```
-
 #### <a id="queue-supportsnativestats"></a>queue.SupportsNativeStats
 
 SupportsNativeStats reports whether a queue runtime exposes native stats snapshots.
@@ -1600,7 +967,7 @@ fmt.Println(queue.SupportsNativeStats(q))
 
 #### <a id="queue-supportspause"></a>queue.SupportsPause
 
-SupportsPause reports whether a queue runtime supports PauseQueue/ResumeQueue.
+SupportsPause reports whether a queue runtime supports Pause/Resume.
 
 ```go
 q, _ := queue.NewSync()
@@ -1628,12 +995,90 @@ fmt.Printf("ok=%v hour=%+v day=%+v week=%+v\n", ok, throughput.Hour, throughput.
 
 ### Queue
 
+#### <a id="queue-queue-batch"></a>queue.Queue.Batch
+
+Batch creates a batch builder for fan-out workflow execution.
+
+#### <a id="queue-queue-chain"></a>queue.Queue.Chain
+
+Chain creates a chain builder for sequential workflow execution.
+
 #### <a id="queue-queue-dispatch"></a>queue.Queue.Dispatch
+
+Dispatch enqueues a high-level job.
+
+#### <a id="queue-queue-driver"></a>queue.Queue.Driver
+
+Driver reports the configured backend driver for the underlying queue runtime.
+
+#### <a id="queue-queue-findbatch"></a>queue.Queue.FindBatch
+
+FindBatch returns current batch state by ID.
+
+#### <a id="queue-queue-findchain"></a>queue.Queue.FindChain
+
+FindChain returns current chain state by ID.
+
+#### <a id="queue-queue-pause"></a>queue.Queue.Pause
+
+Pause pauses consumption for a queue when supported by the underlying driver.
+
+#### <a id="queue-queue-prune"></a>queue.Queue.Prune
+
+Prune deletes old workflow state records.
+
+#### <a id="queue-queue-register"></a>queue.Queue.Register
+
+Register binds a handler for a high-level job type.
+
+#### <a id="queue-queue-resume"></a>queue.Queue.Resume
+
+Resume resumes consumption for a queue when supported by the underlying driver.
+
+#### <a id="queue-queue-shutdown"></a>queue.Queue.Shutdown
+
+Shutdown drains workers and closes underlying resources.
+
+#### <a id="queue-queue-startworkers"></a>queue.Queue.StartWorkers
+
+StartWorkers starts worker processing.
+
+#### <a id="queue-queue-stats"></a>queue.Queue.Stats
+
+Stats returns a normalized snapshot when supported by the underlying driver.
+
+#### <a id="queue-queue-underlyingqueue"></a>queue.Queue.UnderlyingQueue
+
+UnderlyingQueue returns the low-level queue runtime used by this high-level runtime.
+
+#### <a id="queue-withworkflowclock"></a>queue.WithWorkflowClock
+
+WithWorkflowClock overrides the workflow runtime clock.
+
+#### <a id="queue-withworkflowmiddleware"></a>queue.WithWorkflowMiddleware
+
+WithWorkflowMiddleware appends workflow middleware.
+
+#### <a id="queue-withworkflowobserver"></a>queue.WithWorkflowObserver
+
+WithWorkflowObserver installs a workflow lifecycle observer.
+
+#### <a id="queue-withworkflowstore"></a>queue.WithWorkflowStore
+
+WithWorkflowStore overrides the workflow orchestration store.
+
+#### <a id="queue-queue-workers"></a>queue.Queue.Workers
+
+Workers sets desired worker concurrency before StartWorkers.
+
+### Queue Runtime
+
+#### <a id="queue-queueruntime-dispatch"></a>queue.QueueRuntime.Dispatch
 
 Dispatch submits a typed job payload using the default queue.
 
 ```go
-var q queue.Queue
+var q queue.QueueRuntime
 err := q.Dispatch(
 	queue.NewJob("emails:send").
 		Payload(map[string]any{"id": 1}).
@@ -1641,60 +1086,60 @@ err := q.Dispatch(
 )
 ```
 
-#### <a id="queue-queue-dispatchctx"></a>queue.Queue.DispatchCtx
+#### <a id="queue-queueruntime-dispatchctx"></a>queue.QueueRuntime.DispatchCtx
 
 DispatchCtx submits a typed job payload using the provided context.
 
 ```go
-var q queue.Queue
+var q queue.QueueRuntime
 err := q.DispatchCtx(
 	context.Background(),
 	queue.NewJob("emails:send").OnQueue("default"),
 )
 ```
 
-#### <a id="queue-queue-driver"></a>queue.Queue.Driver
+#### <a id="queue-queueruntime-driver"></a>queue.QueueRuntime.Driver
 
 Driver returns the active queue driver.
 
 ```go
-var q queue.Queue
+var q queue.QueueRuntime
 driver := q.Driver()
 ```
 
-#### <a id="queue-queue-register"></a>queue.Queue.Register
+#### <a id="queue-queueruntime-register"></a>queue.QueueRuntime.Register
 
 Register associates a handler with a job type.
 
 ```go
-var q queue.Queue
+var q queue.QueueRuntime
 q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 ```
 
-#### <a id="queue-queue-shutdown"></a>queue.Queue.Shutdown
+#### <a id="queue-queueruntime-shutdown"></a>queue.QueueRuntime.Shutdown
 
 Shutdown drains running work and releases resources.
 
 ```go
-var q queue.Queue
+var q queue.QueueRuntime
 err := q.Shutdown(context.Background())
 ```
 
-#### <a id="queue-queue-startworkers"></a>queue.Queue.StartWorkers
+#### <a id="queue-queueruntime-startworkers"></a>queue.QueueRuntime.StartWorkers
 
 StartWorkers starts worker execution.
 
 ```go
-var q queue.Queue
+var q queue.QueueRuntime
 err := q.StartWorkers(context.Background())
 ```
 
-#### <a id="queue-queue-workers"></a>queue.Queue.Workers
+#### <a id="queue-queueruntime-workers"></a>queue.QueueRuntime.Workers
 
 Workers sets desired worker concurrency before StartWorkers.
 
 ```go
-var q queue.Queue
+var q queue.QueueRuntime
 q = q.Workers(4)
 ```
 
@@ -1756,6 +1201,14 @@ AssertNothingDispatched fails when any dispatch was recorded.
 fake := queue.NewFake()
 fake.AssertNothingDispatched(nil)
 ```
+
+#### <a id="queue-fakequeue-busdispatch"></a>queue.FakeQueue.BusDispatch
+
+BusDispatch satisfies the internal orchestration runtime adapter.
+
+#### <a id="queue-fakequeue-busregister"></a>queue.FakeQueue.BusRegister
+
+BusRegister satisfies the internal orchestration runtime adapter.
 
 #### <a id="queue-fakequeue-dispatch"></a>queue.FakeQueue.Dispatch
 

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/busruntime"
 )
 
 const (
@@ -129,7 +129,7 @@ func WithMiddleware(middlewares ...Middleware) Option {
 //	_, _ = b.Dispatch(context.Background(), bus.NewJob("monitor:poll", PollPayload{
 //		URL: "https://goforj.dev/health",
 //	}))
-func New(q queue.Queue, opts ...Option) (Bus, error) {
+func New(q any, opts ...Option) (Bus, error) {
 	return NewWithStore(q, NewMemoryStore(), opts...)
 }
 
@@ -142,15 +142,19 @@ func New(q queue.Queue, opts ...Option) (Bus, error) {
 //	store := bus.NewMemoryStore()
 //	b, _ := bus.NewWithStore(q, store)
 //	_ = b
-func NewWithStore(q queue.Queue, store Store, opts ...Option) (Bus, error) {
+func NewWithStore(q any, store Store, opts ...Option) (Bus, error) {
 	if q == nil {
 		return nil, errors.New("queue is required")
+	}
+	qr, err := asRuntime(q)
+	if err != nil {
+		return nil, err
 	}
 	if store == nil {
 		store = NewMemoryStore()
 	}
 	r := &runtime{
-		q:              q,
+		q:              qr,
 		store:          store,
 		now:            time.Now,
 		handlers:       make(map[string]Handler),
@@ -161,15 +165,25 @@ func NewWithStore(q queue.Queue, store Store, opts ...Option) (Bus, error) {
 		opt(r)
 	}
 
-	q.Register(internalJob, r.handleInternalJob)
-	q.Register(internalJobChainNode, r.handleInternalChainNode)
-	q.Register(internalJobBatchJob, r.handleInternalBatchJob)
-	q.Register(internalJobCallback, r.handleInternalCallback)
+	qr.BusRegister(internalJob, r.handleInternalJob)
+	qr.BusRegister(internalJobChainNode, r.handleInternalChainNode)
+	qr.BusRegister(internalJobBatchJob, r.handleInternalBatchJob)
+	qr.BusRegister(internalJobCallback, r.handleInternalCallback)
 	return r, nil
 }
 
+func asRuntime(v any) (busruntime.Runtime, error) {
+	if v == nil {
+		return nil, errors.New("queue is required")
+	}
+	if q, ok := v.(busruntime.Runtime); ok {
+		return q, nil
+	}
+	return nil, fmt.Errorf("queue does not support bus runtime adapter")
+}
+
 type runtime struct {
-	q     queue.Queue
+	q     busruntime.Runtime
 	store Store
 	now   func() time.Time
 
@@ -328,26 +342,14 @@ func (r *runtime) dispatchEnvelope(ctx context.Context, jobType string, env enve
 	if err != nil {
 		return err
 	}
-	job := queue.NewJob(jobType).Payload(payload)
-	if env.Job.Options.Queue != "" {
-		job = job.OnQueue(env.Job.Options.Queue)
-	}
-	if env.Job.Options.Delay > 0 {
-		job = job.Delay(env.Job.Options.Delay)
-	}
-	if env.Job.Options.Timeout > 0 {
-		job = job.Timeout(env.Job.Options.Timeout)
-	}
-	if env.Job.Options.Retry > 0 {
-		job = job.Retry(env.Job.Options.Retry)
-	}
-	if env.Job.Options.Backoff > 0 {
-		job = job.Backoff(env.Job.Options.Backoff)
-	}
-	if env.Job.Options.UniqueFor > 0 {
-		job = job.UniqueFor(env.Job.Options.UniqueFor)
-	}
-	return r.q.DispatchCtx(ctx, job)
+	return r.q.BusDispatch(ctx, jobType, payload, busruntime.JobOptions{
+		Queue:     env.Job.Options.Queue,
+		Delay:     env.Job.Options.Delay,
+		Timeout:   env.Job.Options.Timeout,
+		Retry:     env.Job.Options.Retry,
+		Backoff:   env.Job.Options.Backoff,
+		UniqueFor: env.Job.Options.UniqueFor,
+	})
 }
 
 func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind string, err error) error {
@@ -371,7 +373,7 @@ func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind stri
 	return r.dispatchEnvelope(ctx, internalJobCallback, cbEnv)
 }
 
-func (r *runtime) handleInternalJob(ctx context.Context, job queue.Job) error {
+func (r *runtime) handleInternalJob(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err

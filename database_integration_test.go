@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-func newDatabaseQueueIntegration(t *testing.T, cfg DatabaseConfig) Queue {
+func newDatabaseQueueIntegration(t *testing.T, cfg DatabaseConfig) QueueRuntime {
 	t.Helper()
-	q, err := New(Config{
+	q, err := NewQueue(Config{
 		Driver:         DriverDatabase,
 		Database:       cfg.DB,
 		DatabaseDriver: cfg.DriverName,

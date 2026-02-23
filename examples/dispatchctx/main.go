@@ -18,7 +18,7 @@ func example1() {
 	// DispatchCtx submits a typed job payload using the provided context.
 
 	// Example: dispatch with context
-	var q queue.Queue
+	var q queue.QueueRuntime
 	err := q.DispatchCtx(
 		context.Background(),
 		queue.NewJob("emails:send").OnQueue("default"),
