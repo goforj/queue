@@ -467,6 +467,9 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if err == nil {
 			t.Fatal("expected missing job type error")
 		}
+		if !strings.Contains(err.Error(), "dispatch job type is required") {
+			t.Fatalf("expected missing job type message, got %v", err)
+		}
 	})
 
 	t.Run("missing_handler", func(t *testing.T) {
@@ -479,10 +482,16 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 			factory.beforeEach(t)
 		}
 		err := d.DispatchCtx(context.Background(), queue.NewJob("job:contract:missing-handler").OnQueue("default"))
-		if factory.assertMissingHandlerErr && err == nil {
-			t.Fatal("expected missing handler error")
+		if factory.assertMissingHandlerErr {
+			if err == nil {
+				t.Fatal("expected missing handler error")
+			}
+			if !strings.Contains(err.Error(), "no handler registered for job type") {
+				t.Fatalf("expected missing handler message, got %v", err)
+			}
+			return
 		}
-		if !factory.assertMissingHandlerErr && err != nil {
+		if err != nil {
 			t.Fatalf("unexpected missing handler error: %v", err)
 		}
 	})
