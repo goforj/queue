@@ -9,10 +9,10 @@ import (
 	"github.com/goforj/queue/bus"
 )
 
-// Context is the handler context passed to the high-level queue runtime.
+// Message is the handler message passed to the high-level queue runtime.
 // It exposes workflow/job metadata and payload binding helpers.
 // @group Queue
-type Context = bus.Context
+type Message = bus.Context
 
 // DispatchResult describes a high-level dispatch operation.
 // @group Queue
@@ -170,8 +170,8 @@ func WithClock(clock func() time.Time) Option {
 //
 // Example: middleware
 //
-//	mw := queue.MiddlewareFunc(func(ctx context.Context, j queue.Context, next queue.Next) error {
-//		return next(ctx, j)
+//	mw := queue.MiddlewareFunc(func(ctx context.Context, m queue.Message, next queue.Next) error {
+//		return next(ctx, m)
 //	})
 //	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithMiddleware(mw))
 //	if err != nil {
@@ -264,15 +264,15 @@ func NewWorkerpool() (*Queue, error) {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+//	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 //		var payload EmailPayload
-//		if err := j.Bind(&payload); err != nil {
+//		if err := m.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload
 //		return nil
 //	})
-func (r *Queue) Register(jobType string, handler func(context.Context, Context) error) {
+func (r *Queue) Register(jobType string, handler func(context.Context, Message) error) {
 	if r == nil {
 		return
 	}
@@ -324,7 +324,7 @@ func (r *Queue) Workers(count int) *Queue {
 //	if err != nil {
 //		return
 //	}
-//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+//	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
 //	job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
 //	_, _ = q.Dispatch(job)
 func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
@@ -353,8 +353,8 @@ func (r *Queue) DispatchCtx(ctx context.Context, job Job) (DispatchResult, error
 //	if err != nil {
 //		return
 //	}
-//	q.Register("first", func(ctx context.Context, j queue.Context) error { return nil })
-//	q.Register("second", func(ctx context.Context, j queue.Context) error { return nil })
+//	q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
+//	q.Register("second", func(ctx context.Context, m queue.Message) error { return nil })
 //	_, _ = q.Chain(
 //		queue.NewJob("first"),
 //		queue.NewJob("second"),
@@ -383,7 +383,7 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 //	if err != nil {
 //		return
 //	}
-//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+//	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
 //	_, _ = q.Batch(
 //		queue.NewJob("emails:send").Payload(map[string]any{"id": 1}),
 //		queue.NewJob("emails:send").Payload(map[string]any{"id": 2}),
@@ -447,7 +447,7 @@ func (r *Queue) Shutdown(ctx context.Context) error {
 //	if err != nil {
 //		return
 //	}
-//	q.Register("first", func(ctx context.Context, j queue.Context) error { return nil })
+//	q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
 //	chainID, err := q.Chain(queue.NewJob("first")).Dispatch(context.Background())
 //	if err != nil {
 //		return
@@ -469,7 +469,7 @@ func (r *Queue) FindChain(ctx context.Context, chainID string) (ChainState, erro
 //	if err != nil {
 //		return
 //	}
-//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+//	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
 //	batchID, err := q.Batch(queue.NewJob("emails:send")).Dispatch(context.Background())
 //	if err != nil {
 //		return

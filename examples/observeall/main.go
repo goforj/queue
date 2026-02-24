@@ -61,23 +61,23 @@ func main() {
 		panic(err)
 	}
 
-	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 		var payload struct {
 			To string `json:"to"`
 		}
-		if err := j.Bind(&payload); err != nil {
+		if err := m.Bind(&payload); err != nil {
 			return err
 		}
 		fmt.Println("sending", payload.To)
 		return nil
 	})
-	q.Register("emails:flaky", func(ctx context.Context, j queue.Context) error {
+	q.Register("emails:flaky", func(ctx context.Context, m queue.Message) error {
 		if flakyAttempts.Add(1) == 1 {
 			return errors.New("transient smtp error")
 		}
 		return nil
 	})
-	q.Register("emails:fail", func(ctx context.Context, j queue.Context) error {
+	q.Register("emails:fail", func(ctx context.Context, m queue.Message) error {
 		return errors.New("terminal failure")
 	})
 

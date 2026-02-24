@@ -30,7 +30,7 @@ func TestQueueErrorContract_DispatchCtxCancellation(t *testing.T) {
 			t.Fatalf("new queue from workerpool runtime: %v", err)
 		}
 		blockHandler := make(chan struct{})
-		q.Register("job:error-contract:block", func(context.Context, Context) error {
+		q.Register("job:error-contract:block", func(context.Context, Message) error {
 			<-blockHandler
 			return nil
 		})

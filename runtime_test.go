@@ -24,7 +24,7 @@ func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
 	var chainCalls atomic.Int32
 	var batchCalls atomic.Int32
 
-	rt.Register("emails:send", func(_ context.Context, j Context) error {
+	rt.Register("emails:send", func(_ context.Context, j Message) error {
 		var payload struct {
 			ID int `json:"id"`
 		}
@@ -37,15 +37,15 @@ func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
 		dispatchCalls.Add(1)
 		return nil
 	})
-	rt.Register("chain:step1", func(_ context.Context, _ Context) error {
+	rt.Register("chain:step1", func(_ context.Context, _ Message) error {
 		chainCalls.Add(1)
 		return nil
 	})
-	rt.Register("chain:step2", func(_ context.Context, _ Context) error {
+	rt.Register("chain:step2", func(_ context.Context, _ Message) error {
 		chainCalls.Add(1)
 		return nil
 	})
-	rt.Register("batch:step", func(_ context.Context, _ Context) error {
+	rt.Register("batch:step", func(_ context.Context, _ Message) error {
 		batchCalls.Add(1)
 		return nil
 	})
@@ -151,7 +151,7 @@ func TestNew_WithObserver(t *testing.T) {
 		t.Fatalf("new runtime with observer: %v", err)
 	}
 
-	rt.Register("obs:test", func(context.Context, Context) error { return nil })
+	rt.Register("obs:test", func(context.Context, Message) error { return nil })
 	if err := rt.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers: %v", err)
 	}

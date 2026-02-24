@@ -18,7 +18,7 @@ func main() {
 	if err != nil {
 		return
 	}
-	q.Register("first", func(ctx context.Context, j queue.Context) error { return nil })
+	q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
 	chainID, err := q.Chain(queue.NewJob("first")).Dispatch(context.Background())
 	if err != nil {
 		return

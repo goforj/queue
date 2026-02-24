@@ -14,8 +14,8 @@ func main() {
 	// WithMiddleware appends queue workflow middleware.
 
 	// Example: middleware
-	mw := queue.MiddlewareFunc(func(ctx context.Context, j queue.Context, next queue.Next) error {
-		return next(ctx, j)
+	mw := queue.MiddlewareFunc(func(ctx context.Context, m queue.Message, next queue.Next) error {
+		return next(ctx, m)
 	})
 	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithMiddleware(mw))
 	if err != nil {

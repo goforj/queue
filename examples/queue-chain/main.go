@@ -18,8 +18,8 @@ func main() {
 	if err != nil {
 		return
 	}
-	q.Register("first", func(ctx context.Context, j queue.Context) error { return nil })
-	q.Register("second", func(ctx context.Context, j queue.Context) error { return nil })
+	q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
+	q.Register("second", func(ctx context.Context, m queue.Message) error { return nil })
 	_, _ = q.Chain(
 		queue.NewJob("first"),
 		queue.NewJob("second"),

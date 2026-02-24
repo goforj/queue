@@ -213,7 +213,7 @@ func testQueueWorkflowDispatchScenario(t *testing.T, q *Queue, queueName string)
 	seen := make(chan string, 1)
 	jobType := uniqueQueueJobType("queue:dispatch")
 
-	q.Register(jobType, func(_ context.Context, j Context) error {
+	q.Register(jobType, func(_ context.Context, j Message) error {
 		var p payload
 		if err := j.Bind(&p); err != nil {
 			return err
@@ -256,9 +256,9 @@ func testQueueWorkflowChainScenario(t *testing.T, q *Queue, queueName string) {
 	step1 := uniqueQueueJobType("queue:chain:step1")
 	step2 := uniqueQueueJobType("queue:chain:step2")
 	step3 := uniqueQueueJobType("queue:chain:step3")
-	q.Register(step1, func(context.Context, Context) error { appendOrder("step1"); return nil })
-	q.Register(step2, func(context.Context, Context) error { appendOrder("step2"); return nil })
-	q.Register(step3, func(context.Context, Context) error { appendOrder("step3"); return nil })
+	q.Register(step1, func(context.Context, Message) error { appendOrder("step1"); return nil })
+	q.Register(step2, func(context.Context, Message) error { appendOrder("step2"); return nil })
+	q.Register(step3, func(context.Context, Message) error { appendOrder("step3"); return nil })
 
 	chainID, err := q.Chain(
 		NewJob(step1),
@@ -290,7 +290,7 @@ func testQueueWorkflowBatchScenario(t *testing.T, q *Queue, queueName string) {
 	}
 	var processed atomic.Int32
 	jobType := uniqueQueueJobType("queue:batch:work")
-	q.Register(jobType, func(_ context.Context, j Context) error {
+	q.Register(jobType, func(_ context.Context, j Message) error {
 		var p batchPayload
 		if err := j.Bind(&p); err != nil {
 			return err
@@ -322,7 +322,7 @@ func testQueueWorkflowPruneScenario(t *testing.T, q *Queue, queueName string) {
 	t.Helper()
 
 	stepType := uniqueQueueJobType("queue:prune:step")
-	q.Register(stepType, func(context.Context, Context) error { return nil })
+	q.Register(stepType, func(context.Context, Message) error { return nil })
 
 	chainID, err := q.Chain(NewJob(stepType), NewJob(stepType)).OnQueue(queueName).Dispatch(context.Background())
 	if err != nil {

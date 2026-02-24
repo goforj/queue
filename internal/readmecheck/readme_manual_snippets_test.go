@@ -25,11 +25,11 @@ func compileQuickStartQueueSnippet(q *queue.Queue) {
 		return
 	}
 
-	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 		var payload struct {
 			To string `json:"to"`
 		}
-		_ = j.Bind(&payload)
+		_ = m.Bind(&payload)
 		return nil
 	})
 
@@ -52,12 +52,12 @@ func compileQuickStartWorkflowSnippet(q *queue.Queue) {
 		ID int `json:"id"`
 	}
 
-	q.Register("reports:generate", func(context.Context, queue.Context) error { return nil })
-	q.Register("reports:upload", func(_ context.Context, j queue.Context) error {
+	q.Register("reports:generate", func(context.Context, queue.Message) error { return nil })
+	q.Register("reports:upload", func(_ context.Context, m queue.Message) error {
 		var payload EmailPayload
-		return j.Bind(&payload)
+		return m.Bind(&payload)
 	})
-	q.Register("users:notify_report_ready", func(context.Context, queue.Context) error { return nil })
+	q.Register("users:notify_report_ready", func(context.Context, queue.Message) error { return nil })
 
 	_ = q.Workers(2).StartWorkers(context.Background())
 	defer q.Shutdown(context.Background())
@@ -91,15 +91,15 @@ func compileJobBuilderOptionsSnippet(q *queue.Queue) {
 
 	_, _ = q.Dispatch(job)
 
-	q.Register("emails:send", func(ctx context.Context, job queue.Context) error {
+	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 		var payload EmailPayload
-		return job.Bind(&payload)
+		return m.Bind(&payload)
 	})
 }
 
 func compileMiddlewareSnippet() {
-	audit := queue.MiddlewareFunc(func(ctx context.Context, j queue.Context, next queue.Next) error {
-		return next(ctx, j)
+	audit := queue.MiddlewareFunc(func(ctx context.Context, m queue.Message, next queue.Next) error {
+		return next(ctx, m)
 	})
 
 	q, _ := queue.New(

@@ -94,9 +94,9 @@ func newSyncQueue() queueBackend {
 //	type EmailPayload struct {
 //		ID int `json:"id"`
 //	}
-//	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+//	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 //		var payload EmailPayload
-//		if err := j.Bind(&payload); err != nil {
+//		if err := m.Bind(&payload); err != nil {
 //			return err
 //		}
 //		_ = payload

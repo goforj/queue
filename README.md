@@ -39,11 +39,11 @@ import (
 func main() {
 	q, _ := queue.NewWorkerpool()
 
-	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 		var payload struct {
 			To string `json:"to"`
 		}
-		_ = j.Bind(&payload)
+		_ = m.Bind(&payload)
 		fmt.Println("send to", payload.To)
 		return nil
 	})
@@ -75,17 +75,17 @@ type EmailPayload struct {
 func main() {
 	q, _ := queue.NewWorkerpool()
 
-	q.Register("reports:generate", func(ctx context.Context, j queue.Context) error {
+	q.Register("reports:generate", func(ctx context.Context, m queue.Message) error {
 		return nil
 	})
-	q.Register("reports:upload", func(ctx context.Context, j queue.Context) error {
+	q.Register("reports:upload", func(ctx context.Context, m queue.Message) error {
 		var payload EmailPayload
-		if err := j.Bind(&payload); err != nil {
+		if err := m.Bind(&payload); err != nil {
 			return err
 		}
 		return nil
 	})
-	q.Register("users:notify_report_ready", func(ctx context.Context, j queue.Context) error {
+	q.Register("users:notify_report_ready", func(ctx context.Context, m queue.Message) error {
 		return nil
 	})
 
@@ -141,9 +141,9 @@ job := queue.NewJob("emails:send").
 _, _ = q.Dispatch(job)
 
 // In handlers, use Bind to decode payload into a struct.
-q.Register("emails:send", func(ctx context.Context, job queue.Context) error {
+q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 	var payload EmailPayload
-	if err := job.Bind(&payload); err != nil {
+	if err := m.Bind(&payload); err != nil {
 		return err
 	}
 	return nil
@@ -170,8 +170,8 @@ q.Register("emails:send", func(ctx context.Context, job queue.Context) error {
 Use `queue.WithMiddleware(...)` to apply cross-cutting workflow behavior (logging, filtering, error policy) to chains/batches/dispatch orchestration.
 
 ```go
-audit := queue.MiddlewareFunc(func(ctx context.Context, j queue.Context, next queue.Next) error {
-    return next(ctx, j)
+audit := queue.MiddlewareFunc(func(ctx context.Context, m queue.Message, next queue.Next) error {
+    return next(ctx, m)
 })
 
 q, _ := queue.New(
@@ -458,9 +458,9 @@ if err != nil {
 type EmailPayload struct {
 	ID int `json:"id"`
 }
-q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 	var payload EmailPayload
-	if err := j.Bind(&payload); err != nil {
+	if err := m.Bind(&payload); err != nil {
 		return err
 	}
 	return nil
@@ -1012,7 +1012,7 @@ q, err := queue.NewSync()
 if err != nil {
 	return
 }
-q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
 _, _ = q.Batch(
 	queue.NewJob("emails:send").Payload(map[string]any{"id": 1}),
 	queue.NewJob("emails:send").Payload(map[string]any{"id": 2}),
@@ -1028,8 +1028,8 @@ q, err := queue.NewSync()
 if err != nil {
 	return
 }
-q.Register("first", func(ctx context.Context, j queue.Context) error { return nil })
-q.Register("second", func(ctx context.Context, j queue.Context) error { return nil })
+q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
+q.Register("second", func(ctx context.Context, m queue.Message) error { return nil })
 _, _ = q.Chain(
 	queue.NewJob("first"),
 	queue.NewJob("second"),
@@ -1045,7 +1045,7 @@ q, err := queue.NewSync()
 if err != nil {
 	return
 }
-q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
 job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
 _, _ = q.Dispatch(job)
 ```
@@ -1076,7 +1076,7 @@ q, err := queue.NewSync()
 if err != nil {
 	return
 }
-q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
 batchID, err := q.Batch(queue.NewJob("emails:send")).Dispatch(context.Background())
 if err != nil {
 	return
@@ -1093,7 +1093,7 @@ q, err := queue.NewSync()
 if err != nil {
 	return
 }
-q.Register("first", func(ctx context.Context, j queue.Context) error { return nil })
+q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
 chainID, err := q.Chain(queue.NewJob("first")).Dispatch(context.Background())
 if err != nil {
 	return
@@ -1137,9 +1137,9 @@ if err != nil {
 type EmailPayload struct {
 	ID int `json:"id"`
 }
-q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 	var payload EmailPayload
-	if err := j.Bind(&payload); err != nil {
+	if err := m.Bind(&payload); err != nil {
 		return err
 	}
 	return nil
@@ -1214,8 +1214,8 @@ if err != nil {
 WithMiddleware appends queue workflow middleware.
 
 ```go
-mw := queue.MiddlewareFunc(func(ctx context.Context, j queue.Context, next queue.Next) error {
-	return next(ctx, j)
+mw := queue.MiddlewareFunc(func(ctx context.Context, m queue.Message, next queue.Next) error {
+	return next(ctx, m)
 })
 q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithMiddleware(mw))
 if err != nil {

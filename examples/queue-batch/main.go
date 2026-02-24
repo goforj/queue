@@ -18,7 +18,7 @@ func main() {
 	if err != nil {
 		return
 	}
-	q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
+	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
 	_, _ = q.Batch(
 		queue.NewJob("emails:send").Payload(map[string]any{"id": 1}),
 		queue.NewJob("emails:send").Payload(map[string]any{"id": 2}),
