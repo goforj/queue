@@ -155,3 +155,30 @@ func TestQueueErrorContract_Constructors(t *testing.T) {
 		}
 	})
 }
+
+func TestQueueErrorContract_RuntimeDispatchInputValidation(t *testing.T) {
+	r, err := newRuntime(Config{Driver: DriverSync})
+	if err != nil {
+		t.Fatalf("new sync runtime: %v", err)
+	}
+
+	t.Run("nil_job", func(t *testing.T) {
+		err := r.DispatchCtx(context.Background(), nil)
+		if err == nil {
+			t.Fatal("expected nil job error")
+		}
+		if !strings.Contains(err.Error(), "dispatch job is nil") {
+			t.Fatalf("expected nil job error message, got %v", err)
+		}
+	})
+
+	t.Run("uninferable_job_type", func(t *testing.T) {
+		err := r.Dispatch(struct{ F func() }{})
+		if err == nil {
+			t.Fatal("expected uninferable job type error")
+		}
+		if !strings.Contains(err.Error(), "dispatch job type could not be inferred") {
+			t.Fatalf("expected uninferable job type message, got %v", err)
+		}
+	})
+}

@@ -532,7 +532,7 @@ Track flake rates by backend/scenario.
   - workflow not-found / invalid-state errors are covered
 - Notes:
   - avoid overfitting exact wrapped error strings unless intentionally part of API
-  - Progress: root-level `error_contract_test.go` covers `Queue.DispatchCtx` cancellation/deadline error classes (using deterministic workerpool saturation), unsupported capability errors for `Queue.Pause`, `Queue.Resume`, and `Queue.Stats`, `ErrWorkflowNotFound` wrapper behavior for `FindChain`/`FindBatch`, and constructor errors for unsupported drivers / moved optional-driver guidance; root and integration-root driver contract tests now assert error message shape for missing job type and (where applicable) missing handler dispatch-time validation
+  - Progress: root-level `error_contract_test.go` covers `Queue.DispatchCtx` cancellation/deadline error classes (using deterministic workerpool saturation), unsupported capability errors for `Queue.Pause`, `Queue.Resume`, and `Queue.Stats`, `ErrWorkflowNotFound` wrapper behavior for `FindChain`/`FindBatch`, constructor errors for unsupported drivers / moved optional-driver guidance, and runtime-level dispatch input validation (`nil` job / uninferable job type); root and integration-root driver contract tests now assert error message shape for missing job type and (where applicable) missing handler dispatch-time validation
 
 Add assertions for user-visible errors:
 
