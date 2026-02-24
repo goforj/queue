@@ -10,6 +10,11 @@ on:
         required: false
         default: "15"
         type: string
+      flake_repeat_count:
+        description: "Repeat count for integration-flake-repeat job"
+        required: false
+        default: "5"
+        type: string
 
 jobs:
   integration-evidence:
@@ -249,5 +254,55 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integration-chaos-${{ matrix.backend }}
+          path: .artifacts/*
+          if-no-files-found: warn
+
+  integration-flake-repeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [redis, rabbitmq, sqs]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run repeated integration flake probes
+        env:
+          INTEGRATION_BACKEND: ${{ matrix.backend }}
+          FLAKE_REPEAT_COUNT: ${{ github.event.inputs.flake_repeat_count || '5' }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          scripts/integration-flake-repeat.sh
+
+      - name: Summarize repeated flake probes
+        if: always()
+        run: |
+          summary=".artifacts/integration-flake-${{ matrix.backend }}-summary.md"
+          if [[ -f "${summary}" ]]; then
+            {
+              echo "### integration-flake-repeat / ${{ matrix.backend }}"
+              cat "${summary}"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "integration flake repeat summary not found for ${{ matrix.backend }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload flake probe logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-flake-repeat-${{ matrix.backend }}
           path: .artifacts/*
           if-no-files-found: warn

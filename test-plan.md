@@ -497,7 +497,7 @@ Why:
 
 ## 8. Repeat-run / soak on timing-sensitive scenarios
 
-- [ ] Add repeated-run soak gate for timing/concurrency-sensitive scenarios with flake tracking
+- [x] Add repeated-run soak gate for timing/concurrency-sensitive scenarios with flake tracking
 - Location:
   - CI scheduled workflow(s) / release-candidate workflow
   - `docs/integration-scenarios.md`
@@ -508,6 +508,7 @@ Why:
   - release candidates require manual review of recent flake results
 - Notes:
   - focus on contention, retry timing, shutdown races, ordering
+  - Implemented via `.github/workflows/soak.yml` `integration-flake-repeat` (scheduled + manual) using `scripts/integration-flake-repeat.sh`; current backend subset is `redis`, `rabbitmq`, `sqs` with per-scenario flake-rate summaries/artifacts in `docs/flake-log.md` review format
 
 Run critical scenarios repeatedly (nightly/RC gate):
 
@@ -632,7 +633,7 @@ Use this section for active implementation tracking. Move items from here to com
 ## P1 Active
 
 - [ ] Chaos-lite failure injection expansion
-- [ ] Repeat-run/soak flake tracking pipeline
+- [x] Repeat-run/soak flake tracking pipeline
 - [ ] Error contract tests
 
 ## P2 Active

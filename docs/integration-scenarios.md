@@ -142,6 +142,9 @@ CI (`.github/workflows/soak.yml`) collects these logs and publishes parsed durat
 - `integration-evidence`
 - `integration-soak`
 - `integration-chaos`
+- `integration-flake-repeat` (repeated timing/concurrency probes with per-scenario flake-rate summaries)
+
+Flake-repeat review process and artifact expectations are documented in `docs/flake-log.md`. Release candidates should be reviewed against the latest `integration-flake-repeat` artifacts before sign-off.
 
 Duration thresholds can be tuned via environment variables. Override precedence is:
 
