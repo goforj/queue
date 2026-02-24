@@ -860,6 +860,14 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 }
 
 func safeObserve(observer Observer, event Event) {
+	SafeObserve(observer, event)
+}
+
+// SafeObserve delivers an event to an observer and recovers observer panics.
+//
+// This is an advanced helper intended for driver-module implementations.
+// @group Observability
+func SafeObserve(observer Observer, event Event) {
 	if observer == nil {
 		return
 	}
@@ -890,6 +898,14 @@ func jobEventKey(job Job) string {
 }
 
 func normalizeQueueName(name string) string {
+	return NormalizeQueueName(name)
+}
+
+// NormalizeQueueName returns the default logical queue name when empty.
+//
+// This is an advanced helper intended for driver-module implementations.
+// @group Observability
+func NormalizeQueueName(name string) string {
 	if name == "" {
 		return "default"
 	}

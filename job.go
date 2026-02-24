@@ -36,6 +36,20 @@ type jobOptions struct {
 	uniqueTTL time.Duration
 }
 
+// DriverJobOptions exposes parsed job enqueue metadata for driver-module implementations.
+//
+// This is an advanced type intended for optional driver integrations.
+// @group Queue Runtime
+type DriverJobOptions struct {
+	QueueName string
+	Timeout   *time.Duration
+	MaxRetry  *int
+	Attempt   int
+	Backoff   *time.Duration
+	Delay     time.Duration
+	UniqueTTL time.Duration
+}
+
 // NewJob creates a job value with a required job type.
 // @group Job
 //
@@ -278,6 +292,31 @@ func (t Job) jobOptions() jobOptions {
 	return t.options
 }
 
+// ValidateDriverJob validates a job value for backend dispatch.
+//
+// This is an advanced helper intended for driver-module implementations.
+// @group Queue Runtime
+func ValidateDriverJob(job Job) error {
+	return job.validate()
+}
+
+// DriverOptions returns parsed enqueue metadata for backend dispatch.
+//
+// This is an advanced helper intended for driver-module implementations.
+// @group Queue Runtime
+func DriverOptions(job Job) DriverJobOptions {
+	opts := job.jobOptions()
+	return DriverJobOptions{
+		QueueName: opts.queueName,
+		Timeout:   opts.timeout,
+		MaxRetry:  opts.maxRetry,
+		Attempt:   opts.attempt,
+		Backoff:   opts.backoff,
+		Delay:     opts.delay,
+		UniqueTTL: opts.uniqueTTL,
+	}
+}
+
 func (t Job) withBuildErr(err error) Job {
 	if t.buildErr == nil {
 		t.buildErr = err
@@ -288,6 +327,14 @@ func (t Job) withBuildErr(err error) Job {
 func (t Job) withAttempt(attempt int) Job {
 	t.options.attempt = attempt
 	return t
+}
+
+// DriverWithAttempt returns a copy of the job with the attempt number set.
+//
+// This is an advanced helper intended for driver-module implementations.
+// @group Queue Runtime
+func DriverWithAttempt(job Job, attempt int) Job {
+	return job.withAttempt(attempt)
 }
 
 // Handler processes a job.

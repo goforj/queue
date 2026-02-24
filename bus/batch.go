@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/goforj/queue/internal/busruntime"
+	"github.com/goforj/queue/busruntime"
 )
 
 type BatchBuilder interface {

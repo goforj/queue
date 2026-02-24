@@ -9,8 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goforj/queue/internal/busruntime"
-	"github.com/hibiken/asynq"
+	"github.com/goforj/queue/busruntime"
 )
 
 // QueueRuntime is the low-level queue runtime abstraction exposed to callers.
@@ -235,24 +234,15 @@ func NewQueue(cfg Config) (QueueRuntime, error) {
 	case DriverWorkerpool:
 		q = newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{})
 	case DriverDatabase:
-		q, err = newDatabaseQueue(cfg.databaseConfig())
+		return nil, optionalDriverMovedError(cfg.Driver)
 	case DriverRedis:
-		if cfg.RedisAddr == "" {
-			return nil, fmt.Errorf("redis addr is required")
-		}
-		q = newRedisQueue(newAsynqClient(cfg), newAsynqInspector(cfg), true)
+		return nil, optionalDriverMovedError(cfg.Driver)
 	case DriverNATS:
-		if cfg.NATSURL == "" {
-			return nil, fmt.Errorf("nats url is required")
-		}
-		q = newNATSQueue(cfg.NATSURL)
+		return nil, optionalDriverMovedError(cfg.Driver)
 	case DriverSQS:
-		q = newSQSQueue(cfg)
+		return nil, optionalDriverMovedError(cfg.Driver)
 	case DriverRabbitMQ:
-		if cfg.RabbitMQURL == "" {
-			return nil, fmt.Errorf("rabbitmq url is required")
-		}
-		q = newRabbitMQQueue(cfg.RabbitMQURL, cfg.DefaultQueue)
+		return nil, optionalDriverMovedError(cfg.Driver)
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
 	}
@@ -315,6 +305,7 @@ type externalQueueRuntime struct {
 	worker     runtimeWorkerBackend
 	started    bool
 	workers    int
+	newWorker  DriverWorkerFactory
 }
 
 type runtimeWorkerBackend interface {
@@ -451,9 +442,21 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	}
 	q.mu.Unlock()
 
-	w, err := newExternalWorker(q.common.cfg, workers)
-	if err != nil {
-		return err
+	var (
+		w   runtimeWorkerBackend
+		err error
+	)
+	if q.newWorker != nil {
+		driverWorker, e := q.newWorker(q.common.cfg, defaultWorkerCount(workers))
+		if e != nil {
+			return e
+		}
+		w = driverWorkerBackendAdapter{driverWorker}
+	} else {
+		w, err = newExternalWorker(q.common.cfg, workers)
+		if err != nil {
+			return err
+		}
 	}
 	for jobType, handler := range registered {
 		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
@@ -597,42 +600,37 @@ func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payloa
 
 func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error) {
 	switch cfg.Driver {
-	case DriverRedis:
-		workers := concurrency
-		workers = defaultWorkerCount(workers)
-		return newRedisWorker(
-			asynq.NewServer(asynq.RedisClientOpt{
-				Addr:     cfg.RedisAddr,
-				Password: cfg.RedisPassword,
-				DB:       cfg.RedisDB,
-			}, asynq.Config{Concurrency: workers}),
-			asynq.NewServeMux(),
-		), nil
-	case DriverNATS:
-		return newNATSWorkerWithConfig(natsWorkerConfig{
-			URL:      cfg.NATSURL,
-			Workers:  defaultWorkerCount(concurrency),
-			Observer: cfg.Observer,
-		}), nil
-	case DriverSQS:
-		return newSQSWorker(sqsWorkerConfig{
-			DefaultQueue: cfg.DefaultQueue,
-			SQSRegion:    cfg.SQSRegion,
-			SQSEndpoint:  cfg.SQSEndpoint,
-			SQSAccessKey: cfg.SQSAccessKey,
-			SQSSecretKey: cfg.SQSSecretKey,
-			Workers:      defaultWorkerCount(concurrency),
-			Observer:     cfg.Observer,
-		}), nil
-	case DriverRabbitMQ:
-		return newRabbitMQWorker(rabbitMQWorkerConfig{
-			DefaultQueue: cfg.DefaultQueue,
-			RabbitMQURL:  cfg.RabbitMQURL,
-			Workers:      defaultWorkerCount(concurrency),
-			Observer:     cfg.Observer,
-		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported queue driver %q", cfg.Driver)
+	}
+}
+
+type driverQueueBackendAdapter struct {
+	DriverQueueBackend
+}
+
+type driverRuntimeQueueBackendAdapter struct {
+	DriverRuntimeQueueBackend
+}
+
+type driverWorkerBackendAdapter struct {
+	DriverWorkerBackend
+}
+
+func optionalDriverMovedError(driver Driver) error {
+	switch driver {
+	case DriverRedis:
+		return fmt.Errorf("redis driver moved; use github.com/goforj/queue/driver/redisqueue")
+	case DriverNATS:
+		return fmt.Errorf("nats driver moved; use github.com/goforj/queue/driver/natsqueue")
+	case DriverSQS:
+		return fmt.Errorf("sqs driver moved; use github.com/goforj/queue/driver/sqsqueue")
+	case DriverRabbitMQ:
+		return fmt.Errorf("rabbitmq driver moved; use github.com/goforj/queue/driver/rabbitmqqueue")
+	case DriverDatabase:
+		return fmt.Errorf("database drivers moved; use github.com/goforj/queue/driver/{mysqlqueue,postgresqueue,sqlitequeue}")
+	default:
+		return fmt.Errorf("unsupported queue driver %q", driver)
 	}
 }
 

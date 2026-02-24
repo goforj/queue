@@ -437,6 +437,13 @@ func (d *localQueue) claimUnique(job Job, queueName string, ttl time.Duration) b
 	return true
 }
 
+func boolToInt64(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
 func waitGroupWithContext(ctx context.Context, waitGroup *sync.WaitGroup) error {
 	done := make(chan struct{})
 	go func() {

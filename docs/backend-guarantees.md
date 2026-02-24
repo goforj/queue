@@ -13,7 +13,7 @@ All backends are expected to provide at-least-once delivery semantics. Handlers 
 
 ## Capability Matrix (Integration Fixture-Aligned)
 
-The table below reflects the capability gates used in `integration_scenarios_test.go` and the shared scenario suite.
+The table below reflects the capability gates used in `integration/all/integration_scenarios_test.go` and the shared scenario suite.
 
 | Backend | Backoff | Restart Recovery | Delayed/Retry Restart Durability | Poison Retry | Dispatch Context Cancel | Deterministic No-Dupes (suite) | Ordering Contract (suite) | Broker Fault Scenarios | Shutdown During Delay/Retry |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -25,7 +25,7 @@ The table below reflects the capability gates used in `integration_scenarios_tes
 | `sqs` | Yes | Yes | No | Yes | Yes | Yes | No | No | No |
 | `rabbitmq` | Yes | Yes | Yes | Yes | No | Yes | No | No | Yes |
 
-\* `sqlite` is promoted to full restart/durability coverage in the shared suite when queue and worker use the same test-local DSN (see fixture override logic in `integration_scenarios_test.go`).
+\* `sqlite` is promoted to full restart/durability coverage in the shared suite when queue and worker use the same test-local DSN (see fixture override logic in `integration/all/integration_scenarios_test.go`).
 
 ## Backend Notes
 
@@ -64,7 +64,7 @@ The table below reflects the capability gates used in `integration_scenarios_tes
 ## Production Guidance Notes
 
 - Treat this matrix as the contract for what the shared integration suite validates today.
-- If you change a capability flag in `integration_scenarios_test.go`, update this document in the same PR.
+- If you change a capability flag in `integration/all/integration_scenarios_test.go`, update this document in the same PR.
 - If you want to claim a stronger backend guarantee publicly, add or unskip the corresponding shared scenario first.
 
 ## GA Completion Criteria for This Document

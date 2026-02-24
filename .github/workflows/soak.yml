@@ -33,12 +33,11 @@ jobs:
 
       - name: Run shared integration scenario matrix (evidence)
         env:
-          RUN_INTEGRATION: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
         run: |
           set -euo pipefail
           mkdir -p .artifacts
-          go test -tags=integration ./... \
+          go test -tags=integration ./integration/... \
             -run '^TestIntegrationScenarios_AllBackends$' \
             -count=1 -v \
             | tee ".artifacts/integration-scenarios-${{ matrix.backend }}.log"
@@ -84,13 +83,12 @@ jobs:
 
       - name: Run integration soak scenario suite
         env:
-          RUN_INTEGRATION: "1"
           RUN_SOAK: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
         run: |
           set -euo pipefail
           mkdir -p .artifacts
-          go test -tags=integration ./... \
+          go test -tags=integration ./integration/... \
             -run '^TestIntegrationScenarios_AllBackends$' \
             -count=1 -v \
             | tee ".artifacts/integration-soak-${{ matrix.backend }}.log"
@@ -136,7 +134,6 @@ jobs:
 
       - name: Run GA soak scenario suite (timed)
         env:
-          RUN_INTEGRATION: "1"
           RUN_SOAK: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
           REQUESTED_SOAK_MINUTES: ${{ github.event.inputs.ga_soak_minutes || '15' }}
@@ -150,7 +147,7 @@ jobs:
             echo "started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > ".artifacts/soak-ga-${{ matrix.backend }}-meta.txt"
 
-          go test -tags=integration ./... \
+          go test -tags=integration ./integration/... \
             -run '^TestIntegrationScenarios_AllBackends$' \
             -count=1 -v \
             | tee ".artifacts/soak-ga-${{ matrix.backend }}.log"
@@ -226,12 +223,11 @@ jobs:
 
       - name: Run integration chaos scenario subset
         env:
-          RUN_INTEGRATION: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
         run: |
           set -euo pipefail
           mkdir -p .artifacts
-          go test -tags=integration ./... \
+          go test -tags=integration ./integration/... \
             -run "TestIntegrationScenarios_AllBackends/.*/scenario_(enqueue_during_broker_fault|consume_after_broker_recovery|shutdown_during_delay_retry|multi_worker_contention)$" \
             -count=1 -v \
             | tee ".artifacts/integration-chaos-${{ matrix.backend }}.log"

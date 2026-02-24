@@ -21,7 +21,7 @@
 - App logs for worker errors/retries:
   - `kubectl logs <worker-pod> --since=15m`
 - Integration-style local baseline:
-  - `RUN_INTEGRATION=1 INTEGRATION_BACKEND=<backend> go test -tags=integration ./... -run '^TestIntegrationScenarios_AllBackends$' -count=1`
+  - `INTEGRATION_BACKEND=<backend> go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1`
 
 ## Likely causes
 

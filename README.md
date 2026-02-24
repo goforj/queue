@@ -15,7 +15,7 @@
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/tests-401-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-222-brightgreen" alt="Tests">
 <!-- test-count:embed:end -->
 </p>
 
@@ -157,7 +157,9 @@ q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 | <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched jobs; useful for disabled queue modes and smoke tests. | - | - | - | - | - | - |
 | <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | ✓ | - | ✓ |
 | <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/database-%23336791?logo=postgresql&logoColor=white" alt="Database"> | SQL (pg/mysql/sqlite) | Durable queue with SQL storage. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL durable queue | MySQL driver module (`driver/mysqlqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="Postgres"> | SQL durable queue | Postgres driver module (`driver/postgresqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL durable queue | SQLite driver module (`driver/sqlitequeue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend (Asynq semantics). | ✓ | ✓ | ✓ | ✓ | - | ✓ |
 | <img src="https://img.shields.io/badge/NATS-007ACC?style=flat" alt="NATS"> | Broker target | NATS transport with queue-subject routing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 | <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -194,16 +196,17 @@ _ = q
 
 Use `queue` constructors/config to choose transport/runtime. `Queue` composes these backends for workflow features.
 Use `queue.NewQueue(...)` only when you need the advanced low-level `QueueRuntime` API.
+For optional backend migration examples, see `docs/driver-migration.md`.
 
 | Backend | Constructor |
 | ---: | --- |
 | In-process sync | `queue.NewSync()` |
 | In-process worker pool | `queue.NewWorkerpool()` |
-| SQL durable queue | `queue.NewDatabase(driver, dsn)` |
-| Redis/Asynq | `queue.NewRedis(addr)` |
-| NATS | `queue.NewNATS(url)` |
-| SQS | `queue.NewSQS(region)` |
-| RabbitMQ | `queue.NewRabbitMQ(url)` |
+| SQL durable queue | `sqlitequeue.New(dsn)` (`github.com/goforj/queue/driver/sqlitequeue`) / `mysqlqueue.New(dsn)` / `postgresqueue.New(dsn)` |
+| Redis/Asynq | `redisqueue.New(addr)` (`github.com/goforj/queue/driver/redisqueue`) |
+| NATS | `natsqueue.New(url)` (`github.com/goforj/queue/driver/natsqueue`) |
+| SQS | `sqsqueue.New(region)` (`github.com/goforj/queue/driver/sqsqueue`) |
+| RabbitMQ | `rabbitmqqueue.New(url)` (`github.com/goforj/queue/driver/rabbitmqqueue`) |
 | Drop-only (disabled mode) | `queue.NewNull()` |
 
 ## Observability
@@ -223,6 +226,18 @@ q, _ := queue.New(queue.Config{
     Driver:   queue.DriverWorkerpool,
     Observer: observer,
 })
+_ = q
+```
+
+RabbitMQ also has a driver-module constructor path (pilot split):
+
+```go
+import "github.com/goforj/queue/driver/rabbitmqqueue"
+
+q, err := rabbitmqqueue.New("amqp://guest:guest@127.0.0.1:5672/")
+if err != nil {
+	return
+}
 _ = q
 ```
 
@@ -369,6 +384,28 @@ _ = q
 
 ## Testing By Audience
 
+### Running tests
+
+Unit tests (root module):
+
+```bash
+go test ./...
+```
+
+Integration tests (separate `integration` module):
+
+```bash
+go test -tags=integration ./integration/...
+```
+
+Select specific backends with `INTEGRATION_BACKEND` (comma-separated), for example:
+
+```bash
+INTEGRATION_BACKEND=sqlite go test -tags=integration ./integration/...
+INTEGRATION_BACKEND=redis,rabbitmq go test -tags=integration ./integration/... -count=1
+INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1
+```
+
 ### Application tests
 
 Use `queue.NewFake()` to assert dispatch behavior in application tests.
@@ -415,11 +452,11 @@ The API section below is autogenerated; do not edit between the markers.
 
 | Group | Functions |
 |------:|:-----------|
-| **Constructors** | [New](#queue-new) [NewDatabase](#queue-newdatabase) [NewNATS](#queue-newnats) [NewNull](#queue-newnull) [NewQueue](#queue-newqueue) [NewRabbitMQ](#queue-newrabbitmq) [NewRedis](#queue-newredis) [NewSQS](#queue-newsqs) [NewStatsCollector](#queue-newstatscollector) [NewSync](#queue-newsync) [NewWorkerpool](#queue-newworkerpool) |
+| **Constructors** | [New](#queue-new) [NewFromRuntime](#queue-newfromruntime) [NewNull](#queue-newnull) [NewQueue](#queue-newqueue) [NewStatsCollector](#queue-newstatscollector) [NewSync](#queue-newsync) [NewWorkerpool](#queue-newworkerpool) |
 | **Job** | [Backoff](#queue-job-backoff) [Bind](#queue-job-bind) [Delay](#queue-job-delay) [NewJob](#queue-newjob) [OnQueue](#queue-job-onqueue) [Payload](#queue-job-payload) [PayloadBytes](#queue-job-payloadbytes) [PayloadJSON](#queue-job-payloadjson) [Retry](#queue-job-retry) [Timeout](#queue-job-timeout) [UniqueFor](#queue-job-uniquefor) |
-| **Observability** | [Active](#queue-statssnapshot-active) [Archived](#queue-statssnapshot-archived) [Failed](#queue-statssnapshot-failed) [MultiObserver](#queue-multiobserver) [ChannelObserver.Observe](#queue-channelobserver-observe) [Observer.Observe](#queue-observer-observe) [ObserverFunc.Observe](#queue-observerfunc-observe) [StatsCollector.Observe](#queue-statscollector-observe) [Pause](#queue-pause) [Paused](#queue-statssnapshot-paused) [Pending](#queue-statssnapshot-pending) [Processed](#queue-statssnapshot-processed) [Queue](#queue-statssnapshot-queue) [Queues](#queue-statssnapshot-queues) [Resume](#queue-resume) [RetryCount](#queue-statssnapshot-retrycount) [Scheduled](#queue-statssnapshot-scheduled) [Snapshot](#queue-snapshot) [StatsCollector.Snapshot](#queue-statscollector-snapshot) [SupportsNativeStats](#queue-supportsnativestats) [SupportsPause](#queue-supportspause) [Throughput](#queue-statssnapshot-throughput) |
+| **Observability** | [Active](#queue-statssnapshot-active) [Archived](#queue-statssnapshot-archived) [Failed](#queue-statssnapshot-failed) [MultiObserver](#queue-multiobserver) [NormalizeQueueName](#queue-normalizequeuename) [ChannelObserver.Observe](#queue-channelobserver-observe) [Observer.Observe](#queue-observer-observe) [ObserverFunc.Observe](#queue-observerfunc-observe) [StatsCollector.Observe](#queue-statscollector-observe) [Pause](#queue-pause) [Paused](#queue-statssnapshot-paused) [Pending](#queue-statssnapshot-pending) [Processed](#queue-statssnapshot-processed) [Queue](#queue-statssnapshot-queue) [Queues](#queue-statssnapshot-queues) [Resume](#queue-resume) [RetryCount](#queue-statssnapshot-retrycount) [SafeObserve](#queue-safeobserve) [Scheduled](#queue-statssnapshot-scheduled) [Snapshot](#queue-snapshot) [StatsCollector.Snapshot](#queue-statscollector-snapshot) [SupportsNativeStats](#queue-supportsnativestats) [SupportsPause](#queue-supportspause) [Throughput](#queue-statssnapshot-throughput) |
 | **Queue** | [Batch](#queue-queue-batch) [Chain](#queue-queue-chain) [Dispatch](#queue-queue-dispatch) [Driver](#queue-queue-driver) [FindBatch](#queue-queue-findbatch) [FindChain](#queue-queue-findchain) [Pause](#queue-queue-pause) [Prune](#queue-queue-prune) [Register](#queue-queue-register) [Resume](#queue-queue-resume) [Shutdown](#queue-queue-shutdown) [StartWorkers](#queue-queue-startworkers) [Stats](#queue-queue-stats) [WithClock](#queue-withclock) [WithMiddleware](#queue-withmiddleware) [WithObserver](#queue-withobserver) [WithStore](#queue-withstore) [Workers](#queue-queue-workers) |
-| **Queue Runtime** | [Dispatch](#queue-queueruntime-dispatch) [DispatchCtx](#queue-queueruntime-dispatchctx) [Driver](#queue-queueruntime-driver) [Register](#queue-queueruntime-register) [Shutdown](#queue-queueruntime-shutdown) [StartWorkers](#queue-queueruntime-startworkers) [Workers](#queue-queueruntime-workers) |
+| **Queue Runtime** | [Dispatch](#queue-queueruntime-dispatch) [DispatchCtx](#queue-queueruntime-dispatchctx) [Driver](#queue-queueruntime-driver) [DriverOptions](#queue-driveroptions) [DriverWithAttempt](#queue-driverwithattempt) [NewQueueFromDriver](#queue-newqueuefromdriver) [Register](#queue-queueruntime-register) [Shutdown](#queue-queueruntime-shutdown) [StartWorkers](#queue-queueruntime-startworkers) [ValidateDriverJob](#queue-validatedriverjob) [Workers](#queue-queueruntime-workers) |
 
 
 
@@ -455,23 +492,19 @@ _, _ = q.Dispatch(
 )
 ```
 
-#### <a id="queue-newdatabase"></a>NewDatabase
+#### <a id="queue-newfromruntime"></a>NewFromRuntime
 
-NewDatabase creates a Queue on the SQL backend.
+NewFromRuntime builds the high-level Queue API around an existing QueueRuntime.
+
+This is an advanced constructor primarily intended for driver modules and custom
+runtime integrations.
 
 ```go
-q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
+raw, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
 if err != nil {
 	return
 }
-```
-
-#### <a id="queue-newnats"></a>NewNATS
-
-NewNATS creates a Queue on the NATS backend.
-
-```go
-q, err := queue.NewNATS("nats://127.0.0.1:4222")
+q, err := queue.NewFromRuntime(raw)
 if err != nil {
 	return
 }
@@ -512,39 +545,6 @@ q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
 	return nil
 })
 defer q.Shutdown(context.Background())
-```
-
-#### <a id="queue-newrabbitmq"></a>NewRabbitMQ
-
-NewRabbitMQ creates a Queue on the RabbitMQ backend.
-
-```go
-q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
-if err != nil {
-	return
-}
-```
-
-#### <a id="queue-newredis"></a>NewRedis
-
-NewRedis creates a Queue on the Redis backend.
-
-```go
-q, err := queue.NewRedis("127.0.0.1:6379")
-if err != nil {
-	return
-}
-```
-
-#### <a id="queue-newsqs"></a>NewSQS
-
-NewSQS creates a Queue on the SQS backend.
-
-```go
-q, err := queue.NewSQS("us-east-1")
-if err != nil {
-	return
-}
 ```
 
 #### <a id="queue-newstatscollector"></a>NewStatsCollector
@@ -768,6 +768,12 @@ fmt.Println(len(events))
 // Output: 1
 ```
 
+#### <a id="queue-normalizequeuename"></a>NormalizeQueueName
+
+NormalizeQueueName returns the default logical queue name when empty.
+
+This is an advanced helper intended for driver-module implementations.
+
 #### <a id="queue-channelobserver-observe"></a>ChannelObserver.Observe
 
 Observe forwards an event to the configured channel.
@@ -948,6 +954,12 @@ snapshot := queue.StatsSnapshot{
 fmt.Println(snapshot.RetryCount("default"))
 // Output: 1
 ```
+
+#### <a id="queue-safeobserve"></a>SafeObserve
+
+SafeObserve delivers an event to an observer and recovers observer panics.
+
+This is an advanced helper intended for driver-module implementations.
 
 #### <a id="queue-statssnapshot-scheduled"></a>Scheduled
 
@@ -1343,6 +1355,25 @@ var q queue.QueueRuntime
 driver := q.Driver()
 ```
 
+#### <a id="queue-driveroptions"></a>DriverOptions
+
+DriverOptions returns parsed enqueue metadata for backend dispatch.
+
+This is an advanced helper intended for driver-module implementations.
+
+#### <a id="queue-driverwithattempt"></a>DriverWithAttempt
+
+DriverWithAttempt returns a copy of the job with the attempt number set.
+
+This is an advanced helper intended for driver-module implementations.
+
+#### <a id="queue-newqueuefromdriver"></a>NewQueueFromDriver
+
+NewQueueFromDriver wraps a driver-module backend into a QueueRuntime.
+
+Driver modules use this to return a queue.QueueRuntime without relying on root optional
+driver factory support.
+
 #### <a id="queue-queueruntime-register"></a>QueueRuntime.Register
 
 Register associates a handler with a job type.
@@ -1369,6 +1400,12 @@ StartWorkers starts worker execution.
 var q queue.QueueRuntime
 err := q.StartWorkers(context.Background())
 ```
+
+#### <a id="queue-validatedriverjob"></a>ValidateDriverJob
+
+ValidateDriverJob validates a job value for backend dispatch.
+
+This is an advanced helper intended for driver-module implementations.
 
 #### <a id="queue-queueruntime-workers"></a>QueueRuntime.Workers
 

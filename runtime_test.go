@@ -129,7 +129,7 @@ func TestRuntime_JobValidationErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestNewRuntimeSync(t *testing.T) {
+func TestNewSync(t *testing.T) {
 	rt, err := NewSync()
 	if err != nil {
 		t.Fatalf("new runtime sync: %v", err)
@@ -139,7 +139,7 @@ func TestNewRuntimeSync(t *testing.T) {
 	}
 }
 
-func TestNewRuntime_WithWorkflowObserver(t *testing.T) {
+func TestNew_WithObserver(t *testing.T) {
 	var observed atomic.Int32
 	rt, err := New(
 		Config{Driver: DriverSync},

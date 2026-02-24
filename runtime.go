@@ -200,6 +200,27 @@ func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 	return newQueueFromRuntime(q, opts...)
 }
 
+// NewFromRuntime builds the high-level Queue API around an existing QueueRuntime.
+//
+// This is an advanced constructor primarily intended for driver modules and custom
+// runtime integrations.
+// @group Constructors
+//
+// Example: wrap an existing runtime
+//
+//	raw, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+//	if err != nil {
+//		return
+//	}
+//	q, err := queue.NewFromRuntime(raw)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func NewFromRuntime(q QueueRuntime, opts ...Option) (*Queue, error) {
+	return newQueueFromRuntime(q, opts...)
+}
+
 func newQueueFromRuntime(q QueueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
@@ -250,92 +271,6 @@ func NewSync() (*Queue, error) {
 //	_ = q
 func NewWorkerpool() (*Queue, error) {
 	return New(Config{Driver: DriverWorkerpool})
-}
-
-// NewDatabase creates a Queue on the SQL backend.
-// @group Constructors
-//
-// Example: database backend
-//
-//	q, err := queue.NewDatabase("sqlite", "file:queue.db?_busy_timeout=5000")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewDatabase(driverName, dsn string) (*Queue, error) {
-	return New(Config{
-		Driver:         DriverDatabase,
-		DatabaseDriver: driverName,
-		DatabaseDSN:    dsn,
-	})
-}
-
-// NewRedis creates a Queue on the Redis backend.
-// @group Constructors
-//
-// Example: redis backend
-//
-//	q, err := queue.NewRedis("127.0.0.1:6379")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewRedis(addr string) (*Queue, error) {
-	return New(Config{
-		Driver:    DriverRedis,
-		RedisAddr: addr,
-	})
-}
-
-// NewNATS creates a Queue on the NATS backend.
-// @group Constructors
-//
-// Example: nats backend
-//
-//	q, err := queue.NewNATS("nats://127.0.0.1:4222")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewNATS(url string) (*Queue, error) {
-	return New(Config{
-		Driver:  DriverNATS,
-		NATSURL: url,
-	})
-}
-
-// NewSQS creates a Queue on the SQS backend.
-// @group Constructors
-//
-// Example: sqs backend
-//
-//	q, err := queue.NewSQS("us-east-1")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewSQS(region string) (*Queue, error) {
-	return New(Config{
-		Driver:    DriverSQS,
-		SQSRegion: region,
-	})
-}
-
-// NewRabbitMQ creates a Queue on the RabbitMQ backend.
-// @group Constructors
-//
-// Example: rabbitmq backend
-//
-//	q, err := queue.NewRabbitMQ("amqp://guest:guest@127.0.0.1:5672/")
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewRabbitMQ(url string) (*Queue, error) {
-	return New(Config{
-		Driver:      DriverRabbitMQ,
-		RabbitMQURL: url,
-	})
 }
 
 // Register binds a handler for a high-level job type.

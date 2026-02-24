@@ -50,7 +50,7 @@ func TestRenderBenchmarks(t *testing.T) {
 
 	rows := parseRows(t, localOutput, "Local")
 
-	if os.Getenv("RUN_INTEGRATION") == "1" {
+	if integrationBackends := os.Getenv("INTEGRATION_BACKEND"); integrationBackends != "" {
 		integrationOutput := runBenchCommand(t, root, commandSpec{
 			args: []string{
 				"test", "./...",
@@ -59,8 +59,8 @@ func TestRenderBenchmarks(t *testing.T) {
 				"-bench", "BenchmarkDriverDispatch_Integration",
 			},
 			env: map[string]string{
-				"RUN_INTEGRATION": "1",
-				"GOCACHE":         "/tmp/queue-gocache",
+				"INTEGRATION_BACKEND": integrationBackends,
+				"GOCACHE":             "/tmp/queue-gocache",
 			},
 		})
 		rows = append(rows, parseRows(t, integrationOutput, "Integration")...)

@@ -3,7 +3,6 @@ package queue
 import (
 	"context"
 	"errors"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -552,7 +551,7 @@ func declaredDriversFromSource(t *testing.T) []Driver {
 	return out
 }
 
-func TestQueueContract_LocalAndSQLite(t *testing.T) {
+func TestQueueContract_LocalRuntimes(t *testing.T) {
 	factories := []contractFactory{
 		{
 			name:           "null",
@@ -602,26 +601,6 @@ func TestQueueContract_LocalAndSQLite(t *testing.T) {
 			requiresQueueName:        false,
 			assertMissingHandlerErr:  true,
 			supportsPause:            true,
-			supportsNativeStats:      true,
-		},
-		{
-			name:           "database-sqlite",
-			expectedDriver: DriverDatabase,
-			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := NewQueue(Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "sqlite",
-					DatabaseDSN:    fmt.Sprintf("%s/contract-%d.db", t.TempDir(), time.Now().UnixNano()),
-				})
-				if err != nil {
-					t.Fatalf("new sqlite q failed: %v", err)
-				}
-				return q
-			},
-			requiresRegisteredHandle: true,
-			requiresQueueName:        true,
-			assertMissingHandlerErr:  false,
-			supportsPause:            false,
 			supportsNativeStats:      true,
 		},
 	}

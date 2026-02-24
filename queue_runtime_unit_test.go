@@ -189,24 +189,9 @@ func TestQueueConstructorsAndBackendDriverMethods(t *testing.T) {
 		t.Fatalf("expected null driver, got %q", got)
 	}
 	newNullQueue().(*nullQueue).Register("job:nil", func(context.Context, Job) error { return nil })
-	if got := newNATSQueue("nats://example").Driver(); got != DriverNATS {
-		t.Fatalf("expected nats driver, got %q", got)
-	}
-	if got := newSQSQueue(Config{}).Driver(); got != DriverSQS {
-		t.Fatalf("expected sqs driver, got %q", got)
-	}
-	if got := newRabbitMQQueue("amqp://example", "default").Driver(); got != DriverRabbitMQ {
-		t.Fatalf("expected rabbitmq driver, got %q", got)
-	}
-	if got := newRedisQueue(nil, nil, false).Driver(); got != DriverRedis {
-		t.Fatalf("expected redis driver, got %q", got)
-	}
-	if got := (&databaseQueue{}).Driver(); got != DriverDatabase {
-		t.Fatalf("expected database driver, got %q", got)
-	}
 }
 
-func TestNewQueueWithDefaultsAndNewExternalWorker(t *testing.T) {
+func TestNewQueueAndNewExternalWorker(t *testing.T) {
 	q, err := NewQueue(Config{Driver: DriverSync, DefaultQueue: "critical"})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
@@ -215,39 +200,6 @@ func TestNewQueueWithDefaultsAndNewExternalWorker(t *testing.T) {
 		t.Fatalf("expected sync driver, got %q", q.Driver())
 	}
 
-	w, err := newExternalWorker(Config{Driver: DriverNATS, NATSURL: "nats://example"}, 2)
-	if err != nil {
-		t.Fatalf("new external nats worker failed: %v", err)
-	}
-	nw, ok := w.(*natsWorker)
-	if !ok {
-		t.Fatalf("expected nats worker type, got %T", w)
-	}
-	if nw.workers != 2 {
-		t.Fatalf("expected nats worker count 2, got %d", nw.workers)
-	}
-	w, err = newExternalWorker(Config{Driver: DriverSQS}, 3)
-	if err != nil {
-		t.Fatalf("new external sqs worker failed: %v", err)
-	}
-	sw, ok := w.(*sqsWorker)
-	if !ok {
-		t.Fatalf("expected sqs worker type, got %T", w)
-	}
-	if sw.cfg.Workers != 3 {
-		t.Fatalf("expected sqs worker count 3, got %d", sw.cfg.Workers)
-	}
-	w, err = newExternalWorker(Config{Driver: DriverRabbitMQ, RabbitMQURL: "amqp://example"}, 4)
-	if err != nil {
-		t.Fatalf("new external rabbitmq worker failed: %v", err)
-	}
-	rw, ok := w.(*rabbitMQWorker)
-	if !ok {
-		t.Fatalf("expected rabbitmq worker type, got %T", w)
-	}
-	if rw.cfg.Workers != 4 {
-		t.Fatalf("expected rabbitmq worker count 4, got %d", rw.cfg.Workers)
-	}
 	if _, err := newExternalWorker(Config{Driver: Driver("unknown")}, 1); err == nil {
 		t.Fatal("expected unsupported worker driver error")
 	}

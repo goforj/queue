@@ -6,35 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	amqp "github.com/rabbitmq/amqp091-go"
 )
-
-func TestRabbitMQConnectionClosedDetection(t *testing.T) {
-	if isRabbitConnectionClosed(nil) {
-		t.Fatal("nil error should not be considered closed")
-	}
-	if !isRabbitConnectionClosed(amqp.ErrClosed) {
-		t.Fatal("amqp.ErrClosed should be considered closed")
-	}
-	if !isRabbitConnectionClosed(errors.New("channel/connection is not open")) {
-		t.Fatal("closed-connection message should be considered closed")
-	}
-	if isRabbitConnectionClosed(errors.New("some other error")) {
-		t.Fatal("unrelated error should not be considered closed")
-	}
-}
-
-func TestDialRabbitMQWithRetry_InvalidURLFailsFast(t *testing.T) {
-	start := time.Now()
-	_, err := dialRabbitMQWithRetry("://bad-url", 5*time.Millisecond)
-	if err == nil {
-		t.Fatal("expected dial error for invalid rabbitmq url")
-	}
-	if time.Since(start) > 2*time.Second {
-		t.Fatal("expected invalid url dial to fail quickly")
-	}
-}
 
 func TestNullQueue_StartWorkersAndRegister(t *testing.T) {
 	q := newNullQueue().(*nullQueue)

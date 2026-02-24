@@ -98,6 +98,5 @@ jobs:
 
       - name: Run integration tests
         env:
-          RUN_INTEGRATION: "1"
           INTEGRATION_BACKEND: ${{ matrix.backend }}
-        run: go test -tags integration ./...
+        run: go test -tags integration ./integration/...

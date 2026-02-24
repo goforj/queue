@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goforj/queue/internal/busruntime"
+	"github.com/goforj/queue/busruntime"
 )
 
 const (

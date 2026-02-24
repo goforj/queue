@@ -15,7 +15,11 @@ Interoperability coverage
 Integration backend wiring
 - If the driver uses external infrastructure, wire it into integration tests and backend selection.
 - Keep integration runs executable with:
-  - `RUN_INTEGRATION=1 go test -tags integration ./...`
+  - `go test -tags integration ./integration/...`
+- Prefer the centralized integration driver registration helper (`integration/internal/intdrivers`) instead of repeating per-test-file driver blank-import lists.
+
+Driver-module migration
+- If you change optional backend constructors/import paths, update `docs/driver-migration.md` in the same change.
 
 CI matrix
 - Ensure the integration backend matrix in `.github/workflows/test.yml` includes the backend.
@@ -25,7 +29,7 @@ CI matrix
 
 ## Integration scenarios
 
-The integration scenarios suite runs for every enabled backend in `integration_scenarios_test.go` under `TestIntegrationScenarios_AllBackends`.
+The integration scenarios suite runs for every enabled backend in `integration/all/integration_scenarios_test.go` under `TestIntegrationScenarios_AllBackends`.
 
 Named scenarios currently enforced:
 - `scenario_register_handler`

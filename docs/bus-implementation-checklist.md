@@ -154,7 +154,7 @@ Acceptance:
 
 - [x] `go test ./...`
 - [x] `go test -race ./...`
-- [ ] `go test -tags integration ./...`
+- [ ] `go test -tags integration ./integration/...`
 - [x] Duplicate-delivery/idempotency scenarios included in integration suite.
 
 ## Merge Criteria

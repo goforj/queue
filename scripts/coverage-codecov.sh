@@ -21,7 +21,7 @@ GOCACHE="$GOCACHE_DIR" \
 go test -cover -coverpkg=./... ./... -args -test.gocoverdir="$UNIT_DIR"
 
 echo "==> Integration coverage (backend=${INTEGRATION_BACKEND})"
-RUN_INTEGRATION=1 INTEGRATION_BACKEND="$INTEGRATION_BACKEND" GOCACHE="$GOCACHE_DIR" \
+INTEGRATION_BACKEND="$INTEGRATION_BACKEND" GOCACHE="$GOCACHE_DIR" \
 go test -cover -tags integration -coverpkg=./... ./... -args -test.gocoverdir="$INT_DIR"
 
 echo "==> Merge coverage"

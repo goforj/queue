@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/goforj/queue/internal/busruntime"
+	"github.com/goforj/queue/busruntime"
 )
 
 // DispatchRecord captures one dispatch observed by FakeQueue.

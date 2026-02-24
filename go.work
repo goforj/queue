@@ -1,0 +1,15 @@
+go 1.24.4
+
+use (
+	.
+	./driver/natsqueue
+	./driver/rabbitmqqueue
+	./driver/redisqueue
+	./driver/sqsqueue
+	./driver/sqlqueuecore
+	./driver/sqlitequeue
+	./driver/postgresqueue
+	./driver/mysqlqueue
+	./examples
+	./integration
+)

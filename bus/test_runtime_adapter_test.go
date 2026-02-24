@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/goforj/queue/internal/busruntime"
+	"github.com/goforj/queue/busruntime"
 )
 
 type testInboundJob struct {

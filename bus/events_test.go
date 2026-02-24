@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/goforj/queue/internal/busruntime"
+	"github.com/goforj/queue/busruntime"
 )
 
 type failingDispatchQueue struct {
