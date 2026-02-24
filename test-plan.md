@@ -571,7 +571,7 @@ Targets:
 
 ## 11. Performance regression guardrails
 
-- [ ] Define and automate lightweight performance smoke thresholds
+- [x] Define and automate lightweight performance smoke thresholds
 - Location:
   - benchmark/smoke tooling (existing docs/bench if reused)
   - CI scheduled or release-candidate workflow
@@ -581,6 +581,7 @@ Targets:
   - release process includes checking these results
 - Notes:
   - avoid flaky microbench gating in PR CI
+  - Implemented via `BenchmarkWorkerpoolLifecycle` + existing enqueue benchmarks, checked by `scripts/check-bench-smoke.sh` and scheduled in `.github/workflows/soak.yml` `benchmark-smoke`; thresholds and review expectations documented in `docs/performance-smoke.md`
 
 Add smoke thresholds (not optimization benchmarks):
 
@@ -641,7 +642,7 @@ Use this section for active implementation tracking. Move items from here to com
 ## P2 Active
 
 - [x] Fuzz/property suites
-- [ ] Performance regression guardrails
+- [x] Performance regression guardrails
 - [ ] Versioned compatibility matrix automation
 
 ## Maintenance Rules

@@ -17,6 +17,45 @@ on:
         type: string
 
 jobs:
+  benchmark-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run benchmark smoke guardrails
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          ./scripts/check-bench-smoke.sh
+
+      - name: Summarize benchmark smoke guardrails
+        if: always()
+        run: |
+          summary=".artifacts/bench-smoke-summary.md"
+          if [[ -f "${summary}" ]]; then
+            cat "${summary}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "benchmark smoke summary not found" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke
+          path: .artifacts/*
+          if-no-files-found: warn
+
   integration-evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 45

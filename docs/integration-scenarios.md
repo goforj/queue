@@ -139,6 +139,7 @@ Observability contract
 Selected scenarios emit duration lines in the test output (for example: `[sqs][scenario_worker_restart_recovery] duration=1.118s`).
 
 CI (`.github/workflows/soak.yml`) collects these logs and publishes parsed duration summaries as artifacts and job summaries for:
+- `benchmark-smoke` (performance regression alarms; see `docs/performance-smoke.md`)
 - `integration-evidence`
 - `integration-soak`
 - `integration-chaos`
