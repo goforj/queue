@@ -36,7 +36,7 @@ type DriverWorkerBackend interface {
 
 // DriverWorkerFactory builds a driver worker backend for an external queue runtime.
 // @group Queue Runtime
-type DriverWorkerFactory func(cfg Config, workers int) (DriverWorkerBackend, error)
+type DriverWorkerFactory func(workers int) (DriverWorkerBackend, error)
 
 // NewQueueFromDriver wraps a driver-module backend into a QueueRuntime.
 //
@@ -76,4 +76,3 @@ func NewQueueFromDriver(cfg Config, backend DriverQueueBackend, workerFactory Dr
 		newWorker:  workerFactory,
 	}, nil
 }
-

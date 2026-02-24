@@ -284,11 +284,14 @@ func TestExternalQueueRuntimeStartWorkersErrorBranches(t *testing.T) {
 		q := &externalQueueRuntime{
 			common: &queueCommon{
 				inner:  &queueBackendRecorder{},
-				cfg:    Config{Driver: DriverNATS, NATSURL: "nats://127.0.0.1:1"},
+				cfg:    Config{Driver: DriverNATS},
 				driver: DriverNATS,
 			},
 			registered: map[string]Handler{
 				"job:nats": func(context.Context, Job) error { return nil },
+			},
+			newWorker: func(int) (DriverWorkerBackend, error) {
+				return nil, errors.New("dial failed")
 			},
 		}
 		if err := q.StartWorkers(context.Background()); err == nil {

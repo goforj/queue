@@ -15,11 +15,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 
 	runIntegrationDriverBench(b, "redis", func(b *testing.B) queue.QueueRuntime {
 		ensureRedis(b)
-		cfg := queue.Config{
-			Driver:       queue.DriverRedis,
-			RedisAddr:    integrationRedis.addr,
-			DefaultQueue: uniqueQueueName("bench-redis"),
-		}
+		cfg := withDefaultQueue(redisCfg(integrationRedis.addr), uniqueQueueName("bench-redis"))
 		q, err := newQueueRuntime(cfg)
 		if err != nil {
 			b.Fatalf("new redis queue failed: %v", err)
@@ -34,11 +30,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 
 	runIntegrationDriverBench(b, "nats", func(b *testing.B) queue.QueueRuntime {
 		ensureNATS(b)
-		cfg := queue.Config{
-			Driver:       queue.DriverNATS,
-			NATSURL:      integrationNATS.url,
-			DefaultQueue: uniqueQueueName("bench-nats"),
-		}
+		cfg := withDefaultQueue(natsCfg(integrationNATS.url), uniqueQueueName("bench-nats"))
 		q, err := newQueueRuntime(cfg)
 		if err != nil {
 			b.Fatalf("new nats queue failed: %v", err)
@@ -53,14 +45,12 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 
 	runIntegrationDriverBench(b, "sqs", func(b *testing.B) queue.QueueRuntime {
 		ensureSQS(b)
-		cfg := queue.Config{
-			Driver:       queue.DriverSQS,
-			SQSRegion:    integrationSQS.region,
-			SQSEndpoint:  integrationSQS.endpoint,
-			SQSAccessKey: integrationSQS.accessKey,
-			SQSSecretKey: integrationSQS.secretKey,
-			DefaultQueue: uniqueQueueName("bench-sqs"),
-		}
+		cfg := withDefaultQueue(sqsCfg(
+			integrationSQS.region,
+			integrationSQS.endpoint,
+			integrationSQS.accessKey,
+			integrationSQS.secretKey,
+		), uniqueQueueName("bench-sqs"))
 		q, err := newQueueRuntime(cfg)
 		if err != nil {
 			b.Fatalf("new sqs queue failed: %v", err)
@@ -75,11 +65,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 
 	runIntegrationDriverBench(b, "rabbitmq", func(b *testing.B) queue.QueueRuntime {
 		ensureRabbitMQ(b)
-		cfg := queue.Config{
-			Driver:       queue.DriverRabbitMQ,
-			RabbitMQURL:  integrationRabbitMQ.url,
-			DefaultQueue: uniqueQueueName("bench-rmq"),
-		}
+		cfg := withDefaultQueue(rabbitmqCfg(integrationRabbitMQ.url), uniqueQueueName("bench-rmq"))
 		q, err := newQueueRuntime(cfg)
 		if err != nil {
 			b.Fatalf("new rabbitmq queue failed: %v", err)
@@ -94,12 +80,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 
 	runIntegrationDriverBench(b, "mysql", func(b *testing.B) queue.QueueRuntime {
 		ensureMySQLDB(b)
-		cfg := queue.Config{
-			Driver:         queue.DriverDatabase,
-			DatabaseDriver: "mysql",
-			DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-			DefaultQueue:   "default",
-		}
+		cfg := withDefaultQueue(mysqlCfg(fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr)), "default")
 		q, err := newQueueRuntime(cfg)
 		if err != nil {
 			b.Fatalf("new mysql queue failed: %v", err)
@@ -114,12 +95,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 
 	runIntegrationDriverBench(b, "postgres", func(b *testing.B) queue.QueueRuntime {
 		ensurePostgresDB(b)
-		cfg := queue.Config{
-			Driver:         queue.DriverDatabase,
-			DatabaseDriver: "pgx",
-			DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-			DefaultQueue:   "default",
-		}
+		cfg := withDefaultQueue(postgresCfg(fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr)), "default")
 		q, err := newQueueRuntime(cfg)
 		if err != nil {
 			b.Fatalf("new postgres queue failed: %v", err)

@@ -6,14 +6,14 @@ import (
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/driver/sqlqueuecore"
+	"github.com/goforj/queue/queueconfig"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 type Config struct {
+	queueconfig.DriverBaseConfig
 	DB                       *sql.DB
 	DSN                      string
-	DefaultQueue             string
-	Observer                 queue.Observer
 	ProcessingRecoveryGrace  time.Duration
 	ProcessingLeaseNoTimeout time.Duration
 }
@@ -23,35 +23,21 @@ func New(dsn string) (*queue.Queue, error) {
 }
 
 func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
-	raw, err := NewQueue(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return queue.NewFromRuntime(raw, opts...)
+	return sqlqueuecore.NewQueue("pgx", sqlqueuecore.ModuleConfig{
+		DriverBaseConfig:         cfg.DriverBaseConfig,
+		DB:                       cfg.DB,
+		DSN:                      cfg.DSN,
+		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
+		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
+	}, opts...)
 }
 
-func NewQueue(cfg Config) (queue.QueueRuntime, error) {
-	rootCfg := queue.Config{
-		Driver:                           queue.DriverDatabase,
-		Database:                         cfg.DB,
-		DatabaseDriver:                   "pgx",
-		DatabaseDSN:                      cfg.DSN,
-		DefaultQueue:                     cfg.DefaultQueue,
-		Observer:                         cfg.Observer,
-		DatabaseProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
-		DatabaseProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
-	}
-	backend, err := sqlqueuecore.New(queue.DatabaseConfig{
-		DB:                       rootCfg.Database,
-		DriverName:               rootCfg.DatabaseDriver,
-		DSN:                      rootCfg.DatabaseDSN,
-		DefaultQueue:             rootCfg.DefaultQueue,
-		ProcessingRecoveryGrace:  rootCfg.DatabaseProcessingRecoveryGrace,
-		ProcessingLeaseNoTimeout: rootCfg.DatabaseProcessingLeaseNoTimeout,
-		Observer:                 rootCfg.Observer,
+func NewRuntime(cfg Config) (queue.QueueRuntime, error) {
+	return sqlqueuecore.NewRuntime("pgx", sqlqueuecore.ModuleConfig{
+		DriverBaseConfig:         cfg.DriverBaseConfig,
+		DB:                       cfg.DB,
+		DSN:                      cfg.DSN,
+		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
+		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return queue.NewQueueFromDriver(rootCfg, backend, nil)
 }

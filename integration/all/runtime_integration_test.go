@@ -24,7 +24,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     "null",
 			executes: false,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(Config{Driver: DriverNull})
+				q, err := newQueue(nullCfg())
 				if err != nil {
 					t.Fatalf("new null queue failed: %v", err)
 				}
@@ -35,7 +35,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     "sync",
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(Config{Driver: DriverSync})
+				q, err := newQueue(syncCfg())
 				if err != nil {
 					t.Fatalf("new sync queue failed: %v", err)
 				}
@@ -46,7 +46,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     "workerpool",
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(Config{Driver: DriverWorkerpool})
+				q, err := newQueue(workerpoolCfg())
 				if err != nil {
 					t.Fatalf("new workerpool queue failed: %v", err)
 				}
@@ -57,11 +57,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     "redis",
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(Config{
-					Driver:       DriverRedis,
-					RedisAddr:    integrationRedis.addr,
-					DefaultQueue: "default",
-				})
+				q, err := newQueue(withDefaultQueue(redisCfg(integrationRedis.addr), "default"))
 				if err != nil {
 					t.Fatalf("new redis queue failed: %v", err)
 				}
@@ -72,11 +68,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     "mysql",
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "mysql",
-					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-				})
+				q, err := newQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)))
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
@@ -87,11 +79,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     "postgres",
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "pgx",
-					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-				})
+				q, err := newQueue(postgresCfg(postgresDSN(integrationPostgres.addr)))
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
@@ -102,11 +90,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     "sqlite",
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "sqlite",
-					DatabaseDSN:    fmt.Sprintf("%s/queue-integration-%d.db", t.TempDir(), time.Now().UnixNano()),
-				})
+				q, err := newQueue(sqliteCfg(fmt.Sprintf("%s/queue-integration-%d.db", t.TempDir(), time.Now().UnixNano())))
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
 				}
@@ -117,10 +101,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     "nats",
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(Config{
-					Driver:  DriverNATS,
-					NATSURL: integrationNATS.url,
-				})
+				q, err := newQueue(natsCfg(integrationNATS.url))
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}
@@ -132,14 +113,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				physical := uniqueQueueName("queue-sqs")
-				q, err := newQueue(Config{
-					Driver:       DriverSQS,
-					DefaultQueue: physical,
-					SQSEndpoint:  integrationSQS.endpoint,
-					SQSRegion:    integrationSQS.region,
-					SQSAccessKey: integrationSQS.accessKey,
-					SQSSecretKey: integrationSQS.secretKey,
-				})
+				q, err := newQueue(withDefaultQueue(sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey), physical))
 				if err != nil {
 					t.Fatalf("new sqs queue failed: %v", err)
 				}
@@ -151,11 +125,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				physical := uniqueQueueName("queue-rabbitmq")
-				q, err := newQueue(Config{
-					Driver:       DriverRabbitMQ,
-					DefaultQueue: physical,
-					RabbitMQURL:  integrationRabbitMQ.url,
-				})
+				q, err := newQueue(withDefaultQueue(rabbitmqCfg(integrationRabbitMQ.url), physical))
 				if err != nil {
 					t.Fatalf("new rabbitmq queue failed: %v", err)
 				}

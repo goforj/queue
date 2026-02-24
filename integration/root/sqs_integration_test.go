@@ -63,16 +63,14 @@ func ensureSQS(t testing.TB) {
 	integrationSQS.secretKey = "test"
 }
 
-func newSQSIntegrationConfig(t *testing.T, defaultQueue string) queue.Config {
+func newSQSIntegrationConfig(t *testing.T, defaultQueue string) any {
 	ensureSQS(t)
-	return queue.Config{
-		Driver:       queue.DriverSQS,
-		DefaultQueue: defaultQueue,
-		SQSEndpoint:  integrationSQS.endpoint,
-		SQSRegion:    integrationSQS.region,
-		SQSAccessKey: integrationSQS.accessKey,
-		SQSSecretKey: integrationSQS.secretKey,
-	}
+	return withDefaultQueue(sqsCfg(
+		integrationSQS.region,
+		integrationSQS.endpoint,
+		integrationSQS.accessKey,
+		integrationSQS.secretKey,
+	), defaultQueue)
 }
 
 func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {

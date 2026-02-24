@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 	"github.com/nats-io/nats.go"
 )
 
@@ -169,10 +170,10 @@ func (w *natsWorker) republish(message natsMessage) error {
 }
 
 func (w *natsWorker) observeRepublishFailure(message natsMessage, err error) {
-	queue.SafeObserve(w.observer, queue.Event{
+	queuecore.SafeObserve(w.observer, queue.Event{
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverNATS,
-		Queue:    queue.NormalizeQueueName(message.Queue),
+		Queue:    queuecore.NormalizeQueueName(message.Queue),
 		JobType:  message.Type,
 		Attempt:  message.Attempt,
 		MaxRetry: message.MaxRetry,

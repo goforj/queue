@@ -209,6 +209,8 @@ For optional backend migration examples, see `docs/driver-migration.md`.
 | RabbitMQ | `rabbitmqqueue.New(url)` (`github.com/goforj/queue/driver/rabbitmqqueue`) |
 | Drop-only (disabled mode) | `queue.NewNull()` |
 
+For a driver module low-level runtime (`queue.QueueRuntime`), use `driverX.NewRuntime(...)` (for example, `redisqueue.NewRuntime(...)`) and wrap with `queue.NewFromRuntime(...)` if you want the high-level `Queue` API.
+
 ## Observability
 
 Use `queue.Observer` implementations to capture normalized runtime events across drivers.
@@ -324,14 +326,11 @@ workflowObserver := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
 	)
 })
 
-q, _ := queue.New(
-	queue.Config{
-		Driver:    queue.DriverRedis,
-		RedisAddr: "127.0.0.1:6379",
-		Observer:  runtimeObserver,
-	},
-	queue.WithObserver(workflowObserver),
-)
+raw, _ := redisqueue.NewRuntime(redisqueue.Config{
+	Addr:     "127.0.0.1:6379",
+	Observer: runtimeObserver,
+})
+q, _ := queue.NewFromRuntime(raw, queue.WithObserver(workflowObserver))
 _ = q
 ```
 

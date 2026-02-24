@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 )
 
 const (
@@ -207,7 +208,7 @@ func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	if d.shuttingDown.Load() {
 		return queue.ErrQueuerShuttingDown
 	}
-	if err := queue.ValidateDriverJob(job); err != nil {
+	if err := queuecore.ValidateDriverJob(job); err != nil {
 		return err
 	}
 	if !d.started.Load() && d.hasHandlers() {
@@ -215,7 +216,7 @@ func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
 			return err
 		}
 	}
-	parsed := queue.DriverOptions(job)
+	parsed := queuecore.DriverOptions(job)
 	payloadBytes := job.PayloadBytes()
 	if payloadBytes == nil {
 		payloadBytes = []byte{}
@@ -237,7 +238,7 @@ func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
 			return err
 		}
 		if !ok {
-			return queue.ErrDuplicate
+			return queuecore.ErrDuplicate
 		}
 	}
 
@@ -476,7 +477,7 @@ WHERE state='processing' AND processing_started_at IS NOT NULL AND (
 	if d.observer != nil {
 		if rows, rowsErr := res.RowsAffected(); rowsErr == nil && rows > 0 {
 			for i := int64(0); i < rows; i++ {
-				queue.SafeObserve(d.observer, queue.Event{
+				queuecore.SafeObserve(d.observer, queue.Event{
 					Kind:   queue.EventProcessRecovered,
 					Driver: queue.DriverDatabase,
 					Time:   time.Now(),

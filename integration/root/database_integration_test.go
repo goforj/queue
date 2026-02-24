@@ -19,13 +19,18 @@ import (
 
 func newDatabaseQueueIntegration(t *testing.T, cfg queue.DatabaseConfig) queue.QueueRuntime {
 	t.Helper()
-	q, err := newQueueRuntime(queue.Config{
-		Driver:         queue.DriverDatabase,
-		Database:       cfg.DB,
-		DatabaseDriver: cfg.DriverName,
-		DatabaseDSN:    cfg.DSN,
-		DefaultQueue:   cfg.DefaultQueue,
-	})
+	var runtimeCfg any
+	switch cfg.DriverName {
+	case "mysql":
+		runtimeCfg = withDefaultQueue(withDBHandle(mysqlCfg(cfg.DSN), cfg.DB), cfg.DefaultQueue)
+	case "pgx", "postgres":
+		runtimeCfg = withDefaultQueue(withDBHandle(postgresCfg(cfg.DSN), cfg.DB), cfg.DefaultQueue)
+	case "sqlite":
+		runtimeCfg = withDefaultQueue(withDBHandle(sqliteCfg(cfg.DSN), cfg.DB), cfg.DefaultQueue)
+	default:
+		t.Fatalf("unsupported database driver %q", cfg.DriverName)
+	}
+	q, err := newQueueRuntime(runtimeCfg)
 	if err != nil {
 		t.Fatalf("new database queue failed: %v", err)
 	}

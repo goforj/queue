@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -44,24 +43,6 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 		benchmarkDispatchLoop(b, ctx, q, benchJob("bench:workerpool", "workerpool"))
 	})
 
-	b.Run("database-sqlite", func(b *testing.B) {
-		dsn := "file:" + filepath.Join(b.TempDir(), "queue-bench.db") + "?_busy_timeout=5000"
-		q, err := NewQueue(Config{
-			Driver:         DriverDatabase,
-			DatabaseDriver: "sqlite",
-			DatabaseDSN:    dsn,
-			DefaultQueue:   "default",
-		})
-		if err != nil {
-			b.Fatalf("new sqlite queue failed: %v", err)
-		}
-		q.Register("bench:sqlite", func(context.Context, Job) error { return nil })
-		if err := q.StartWorkers(ctx); err != nil {
-			b.Fatalf("start sqlite workers failed: %v", err)
-		}
-		b.Cleanup(func() { _ = q.Shutdown(ctx) })
-		benchmarkDispatchLoop(b, ctx, q, benchJob("bench:sqlite", "sqlite"))
-	})
 }
 
 func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q QueueRuntime, job Job) {

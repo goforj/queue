@@ -18,7 +18,7 @@ func main() {
 }
 
 func example1() {
-	// Shutdown drains running work and releases resources.
+	// Shutdown drains workers and closes underlying resources.
 
 	// Example: shutdown runtime
 	var q queue.QueueRuntime

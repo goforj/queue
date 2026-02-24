@@ -18,7 +18,7 @@ func main() {
 }
 
 func example1() {
-	// Register associates a handler with a job type.
+	// Register binds a handler for a high-level job type.
 
 	// Example: register a handler
 	var q queue.QueueRuntime

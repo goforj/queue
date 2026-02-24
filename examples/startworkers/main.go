@@ -18,7 +18,7 @@ func main() {
 }
 
 func example1() {
-	// StartWorkers starts worker execution.
+	// StartWorkers starts worker processing.
 
 	// Example: start workers
 	var q queue.QueueRuntime

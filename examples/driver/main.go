@@ -18,7 +18,7 @@ func main() {
 }
 
 func example1() {
-	// Driver returns the active queue driver.
+	// Driver reports the configured backend driver for the underlying queue runtime.
 
 	// Example: inspect queue driver
 	var q queue.QueueRuntime

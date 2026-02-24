@@ -19,7 +19,7 @@ func main() {
 }
 
 func example1() {
-	// Dispatch submits a typed job payload using the default queue.
+	// Dispatch enqueues a high-level job.
 
 	// Example: dispatch typed job
 	var q queue.QueueRuntime

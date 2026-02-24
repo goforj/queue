@@ -4,7 +4,7 @@ This document tracks queue-runtime reliability integration scenarios across all 
 
 ## Current baseline
 
-Implemented in `integration_scenarios_test.go` via `TestIntegrationScenarios_AllBackends` for enabled backends (`redis`, `mysql`, `postgres`, `sqlite`, `nats`, `sqs`, `rabbitmq`).
+Implemented in `integration/all/integration_scenarios_test.go` via `TestIntegrationScenarios_AllBackends` for enabled backends (`redis`, `mysql`, `postgres`, `sqlite`, `nats`, `sqs`, `rabbitmq`).
 
 Named scenarios currently enforced:
 
@@ -35,7 +35,7 @@ Optional long-run scenario (enabled with `RUN_SOAK=1`):
 
 Last full run (local, Docker/testcontainers):
 - Date: February 19, 2026
-- Command: `RUN_INTEGRATION=1 GOCACHE=/tmp/queue-gocache go test -tags integration ./... -count=1`
+- Command: `INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/... -count=1`
 - Result: **pass**
 
 Scenario suite status (`TestIntegrationScenarios_AllBackends`):

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -62,15 +63,15 @@ func (q *rabbitMQQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := queue.ValidateDriverJob(job); err != nil {
+	if err := queuecore.ValidateDriverJob(job); err != nil {
 		return err
 	}
-	parsed := queue.DriverOptions(job)
+	parsed := queuecore.DriverOptions(job)
 	if parsed.QueueName == "" {
 		return fmt.Errorf("job queue is required")
 	}
 	if parsed.UniqueTTL > 0 && !q.claimUnique(job, parsed.QueueName, parsed.UniqueTTL) {
-		return queue.ErrDuplicate
+		return queuecore.ErrDuplicate
 	}
 
 	message := rabbitMQMessage{

@@ -10,7 +10,7 @@ What is already verified on `main` (as of 2026-02-23):
 
 - API hard cut is complete and queue-first (`queue.New(...)`, `Queue`, `QueueRuntime` advanced path).
 - Unit test suite passes locally (`go test ./...`).
-- Full integration suite passes locally with testcontainers (`RUN_INTEGRATION=1 go test -tags=integration ./... -count=1`), including `./bus` in this repo layout.
+- Full integration suite passes locally with testcontainers (`INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1`).
 - Examples compile as part of the normal test suite.
 
 What is not yet sufficient for a GA claim:
@@ -38,19 +38,19 @@ What is not yet sufficient for a GA claim:
   - Acceptance: green on `main` and release candidate branch.
 
 - [x] Full integration suite passes across enabled backends.
-  - Command: `RUN_INTEGRATION=1 go test -tags=integration ./...`
+  - Command: `INTEGRATION_BACKEND=all go test -tags=integration ./integration/...`
   - Acceptance: green matrix in CI for `null`, `sync`, `workerpool`, `redis`, `mysql`, `postgres`, `sqlite`, `nats`, `sqs`, `rabbitmq`.
-  - Evidence: local `main` run passed (`2026-02-23`): `RUN_INTEGRATION=1 go test -tags=integration ./... -count=1`
+  - Evidence: local `main` run passed (`2026-02-23`): `INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1`
 
 - [x] Bus integration suite passes across enabled backends.
-  - Command: `RUN_INTEGRATION=1 go test -tags=integration ./bus -run TestIntegrationBus_AllBackends -count=1 -v`
+  - Command: `INTEGRATION_BACKEND=all go test -tags=integration ./integration/bus -run TestIntegrationBus_AllBackends -count=1 -v`
   - Acceptance: all enabled backends green (including `rabbitmq`).
-  - Evidence: included in `RUN_INTEGRATION=1 go test -tags=integration ./... -count=1` on this repo layout (`./bus` is part of `./...`).
+  - Evidence: included in `INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1` on this repo layout (`integration/bus` is part of `./integration/...`).
 
 ## 2. Shared Integration Contract and Recovery Semantics (must complete)
 
 - [x] `TestIntegrationScenarios_AllBackends` is green across all enabled backends.
-  - Command: `RUN_INTEGRATION=1 go test -tags=integration ./... -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
+  - Command: `INTEGRATION_BACKEND=all go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
   - Acceptance: no unexpected failures; skips only for documented capability gates.
   - Evidence: covered by full integration pass on `main` (`2026-02-23`); NATS timing budget for `scenario_wait_all_processed` was adjusted to avoid parallel-load timeout flake.
 
@@ -101,26 +101,26 @@ What is not yet sufficient for a GA claim:
 
 - [ ] Sustained soak by backend is completed with artifact retention.
   - Minimum target (GA): 1 hour per backend for key production backends (`redis`, `postgres`/`mysql`, `rabbitmq`, `sqs`).
-  - Command pattern: `RUN_INTEGRATION=1 RUN_SOAK=1 INTEGRATION_BACKEND=<backend> go test -tags=integration ./... -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
+  - Command pattern: `RUN_SOAK=1 INTEGRATION_BACKEND=<backend> go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
   - Acceptance: no hangs, no unbounded backlog growth, no repeated hidden failure churn, evidence artifacts retained.
   - Progress (2026-02-23): initial soak-enabled shared scenario pass completed for `redis` (local testcontainers) and passed:
-    - Command: `RUN_INTEGRATION=1 RUN_SOAK=1 INTEGRATION_BACKEND=redis GOCACHE=/tmp/queue-gocache go test -tags=integration ./... -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
+    - Command: `RUN_SOAK=1 INTEGRATION_BACKEND=redis GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
     - Result: `PASS` (`redis` backend selected; `scenario_soak_mixed_load` passed in ~`5.60s`; full `redis` backend scenario set ~`52.09s`)
     - Note: this is a smoke/soak-enabled validation pass, not the GA target 1-hour soak.
   - Progress (2026-02-23): initial soak-enabled shared scenario pass completed for `postgres` (local testcontainers) and passed:
-    - Command: `RUN_INTEGRATION=1 RUN_SOAK=1 INTEGRATION_BACKEND=postgres GOCACHE=/tmp/queue-gocache go test -tags=integration ./... -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
+    - Command: `RUN_SOAK=1 INTEGRATION_BACKEND=postgres GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
     - Result: `PASS` (`postgres` backend selected; `scenario_soak_mixed_load` passed in ~`0.65s`; full `postgres` backend scenario set ~`4.14s`)
     - Note: this is a smoke/soak-enabled validation pass, not the GA target 1-hour soak.
   - Progress (2026-02-23): initial soak-enabled shared scenario pass completed for `rabbitmq` (local testcontainers) and passed:
-    - Command: `RUN_INTEGRATION=1 RUN_SOAK=1 INTEGRATION_BACKEND=rabbitmq GOCACHE=/tmp/queue-gocache go test -tags=integration ./... -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
+    - Command: `RUN_SOAK=1 INTEGRATION_BACKEND=rabbitmq GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
     - Result: `PASS` (`rabbitmq` backend selected; `scenario_soak_mixed_load` passed in ~`0.41s`; full `rabbitmq` backend scenario set ~`4.33s`)
     - Note: this is a smoke/soak-enabled validation pass, not the GA target 1-hour soak.
   - Progress (2026-02-23): initial soak-enabled shared scenario pass completed for `sqs` (LocalStack via testcontainers) and passed:
-    - Command: `RUN_INTEGRATION=1 RUN_SOAK=1 INTEGRATION_BACKEND=sqs GOCACHE=/tmp/queue-gocache go test -tags=integration ./... -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
+    - Command: `RUN_SOAK=1 INTEGRATION_BACKEND=sqs GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
     - Result: `PASS` (`sqs` backend selected; `scenario_soak_mixed_load` passed in ~`1.89s`; full `sqs` backend scenario set ~`5.08s`)
     - Note: this is a smoke/soak-enabled validation pass, not the GA target 1-hour soak.
   - Progress (2026-02-23): initial soak-enabled shared scenario pass completed for `mysql` (local testcontainers) and passed:
-    - Command: `RUN_INTEGRATION=1 RUN_SOAK=1 INTEGRATION_BACKEND=mysql GOCACHE=/tmp/queue-gocache go test -tags=integration ./... -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
+    - Command: `RUN_SOAK=1 INTEGRATION_BACKEND=mysql GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v`
     - Result: `PASS` (`mysql` backend selected; `scenario_soak_mixed_load` passed in ~`2.12s`; full `mysql` backend scenario set ~`6.90s`)
     - Note: this is a smoke/soak-enabled validation pass, not the GA target 1-hour soak.
 

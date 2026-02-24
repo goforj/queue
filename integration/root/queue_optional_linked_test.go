@@ -19,7 +19,7 @@ func testQueueDriver(q queue.QueueRuntime) queue.Driver {
 
 func TestDriverModuleNewQueues(t *testing.T) {
 	t.Run("redis", func(t *testing.T) {
-		q, err := newQueueRuntime(queue.Config{Driver: queue.DriverRedis, RedisAddr: "127.0.0.1:6379"})
+		q, err := newQueueRuntime(redisCfg("127.0.0.1:6379"))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
 		}
@@ -28,7 +28,7 @@ func TestDriverModuleNewQueues(t *testing.T) {
 		}
 	})
 	t.Run("nats", func(t *testing.T) {
-		q, err := newQueueRuntime(queue.Config{Driver: queue.DriverNATS, NATSURL: "nats://127.0.0.1:4222"})
+		q, err := newQueueRuntime(natsCfg("nats://127.0.0.1:4222"))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
 		}
@@ -37,7 +37,7 @@ func TestDriverModuleNewQueues(t *testing.T) {
 		}
 	})
 	t.Run("sqs", func(t *testing.T) {
-		q, err := newQueueRuntime(queue.Config{Driver: queue.DriverSQS, SQSRegion: "us-east-1"})
+		q, err := newQueueRuntime(sqsCfg("us-east-1", "", "", ""))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
 		}
@@ -46,7 +46,7 @@ func TestDriverModuleNewQueues(t *testing.T) {
 		}
 	})
 	t.Run("rabbitmq", func(t *testing.T) {
-		q, err := newQueueRuntime(queue.Config{Driver: queue.DriverRabbitMQ, RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/"})
+		q, err := newQueueRuntime(rabbitmqCfg("amqp://guest:guest@127.0.0.1:5672/"))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
 		}
@@ -55,11 +55,7 @@ func TestDriverModuleNewQueues(t *testing.T) {
 		}
 	})
 	t.Run("database", func(t *testing.T) {
-		q, err := newQueueRuntime(queue.Config{
-			Driver:         queue.DriverDatabase,
-			DatabaseDriver: "sqlite",
-			DatabaseDSN:    t.TempDir() + "/queue.db",
-		})
+		q, err := newQueueRuntime(sqliteCfg(t.TempDir() + "/queue.db"))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
 		}
@@ -72,22 +68,18 @@ func TestDriverModuleNewQueues(t *testing.T) {
 func TestDriverModuleQueueSelectionByConfig(t *testing.T) {
 	testCases := []struct {
 		name   string
-		cfg    queue.Config
+		cfg    any
 		driver queue.Driver
 	}{
 		{
-			name: "database",
-			cfg: queue.Config{
-				Driver:         queue.DriverDatabase,
-				DatabaseDriver: "sqlite",
-				DatabaseDSN:    t.TempDir() + "/queue.db",
-			},
+			name:   "database",
+			cfg:    sqliteCfg(t.TempDir() + "/queue.db"),
 			driver: queue.DriverDatabase,
 		},
-		{name: "redis", cfg: queue.Config{Driver: queue.DriverRedis, RedisAddr: "127.0.0.1:6379"}, driver: queue.DriverRedis},
-		{name: "nats", cfg: queue.Config{Driver: queue.DriverNATS, NATSURL: "nats://127.0.0.1:4222"}, driver: queue.DriverNATS},
-		{name: "sqs", cfg: queue.Config{Driver: queue.DriverSQS, SQSRegion: "us-east-1"}, driver: queue.DriverSQS},
-		{name: "rabbitmq", cfg: queue.Config{Driver: queue.DriverRabbitMQ, RabbitMQURL: "amqp://guest:guest@127.0.0.1:5672/"}, driver: queue.DriverRabbitMQ},
+		{name: "redis", cfg: redisCfg("127.0.0.1:6379"), driver: queue.DriverRedis},
+		{name: "nats", cfg: natsCfg("nats://127.0.0.1:4222"), driver: queue.DriverNATS},
+		{name: "sqs", cfg: sqsCfg("us-east-1", "", "", ""), driver: queue.DriverSQS},
+		{name: "rabbitmq", cfg: rabbitmqCfg("amqp://guest:guest@127.0.0.1:5672/"), driver: queue.DriverRabbitMQ},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -104,7 +96,7 @@ func TestDriverModuleQueueSelectionByConfig(t *testing.T) {
 
 func TestDriverModuleValidationErrors(t *testing.T) {
 	t.Run("redis_missing_addr", func(t *testing.T) {
-		q, err := newQueueRuntime(queue.Config{Driver: queue.DriverRedis})
+		q, err := newQueueRuntime(redisCfg(""))
 		if err == nil {
 			t.Fatal("expected constructor error for missing redis addr")
 		}
@@ -116,7 +108,7 @@ func TestDriverModuleValidationErrors(t *testing.T) {
 		}
 	})
 	t.Run("nats_missing_url", func(t *testing.T) {
-		q, err := newQueueRuntime(queue.Config{Driver: queue.DriverNATS})
+		q, err := newQueueRuntime(natsCfg(""))
 		if err == nil {
 			t.Fatal("expected constructor error for missing nats url")
 		}
@@ -128,7 +120,7 @@ func TestDriverModuleValidationErrors(t *testing.T) {
 		}
 	})
 	t.Run("rabbitmq_missing_url", func(t *testing.T) {
-		q, err := newQueueRuntime(queue.Config{Driver: queue.DriverRabbitMQ})
+		q, err := newQueueRuntime(rabbitmqCfg(""))
 		if err == nil {
 			t.Fatal("expected constructor error for missing rabbitmq url")
 		}
@@ -142,10 +134,7 @@ func TestDriverModuleValidationErrors(t *testing.T) {
 }
 
 func TestQueue_ShutdownNoopForRedis_DriverModule(t *testing.T) {
-	redisQueue, err := newQueueRuntime(queue.Config{
-		Driver:    queue.DriverRedis,
-		RedisAddr: "127.0.0.1:6379",
-	})
+	redisQueue, err := newQueueRuntime(redisCfg("127.0.0.1:6379"))
 	if err != nil {
 		t.Fatalf("redis constructor failed: %v", err)
 	}

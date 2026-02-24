@@ -28,11 +28,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureRedis(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:    queue.DriverRedis,
-					RedisAddr: integrationRedis.addr,
-					Observer:  collector,
-				})
+				q, err := newQueueRuntime(withObserver(redisCfg(integrationRedis.addr), collector))
 				if err != nil {
 					t.Fatalf("new redis queue failed: %v", err)
 				}
@@ -46,12 +42,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureMySQLDB(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:         queue.DriverDatabase,
-					DatabaseDriver: "mysql",
-					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-					Observer:       collector,
-				})
+				q, err := newQueueRuntime(withObserver(mysqlCfg(mysqlDSN(integrationMySQL.addr)), collector))
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
@@ -65,12 +56,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensurePostgresDB(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:         queue.DriverDatabase,
-					DatabaseDriver: "pgx",
-					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-					Observer:       collector,
-				})
+				q, err := newQueueRuntime(withObserver(postgresCfg(postgresDSN(integrationPostgres.addr)), collector))
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
@@ -84,12 +70,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				dsn := fmt.Sprintf("%s/obs-%d.db", t.TempDir(), time.Now().UnixNano())
-				q, err := newQueueRuntime(queue.Config{
-					Driver:         queue.DriverDatabase,
-					DatabaseDriver: "sqlite",
-					DatabaseDSN:    dsn,
-					Observer:       collector,
-				})
+				q, err := newQueueRuntime(withObserver(sqliteCfg(dsn), collector))
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
 				}
@@ -102,11 +83,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureNATS(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:   queue.DriverNATS,
-					NATSURL:  integrationNATS.url,
-					Observer: collector,
-				})
+				q, err := newQueueRuntime(withObserver(natsCfg(integrationNATS.url), collector))
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}
@@ -119,15 +96,13 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureSQS(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:       queue.DriverSQS,
-					DefaultQueue: "obs_sqs",
-					SQSEndpoint:  integrationSQS.endpoint,
-					SQSRegion:    integrationSQS.region,
-					SQSAccessKey: integrationSQS.accessKey,
-					SQSSecretKey: integrationSQS.secretKey,
-					Observer:     collector,
-				})
+				q, err := newQueueRuntime(withObserver(
+					withDefaultQueue(
+						sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
+						"obs_sqs",
+					),
+					collector,
+				))
 				if err != nil {
 					t.Fatalf("new sqs queue failed: %v", err)
 				}
@@ -140,12 +115,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureRabbitMQ(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:       queue.DriverRabbitMQ,
-					DefaultQueue: "obs_rabbitmq",
-					RabbitMQURL:  integrationRabbitMQ.url,
-					Observer:     collector,
-				})
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(rabbitmqCfg(integrationRabbitMQ.url), "obs_rabbitmq"), collector))
 				if err != nil {
 					t.Fatalf("new rabbitmq queue failed: %v", err)
 				}
@@ -291,11 +261,7 @@ func TestObservabilityIntegration_RedisPauseResume(t *testing.T) {
 	}
 	collector := queue.NewStatsCollector()
 	ensureRedis(t)
-	q, err := newQueueRuntime(queue.Config{
-		Driver:    queue.DriverRedis,
-		RedisAddr: integrationRedis.addr,
-		Observer:  collector,
-	})
+	q, err := newQueueRuntime(withObserver(redisCfg(integrationRedis.addr), collector))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
@@ -340,11 +306,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			supports: true,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureRedis(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:    queue.DriverRedis,
-					RedisAddr: integrationRedis.addr,
-					Observer:  collector,
-				})
+				q, err := newQueueRuntime(withObserver(redisCfg(integrationRedis.addr), collector))
 				if err != nil {
 					t.Fatalf("new redis queue failed: %v", err)
 				}
@@ -356,12 +318,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureMySQLDB(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:         queue.DriverDatabase,
-					DatabaseDriver: "mysql",
-					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-					Observer:       collector,
-				})
+				q, err := newQueueRuntime(withObserver(mysqlCfg(mysqlDSN(integrationMySQL.addr)), collector))
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
@@ -373,12 +330,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensurePostgresDB(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:         queue.DriverDatabase,
-					DatabaseDriver: "pgx",
-					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-					Observer:       collector,
-				})
+				q, err := newQueueRuntime(withObserver(postgresCfg(postgresDSN(integrationPostgres.addr)), collector))
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
@@ -389,12 +341,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			name:     "sqlite",
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
-				q, err := newQueueRuntime(queue.Config{
-					Driver:         queue.DriverDatabase,
-					DatabaseDriver: "sqlite",
-					DatabaseDSN:    fmt.Sprintf("%s/pause-%d.db", t.TempDir(), time.Now().UnixNano()),
-					Observer:       collector,
-				})
+				q, err := newQueueRuntime(withObserver(sqliteCfg(fmt.Sprintf("%s/pause-%d.db", t.TempDir(), time.Now().UnixNano())), collector))
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
 				}
@@ -406,11 +353,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureNATS(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:   queue.DriverNATS,
-					NATSURL:  integrationNATS.url,
-					Observer: collector,
-				})
+				q, err := newQueueRuntime(withObserver(natsCfg(integrationNATS.url), collector))
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}
@@ -422,14 +365,10 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureSQS(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:       queue.DriverSQS,
-					SQSEndpoint:  integrationSQS.endpoint,
-					SQSRegion:    integrationSQS.region,
-					SQSAccessKey: integrationSQS.accessKey,
-					SQSSecretKey: integrationSQS.secretKey,
-					Observer:     collector,
-				})
+				q, err := newQueueRuntime(withObserver(
+					sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
+					collector,
+				))
 				if err != nil {
 					t.Fatalf("new sqs queue failed: %v", err)
 				}
@@ -441,11 +380,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) queue.QueueRuntime {
 				ensureRabbitMQ(t)
-				q, err := newQueueRuntime(queue.Config{
-					Driver:      queue.DriverRabbitMQ,
-					RabbitMQURL: integrationRabbitMQ.url,
-					Observer:    collector,
-				})
+				q, err := newQueueRuntime(withObserver(rabbitmqCfg(integrationRabbitMQ.url), collector))
 				if err != nil {
 					t.Fatalf("new rabbitmq queue failed: %v", err)
 				}

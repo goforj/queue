@@ -6,10 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goforj/queue"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 )
 
 type sqsWorkerClient interface {
@@ -78,16 +79,12 @@ func (w *sqsWorker) StartWorkers(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	cfg := queue.Config{
-		SQSRegion:    w.cfg.SQSRegion,
-		SQSEndpoint:  w.cfg.SQSEndpoint,
-		SQSAccessKey: w.cfg.SQSAccessKey,
-		SQSSecretKey: w.cfg.SQSSecretKey,
-	}
-	if cfg.SQSRegion == "" {
-		cfg.SQSRegion = "us-east-1"
-	}
-	client, err := newSQSClient(ctx, cfg)
+	client, err := newSQSClient(ctx, Config{
+		Region:    w.cfg.SQSRegion,
+		Endpoint:  w.cfg.SQSEndpoint,
+		AccessKey: w.cfg.SQSAccessKey,
+		SecretKey: w.cfg.SQSSecretKey,
+	})
 	if err != nil {
 		return err
 	}
@@ -249,10 +246,10 @@ func (w *sqsWorker) delete(ctx context.Context, message sqstypes.Message) {
 }
 
 func (w *sqsWorker) observeRepublishFailure(message sqsMessage, err error) {
-	queue.SafeObserve(w.observer, queue.Event{
+	queuecore.SafeObserve(w.observer, queue.Event{
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverSQS,
-		Queue:    queue.NormalizeQueueName(message.Queue),
+		Queue:    queuecore.NormalizeQueueName(message.Queue),
 		JobType:  message.Type,
 		Attempt:  message.Attempt,
 		MaxRetry: message.MaxRetry,

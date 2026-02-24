@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
-	"github.com/goforj/queue/integration/inttest"
+	"github.com/goforj/queue/integration/testenv"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -23,7 +23,7 @@ var integrationNATS struct {
 }
 
 func integrationBackendEnabled(name string) bool {
-	return inttest.BackendEnabled(os.Getenv("INTEGRATION_BACKEND"), name)
+	return testenv.BackendEnabled(os.Getenv("INTEGRATION_BACKEND"), name)
 }
 
 func ensureNATS(t testing.TB) string {
@@ -69,10 +69,7 @@ func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	}
 	received := make(chan payload, 1)
 
-	q, err := newQueueRuntime(queue.Config{
-		Driver:  queue.DriverNATS,
-		NATSURL: ensureNATS(t),
-	})
+	q, err := newQueueRuntime(natsCfg(ensureNATS(t)))
 	if err != nil {
 		t.Fatalf("new nats queue failed: %v", err)
 	}
@@ -116,10 +113,7 @@ func TestNATSIntegration_OptionBehavior(t *testing.T) {
 	var calls atomic.Int32
 	deadlineSeen := make(chan bool, 1)
 
-	q, err := newQueueRuntime(queue.Config{
-		Driver:  queue.DriverNATS,
-		NATSURL: ensureNATS(t),
-	})
+	q, err := newQueueRuntime(natsCfg(ensureNATS(t)))
 	if err != nil {
 		t.Fatalf("new nats queue failed: %v", err)
 	}
@@ -176,10 +170,7 @@ func TestNATSIntegration_UniqueDuplicate(t *testing.T) {
 	if !integrationBackendEnabled("nats") {
 		t.Skip("nats integration backend not selected")
 	}
-	q, err := newQueueRuntime(queue.Config{
-		Driver:  queue.DriverNATS,
-		NATSURL: ensureNATS(t),
-	})
+	q, err := newQueueRuntime(natsCfg(ensureNATS(t)))
 	if err != nil {
 		t.Fatalf("new nats queue failed: %v", err)
 	}

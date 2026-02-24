@@ -261,7 +261,7 @@ If continuing work, start here:
    - `docs/integration-scenarios.md`
 2. Validate baseline locally:
    - `go test ./...`
-   - `RUN_INTEGRATION=1 go test -tags integration ./...`
+   - `INTEGRATION_BACKEND=all go test -tags=integration ./integration/...`
 3. For reliability changes:
    - update integration scenarios in `integration_scenarios_test.go`
    - update `docs/integration-scenarios.md`

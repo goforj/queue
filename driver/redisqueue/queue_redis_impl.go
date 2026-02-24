@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 	"github.com/hibiken/asynq"
 )
 
@@ -37,19 +38,19 @@ func newRedisQueue(client redisEnqueueClient, inspector redisInspector, ownsClie
 	return &redisQueue{client: client, inspector: inspector, ownsClient: ownsClient}
 }
 
-func newAsynqClient(cfg queue.Config) redisEnqueueClient {
+func newAsynqClient(cfg Config) redisEnqueueClient {
 	return asynq.NewClient(asynq.RedisClientOpt{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
+		Addr:     cfg.Addr,
+		Password: cfg.Password,
+		DB:       cfg.DB,
 	})
 }
 
-func newAsynqInspector(cfg queue.Config) redisInspector {
+func newAsynqInspector(cfg Config) redisInspector {
 	return asynq.NewInspector(asynq.RedisClientOpt{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
+		Addr:     cfg.Addr,
+		Password: cfg.Password,
+		DB:       cfg.DB,
 	})
 }
 
@@ -70,10 +71,10 @@ func (d *redisQueue) Dispatch(_ context.Context, job queue.Job) error {
 	if d.client == nil {
 		return fmt.Errorf("queue client unavailable for redis driver")
 	}
-	if err := queue.ValidateDriverJob(job); err != nil {
+	if err := queuecore.ValidateDriverJob(job); err != nil {
 		return err
 	}
-	parsed := queue.DriverOptions(job)
+	parsed := queuecore.DriverOptions(job)
 	if parsed.QueueName == "" {
 		return fmt.Errorf("job queue is required")
 	}
@@ -88,7 +89,7 @@ func (d *redisQueue) Dispatch(_ context.Context, job queue.Job) error {
 		asynqOpts = append(asynqOpts, asynq.MaxRetry(*parsed.MaxRetry))
 	}
 	if parsed.Backoff != nil && *parsed.Backoff > 0 {
-		return queue.ErrBackoffUnsupported
+		return queuecore.ErrBackoffUnsupported
 	}
 	if parsed.Delay > 0 {
 		asynqOpts = append(asynqOpts, asynq.ProcessIn(parsed.Delay))
@@ -98,7 +99,7 @@ func (d *redisQueue) Dispatch(_ context.Context, job queue.Job) error {
 	}
 	_, err := d.client.Enqueue(asynq.NewTask(job.Type, job.PayloadBytes()), asynqOpts...)
 	if errors.Is(err, asynq.ErrDuplicateTask) {
-		return queue.ErrDuplicate
+		return queuecore.ErrDuplicate
 	}
 	return err
 }
@@ -107,14 +108,14 @@ func (d *redisQueue) Pause(_ context.Context, queueName string) error {
 	if d.inspector == nil {
 		return queue.ErrPauseUnsupported
 	}
-	return d.inspector.PauseQueue(queue.NormalizeQueueName(queueName))
+	return d.inspector.PauseQueue(queuecore.NormalizeQueueName(queueName))
 }
 
 func (d *redisQueue) Resume(_ context.Context, queueName string) error {
 	if d.inspector == nil {
 		return queue.ErrPauseUnsupported
 	}
-	return d.inspector.UnpauseQueue(queue.NormalizeQueueName(queueName))
+	return d.inspector.UnpauseQueue(queuecore.NormalizeQueueName(queueName))
 }
 
 func (d *redisQueue) Stats(_ context.Context) (queue.StatsSnapshot, error) {

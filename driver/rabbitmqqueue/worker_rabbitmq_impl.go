@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -216,10 +217,10 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 }
 
 func (w *rabbitMQWorker) observeRepublishFailure(message rabbitMQMessage, err error) {
-	queue.SafeObserve(w.observer, queue.Event{
+	queuecore.SafeObserve(w.observer, queue.Event{
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverRabbitMQ,
-		Queue:    queue.NormalizeQueueName(message.Queue),
+		Queue:    queuecore.NormalizeQueueName(message.Queue),
 		JobType:  message.Type,
 		Attempt:  message.Attempt,
 		MaxRetry: message.MaxRetry,

@@ -19,7 +19,7 @@ import (
 	"github.com/docker/go-connections/nat"
 	_ "github.com/go-sql-driver/mysql"
 	. "github.com/goforj/queue"
-	"github.com/goforj/queue/integration/inttest"
+	"github.com/goforj/queue/integration/testenv"
 	"github.com/hibiken/asynq"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -224,11 +224,11 @@ func TestMain(m *testing.M) {
 }
 
 func selectedIntegrationBackends() map[string]bool {
-	return inttest.SelectedBackends(os.Getenv("INTEGRATION_BACKEND"))
+	return testenv.SelectedBackends(os.Getenv("INTEGRATION_BACKEND"))
 }
 
 func integrationBackendEnabled(name string) bool {
-	return inttest.BackendEnabled(os.Getenv("INTEGRATION_BACKEND"), name)
+	return testenv.BackendEnabled(os.Getenv("INTEGRATION_BACKEND"), name)
 }
 
 func TestRedisIntegration_DispatchSmoke(t *testing.T) {
@@ -236,10 +236,7 @@ func TestRedisIntegration_DispatchSmoke(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
-	q, err := newQueueRuntime(Config{
-		Driver:    DriverRedis,
-		RedisAddr: integrationRedis.addr,
-	})
+	q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
@@ -265,10 +262,7 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
-	q, err := newQueueRuntime(Config{
-		Driver:    DriverRedis,
-		RedisAddr: integrationRedis.addr,
-	})
+	q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
@@ -312,10 +306,7 @@ func TestRedisIntegration_DefaultTimeoutApplied(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
-	q, err := newQueueRuntime(Config{
-		Driver:    DriverRedis,
-		RedisAddr: integrationRedis.addr,
-	})
+	q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
@@ -342,10 +333,7 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	_ = newRedisInspector(t)
-	q, err := newQueueRuntime(Config{
-		Driver:    DriverRedis,
-		RedisAddr: integrationRedis.addr,
-	})
+	q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
@@ -369,10 +357,7 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 		t.Skip("redis integration backend not selected")
 	}
 	_ = newRedisInspector(t)
-	q, err := newQueueRuntime(Config{
-		Driver:    DriverRedis,
-		RedisAddr: integrationRedis.addr,
-	})
+	q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
@@ -393,10 +378,7 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 	}
 	received := make(chan payload, 1)
 
-	q, err := newQueueRuntime(Config{
-		Driver:    DriverRedis,
-		RedisAddr: integrationRedis.addr,
-	})
+	q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
@@ -769,20 +751,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      "redis",
 			queueName: "default",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(Config{
-					Driver:    DriverRedis,
-					RedisAddr: integrationRedis.addr,
-				})
+				q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
 				if err != nil {
 					t.Fatalf("new redis queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, Config{
-					Driver:    DriverRedis,
-					RedisAddr: integrationRedis.addr,
-				}, 4)
+				return newQueueBackedWorker(t, redisCfg(integrationRedis.addr), 4)
 			},
 			supportsBackoff:                  false,
 			forceTimeout:                     true,
@@ -799,22 +775,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      "mysql",
 			queueName: "scenario_mysql",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "mysql",
-					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-				})
+				q, err := newQueueRuntime(mysqlCfg(mysqlDSN(integrationMySQL.addr)))
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "mysql",
-					DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-				}, 4)
+				return newQueueBackedWorker(t, mysqlCfg(mysqlDSN(integrationMySQL.addr)), 4)
 			},
 			supportsBackoff:                  true,
 			supportsRestart:                  true,
@@ -830,22 +798,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      "postgres",
 			queueName: "scenario_postgres",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "pgx",
-					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-				})
+				q, err := newQueueRuntime(postgresCfg(postgresDSN(integrationPostgres.addr)))
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "pgx",
-					DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-				}, 4)
+				return newQueueBackedWorker(t, postgresCfg(postgresDSN(integrationPostgres.addr)), 4)
 			},
 			supportsBackoff:                  true,
 			supportsRestart:                  true,
@@ -861,11 +821,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      "sqlite",
 			queueName: "scenario_sqlite",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(Config{
-					Driver:         DriverDatabase,
-					DatabaseDriver: "sqlite",
-					DatabaseDSN:    fmt.Sprintf("%s/scenario-%d.db", t.TempDir(), time.Now().UnixNano()),
-				})
+				q, err := newQueueRuntime(sqliteCfg(fmt.Sprintf("%s/scenario-%d.db", t.TempDir(), time.Now().UnixNano())))
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
 				}
@@ -890,20 +846,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      "nats",
 			queueName: "scenario_nats",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(Config{
-					Driver:  DriverNATS,
-					NATSURL: integrationNATS.url,
-				})
+				q, err := newQueueRuntime(natsCfg(integrationNATS.url))
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, Config{
-					Driver:  DriverNATS,
-					NATSURL: integrationNATS.url,
-				}, 4)
+				return newQueueBackedWorker(t, natsCfg(integrationNATS.url), 4)
 			},
 			supportsBackoff:                  true,
 			supportsRestart:                  false,
@@ -919,28 +869,20 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      "sqs",
 			queueName: "scenario_sqs",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(Config{
-					Driver:       DriverSQS,
-					DefaultQueue: "scenario_sqs",
-					SQSEndpoint:  integrationSQS.endpoint,
-					SQSRegion:    integrationSQS.region,
-					SQSAccessKey: integrationSQS.accessKey,
-					SQSSecretKey: integrationSQS.secretKey,
-				})
+				q, err := newQueueRuntime(withDefaultQueue(
+					sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
+					"scenario_sqs",
+				))
 				if err != nil {
 					t.Fatalf("new sqs queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, Config{
-					Driver:       DriverSQS,
-					DefaultQueue: "scenario_sqs",
-					SQSEndpoint:  integrationSQS.endpoint,
-					SQSRegion:    integrationSQS.region,
-					SQSAccessKey: integrationSQS.accessKey,
-					SQSSecretKey: integrationSQS.secretKey,
-				}, 4)
+				return newQueueBackedWorker(t, withDefaultQueue(
+					sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
+					"scenario_sqs",
+				), 4)
 			},
 			supportsBackoff:                  true,
 			supportsRestart:                  true,
@@ -956,22 +898,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      "rabbitmq",
 			queueName: "scenario_rabbitmq",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(Config{
-					Driver:       DriverRabbitMQ,
-					DefaultQueue: "scenario_rabbitmq",
-					RabbitMQURL:  integrationRabbitMQ.url,
-				})
+				q, err := newQueueRuntime(withDefaultQueue(rabbitmqCfg(integrationRabbitMQ.url), "scenario_rabbitmq"))
 				if err != nil {
 					t.Fatalf("new rabbitmq queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, Config{
-					Driver:       DriverRabbitMQ,
-					DefaultQueue: "scenario_rabbitmq",
-					RabbitMQURL:  integrationRabbitMQ.url,
-				}, 4)
+				return newQueueBackedWorker(t, withDefaultQueue(rabbitmqCfg(integrationRabbitMQ.url), "scenario_rabbitmq"), 4)
 			},
 			supportsBackoff:                  true,
 			supportsRestart:                  true,
@@ -997,22 +931,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			if fx.name == "sqlite" {
 				dsn := fmt.Sprintf("%s/scenario-%d.db", t.TempDir(), time.Now().UnixNano())
 				fx.newQueue = func(t *testing.T) QueueRuntime {
-					q, err := newQueueRuntime(Config{
-						Driver:         DriverDatabase,
-						DatabaseDriver: "sqlite",
-						DatabaseDSN:    dsn,
-					})
+					q, err := newQueueRuntime(sqliteCfg(dsn))
 					if err != nil {
 						t.Fatalf("new sqlite queue failed: %v", err)
 					}
 					return q
 				}
 				fx.newWorker = func(t *testing.T) runtimeWorkerBackend {
-					return newQueueBackedWorker(t, Config{
-						Driver:         DriverDatabase,
-						DatabaseDriver: "sqlite",
-						DatabaseDSN:    dsn,
-					}, 4)
+					return newQueueBackedWorker(t, sqliteCfg(dsn), 4)
 				}
 				fx.supportsBackoff = true
 				fx.supportsRestart = true
@@ -1211,14 +1137,10 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			// interfere with restart timing. Use an isolated physical queue for this
 			// recovery invariant subtest so the result reflects restart behavior.
 			restartQueueName = uniqueQueueName("scenario-sqs-restart-basic")
-			restartCfg := Config{
-				Driver:       DriverSQS,
-				DefaultQueue: restartQueueName,
-				SQSEndpoint:  integrationSQS.endpoint,
-				SQSRegion:    integrationSQS.region,
-				SQSAccessKey: integrationSQS.accessKey,
-				SQSSecretKey: integrationSQS.secretKey,
-			}
+			restartCfg := withDefaultQueue(
+				sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
+				restartQueueName,
+			)
 			var err error
 			restartQ, err = newQueueRuntime(restartCfg)
 			if err != nil {
@@ -1251,14 +1173,10 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioNoErr(t, "restart_basic_dispatch_while_worker_down", restartQ.DispatchCtx(context.Background(), job))
 
 		if fx.name == "sqs" {
-			restartCfg := Config{
-				Driver:       DriverSQS,
-				DefaultQueue: restartQueueName,
-				SQSEndpoint:  integrationSQS.endpoint,
-				SQSRegion:    integrationSQS.region,
-				SQSAccessKey: integrationSQS.accessKey,
-				SQSSecretKey: integrationSQS.secretKey,
-			}
+			restartCfg := withDefaultQueue(
+				sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
+				restartQueueName,
+			)
 			restartW = newQueueBackedWorker(t, restartCfg, 4)
 			t.Cleanup(func() { _ = restartW.Shutdown(context.Background()) })
 		} else {
@@ -1672,14 +1590,10 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			// delay duplicate-processing timing by the queue visibility timeout. Isolate
 			// this subtest to a dedicated physical queue so it measures idempotency logic.
 			idempotencyQueueName = uniqueQueueName("scenario-sqs-idempotency")
-			idempotencyCfg := Config{
-				Driver:       DriverSQS,
-				DefaultQueue: idempotencyQueueName,
-				SQSEndpoint:  integrationSQS.endpoint,
-				SQSRegion:    integrationSQS.region,
-				SQSAccessKey: integrationSQS.accessKey,
-				SQSSecretKey: integrationSQS.secretKey,
-			}
+			idempotencyCfg := withDefaultQueue(
+				sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
+				idempotencyQueueName,
+			)
 			var err error
 			idempotencyQ, err = newQueueRuntime(idempotencyCfg)
 			if err != nil {
@@ -2142,7 +2056,7 @@ type queueBackedWorker struct {
 	workers int
 }
 
-func newQueueBackedWorker(t *testing.T, cfg Config, workers int) runtimeWorkerBackend {
+func newQueueBackedWorker(t *testing.T, cfg any, workers int) runtimeWorkerBackend {
 	t.Helper()
 	q, err := newQueueRuntime(cfg)
 	if err != nil {
@@ -2173,22 +2087,11 @@ func newOrderingWorker(t *testing.T, fx scenarioFixture) runtimeWorkerBackend {
 	t.Helper()
 	switch fx.name {
 	case "redis":
-		return newQueueBackedWorker(t, Config{
-			Driver:    DriverRedis,
-			RedisAddr: integrationRedis.addr,
-		}, 1)
+		return newQueueBackedWorker(t, redisCfg(integrationRedis.addr), 1)
 	case "mysql":
-		return newQueueBackedWorker(t, Config{
-			Driver:         DriverDatabase,
-			DatabaseDriver: "mysql",
-			DatabaseDSN:    fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
-		}, 1)
+		return newQueueBackedWorker(t, mysqlCfg(mysqlDSN(integrationMySQL.addr)), 1)
 	case "postgres":
-		return newQueueBackedWorker(t, Config{
-			Driver:         DriverDatabase,
-			DatabaseDriver: "pgx",
-			DatabaseDSN:    fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr),
-		}, 1)
+		return newQueueBackedWorker(t, postgresCfg(postgresDSN(integrationPostgres.addr)), 1)
 	default:
 		return fx.newWorker(t)
 	}

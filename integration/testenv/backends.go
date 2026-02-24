@@ -1,4 +1,4 @@
-package inttest
+package testenv
 
 import "strings"
 
@@ -53,3 +53,4 @@ func SelectedBackends(envValue string) map[string]bool {
 func BackendEnabled(envValue, name string) bool {
 	return SelectedBackends(envValue)[strings.ToLower(strings.TrimSpace(name))]
 }
+

@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -113,25 +112,6 @@ type Config struct {
 	Observer Observer
 
 	DefaultQueue string
-
-	Database                         *sql.DB
-	DatabaseDriver                   string
-	DatabaseDSN                      string
-	DatabaseProcessingRecoveryGrace  time.Duration
-	DatabaseProcessingLeaseNoTimeout time.Duration
-
-	RedisAddr     string
-	RedisPassword string
-	RedisDB       int
-
-	NATSURL string
-
-	SQSRegion    string
-	SQSEndpoint  string
-	SQSAccessKey string
-	SQSSecretKey string
-
-	RabbitMQURL string
 }
 
 type queueBackend interface {
@@ -148,18 +128,6 @@ type runtimeQueueBackend interface {
 
 func newSyncQueue() queueBackend {
 	return newLocalQueueWithConfig(DriverSync, WorkerpoolConfig{})
-}
-
-func (cfg Config) databaseConfig() DatabaseConfig {
-	return DatabaseConfig{
-		DB:                       cfg.Database,
-		DriverName:               cfg.DatabaseDriver,
-		DSN:                      cfg.DatabaseDSN,
-		DefaultQueue:             cfg.DefaultQueue,
-		ProcessingRecoveryGrace:  cfg.DatabaseProcessingRecoveryGrace,
-		ProcessingLeaseNoTimeout: cfg.DatabaseProcessingLeaseNoTimeout,
-		Observer:                 cfg.Observer,
-	}
 }
 
 // New creates the high-level Queue API based on Config.Driver.
@@ -274,9 +242,6 @@ func NewQueue(cfg Config) (QueueRuntime, error) {
 func (cfg Config) normalize() Config {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
-	}
-	if cfg.SQSRegion == "" {
-		cfg.SQSRegion = "us-east-1"
 	}
 	return cfg
 }
@@ -447,7 +412,7 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 		err error
 	)
 	if q.newWorker != nil {
-		driverWorker, e := q.newWorker(q.common.cfg, defaultWorkerCount(workers))
+		driverWorker, e := q.newWorker(defaultWorkerCount(workers))
 		if e != nil {
 			return e
 		}
@@ -615,6 +580,54 @@ type driverRuntimeQueueBackendAdapter struct {
 
 type driverWorkerBackendAdapter struct {
 	DriverWorkerBackend
+}
+
+func (a driverQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
+	controller, ok := a.DriverQueueBackend.(QueueController)
+	if !ok {
+		return ErrPauseUnsupported
+	}
+	return controller.Pause(ctx, queueName)
+}
+
+func (a driverQueueBackendAdapter) Resume(ctx context.Context, queueName string) error {
+	controller, ok := a.DriverQueueBackend.(QueueController)
+	if !ok {
+		return ErrPauseUnsupported
+	}
+	return controller.Resume(ctx, queueName)
+}
+
+func (a driverQueueBackendAdapter) Stats(ctx context.Context) (StatsSnapshot, error) {
+	provider, ok := a.DriverQueueBackend.(StatsProvider)
+	if !ok {
+		return StatsSnapshot{}, fmt.Errorf("stats provider is not available for driver %q", a.Driver())
+	}
+	return provider.Stats(ctx)
+}
+
+func (a driverRuntimeQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
+	controller, ok := a.DriverRuntimeQueueBackend.(QueueController)
+	if !ok {
+		return ErrPauseUnsupported
+	}
+	return controller.Pause(ctx, queueName)
+}
+
+func (a driverRuntimeQueueBackendAdapter) Resume(ctx context.Context, queueName string) error {
+	controller, ok := a.DriverRuntimeQueueBackend.(QueueController)
+	if !ok {
+		return ErrPauseUnsupported
+	}
+	return controller.Resume(ctx, queueName)
+}
+
+func (a driverRuntimeQueueBackendAdapter) Stats(ctx context.Context) (StatsSnapshot, error) {
+	provider, ok := a.DriverRuntimeQueueBackend.(StatsProvider)
+	if !ok {
+		return StatsSnapshot{}, fmt.Errorf("stats provider is not available for driver %q", a.Driver())
+	}
+	return provider.Stats(ctx)
 }
 
 func optionalDriverMovedError(driver Driver) error {

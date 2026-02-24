@@ -65,17 +65,12 @@ type scenarioPayload struct {
 	Name string `json:"name"`
 }
 
-func newRabbitMQIntegrationConfig(t *testing.T) queue.Config {
-	return queue.Config{
-		Driver:      queue.DriverRabbitMQ,
-		RabbitMQURL: ensureRabbitMQ(t),
-	}
+func newRabbitMQIntegrationConfig(t *testing.T) any {
+	return rabbitmqCfg(ensureRabbitMQ(t))
 }
 
-func newRabbitMQIntegrationConfigForQueue(t *testing.T, queueName string) queue.Config {
-	cfg := newRabbitMQIntegrationConfig(t)
-	cfg.DefaultQueue = queueName
-	return cfg
+func newRabbitMQIntegrationConfigForQueue(t *testing.T, queueName string) any {
+	return withDefaultQueue(rabbitmqCfg(ensureRabbitMQ(t)), queueName)
 }
 
 func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {

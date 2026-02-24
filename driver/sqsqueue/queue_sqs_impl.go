@@ -8,12 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goforj/queue"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 )
 
 type sqsMessage struct {
@@ -37,7 +38,7 @@ type sqsClient interface {
 }
 
 type sqsQueue struct {
-	cfg queue.Config
+	cfg Config
 
 	mu        sync.Mutex
 	client    sqsClient
@@ -52,9 +53,9 @@ func (q *sqsQueue) physicalQueueName() string {
 	return "default"
 }
 
-func newSQSQueue(cfg queue.Config) queue.DriverQueueBackend {
+func newSQSQueue(cfg Config) queue.DriverQueueBackend {
 	return &sqsQueue{
-		cfg:       cfg,
+		cfg:       normalizeConfig(cfg),
 		queueURLs: make(map[string]string),
 		unique:    make(map[string]time.Time),
 	}
@@ -93,10 +94,10 @@ func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := queue.ValidateDriverJob(job); err != nil {
+	if err := queuecore.ValidateDriverJob(job); err != nil {
 		return err
 	}
-	parsed := queue.DriverOptions(job)
+	parsed := queuecore.DriverOptions(job)
 	if parsed.QueueName == "" {
 		return fmt.Errorf("job queue is required")
 	}
@@ -104,7 +105,7 @@ func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 		return err
 	}
 	if parsed.UniqueTTL > 0 && !q.claimUnique(job, parsed.QueueName, parsed.UniqueTTL) {
-		return queue.ErrDuplicate
+		return queuecore.ErrDuplicate
 	}
 
 	msg := sqsMessage{
@@ -219,15 +220,16 @@ func (q *sqsQueue) claimUnique(job queue.Job, queueName string, ttl time.Duratio
 	return true
 }
 
-func newSQSClient(ctx context.Context, cfg queue.Config) (sqsClient, error) {
+func newSQSClient(ctx context.Context, cfg Config) (sqsClient, error) {
+	cfg = normalizeConfig(cfg)
 	load := []func(*awsconfig.LoadOptions) error{
-		awsconfig.WithRegion(cfg.SQSRegion),
+		awsconfig.WithRegion(cfg.Region),
 	}
-	if cfg.SQSEndpoint != "" {
-		load = append(load, awsconfig.WithBaseEndpoint(cfg.SQSEndpoint))
+	if cfg.Endpoint != "" {
+		load = append(load, awsconfig.WithBaseEndpoint(cfg.Endpoint))
 	}
-	if cfg.SQSAccessKey != "" || cfg.SQSSecretKey != "" {
-		load = append(load, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.SQSAccessKey, cfg.SQSSecretKey, "")))
+	if cfg.AccessKey != "" || cfg.SecretKey != "" {
+		load = append(load, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")))
 	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, load...)
 	if err != nil {
