@@ -81,7 +81,7 @@ func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
 		received <- in
 		return nil
 	})
-	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(q, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("nats queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
@@ -128,7 +128,7 @@ func TestNATSIntegration_OptionBehavior(t *testing.T) {
 		done <- struct{}{}
 		return nil
 	})
-	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(q, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("nats queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())

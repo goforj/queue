@@ -131,7 +131,7 @@ func (f *FakeQueue) StartWorkers(context.Context) error { return nil }
 //	q := fake.Workers(4)
 //	fmt.Println(q != nil)
 //	// Output: true
-func (f *FakeQueue) Workers(int) QueueRuntime { return f }
+func (f *FakeQueue) Workers(int) queueRuntime { return f }
 
 // Shutdown drains running work and releases resources.
 // @group Testing

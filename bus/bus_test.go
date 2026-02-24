@@ -12,7 +12,7 @@ import (
 )
 
 func TestDispatchExecutesRegisteredHandler(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestDispatchExecutesRegisteredHandler(t *testing.T) {
 }
 
 func TestChainStopsOnFailureAndRunsCallbacksOnce(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestChainStopsOnFailureAndRunsCallbacksOnce(t *testing.T) {
 }
 
 func TestBatchTracksCompletion(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestBatchTracksCompletion(t *testing.T) {
 }
 
 func TestCallbackJobEmitsCallbackEvents(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestCallbackJobEmitsCallbackEvents(t *testing.T) {
 }
 
 func TestDispatchEmitsStartedAndSucceeded(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestDispatchEmitsStartedAndSucceeded(t *testing.T) {
 }
 
 func TestBatchFailFastEmitsCancelled(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestBatchFailFastEmitsCancelled(t *testing.T) {
 }
 
 func TestChainCatchRunsOnceForDuplicateCallbackJobs(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestChainCatchRunsOnceForDuplicateCallbackJobs(t *testing.T) {
 }
 
 func TestBatchThenFinallyRunOnceForDuplicateCallbackJobs(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestBatchThenFinallyRunOnceForDuplicateCallbackJobs(t *testing.T) {
 }
 
 func TestBatchCatchRunsOnceForDuplicateCallbackJobs(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestBatchCatchRunsOnceForDuplicateCallbackJobs(t *testing.T) {
 }
 
 func TestBusPruneRemovesTerminalWorkflowState(t *testing.T) {
-	q, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
+	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
 	}

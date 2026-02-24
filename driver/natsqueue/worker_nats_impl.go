@@ -32,11 +32,11 @@ type natsWorkerConfig struct {
 	Observer queue.Observer
 }
 
-func newNATSWorker(url string) queue.DriverWorkerBackend {
+func newNATSWorker(url string) *natsWorker {
 	return newNATSWorkerWithConfig(natsWorkerConfig{URL: url})
 }
 
-func newNATSWorkerWithConfig(cfg natsWorkerConfig) queue.DriverWorkerBackend {
+func newNATSWorkerWithConfig(cfg natsWorkerConfig) *natsWorker {
 	cfg.Workers = defaultWorkerCount(cfg.Workers)
 	return &natsWorker{
 		url:      cfg.URL,
@@ -133,7 +133,7 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 	}
 	err := handler(
 		ctx,
-		queue.DriverWithAttempt(
+		queuecore.DriverWithAttempt(
 			queue.NewJob(incoming.Type).
 				Payload(incoming.Payload).
 				OnQueue(incoming.Queue).

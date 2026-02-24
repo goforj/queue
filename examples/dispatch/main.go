@@ -15,30 +15,18 @@ func main() {
 	example1()
 	example2()
 	example3()
-	example4()
 }
 
 func example1() {
-	// Dispatch enqueues a high-level job.
+	// Dispatch submits a typed job payload using the default queue.
 
-	// Example: dispatch typed job
-	var q queue.QueueRuntime
-	err := q.Dispatch(
-		queue.NewJob("emails:send").
-			Payload(map[string]any{"id": 1}).
-			OnQueue("default"),
-	)
-	_ = err
-}
-
-func example2() {
 	// Example: dispatch to fake queue
 	fake := queue.NewFake()
 	err := fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 	_ = err
 }
 
-func example3() {
+func example2() {
 	// Example: local dispatch
 	q, err := queue.NewSync()
 	if err != nil {
@@ -62,7 +50,7 @@ func example3() {
 	_, _ = q.Dispatch(context.Background(), job)
 }
 
-func example4() {
+func example3() {
 	// Example: dispatch
 	q, err := queue.NewSync()
 	if err != nil {

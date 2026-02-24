@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goforj/queue"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 )
 
 type sqsWorkerClientStub struct {
@@ -152,7 +153,7 @@ func TestSQSWorker_ProcessSuccessInvokesHandlerAndDeletes(t *testing.T) {
 				if _, ok := ctx.Deadline(); !ok {
 					t.Fatal("expected timeout context")
 				}
-				opts := queue.DriverOptions(job)
+				opts := queuecore.DriverOptions(job)
 				if job.Type != "job:ok" || opts.QueueName != "critical" || opts.Attempt != 1 {
 					t.Fatalf("unexpected job values: type=%q queue=%q attempt=%d", job.Type, opts.QueueName, opts.Attempt)
 				}
@@ -292,7 +293,7 @@ func TestSQSWorker_ProcessFailureRetryAndTerminal(t *testing.T) {
 }
 
 func TestSQSWorker_NewRegisterAndShutdown(t *testing.T) {
-	backend := newSQSWorker(sqsWorkerConfig{}).(*sqsWorker)
+	backend := newSQSWorker(sqsWorkerConfig{})
 	if backend.cfg.DefaultQueue != "default" {
 		t.Fatalf("expected default queue fallback, got %q", backend.cfg.DefaultQueue)
 	}
@@ -318,7 +319,7 @@ func TestSQSWorker_NewRegisterAndShutdown(t *testing.T) {
 }
 
 func TestSQSWorker_StartWorkersFastPaths(t *testing.T) {
-	backend := newSQSWorker(sqsWorkerConfig{}).(*sqsWorker)
+	backend := newSQSWorker(sqsWorkerConfig{})
 
 	backend.started = true
 	if err := backend.StartWorkers(context.Background()); err != nil {
@@ -340,7 +341,7 @@ func TestSQSWorker_StartWorkersInvalidEndpoint(t *testing.T) {
 		SQSEndpoint:  "://bad-endpoint",
 		SQSAccessKey: "test",
 		SQSSecretKey: "test",
-	}).(*sqsWorker)
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()

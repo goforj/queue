@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 	"github.com/nats-io/nats.go"
 )
 
 func TestNATSWorker_NewRegisterAndShutdown(t *testing.T) {
-	w := newNATSWorker("nats://example:4222").(*natsWorker)
+	w := newNATSWorker("nats://example:4222")
 	if w.url != "nats://example:4222" {
 		t.Fatalf("expected url to be preserved, got %q", w.url)
 	}
@@ -37,7 +38,7 @@ func TestNATSWorker_NewRegisterAndShutdown(t *testing.T) {
 }
 
 func TestNATSWorker_StartWorkersCanceledContext(t *testing.T) {
-	w := newNATSWorker("nats://example:4222").(*natsWorker)
+	w := newNATSWorker("nats://example:4222")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -49,12 +50,12 @@ func TestNATSWorker_StartWorkersCanceledContext(t *testing.T) {
 
 func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 	t.Run("invalid json ignored", func(t *testing.T) {
-		w := newNATSWorker("nats://example:4222").(*natsWorker)
+		w := newNATSWorker("nats://example:4222")
 		w.processMessage(&nats.Msg{Data: []byte("{")})
 	})
 
 	t.Run("missing handler ignored", func(t *testing.T) {
-		w := newNATSWorker("nats://example:4222").(*natsWorker)
+		w := newNATSWorker("nats://example:4222")
 		body, err := json.Marshal(natsMessage{Type: "job:none", Queue: "default"})
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -64,13 +65,13 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 
 	t.Run("success uses timeout and job options", func(t *testing.T) {
 		called := 0
-		w := newNATSWorker("nats://example:4222").(*natsWorker)
+		w := newNATSWorker("nats://example:4222")
 		w.Register("job:ok", func(ctx context.Context, job queue.Job) error {
 			called++
 			if _, ok := ctx.Deadline(); !ok {
 				t.Fatal("expected timeout context")
 			}
-			opts := queue.DriverOptions(job)
+			opts := queuecore.DriverOptions(job)
 			if job.Type != "job:ok" || opts.QueueName != "critical" || opts.Attempt != 2 {
 				t.Fatalf("unexpected job fields: type=%q queue=%q attempt=%d", job.Type, opts.QueueName, opts.Attempt)
 			}
@@ -90,7 +91,7 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 	})
 
 	t.Run("future message schedules republish without panic", func(t *testing.T) {
-		w := newNATSWorker("nats://example:4222").(*natsWorker)
+		w := newNATSWorker("nats://example:4222")
 		body, err := json.Marshal(natsMessage{Type: "job:future", Queue: "default", AvailableAtMS: time.Now().Add(10 * time.Millisecond).UnixMilli()})
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -105,7 +106,7 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 			URL:      "nats://example:4222",
 			Workers:  1,
 			Observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
-		}).(*natsWorker)
+		})
 		w.Register("job:fail", func(context.Context, queue.Job) error { return errors.New("boom") })
 		body, err := json.Marshal(natsMessage{Type: "job:fail", Queue: "default", Attempt: 0, MaxRetry: 2, BackoffMillis: 5})
 		if err != nil {
@@ -118,7 +119,7 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 	})
 
 	t.Run("failed handler at max retries stops", func(t *testing.T) {
-		w := newNATSWorker("nats://example:4222").(*natsWorker)
+		w := newNATSWorker("nats://example:4222")
 		w.Register("job:terminal", func(context.Context, queue.Job) error { return errors.New("boom") })
 		body, err := json.Marshal(natsMessage{Type: "job:terminal", Queue: "default", Attempt: 2, MaxRetry: 2})
 		if err != nil {

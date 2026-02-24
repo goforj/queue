@@ -28,7 +28,7 @@ func (s *asynqServerStub) Stop()     {}
 func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
 	server := &asynqServerStub{}
 	mux := asynq.NewServeMux()
-	w := newRedisWorker(server, mux).(*redisWorker)
+	w := newRedisWorker(server, mux)
 
 	// Register no-op branches.
 	w.Register("", func(context.Context, queue.Job) error { return nil })
@@ -65,7 +65,7 @@ func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
 
 func TestRedisWorker_StartError(t *testing.T) {
 	server := &asynqServerStub{startErr: errors.New("start failed")}
-	w := newRedisWorker(server, asynq.NewServeMux()).(*redisWorker)
+	w := newRedisWorker(server, asynq.NewServeMux())
 
 	if err := w.StartWorkers(context.Background()); err == nil {
 		t.Fatal("expected start error")

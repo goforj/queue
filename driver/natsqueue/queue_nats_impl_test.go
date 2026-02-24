@@ -10,7 +10,7 @@ import (
 )
 
 func TestNATSQueue_EnsureConnShortCircuitsWhenPresent(t *testing.T) {
-	q := newNATSQueue("nats://127.0.0.1:1").(*natsQueue)
+	q := newNATSQueue("nats://127.0.0.1:1")
 	q.nc = &nats.Conn{}
 	if err := q.ensureConn(); err != nil {
 		t.Fatalf("expected ensureConn to short-circuit when conn already present, got %v", err)
@@ -18,7 +18,7 @@ func TestNATSQueue_EnsureConnShortCircuitsWhenPresent(t *testing.T) {
 }
 
 func TestNATSQueue_DispatchValidationAndConnectionFailure(t *testing.T) {
-	q := newNATSQueue("://bad-url").(*natsQueue)
+	q := newNATSQueue("://bad-url")
 
 	if err := q.Dispatch(context.Background(), queue.NewJob("")); err == nil {
 		t.Fatal("expected validation error for empty type")
@@ -36,7 +36,7 @@ func TestNATSQueue_DispatchValidationAndConnectionFailure(t *testing.T) {
 }
 
 func TestNATSQueue_ShutdownNilConnAndHelpers(t *testing.T) {
-	q := newNATSQueue("nats://127.0.0.1:1").(*natsQueue)
+	q := newNATSQueue("nats://127.0.0.1:1")
 	if err := q.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown with nil conn failed: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestNATSQueue_ShutdownNilConnAndHelpers(t *testing.T) {
 }
 
 func TestNATSQueue_EnsureConnFailure(t *testing.T) {
-	q := newNATSQueue("://bad-url").(*natsQueue)
+	q := newNATSQueue("://bad-url")
 	if err := q.ensureConn(); err == nil {
 		t.Fatal("expected ensureConn to fail for invalid URL")
 	}
@@ -65,7 +65,7 @@ func TestNATSQueue_EnsureConnFailure(t *testing.T) {
 }
 
 func TestNATSQueue_Driver(t *testing.T) {
-	q := newNATSQueue("nats://127.0.0.1:1").(*natsQueue)
+	q := newNATSQueue("nats://127.0.0.1:1")
 	if q.Driver() != queue.DriverNATS {
 		t.Fatalf("expected driver %q, got %q", queue.DriverNATS, q.Driver())
 	}

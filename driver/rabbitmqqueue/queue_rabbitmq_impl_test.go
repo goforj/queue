@@ -11,11 +11,11 @@ import (
 )
 
 func TestRabbitMQQueue_HelperBranches(t *testing.T) {
-	qDefault := newRabbitMQQueue("amqp://example", "").(*rabbitMQQueue)
+	qDefault := newRabbitMQQueue("amqp://example", "")
 	if qDefault.defaultQueue != "default" {
 		t.Fatalf("expected default queue fallback, got %q", qDefault.defaultQueue)
 	}
-	qNamed := newRabbitMQQueue("amqp://example", "critical").(*rabbitMQQueue)
+	qNamed := newRabbitMQQueue("amqp://example", "critical")
 	if qNamed.defaultQueue != "critical" {
 		t.Fatalf("expected explicit default queue, got %q", qNamed.defaultQueue)
 	}
@@ -34,7 +34,7 @@ func TestRabbitMQQueue_HelperBranches(t *testing.T) {
 }
 
 func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
-	q := newRabbitMQQueue("amqp://example", "default").(*rabbitMQQueue)
+	q := newRabbitMQQueue("amqp://example", "default")
 
 	if err := q.Dispatch(context.Background(), queue.NewJob("")); err == nil {
 		t.Fatal("expected validation error for empty job type")
@@ -51,7 +51,7 @@ func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 }
 
 func TestRabbitMQQueue_ClaimUniquePrunesExpired(t *testing.T) {
-	q := newRabbitMQQueue("amqp://example", "default").(*rabbitMQQueue)
+	q := newRabbitMQQueue("amqp://example", "default")
 	job := queue.NewJob("job:unique").Payload([]byte(`{"id":1}`)).OnQueue("default")
 	key := "default:" + job.Type + ":" + string(job.PayloadBytes())
 	q.unique[key] = time.Now().Add(-time.Second)
@@ -62,7 +62,7 @@ func TestRabbitMQQueue_ClaimUniquePrunesExpired(t *testing.T) {
 }
 
 func TestRabbitMQQueue_EnsureConnectedLockedAndErrorClassifier(t *testing.T) {
-	q := newRabbitMQQueue("://bad-url", "default").(*rabbitMQQueue)
+	q := newRabbitMQQueue("://bad-url", "default")
 	q.dialTimeout = 5 * time.Millisecond
 	if err := q.ensureConnectedLocked(); err == nil {
 		t.Fatal("expected ensureConnectedLocked to fail for invalid url")

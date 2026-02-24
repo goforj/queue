@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -29,7 +30,7 @@ func (a *ackRecorder) Nack(_ uint64, _ bool, _ bool) error {
 func (a *ackRecorder) Reject(_ uint64, _ bool) error { return nil }
 
 func TestRabbitMQWorker_NewRegisterAndShutdown(t *testing.T) {
-	w := newRabbitMQWorker(rabbitMQWorkerConfig{}).(*rabbitMQWorker)
+	w := newRabbitMQWorker(rabbitMQWorkerConfig{})
 	if w.cfg.DefaultQueue != "default" {
 		t.Fatalf("expected default queue fallback, got %q", w.cfg.DefaultQueue)
 	}
@@ -50,7 +51,7 @@ func TestRabbitMQWorker_NewRegisterAndShutdown(t *testing.T) {
 }
 
 func TestRabbitMQWorker_StartWorkersFastPaths(t *testing.T) {
-	w := newRabbitMQWorker(rabbitMQWorkerConfig{}).(*rabbitMQWorker)
+	w := newRabbitMQWorker(rabbitMQWorkerConfig{})
 	w.started = true
 	if err := w.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("expected started fast-path nil, got %v", err)
@@ -106,7 +107,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 				if _, ok := ctx.Deadline(); !ok {
 					t.Fatal("expected timeout context")
 				}
-				opts := queue.DriverOptions(job)
+				opts := queuecore.DriverOptions(job)
 				if job.Type != "job:ok" || opts.QueueName != "critical" || opts.Attempt != 1 {
 					t.Fatalf("unexpected job fields: type=%q queue=%q attempt=%d", job.Type, opts.QueueName, opts.Attempt)
 				}

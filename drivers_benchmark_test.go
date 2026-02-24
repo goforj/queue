@@ -10,7 +10,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	ctx := context.Background()
 
 	b.Run("null", func(b *testing.B) {
-		q, err := NewQueue(Config{Driver: DriverNull})
+		q, err := newRuntime(Config{Driver: DriverNull})
 		if err != nil {
 			b.Fatalf("new null queue failed: %v", err)
 		}
@@ -18,7 +18,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	})
 
 	b.Run("sync", func(b *testing.B) {
-		q, err := NewQueue(Config{Driver: DriverSync})
+		q, err := newRuntime(Config{Driver: DriverSync})
 		if err != nil {
 			b.Fatalf("new sync queue failed: %v", err)
 		}
@@ -31,7 +31,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 	})
 
 	b.Run("workerpool", func(b *testing.B) {
-		q, err := NewQueue(Config{Driver: DriverWorkerpool})
+		q, err := newRuntime(Config{Driver: DriverWorkerpool})
 		if err != nil {
 			b.Fatalf("new workerpool queue failed: %v", err)
 		}
@@ -45,7 +45,7 @@ func BenchmarkDriverDispatch_Local(b *testing.B) {
 
 }
 
-func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q QueueRuntime, job Job) {
+func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q queueRuntime, job Job) {
 	// Warm up one dispatch so constructor/startup overhead stays out of the loop.
 	if err := q.DispatchCtx(ctx, job); err != nil {
 		b.Fatalf("warmup dispatch failed: %v", err)

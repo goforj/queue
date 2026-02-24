@@ -14,19 +14,11 @@ func main() {
 	example1()
 	example2()
 	example3()
-	example4()
 }
 
 func example1() {
-	// StartWorkers starts worker processing.
+	// StartWorkers starts worker execution.
 
-	// Example: start workers
-	var q queue.QueueRuntime
-	err := q.StartWorkers(context.Background())
-	_ = err
-}
-
-func example2() {
 	// Example: local start workers
 	q, err := queue.NewWorkerpool()
 	if err != nil {
@@ -35,14 +27,14 @@ func example2() {
 	_ = q.StartWorkers(context.Background())
 }
 
-func example3() {
+func example2() {
 	// Example: start fake workers
 	fake := queue.NewFake()
 	err := fake.StartWorkers(context.Background())
 	_ = err
 }
 
-func example4() {
+func example3() {
 	// Example: start workers
 	q, err := queue.NewWorkerpool()
 	if err != nil {

@@ -14,18 +14,11 @@ func main() {
 	example1()
 	example2()
 	example3()
-	example4()
 }
 
 func example1() {
-	// Register binds a handler for a high-level job type.
+	// Register associates a handler with a job type.
 
-	// Example: register a handler
-	var q queue.QueueRuntime
-	q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
-}
-
-func example2() {
 	// Example: local register
 	q, err := queue.NewSync()
 	if err != nil {
@@ -44,13 +37,13 @@ func example2() {
 	})
 }
 
-func example3() {
+func example2() {
 	// Example: register no-op on fake
 	fake := queue.NewFake()
 	fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 }
 
-func example4() {
+func example3() {
 	// Example: register
 	q, err := queue.NewSync()
 	if err != nil {

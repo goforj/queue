@@ -37,7 +37,7 @@ type rabbitMQQueue struct {
 	unique map[string]time.Time
 }
 
-func newRabbitMQQueue(url string, defaultQueue string) queue.DriverQueueBackend {
+func newRabbitMQQueue(url string, defaultQueue string) *rabbitMQQueue {
 	if defaultQueue == "" {
 		defaultQueue = "default"
 	}

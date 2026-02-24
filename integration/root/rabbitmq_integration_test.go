@@ -94,7 +94,7 @@ func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 		received <- in
 		return nil
 	})
-	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(q, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("rabbitmq queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
@@ -141,7 +141,7 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 		done <- struct{}{}
 		return nil
 	})
-	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(q, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("rabbitmq queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
@@ -225,7 +225,7 @@ func TestRabbitMQIntegration_RoutesToJobQueue(t *testing.T) {
 		}
 		return nil
 	})
-	if err := consumer.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(consumer, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
 	defer consumer.Shutdown(context.Background())
@@ -268,7 +268,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 		}
 		return nil
 	})
-	if err := consumer1.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(consumer1, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
 
@@ -301,7 +301,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 		}
 		return nil
 	})
-	if err := consumer2.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(consumer2, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("rabbitmq consumer queue 2 start failed: %v", err)
 	}
 	defer consumer2.Shutdown(context.Background())
@@ -345,7 +345,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		}
 		return nil
 	})
-	if err := consumer1.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(consumer1, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
 
@@ -387,7 +387,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 		}
 		return nil
 	})
-	if err := consumer2.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(consumer2, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("rabbitmq consumer queue 2 start failed: %v", err)
 	}
 	defer consumer2.Shutdown(context.Background())
@@ -423,7 +423,7 @@ func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
 		}
 		return nil
 	})
-	if err := consumer.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(consumer, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("rabbitmq consumer queue start failed: %v", err)
 	}
 	defer consumer.Shutdown(context.Background())

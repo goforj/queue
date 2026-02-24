@@ -46,7 +46,7 @@ type sqsWorker struct {
 	observer  queue.Observer
 }
 
-func newSQSWorker(cfg sqsWorkerConfig) queue.DriverWorkerBackend {
+func newSQSWorker(cfg sqsWorkerConfig) *sqsWorker {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
 	}
@@ -183,7 +183,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	}
 	err := handler(
 		runCtx,
-		queue.DriverWithAttempt(
+		queuecore.DriverWithAttempt(
 			queue.NewJob(incoming.Type).
 				Payload(incoming.Payload).
 				OnQueue(incoming.Queue).

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func queueDriver(q QueueRuntime) Driver {
+func queueDriver(q queueRuntime) Driver {
 	if driverAware, ok := q.(interface{ Driver() Driver }); ok {
 		return driverAware.Driver()
 	}
@@ -13,7 +13,7 @@ func queueDriver(q QueueRuntime) Driver {
 }
 
 func TestNewSyncQueue(t *testing.T) {
-	q, err := NewQueue(Config{Driver: DriverSync})
+	q, err := newRuntime(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestNewSyncQueue(t *testing.T) {
 }
 
 func TestNewNullQueue(t *testing.T) {
-	q, err := NewQueue(Config{Driver: DriverNull})
+	q, err := newRuntime(Config{Driver: DriverNull})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestNewNullQueue(t *testing.T) {
 }
 
 func TestNewWorkerpoolQueue(t *testing.T) {
-	q, err := NewQueue(Config{Driver: DriverWorkerpool})
+	q, err := newRuntime(Config{Driver: DriverWorkerpool})
 	if err != nil {
 		t.Fatalf("new q failed: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestNew_SelectsByConfig(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			q, err := NewQueue(tc.cfg)
+			q, err := newRuntime(tc.cfg)
 			if err != nil {
 				t.Fatalf("new q failed: %v", err)
 			}
@@ -67,7 +67,7 @@ func TestNew_SelectsByConfig(t *testing.T) {
 }
 
 func TestNew_UnknownDriverFails(t *testing.T) {
-	q, err := NewQueue(Config{Driver: Driver("unknown")})
+	q, err := newRuntime(Config{Driver: Driver("unknown")})
 	if err == nil {
 		t.Fatal("expected unknown driver error")
 	}
@@ -77,7 +77,7 @@ func TestNew_UnknownDriverFails(t *testing.T) {
 }
 
 func TestQueue_ShutdownNoopForSyncAndRedis(t *testing.T) {
-	syncQueue, err := NewQueue(Config{Driver: DriverSync})
+	syncQueue, err := newRuntime(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("sync constructor failed: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestQueue_ShutdownNoopForSyncAndRedis(t *testing.T) {
 }
 
 func TestQueueRuntime_StartWorkersFromQueueConfig(t *testing.T) {
-	q, err := NewQueue(Config{
+	q, err := newRuntime(Config{
 		Driver: DriverWorkerpool,
 	})
 	if err != nil {
@@ -103,7 +103,7 @@ func TestQueueRuntime_StartWorkersFromQueueConfig(t *testing.T) {
 }
 
 func TestQueueRuntime_StartWorkers_Idempotent(t *testing.T) {
-	q, err := NewQueue(Config{Driver: DriverSync})
+	q, err := newRuntime(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestQueueRuntime_StartWorkers_Idempotent(t *testing.T) {
 }
 
 func TestQueueRuntime_StartWorkersSharesInProcessRuntime(t *testing.T) {
-	q, err := NewQueue(Config{Driver: DriverSync})
+	q, err := newRuntime(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestQueueRuntime_StartWorkersSharesInProcessRuntime(t *testing.T) {
 }
 
 func TestQueueRuntime_PathInvariant_NativeRuntimeSelected(t *testing.T) {
-	q, err := NewQueue(Config{Driver: DriverSync})
+	q, err := newRuntime(Config{Driver: DriverSync})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}

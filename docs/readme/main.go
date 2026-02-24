@@ -97,6 +97,9 @@ func includeInReadmeAPI(fd *FuncDoc) bool {
 	if fd.Package == "queue" && fd.Owner == "FakeQueue" && (fd.Name == "BusRegister" || fd.Name == "BusDispatch") {
 		return false
 	}
+	if fd.Package == "queue" && (fd.Group == "Queue Runtime" || fd.Group == "Driver Integration") {
+		return false
+	}
 	return true
 }
 

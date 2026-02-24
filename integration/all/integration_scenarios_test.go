@@ -390,7 +390,7 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 		received <- in
 		return nil
 	})
-	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
+	if err := withWorkers(q, 1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("redis queue start failed: %v", err)
 	}
 	defer q.Shutdown(context.Background())
@@ -2073,7 +2073,7 @@ func (w *queueBackedWorker) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return w.q.Workers(w.workers).StartWorkers(ctx)
+	return withWorkers(w.q, w.workers).StartWorkers(ctx)
 }
 
 func (w *queueBackedWorker) Shutdown(ctx context.Context) error {

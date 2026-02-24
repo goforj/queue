@@ -11,7 +11,7 @@ import (
 )
 
 // EventKind identifies a queue runtime event.
-// @group Observability
+// @group Driver Integration
 type EventKind string
 
 const (
@@ -44,7 +44,7 @@ const (
 )
 
 // Event is emitted through Observer hooks for queue/worker activity.
-// @group Observability
+// @group Driver Integration
 type Event struct {
 	Kind      EventKind
 	Driver    Driver
@@ -912,11 +912,11 @@ func NormalizeQueueName(name string) string {
 	return name
 }
 
-func resolveQueueRuntime(v any) QueueRuntime {
+func resolveQueueRuntime(v any) queueRuntime {
 	switch q := v.(type) {
 	case nil:
 		return nil
-	case QueueRuntime:
+	case queueRuntime:
 		return q
 	case *Queue:
 		if q == nil {

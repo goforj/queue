@@ -19,7 +19,7 @@ func TestQueueContract_Redis(t *testing.T) {
 	factory := contractFactory{
 		name:           "redis",
 		expectedDriver: queue.DriverRedis,
-		newQueue: func(t *testing.T) queue.QueueRuntime {
+		newQueue: func(t *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
 			if err != nil {
 				t.Fatalf("new redis queue failed: %v", err)
@@ -52,7 +52,7 @@ func TestQueueContract_DatabaseMySQL(t *testing.T) {
 	factory := contractFactory{
 		name:           "database-mysql",
 		expectedDriver: queue.DriverDatabase,
-		newQueue: func(_ *testing.T) queue.QueueRuntime {
+		newQueue: func(_ *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(mysqlCfg(cfg.DSN))
 			if err != nil {
 				t.Fatalf("new mysql q failed: %v", err)
@@ -85,7 +85,7 @@ func TestQueueContract_DatabasePostgres(t *testing.T) {
 	factory := contractFactory{
 		name:           "database-postgres",
 		expectedDriver: queue.DriverDatabase,
-		newQueue: func(_ *testing.T) queue.QueueRuntime {
+		newQueue: func(_ *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(postgresCfg(cfg.DSN))
 			if err != nil {
 				t.Fatalf("new postgres q failed: %v", err)
@@ -111,7 +111,7 @@ func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 	factory := contractFactory{
 		name:           "database-sqlite",
 		expectedDriver: queue.DriverDatabase,
-		newQueue: func(t *testing.T) queue.QueueRuntime {
+		newQueue: func(t *testing.T) QueueRuntime {
 			cfg := queue.DatabaseConfig{
 				DriverName:   "sqlite",
 				DSN:          fmt.Sprintf("%s/contract-integration-%d.db", t.TempDir(), time.Now().UnixNano()),
@@ -141,7 +141,7 @@ func TestQueueContract_NATS(t *testing.T) {
 	factory := contractFactory{
 		name:           "nats",
 		expectedDriver: queue.DriverNATS,
-		newQueue: func(_ *testing.T) queue.QueueRuntime {
+		newQueue: func(_ *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(natsCfg(integrationNATS.url))
 			if err != nil {
 				t.Fatalf("new nats q failed: %v", err)
@@ -165,7 +165,7 @@ func TestQueueContract_SQS(t *testing.T) {
 	factory := contractFactory{
 		name:           "sqs",
 		expectedDriver: queue.DriverSQS,
-		newQueue: func(_ *testing.T) queue.QueueRuntime {
+		newQueue: func(_ *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(sqsCfg(
 				integrationSQS.region,
 				integrationSQS.endpoint,
@@ -194,7 +194,7 @@ func TestQueueContract_RabbitMQ(t *testing.T) {
 	factory := contractFactory{
 		name:           "rabbitmq",
 		expectedDriver: queue.DriverRabbitMQ,
-		newQueue: func(_ *testing.T) queue.QueueRuntime {
+		newQueue: func(_ *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(rabbitmqCfg(integrationRabbitMQ.url))
 			if err != nil {
 				t.Fatalf("new rabbitmq q failed: %v", err)

@@ -34,7 +34,7 @@ type redisQueue struct {
 
 const redisDefaultJobTimeout = 30 * time.Second
 
-func newRedisQueue(client redisEnqueueClient, inspector redisInspector, ownsClient bool) queue.DriverQueueBackend {
+func newRedisQueue(client redisEnqueueClient, inspector redisInspector, ownsClient bool) *redisQueue {
 	return &redisQueue{client: client, inspector: inspector, ownsClient: ownsClient}
 }
 

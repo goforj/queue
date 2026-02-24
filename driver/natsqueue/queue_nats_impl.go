@@ -36,7 +36,7 @@ func (q *natsQueue) Driver() queue.Driver {
 	return queue.DriverNATS
 }
 
-func newNATSQueue(url string) queue.DriverQueueBackend {
+func newNATSQueue(url string) *natsQueue {
 	return &natsQueue{
 		url:    url,
 		unique: make(map[string]time.Time),

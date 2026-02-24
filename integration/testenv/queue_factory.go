@@ -11,29 +11,46 @@ import (
 	"github.com/goforj/queue/driver/redisqueue"
 	"github.com/goforj/queue/driver/sqlitequeue"
 	"github.com/goforj/queue/driver/sqsqueue"
+	"github.com/goforj/queue/internal/testbridge"
 )
 
-func NewQueueRuntime(cfg any) (queue.QueueRuntime, error) {
+func NewQueueRuntime(cfg any) (Runtime, error) {
+	var (
+		high *queue.Queue
+		err  error
+	)
 	switch c := cfg.(type) {
 	case queue.Config:
-		return queue.NewQueue(c)
+		high, err = queue.New(c)
 	case redisqueue.Config:
-		return redisqueue.NewRuntime(c)
+		high, err = redisqueue.NewWithConfig(c)
 	case natsqueue.Config:
-		return natsqueue.NewRuntime(c)
+		high, err = natsqueue.NewWithConfig(c)
 	case sqsqueue.Config:
-		return sqsqueue.NewRuntime(c)
+		high, err = sqsqueue.NewWithConfig(c)
 	case rabbitmqqueue.Config:
-		return rabbitmqqueue.NewRuntime(c)
+		high, err = rabbitmqqueue.NewWithConfig(c)
 	case mysqlqueue.Config:
-		return mysqlqueue.NewRuntime(c)
+		high, err = mysqlqueue.NewWithConfig(c)
 	case postgresqueue.Config:
-		return postgresqueue.NewRuntime(c)
+		high, err = postgresqueue.NewWithConfig(c)
 	case sqlitequeue.Config:
-		return sqlitequeue.NewRuntime(c)
+		high, err = sqlitequeue.NewWithConfig(c)
 	default:
 		return nil, fmt.Errorf("unsupported integration queue runtime config type %T", cfg)
 	}
+	if err != nil {
+		return nil, err
+	}
+	raw, err := testbridge.RuntimeFromQueue(high)
+	if err != nil {
+		return nil, err
+	}
+	r, ok := raw.(Runtime)
+	if !ok {
+		return nil, fmt.Errorf("unsupported runtime type %T", raw)
+	}
+	return r, nil
 }
 
 func NewQueue(cfg any, opts ...queue.Option) (*queue.Queue, error) {

@@ -39,7 +39,7 @@ type jobOptions struct {
 // DriverJobOptions exposes parsed job enqueue metadata for driver-module implementations.
 //
 // This is an advanced type intended for optional driver integrations.
-// @group Queue Runtime
+// @group Driver Integration
 type DriverJobOptions struct {
 	QueueName string
 	Timeout   *time.Duration
@@ -295,7 +295,7 @@ func (t Job) jobOptions() jobOptions {
 // ValidateDriverJob validates a job value for backend dispatch.
 //
 // This is an advanced helper intended for driver-module implementations.
-// @group Queue Runtime
+// @group Driver Integration
 func ValidateDriverJob(job Job) error {
 	return job.validate()
 }
@@ -303,7 +303,7 @@ func ValidateDriverJob(job Job) error {
 // DriverOptions returns parsed enqueue metadata for backend dispatch.
 //
 // This is an advanced helper intended for driver-module implementations.
-// @group Queue Runtime
+// @group Driver Integration
 func DriverOptions(job Job) DriverJobOptions {
 	opts := job.jobOptions()
 	return DriverJobOptions{
@@ -332,7 +332,7 @@ func (t Job) withAttempt(attempt int) Job {
 // DriverWithAttempt returns a copy of the job with the attempt number set.
 //
 // This is an advanced helper intended for driver-module implementations.
-// @group Queue Runtime
+// @group Driver Integration
 func DriverWithAttempt(job Job, attempt int) Job {
 	return job.withAttempt(attempt)
 }

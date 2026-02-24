@@ -5,45 +5,27 @@ import (
 	"fmt"
 )
 
-// DriverQueueBackend is the low-level backend interface optional driver modules implement.
-//
-// This is primarily intended for driver-module integration, not normal application code.
-// @group Queue Runtime
-type DriverQueueBackend interface {
+type driverQueueBackend interface {
 	Driver() Driver
 	Dispatch(ctx context.Context, job Job) error
 	Shutdown(ctx context.Context) error
 }
 
-// DriverRuntimeQueueBackend is a queue backend that can also run workers directly.
-// This is used by SQL-backed driver modules and other runtimes that own their worker loop.
-// @group Queue Runtime
-type DriverRuntimeQueueBackend interface {
-	DriverQueueBackend
+type driverRuntimeQueueBackend interface {
+	driverQueueBackend
 	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
 }
 
-// DriverWorkerBackend is the worker backend interface optional driver modules implement.
-//
-// This is primarily intended for driver-module integration, not normal application code.
-// @group Queue Runtime
-type DriverWorkerBackend interface {
+type driverWorkerBackend interface {
 	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
 	Shutdown(ctx context.Context) error
 }
 
-// DriverWorkerFactory builds a driver worker backend for an external queue runtime.
-// @group Queue Runtime
-type DriverWorkerFactory func(workers int) (DriverWorkerBackend, error)
+type driverWorkerFactory func(workers int) (driverWorkerBackend, error)
 
-// NewQueueFromDriver wraps a driver-module backend into a QueueRuntime.
-//
-// Driver modules use this to return a queue.QueueRuntime without relying on root optional
-// driver factory support.
-// @group Queue Runtime
-func NewQueueFromDriver(cfg Config, backend DriverQueueBackend, workerFactory DriverWorkerFactory) (QueueRuntime, error) {
+func newQueueFromDriver(cfg Config, backend driverQueueBackend, workerFactory driverWorkerFactory) (queueRuntime, error) {
 	if backend == nil {
 		return nil, fmt.Errorf("driver backend is nil")
 	}
@@ -51,7 +33,7 @@ func NewQueueFromDriver(cfg Config, backend DriverQueueBackend, workerFactory Dr
 
 	var q queueBackend
 	var runtime runtimeQueueBackend
-	if native, ok := backend.(DriverRuntimeQueueBackend); ok {
+	if native, ok := backend.(driverRuntimeQueueBackend); ok {
 		runtime = driverRuntimeQueueBackendAdapter{native}
 		q = runtime
 	} else {

@@ -38,7 +38,7 @@ type rabbitMQWorkerConfig struct {
 	DialTimeout  time.Duration
 }
 
-func newRabbitMQWorker(cfg rabbitMQWorkerConfig) queue.DriverWorkerBackend {
+func newRabbitMQWorker(cfg rabbitMQWorkerConfig) *rabbitMQWorker {
 	if cfg.DefaultQueue == "" {
 		cfg.DefaultQueue = "default"
 	}
@@ -186,7 +186,7 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 	}
 	err := handler(
 		runCtx,
-		queue.DriverWithAttempt(
+		queuecore.DriverWithAttempt(
 			queue.NewJob(incoming.Type).
 				Payload(incoming.Payload).
 				OnQueue(incoming.Queue).

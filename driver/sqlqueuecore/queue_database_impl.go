@@ -91,7 +91,7 @@ type dbJob struct {
 	attempt        int
 }
 
-func New(cfg queue.DatabaseConfig) (queue.DriverQueueBackend, error) {
+func New(cfg queue.DatabaseConfig) (*databaseQueue, error) {
 	local := localDatabaseConfig{
 		DB:                       cfg.DB,
 		DriverName:               cfg.DriverName,
@@ -371,7 +371,7 @@ func (d *databaseQueue) processJob(job *dbJob) {
 	}
 	err := handler(
 		ctx,
-		queue.DriverWithAttempt(
+		queuecore.DriverWithAttempt(
 			queue.NewJob(job.jobType).
 				Payload(job.payload).
 				OnQueue(job.queueName).

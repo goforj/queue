@@ -3,10 +3,15 @@
 package bus_test
 
 import (
-	"github.com/goforj/queue"
 	"github.com/goforj/queue/integration/testenv"
 )
 
-func newQueueRuntime(cfg any) (queue.QueueRuntime, error) {
+type QueueRuntime = testenv.Runtime
+
+func newQueueRuntime(cfg any) (QueueRuntime, error) {
 	return testenv.NewQueueRuntime(cfg)
+}
+
+func withWorkers(q QueueRuntime, count int) QueueRuntime {
+	return testenv.WithWorkers(q, count)
 }

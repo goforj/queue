@@ -53,7 +53,7 @@ func (q *sqsQueue) physicalQueueName() string {
 	return "default"
 }
 
-func newSQSQueue(cfg Config) queue.DriverQueueBackend {
+func newSQSQueue(cfg Config) *sqsQueue {
 	return &sqsQueue{
 		cfg:       normalizeConfig(cfg),
 		queueURLs: make(map[string]string),

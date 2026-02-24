@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/driverbridge"
 	"github.com/goforj/queue/queueconfig"
 )
 
@@ -18,9 +19,9 @@ type ModuleConfig struct {
 	ProcessingLeaseNoTimeout time.Duration
 }
 
-// NewRuntime wraps the shared SQL queue implementation into a queue.QueueRuntime
-// for a specific SQL driver name (for example, "mysql", "pgx", "sqlite").
-func NewRuntime(driverName string, cfg ModuleConfig) (queue.QueueRuntime, error) {
+// NewQueue creates a high-level queue.Queue from the shared SQL implementation
+// for a specific SQL driver name.
+func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue.Queue, error) {
 	backend, err := New(queue.DatabaseConfig{
 		DB:                       cfg.DB,
 		DriverName:               driverName,
@@ -38,15 +39,5 @@ func NewRuntime(driverName string, cfg ModuleConfig) (queue.QueueRuntime, error)
 		DefaultQueue: cfg.DefaultQueue,
 		Observer:     cfg.Observer,
 	}
-	return queue.NewQueueFromDriver(rootCfg, backend, nil)
-}
-
-// NewQueue creates a high-level queue.Queue from the shared SQL implementation
-// for a specific SQL driver name.
-func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue.Queue, error) {
-	raw, err := NewRuntime(driverName, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return queue.NewFromRuntime(raw, opts...)
+	return driverbridge.NewQueueFromDriver(rootCfg, backend, nil, opts...)
 }

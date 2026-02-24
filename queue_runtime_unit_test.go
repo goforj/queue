@@ -192,7 +192,7 @@ func TestQueueConstructorsAndBackendDriverMethods(t *testing.T) {
 }
 
 func TestNewQueueAndNewExternalWorker(t *testing.T) {
-	q, err := NewQueue(Config{Driver: DriverSync, DefaultQueue: "critical"})
+	q, err := newRuntime(Config{Driver: DriverSync, DefaultQueue: "critical"})
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestExternalQueueRuntimeStartWorkersErrorBranches(t *testing.T) {
 			registered: map[string]Handler{
 				"job:nats": func(context.Context, Job) error { return nil },
 			},
-			newWorker: func(int) (DriverWorkerBackend, error) {
+			newWorker: func(int) (driverWorkerBackend, error) {
 				return nil, errors.New("dial failed")
 			},
 		}

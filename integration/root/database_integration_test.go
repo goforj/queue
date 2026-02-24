@@ -17,7 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func newDatabaseQueueIntegration(t *testing.T, cfg queue.DatabaseConfig) queue.QueueRuntime {
+func newDatabaseQueueIntegration(t *testing.T, cfg queue.DatabaseConfig) QueueRuntime {
 	t.Helper()
 	var runtimeCfg any
 	switch cfg.DriverName {

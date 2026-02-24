@@ -14,19 +14,11 @@ func main() {
 	example1()
 	example2()
 	example3()
-	example4()
 }
 
 func example1() {
-	// Shutdown drains workers and closes underlying resources.
+	// Shutdown drains running work and releases resources.
 
-	// Example: shutdown runtime
-	var q queue.QueueRuntime
-	err := q.Shutdown(context.Background())
-	_ = err
-}
-
-func example2() {
 	// Example: local shutdown
 	q, err := queue.NewWorkerpool()
 	if err != nil {
@@ -36,14 +28,14 @@ func example2() {
 	_ = q.Shutdown(context.Background())
 }
 
-func example3() {
+func example2() {
 	// Example: shutdown fake queue
 	fake := queue.NewFake()
 	err := fake.Shutdown(context.Background())
 	_ = err
 }
 
-func example4() {
+func example3() {
 	// Example: shutdown
 	q, err := queue.NewWorkerpool()
 	if err != nil {

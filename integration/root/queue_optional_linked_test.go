@@ -10,7 +10,7 @@ import (
 	"github.com/goforj/queue"
 )
 
-func testQueueDriver(q queue.QueueRuntime) queue.Driver {
+func testQueueDriver(q QueueRuntime) queue.Driver {
 	if driverAware, ok := q.(interface{ Driver() queue.Driver }); ok {
 		return driverAware.Driver()
 	}
@@ -157,7 +157,7 @@ func TestRootNewQueue_RejectsOptionalDrivers(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			q, err := queue.NewQueue(tc.cfg)
+			q, err := newQueueRuntime(tc.cfg)
 			if err == nil {
 				t.Fatal("expected error")
 			}

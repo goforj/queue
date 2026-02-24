@@ -8,7 +8,7 @@ Status as of: 2026-02-23
 
 What is already verified on `main` (as of 2026-02-23):
 
-- API hard cut is complete and queue-first (`queue.New(...)`, `Queue`, `QueueRuntime` advanced path).
+- API hard cut is complete and queue-first (`queue.New(...)`, `Queue`, driver-module `New(...)`/`NewWithConfig(...)`).
 - Unit test suite passes locally (`go test ./...`).
 - Full integration suite passes locally with testcontainers (`INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1`).
 - Examples compile as part of the normal test suite.
@@ -185,12 +185,12 @@ What is not yet sufficient for a GA claim:
 - Queue-first option surface is in place:
   - `WithObserver`, `WithStore`, `WithClock`, `WithMiddleware`
   - `Option` (renamed from `RuntimeOption`)
-- Redundant `NewQueueWithDefaults(...)` removed (use `NewQueue(Config{DefaultQueue: ...})`)
+- Redundant `NewQueueWithDefaults(...)` removed (use `New(Config{DefaultQueue: ...})`)
 - Public observability helper names are queue-first:
   - `Pause`, `Resume`, `Snapshot`
 - README/API cleanup:
   - `Testing` group hidden from API index
-  - low-level section correctly documents `queue.QueueRuntime` + `queue.NewQueue(...)`
+  - README presents the queue-first constructor path only (no public runtime constructor path)
   - README testing guidance no longer requires `bus.NewFake()`
 
 ## 7. Coverage and Test Debt (should complete)

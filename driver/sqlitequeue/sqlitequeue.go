@@ -31,13 +31,3 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
 	}, opts...)
 }
-
-func NewRuntime(cfg Config) (queue.QueueRuntime, error) {
-	return sqlqueuecore.NewRuntime("sqlite", sqlqueuecore.ModuleConfig{
-		DriverBaseConfig:         cfg.DriverBaseConfig,
-		DB:                       cfg.DB,
-		DSN:                      cfg.DSN,
-		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
-		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
-	})
-}

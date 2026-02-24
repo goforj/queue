@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/driverbridge"
 	"github.com/goforj/queue/queueconfig"
 	"github.com/hibiken/asynq"
 )
@@ -23,15 +24,6 @@ func New(addr string) (*queue.Queue, error) {
 
 // NewWithConfig creates a high-level Queue using an explicit Redis driver config.
 func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
-	raw, err := NewRuntime(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return queue.NewFromRuntime(raw, opts...)
-}
-
-// NewRuntime creates a low-level QueueRuntime using the Redis backend.
-func NewRuntime(cfg Config) (queue.QueueRuntime, error) {
 	if cfg.Addr == "" {
 		return nil, fmt.Errorf("redis addr is required")
 	}
@@ -41,7 +33,7 @@ func NewRuntime(cfg Config) (queue.QueueRuntime, error) {
 		Observer:     cfg.Observer,
 	}
 	backend := newRedisQueue(newAsynqClient(cfg), newAsynqInspector(cfg), true)
-	return queue.NewQueueFromDriver(rootCfg, backend, func(workers int) (queue.DriverWorkerBackend, error) {
+	q, err := driverbridge.NewQueueFromDriver(rootCfg, backend, func(workers int) (any, error) {
 		return newRedisWorker(
 			asynq.NewServer(asynq.RedisClientOpt{
 				Addr:     cfg.Addr,
@@ -50,5 +42,9 @@ func NewRuntime(cfg Config) (queue.QueueRuntime, error) {
 			}, asynq.Config{Concurrency: workers}),
 			asynq.NewServeMux(),
 		), nil
-	})
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return q, nil
 }

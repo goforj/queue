@@ -188,40 +188,19 @@ func WithMiddleware(middlewares ...Middleware) Option {
 // It composes the queue runtime with the internal orchestration engine.
 // @group Queue
 type Queue struct {
-	q QueueRuntime
+	q queueRuntime
 	b bus.Bus
 }
 
 func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
-	q, err := NewQueue(cfg)
+	q, err := newRuntime(cfg)
 	if err != nil {
 		return nil, err
 	}
 	return newQueueFromRuntime(q, opts...)
 }
 
-// NewFromRuntime builds the high-level Queue API around an existing QueueRuntime.
-//
-// This is an advanced constructor primarily intended for driver modules and custom
-// runtime integrations.
-// @group Constructors
-//
-// Example: wrap an existing runtime
-//
-//	raw, err := queue.NewQueue(queue.Config{Driver: queue.DriverSync})
-//	if err != nil {
-//		return
-//	}
-//	q, err := queue.NewFromRuntime(raw)
-//	if err != nil {
-//		return
-//	}
-//	_ = q
-func NewFromRuntime(q QueueRuntime, opts ...Option) (*Queue, error) {
-	return newQueueFromRuntime(q, opts...)
-}
-
-func newQueueFromRuntime(q QueueRuntime, opts ...Option) (*Queue, error) {
+func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
 	b, err := bus.New(q, ro.busOpts...)

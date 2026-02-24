@@ -10,7 +10,7 @@ import (
 	"github.com/goforj/queue"
 )
 
-func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q queue.QueueRuntime, job queue.Job) {
+func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q QueueRuntime, job queue.Job) {
 	if err := q.DispatchCtx(ctx, job); err != nil {
 		b.Fatalf("warmup dispatch failed: %v", err)
 	}

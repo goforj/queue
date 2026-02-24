@@ -11,81 +11,33 @@ import (
 	"github.com/goforj/queue/busruntime"
 )
 
-// QueueRuntime is the low-level queue runtime abstraction exposed to callers.
-type QueueRuntime interface {
+type queueRuntime interface {
 	// Driver returns the active queue driver.
-	// @group Queue Runtime
-	//
-	// Example: inspect queue driver
-	//
-	//	var q queue.QueueRuntime
-	//	driver := q.Driver()
-	//	_ = driver
+	// @group Driver Integration
 	Driver() Driver
 
 	// Dispatch submits a typed job payload using the default queue.
-	// @group Queue Runtime
-	//
-	// Example: dispatch typed job
-	//
-	//	var q queue.QueueRuntime
-	//	err := q.Dispatch(
-	//		queue.NewJob("emails:send").
-	//			Payload(map[string]any{"id": 1}).
-	//			OnQueue("default"),
-	//	)
-	//	_ = err
+	// @group Driver Integration
 	Dispatch(job any) error
 
 	// DispatchCtx submits a typed job payload using the provided context.
-	// @group Queue Runtime
-	//
-	// Example: dispatch with context
-	//
-	//	var q queue.QueueRuntime
-	//	err := q.DispatchCtx(
-	//		context.Background(),
-	//		queue.NewJob("emails:send").OnQueue("default"),
-	//	)
-	//	_ = err
+	// @group Driver Integration
 	DispatchCtx(ctx context.Context, job any) error
 
 	// Register associates a handler with a job type.
-	// @group Queue Runtime
-	//
-	// Example: register a handler
-	//
-	//	var q queue.QueueRuntime
-	//	q.Register("emails:send", func(context.Context, queue.Job) error { return nil })
+	// @group Driver Integration
 	Register(jobType string, handler Handler)
 
 	// StartWorkers starts worker execution.
-	// @group Queue Runtime
-	//
-	// Example: start workers
-	//
-	//	var q queue.QueueRuntime
-	//	err := q.StartWorkers(context.Background())
-	//	_ = err
+	// @group Driver Integration
 	StartWorkers(ctx context.Context) error
 
 	// Workers sets desired worker concurrency before StartWorkers.
-	// @group Queue Runtime
-	//
-	// Example: set worker count
-	//
-	//	var q queue.QueueRuntime
-	//	q = q.Workers(4)
-	Workers(count int) QueueRuntime
+	// @group Driver Integration
+	Workers(count int) queueRuntime
 
 	// Shutdown drains running work and releases resources.
-	// @group Queue Runtime
-	//
-	// Example: shutdown runtime
-	//
-	//	var q queue.QueueRuntime
-	//	err := q.Shutdown(context.Background())
-	//	_ = err
+	// @group Driver Integration
 	Shutdown(ctx context.Context) error
 }
 
@@ -105,7 +57,7 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 	return c
 }
 
-// Config configures queue creation for New and NewQueue.
+// Config configures queue creation for New (and advanced driver/runtime interop).
 // @group Config
 type Config struct {
 	Driver   Driver
@@ -162,34 +114,7 @@ func New(cfg Config, opts ...Option) (*Queue, error) {
 	return newHighLevelQueue(cfg, opts...)
 }
 
-// NewQueue creates the low-level queue runtime (driver-facing API) based on Config.Driver.
-// Use this only for driver-focused/advanced runtime access; application code should prefer New.
-// @group Constructors
-//
-// Example: new queue runtime with default queue
-//
-//	q, err := queue.NewQueue(queue.Config{
-//		Driver:       queue.DriverSync,
-//		DefaultQueue: "critical",
-//	})
-//	if err != nil {
-//		return
-//	}
-//	type EmailPayload struct {
-//		ID int `json:"id"`
-//	}
-//	q.Register("emails:send", func(ctx context.Context, job queue.Job) error {
-//		var payload EmailPayload
-//		if err := job.Bind(&payload); err != nil {
-//			return err
-//		}
-//		_ = payload
-//		return nil
-//	})
-//	_ = q.StartWorkers(context.Background())
-//	defer q.Shutdown(context.Background())
-//	_ = q.Dispatch(queue.NewJob("emails:send").Payload(EmailPayload{ID: 1}))
-func NewQueue(cfg Config) (QueueRuntime, error) {
+func newRuntime(cfg Config) (queueRuntime, error) {
 	cfg = cfg.normalize()
 
 	var q queueBackend
@@ -270,7 +195,7 @@ type externalQueueRuntime struct {
 	worker     runtimeWorkerBackend
 	started    bool
 	workers    int
-	newWorker  DriverWorkerFactory
+	newWorker  driverWorkerFactory
 }
 
 type runtimeWorkerBackend interface {
@@ -436,7 +361,7 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
-func (q *nativeQueueRuntime) Workers(count int) QueueRuntime {
+func (q *nativeQueueRuntime) Workers(count int) queueRuntime {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started && count > 0 {
@@ -445,7 +370,7 @@ func (q *nativeQueueRuntime) Workers(count int) QueueRuntime {
 	return q
 }
 
-func (q *externalQueueRuntime) Workers(count int) QueueRuntime {
+func (q *externalQueueRuntime) Workers(count int) queueRuntime {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started && count > 0 {
@@ -571,19 +496,19 @@ func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error
 }
 
 type driverQueueBackendAdapter struct {
-	DriverQueueBackend
+	driverQueueBackend
 }
 
 type driverRuntimeQueueBackendAdapter struct {
-	DriverRuntimeQueueBackend
+	driverRuntimeQueueBackend
 }
 
 type driverWorkerBackendAdapter struct {
-	DriverWorkerBackend
+	driverWorkerBackend
 }
 
 func (a driverQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
-	controller, ok := a.DriverQueueBackend.(QueueController)
+	controller, ok := a.driverQueueBackend.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
 	}
@@ -591,7 +516,7 @@ func (a driverQueueBackendAdapter) Pause(ctx context.Context, queueName string) 
 }
 
 func (a driverQueueBackendAdapter) Resume(ctx context.Context, queueName string) error {
-	controller, ok := a.DriverQueueBackend.(QueueController)
+	controller, ok := a.driverQueueBackend.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
 	}
@@ -599,7 +524,7 @@ func (a driverQueueBackendAdapter) Resume(ctx context.Context, queueName string)
 }
 
 func (a driverQueueBackendAdapter) Stats(ctx context.Context) (StatsSnapshot, error) {
-	provider, ok := a.DriverQueueBackend.(StatsProvider)
+	provider, ok := a.driverQueueBackend.(StatsProvider)
 	if !ok {
 		return StatsSnapshot{}, fmt.Errorf("stats provider is not available for driver %q", a.Driver())
 	}
@@ -607,7 +532,7 @@ func (a driverQueueBackendAdapter) Stats(ctx context.Context) (StatsSnapshot, er
 }
 
 func (a driverRuntimeQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
-	controller, ok := a.DriverRuntimeQueueBackend.(QueueController)
+	controller, ok := a.driverRuntimeQueueBackend.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
 	}
@@ -615,7 +540,7 @@ func (a driverRuntimeQueueBackendAdapter) Pause(ctx context.Context, queueName s
 }
 
 func (a driverRuntimeQueueBackendAdapter) Resume(ctx context.Context, queueName string) error {
-	controller, ok := a.DriverRuntimeQueueBackend.(QueueController)
+	controller, ok := a.driverRuntimeQueueBackend.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
 	}
@@ -623,7 +548,7 @@ func (a driverRuntimeQueueBackendAdapter) Resume(ctx context.Context, queueName 
 }
 
 func (a driverRuntimeQueueBackendAdapter) Stats(ctx context.Context) (StatsSnapshot, error) {
-	provider, ok := a.DriverRuntimeQueueBackend.(StatsProvider)
+	provider, ok := a.driverRuntimeQueueBackend.(StatsProvider)
 	if !ok {
 		return StatsSnapshot{}, fmt.Errorf("stats provider is not available for driver %q", a.Driver())
 	}

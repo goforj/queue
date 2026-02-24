@@ -40,7 +40,7 @@ func BenchmarkStatsCollectorObserve(b *testing.B) {
 }
 
 func BenchmarkEnqueueSync_NoObserver(b *testing.B) {
-	q, err := NewQueue(Config{Driver: DriverSync})
+	q, err := newRuntime(Config{Driver: DriverSync})
 	if err != nil {
 		b.Fatalf("new queue failed: %v", err)
 	}
@@ -62,7 +62,7 @@ func BenchmarkEnqueueSync_NoObserver(b *testing.B) {
 
 func BenchmarkEnqueueSync_WithObserver(b *testing.B) {
 	collector := NewStatsCollector()
-	q, err := NewQueue(Config{
+	q, err := newRuntime(Config{
 		Driver:   DriverSync,
 		Observer: collector,
 	})

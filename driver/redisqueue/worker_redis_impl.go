@@ -22,7 +22,7 @@ type redisWorker struct {
 	started bool
 }
 
-func newRedisWorker(server asynqServer, mux *asynq.ServeMux) queue.DriverWorkerBackend {
+func newRedisWorker(server asynqServer, mux *asynq.ServeMux) *redisWorker {
 	return &redisWorker{server: server, mux: mux}
 }
 

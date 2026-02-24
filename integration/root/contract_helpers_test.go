@@ -15,7 +15,7 @@ import (
 type contractFactory struct {
 	name                     string
 	expectedDriver           queue.Driver
-	newQueue                 func(t *testing.T) queue.QueueRuntime
+	newQueue                 func(t *testing.T) QueueRuntime
 	requiresRegisteredHandle bool
 	requiresQueueName        bool
 	assertMissingHandlerErr  bool
@@ -30,12 +30,12 @@ type contractFactory struct {
 func runQueueContractSuite(t *testing.T, factory contractFactory) {
 	t.Helper()
 
-	startWorker := func(t *testing.T, d queue.QueueRuntime, register func(queue.QueueRuntime)) {
+	startWorker := func(t *testing.T, d QueueRuntime, register func(QueueRuntime)) {
 		t.Helper()
 		if register != nil {
 			register(d)
 		}
-		if err := d.Workers(1).StartWorkers(context.Background()); err != nil {
+		if err := withWorkers(d, 1).StartWorkers(context.Background()); err != nil {
 			t.Fatalf("worker start failed: %v", err)
 		}
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
@@ -47,7 +47,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if factory.expectedDriver != "" && d.Driver() != factory.expectedDriver {
 			t.Fatalf("expected driver %q, got %q", factory.expectedDriver, d.Driver())
 		}
-		if err := d.Workers(1).StartWorkers(context.Background()); err != nil {
+		if err := withWorkers(d, 1).StartWorkers(context.Background()); err != nil {
 			t.Fatalf("worker start failed: %v", err)
 		}
 		if factory.beforeEach != nil {
@@ -89,7 +89,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 
 		_, err := queue.Snapshot(context.Background(), d, nil)
 		if factory.supportsNativeStats && err != nil {
-			if startErr := d.Workers(1).StartWorkers(context.Background()); startErr != nil {
+			if startErr := withWorkers(d, 1).StartWorkers(context.Background()); startErr != nil {
 				t.Fatalf("expected native stats support; bootstrap start workers failed: %v", startErr)
 			}
 			_, err = queue.Snapshot(context.Background(), d, nil)
@@ -106,7 +106,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:immediate", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
@@ -123,7 +123,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:delay", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
@@ -140,7 +140,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:queue", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
@@ -157,7 +157,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:noqueue", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
@@ -183,7 +183,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:nilctx", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
@@ -204,7 +204,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		timeoutChecked := make(chan bool, 1)
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:timeout", func(ctx context.Context, _ queue.Job) error {
 					_, ok := ctx.Deadline()
 					timeoutChecked <- ok
@@ -235,7 +235,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:invalid-payload", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
@@ -256,7 +256,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:invalid-values", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
@@ -290,7 +290,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 			Name string `json:"name"`
 		}
 		seen := make(chan payload, 1)
-		startWorker(t, d, func(q queue.QueueRuntime) {
+		startWorker(t, d, func(q QueueRuntime) {
 			q.Register("job:contract:bind", func(_ context.Context, job queue.Job) error {
 				var in payload
 				if err := job.Bind(&in); err != nil {
@@ -323,7 +323,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		var calls atomic.Int32
 		done := make(chan struct{}, 1)
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:maxretry", func(_ context.Context, _ queue.Job) error {
 					if calls.Add(1) < 3 {
 						return errors.New("transient")
@@ -359,7 +359,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		done := make(chan time.Duration, 1)
 		var calls atomic.Int32
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:backoff", func(_ context.Context, _ queue.Job) error {
 					if calls.Add(1) < 2 {
 						return errors.New("retry-me")
@@ -401,7 +401,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:unique", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
@@ -437,7 +437,7 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		d := factory.newQueue(t)
 		t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
 		if factory.requiresRegisteredHandle {
-			startWorker(t, d, func(q queue.QueueRuntime) {
+			startWorker(t, d, func(q QueueRuntime) {
 				q.Register("job:contract:unique-scope", func(_ context.Context, _ queue.Job) error { return nil })
 			})
 		}
