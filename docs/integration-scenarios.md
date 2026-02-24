@@ -27,6 +27,7 @@ Named scenarios currently enforced:
 - `scenario_consume_after_broker_recovery`
 - `scenario_ordering_contract`
   - `scenario_ordering_single_worker_fifo`
+  - `scenario_ordering_multi_worker_best_effort`
   - `scenario_ordering_delayed_immediate_mix`
   - `scenario_ordering_retry_reorder_allowed` (capability-gated)
 - `scenario_retry_delay_timing_windows`
@@ -79,6 +80,7 @@ What this proves today:
 - Duplicate-delivery idempotency patterns are validated under forced retry with single side-effect commit.
 - Broker fault injection and consume-after-recovery flow is validated on supported backends.
 - FIFO ordering is validated only in the constrained `scenario_ordering_single_worker_fifo` sub-scenario for backends marked ordering-capable.
+- `scenario_ordering_multi_worker_best_effort` explicitly treats concurrent-worker ordering as a non-guarantee and only asserts completion/correctness.
 - Delayed/immediate and retry-based reordering behavior is explicitly exercised to avoid over-claiming FIFO semantics.
 - Delay and retry timing-window semantics are validated as "not before" guarantees with backend-tolerant timing slack.
 - Backpressure saturation preserves forward progress and probe processing.

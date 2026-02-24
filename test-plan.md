@@ -350,7 +350,7 @@ Why:
 
 ## 2. Ordering scenario split + documentation alignment
 
-- [ ] Split ordering coverage into condition-specific scenarios and align docs with exact guarantees
+- [x] Split ordering coverage into condition-specific scenarios and align docs with exact guarantees
 - Location:
   - `integration/all/integration_scenarios_test.go`
   - `docs/integration-scenarios.md`
@@ -621,7 +621,7 @@ Use this section for active implementation tracking. Move items from here to com
 ## P0 Active
 
 - [x] Driver guarantee matrix linked to tests/docs
-- [ ] Ordering scenarios split + docs alignment
+- [x] Ordering scenarios split + docs alignment
 - [x] Retry/delay timing-window assertions
 - [ ] Workflow fault + duplicate callback integration expansion
 - [ ] CI race job added (required scope defined)

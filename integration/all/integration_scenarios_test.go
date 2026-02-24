@@ -1852,6 +1852,60 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			}
 		})
 
+		t.Run("scenario_ordering_multi_worker_best_effort", func(t *testing.T) {
+			// This is a non-guarantee scenario: with concurrent workers we only
+			// assert completion/correctness, not FIFO ordering.
+			requireScenarioNoErr(t, "ordering_multi_shutdown_single_worker", (w).Shutdown(context.Background()))
+			w = fx.newWorker(t)
+			requireScenarioNoErr(t, "ordering_multi_worker_start", (w).StartWorkers(context.Background()))
+
+			jobType := "job:scenario:ordering:multi:" + fx.name
+			const count = 24
+			orderCh := make(chan int, count)
+			w.Register(jobType, func(_ context.Context, job Job) error {
+				var payload scenarioPayload
+				if err := job.Bind(&payload); err != nil {
+					return err
+				}
+				// Small per-job variance increases interleaving likelihood without
+				// making the scenario depend on a specific reorder outcome.
+				time.Sleep(time.Duration((payload.ID%4)+1) * 5 * time.Millisecond)
+				orderCh <- payload.ID
+				return nil
+			})
+
+			for i := 0; i < count; i++ {
+				job := NewJob(jobType).
+					Payload(scenarioPayload{ID: i, Name: "ordering-multi"}).
+					OnQueue(fx.queueName)
+				if fx.forceTimeout {
+					job = job.Timeout(jobTimeout)
+				}
+				requireScenarioNoErr(t, "ordering_multi_dispatch", q.DispatchCtx(context.Background(), job))
+			}
+
+			got := collectOrderedIDs(t, orderCh, count, 20*time.Second)
+			seen := make(map[int]int, count)
+			for _, id := range got {
+				seen[id]++
+			}
+			for i := 0; i < count; i++ {
+				if seen[i] != 1 {
+					t.Fatalf("[ordering_multi_completeness] id=%d seen=%d got=%v", i, seen[i], got)
+				}
+			}
+			isFIFO := true
+			for i := 0; i < count; i++ {
+				if got[i] != i {
+					isFIFO = false
+					break
+				}
+			}
+			if isFIFO {
+				t.Logf("[%s][scenario_ordering_multi_worker_best_effort] observed FIFO; no FIFO guarantee is claimed", fx.name)
+			}
+		})
+
 		t.Run("scenario_ordering_retry_reorder_allowed", func(t *testing.T) {
 			if !(fx.supportsBackoff && fx.supportsPoisonRetry) {
 				t.Skip("backend does not support deterministic retry reorder scenario in this suite")
