@@ -412,7 +412,7 @@ Why:
   - no double-advance / double-terminal transition under concurrent processing in covered scenarios
 - Notes:
   - this is a trust-critical P0 item, not optional polish
-  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration now also covers chain + batch duplicate callback suppression. Duplicate-callback-under-fault and partial-dispatch-failure paths remain to add
+  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration now covers chain + batch duplicate callback suppression and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress). Duplicate-callback-under-fault paths remain to add
 
 Extend workflow integration scenarios to cover:
 
