@@ -522,7 +522,7 @@ Track flake rates by backend/scenario.
 
 ## 9. Error contract tests
 
-- [ ] Add explicit error contract tests for user-facing error classes
+- [x] Add explicit error contract tests for user-facing error classes
 - Location:
   - root tests (`*_test.go`)
   - `integration/all` for backend/dispatch errors
@@ -534,7 +534,7 @@ Track flake rates by backend/scenario.
   - workflow not-found / invalid-state errors are covered
 - Notes:
   - avoid overfitting exact wrapped error strings unless intentionally part of API
-  - Progress: root-level `error_contract_test.go` covers `Queue.DispatchCtx` cancellation/deadline error classes (using deterministic workerpool saturation), unsupported capability errors for `Queue.Pause`, `Queue.Resume`, and `Queue.Stats`, `ErrWorkflowNotFound` wrapper behavior for `FindChain`/`FindBatch`, constructor errors for unsupported drivers / moved optional-driver guidance, runtime-level dispatch input validation (`nil` job / uninferable job type), and high-level workflow builder invalid-state errors (`Chain`/`Batch` with no jobs or invalid jobs); root and integration-root driver contract tests now assert error message shape for missing job type and (where applicable) missing handler dispatch-time validation, and root contract tests assert the unsupported `Snapshot(...)` error shape (`snapshot is unavailable`) when no collector fallback is provided
+  - Implemented across root + integration suites: root-level `error_contract_test.go` covers high-level `Queue.DispatchCtx` cancellation/deadline classes (deterministic saturation), unsupported capability errors for `Queue.Pause`, `Queue.Resume`, `Queue.Stats`, `ErrWorkflowNotFound` wrappers for `FindChain`/`FindBatch`, constructor guidance errors (unsupported/moved drivers), runtime dispatch input validation (`nil` job / uninferable job type), high-level dispatch validation (`nil` receiver / invalid job), and workflow builder invalid-state errors; shared integration scenarios validate backend `DispatchCtx` cancellation classes (`scenario_dispatch_context_cancellation`), and root/integration-root contract suites assert stable error-shape semantics for missing job type / missing handler and unsupported `Snapshot(...)` fallback behavior
 
 Add assertions for user-visible errors:
 
@@ -635,7 +635,7 @@ Use this section for active implementation tracking. Move items from here to com
 
 - [x] Chaos-lite failure injection expansion
 - [x] Repeat-run/soak flake tracking pipeline
-- [ ] Error contract tests
+- [x] Error contract tests
 
 ## P2 Active
 

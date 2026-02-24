@@ -229,3 +229,30 @@ func TestQueueErrorContract_WorkflowBuilderValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestQueueErrorContract_HighLevelDispatchValidation(t *testing.T) {
+	t.Run("nil_queue_receiver", func(t *testing.T) {
+		var q *Queue
+		_, err := q.Dispatch(NewJob("job:error-contract:nil-queue"))
+		if err == nil {
+			t.Fatal("expected nil queue receiver error")
+		}
+		if !strings.Contains(err.Error(), "runtime is nil") {
+			t.Fatalf("expected nil queue receiver error message, got %v", err)
+		}
+	})
+
+	t.Run("zero_value_job", func(t *testing.T) {
+		q, err := NewSync()
+		if err != nil {
+			t.Fatalf("new sync queue: %v", err)
+		}
+		_, err = q.Dispatch(Job{})
+		if err == nil {
+			t.Fatal("expected invalid job error")
+		}
+		if !strings.Contains(err.Error(), "job type is required") {
+			t.Fatalf("expected invalid job message, got %v", err)
+		}
+	})
+}
