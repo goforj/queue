@@ -532,6 +532,7 @@ Track flake rates by backend/scenario.
   - workflow not-found / invalid-state errors are covered
 - Notes:
   - avoid overfitting exact wrapped error strings unless intentionally part of API
+  - Progress: root-level `error_contract_test.go` covers `Queue.DispatchCtx` cancellation/deadline error classes (using deterministic workerpool saturation) and unsupported capability errors for `Queue.Pause`, `Queue.Resume`, and `Queue.Stats`
 
 Add assertions for user-visible errors:
 
