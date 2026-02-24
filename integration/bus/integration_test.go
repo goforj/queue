@@ -5,6 +5,7 @@ package bus_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -308,6 +309,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			testBusDispatchScenario(t, b, queueName)
 			testBusChainScenario(t, b, queueName)
 			testBusBatchScenario(t, b, queueName)
+			testBusWorkflowFailureCallbacksScenario(t, b, queueName)
 		})
 	}
 }
@@ -462,6 +464,162 @@ func testBusBatchScenario(t *testing.T, b bus.Bus, queueName string) {
 	if got := processed.Load(); got != 3 {
 		t.Fatalf("batch scenario: expected 3 processed jobs, got %d", got)
 	}
+}
+
+func testBusWorkflowFailureCallbacksScenario(t *testing.T, b bus.Bus, queueName string) {
+	t.Helper()
+
+	t.Run("workflow_chain_failure_callbacks", func(t *testing.T) {
+		step1Type := fmt.Sprintf("bus:chain:fail:step1:%d", time.Now().UnixNano())
+		step2Type := fmt.Sprintf("bus:chain:fail:step2:%d", time.Now().UnixNano())
+
+		b.Register(step1Type, func(context.Context, bus.Context) error { return nil })
+		b.Register(step2Type, func(context.Context, bus.Context) error { return errors.New("chain-step-fail") })
+
+		var catchCount atomic.Int32
+		var finallyCount atomic.Int32
+		catchDone := make(chan struct{}, 1)
+		finallyDone := make(chan struct{}, 1)
+
+		chainID, _ := b.Chain(
+			bus.NewJob(step1Type, nil),
+			bus.NewJob(step2Type, nil),
+		).OnQueue(queueName).Catch(func(_ context.Context, st bus.ChainState, err error) error {
+			if err == nil {
+				return errors.New("expected chain callback error")
+			}
+			if !st.Failed {
+				return errors.New("expected failed chain state in catch")
+			}
+			catchCount.Add(1)
+			select {
+			case catchDone <- struct{}{}:
+			default:
+			}
+			return nil
+		}).Finally(func(_ context.Context, st bus.ChainState) error {
+			if !st.Failed {
+				return errors.New("expected failed chain state in finally")
+			}
+			finallyCount.Add(1)
+			select {
+			case finallyDone <- struct{}{}:
+			default:
+			}
+			return nil
+		}).Dispatch(context.Background())
+
+		if chainID == "" {
+			t.Fatal("workflow chain failure scenario: expected chain ID")
+		}
+
+		select {
+		case <-catchDone:
+		case <-time.After(20 * time.Second):
+			t.Fatal("workflow chain failure scenario: timed out waiting for catch callback")
+		}
+		select {
+		case <-finallyDone:
+		case <-time.After(20 * time.Second):
+			t.Fatal("workflow chain failure scenario: timed out waiting for finally callback")
+		}
+
+		waitFor(t, 20*time.Second, "failed chain state", func() bool {
+			st, err := b.FindChain(context.Background(), chainID)
+			return err == nil && st.Failed
+		})
+
+		if got := catchCount.Load(); got != 1 {
+			t.Fatalf("workflow chain failure scenario: expected catch once, got %d", got)
+		}
+		if got := finallyCount.Load(); got != 1 {
+			t.Fatalf("workflow chain failure scenario: expected finally once, got %d", got)
+		}
+
+		st, err := b.FindChain(context.Background(), chainID)
+		if err != nil {
+			t.Fatalf("workflow chain failure scenario: find chain failed: %v", err)
+		}
+		if !st.Failed {
+			t.Fatalf("workflow chain failure scenario: expected failed chain state, got %+v", st)
+		}
+		if st.Failure == "" {
+			t.Fatalf("workflow chain failure scenario: expected failure message, got %+v", st)
+		}
+	})
+
+	t.Run("workflow_batch_failure_callbacks", func(t *testing.T) {
+		jobType := fmt.Sprintf("bus:batch:fail:work:%d", time.Now().UnixNano())
+		b.Register(jobType, func(context.Context, bus.Context) error { return errors.New("batch-work-fail") })
+
+		var catchCount atomic.Int32
+		var finallyCount atomic.Int32
+		catchDone := make(chan struct{}, 1)
+		finallyDone := make(chan struct{}, 1)
+
+		batchID, _ := b.Batch(
+			bus.NewJob(jobType, nil),
+			bus.NewJob(jobType, nil),
+		).OnQueue(queueName).Catch(func(_ context.Context, st bus.BatchState, err error) error {
+			if err == nil {
+				return errors.New("expected batch callback error")
+			}
+			if !st.Completed || !st.Cancelled {
+				return errors.New("expected cancelled/completed batch state in catch")
+			}
+			catchCount.Add(1)
+			select {
+			case catchDone <- struct{}{}:
+			default:
+			}
+			return nil
+		}).Finally(func(_ context.Context, st bus.BatchState) error {
+			if !st.Completed {
+				return errors.New("expected completed batch state in finally")
+			}
+			finallyCount.Add(1)
+			select {
+			case finallyDone <- struct{}{}:
+			default:
+			}
+			return nil
+		}).Dispatch(context.Background())
+
+		if batchID == "" {
+			t.Fatal("workflow batch failure scenario: expected batch ID")
+		}
+
+		select {
+		case <-catchDone:
+		case <-time.After(20 * time.Second):
+			t.Fatal("workflow batch failure scenario: timed out waiting for catch callback")
+		}
+		select {
+		case <-finallyDone:
+		case <-time.After(20 * time.Second):
+			t.Fatal("workflow batch failure scenario: timed out waiting for finally callback")
+		}
+
+		waitFor(t, 20*time.Second, "failed/cancelled batch state", func() bool {
+			st, err := b.FindBatch(context.Background(), batchID)
+			return err == nil && st.Completed && st.Cancelled
+		})
+
+		if got := catchCount.Load(); got != 1 {
+			t.Fatalf("workflow batch failure scenario: expected catch once, got %d", got)
+		}
+		if got := finallyCount.Load(); got != 1 {
+			t.Fatalf("workflow batch failure scenario: expected finally once, got %d", got)
+		}
+
+		st, err := b.FindBatch(context.Background(), batchID)
+		if err != nil {
+			t.Fatalf("workflow batch failure scenario: find batch failed: %v", err)
+		}
+		if !st.Completed || !st.Cancelled {
+			t.Fatalf("workflow batch failure scenario: expected completed+cancelled batch, got %+v", st)
+		}
+	})
 }
 
 func waitFor(t *testing.T, timeout time.Duration, label string, ready func() bool) {

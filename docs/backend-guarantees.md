@@ -45,6 +45,7 @@ These are the primary shared-scenario proofs for the matrix above.
 | Pause/Resume capability behavior | `TestObservabilityIntegration_PauseResumeSupport_AllBackends` (`integration/root/observability_integration_test.go`) |
 | Native stats capability behavior | `TestObservabilityIntegration_AllBackends` (`integration/root/observability_integration_test.go`) |
 | Queue/workflow chain/batch integration baseline | `TestIntegrationQueue_AllBackends` (`integration/all/runtime_integration_test.go`); `TestIntegrationBus_AllBackends` (`integration/bus/integration_test.go`) |
+| Workflow failure callback semantics (catch/finally + terminal state) | `TestIntegrationBus_AllBackends` -> `workflow_chain_failure_callbacks` and `workflow_batch_failure_callbacks` (`integration/bus/integration_test.go`) |
 
 \* `sqlite` is promoted to full restart/durability coverage in the shared suite when queue and worker use the same test-local DSN (see fixture override logic in `integration/all/integration_scenarios_test.go`).
 
