@@ -54,7 +54,7 @@ func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
 		t.Fatalf("start workers: %v", err)
 	}
 
-	res, err := rt.Dispatch(context.Background(), NewJob("emails:send").Payload(struct {
+	res, err := rt.Dispatch(NewJob("emails:send").Payload(struct {
 		ID int `json:"id"`
 	}{ID: 1}))
 	if err != nil {
@@ -116,7 +116,7 @@ func TestRuntime_JobValidationErrorPropagates(t *testing.T) {
 		t.Fatalf("new runtime: %v", err)
 	}
 
-	_, err = rt.Dispatch(context.Background(), NewJob("bad").Timeout(-1))
+	_, err = rt.Dispatch(NewJob("bad").Timeout(-1))
 	if err == nil {
 		t.Fatal("expected validation error from dispatch")
 	}
@@ -155,7 +155,7 @@ func TestNew_WithObserver(t *testing.T) {
 	if err := rt.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers: %v", err)
 	}
-	if _, err := rt.Dispatch(context.Background(), NewJob("obs:test")); err != nil {
+	if _, err := rt.Dispatch(NewJob("obs:test")); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	if observed.Load() == 0 {

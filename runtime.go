@@ -315,7 +315,7 @@ func (r *Queue) Workers(count int) *Queue {
 	return r
 }
 
-// Dispatch enqueues a high-level job.
+// Dispatch enqueues a high-level job using context.Background.
 // @group Queue
 //
 // Example: dispatch
@@ -326,8 +326,14 @@ func (r *Queue) Workers(count int) *Queue {
 //	}
 //	q.Register("emails:send", func(ctx context.Context, j queue.Context) error { return nil })
 //	job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
-//	_, _ = q.Dispatch(context.Background(), job)
-func (r *Queue) Dispatch(ctx context.Context, job Job) (DispatchResult, error) {
+//	_, _ = q.Dispatch(job)
+func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
+	return r.DispatchCtx(context.Background(), job)
+}
+
+// DispatchCtx enqueues a high-level job using the provided context.
+// @group Queue
+func (r *Queue) DispatchCtx(ctx context.Context, job Job) (DispatchResult, error) {
 	if r == nil {
 		return DispatchResult{}, fmt.Errorf("runtime is nil")
 	}

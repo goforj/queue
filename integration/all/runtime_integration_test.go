@@ -169,7 +169,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 func testQueueWorkflowNullScenario(t *testing.T, q *Queue, queueName string) {
 	t.Helper()
 
-	if _, err := q.Dispatch(context.Background(), NewJob("queue:null:dispatch").OnQueue(queueName)); err != nil {
+	if _, err := q.Dispatch(NewJob("queue:null:dispatch").OnQueue(queueName)); err != nil {
 		t.Fatalf("null scenario: dispatch failed: %v", err)
 	}
 
@@ -225,7 +225,7 @@ func testQueueWorkflowDispatchScenario(t *testing.T, q *Queue, queueName string)
 		return nil
 	})
 
-	_, err := q.Dispatch(context.Background(), NewJob(jobType).Payload(payload{
+	_, err := q.Dispatch(NewJob(jobType).Payload(payload{
 		URL: "https://goforj.dev/health",
 	}).OnQueue(queueName))
 	if err != nil {

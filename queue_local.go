@@ -179,7 +179,7 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 //		Payload(EmailPayload{ID: 1}).
 //		OnQueue("default").
 //		Delay(10 * time.Millisecond)
-//	_, _ = q.Dispatch(context.Background(), job)
+//	_, _ = q.Dispatch(job)
 func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
 		return ErrQueuerShuttingDown

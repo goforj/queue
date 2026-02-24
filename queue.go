@@ -105,7 +105,6 @@ func newSyncQueue() queueBackend {
 //	_ = q.Workers(1).StartWorkers(context.Background())
 //	defer q.Shutdown(context.Background())
 //	_, _ = q.Dispatch(
-//		context.Background(),
 //		queue.NewJob("emails:send").
 //			Payload(EmailPayload{ID: 1}).
 //			OnQueue("default"),
