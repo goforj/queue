@@ -2,6 +2,9 @@ package readmecheck
 
 import (
 	"context"
+	"log"
+	"os/signal"
+	"syscall"
 	"testing"
 	"time"
 
@@ -14,6 +17,7 @@ func TestReadmeManualSnippetsCompile(t *testing.T) {
 	_ = []any{
 		compileQuickStartQueueSnippet,
 		compileQuickStartWorkflowSnippet,
+		compileRunAsWorkerServiceSnippet,
 		compileJobBuilderOptionsSnippet,
 		compileMiddlewareSnippet,
 		compileFakeQueueSnippet,
@@ -68,6 +72,21 @@ func compileQuickStartWorkflowSnippet(q *queue.Queue) {
 		queue.NewJob("users:notify_report_ready").Payload(map[string]any{"user_id": 123}),
 	).OnQueue("critical").Dispatch(context.Background())
 	_ = chainID
+}
+
+func compileRunAsWorkerServiceSnippet(q *queue.Queue) {
+	if q == nil {
+		return
+	}
+
+	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := q.Run(ctx); err != nil {
+		log.Print(err)
+	}
 }
 
 func compileJobBuilderOptionsSnippet(q *queue.Queue) {

@@ -104,6 +104,39 @@ func main() {
 }
 ```
 
+## Run as a Worker Service
+
+Use `Run(ctx)` for long-lived workers: it starts processing, waits for shutdown signals, and performs graceful termination.
+
+```go
+import (
+	"context"
+	"log"
+	"os/signal"
+	"syscall"
+
+	"github.com/goforj/queue"
+)
+
+func main() {
+	q, _ := queue.NewWorkerpool()
+
+	// Register handlers before starting workers.
+	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
+		return nil
+	})
+
+	// Create a context that is canceled on SIGINT/SIGTERM (Ctrl+C, container stop).
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Run starts workers, blocks until ctx is canceled, then gracefully shuts down.
+	if err := q.Run(ctx); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
 ## Job builder options
 
 ```go
