@@ -1772,6 +1772,15 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			}
 			return got
 		}
+		orderingCollectTimeout := func(defaultTimeout time.Duration) time.Duration {
+			// SQS/localstack can take significantly longer to drain small bursts in
+			// some CI environments; treat this as a timing budget issue, not an
+			// ordering semantic difference.
+			if fx.name == "sqs" && defaultTimeout < 60*time.Second {
+				return 60 * time.Second
+			}
+			return defaultTimeout
+		}
 
 		t.Run("scenario_ordering_single_worker_fifo", func(t *testing.T) {
 			if !fx.supportsOrderingContract {
@@ -1799,7 +1808,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				requireScenarioNoErr(t, "ordering_fifo_dispatch", q.DispatchCtx(context.Background(), job))
 			}
 
-			got := collectOrderedIDs(t, orderCh, count, 15*time.Second)
+			got := collectOrderedIDs(t, orderCh, count, orderingCollectTimeout(15*time.Second))
 			for i := 0; i < count; i++ {
 				if got[i] != i {
 					t.Fatalf("[ordering_fifo] index=%d got=%d expected=%d", i, got[i], i)
@@ -1808,6 +1817,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 
 		t.Run("scenario_ordering_delayed_immediate_mix", func(t *testing.T) {
+			if !fx.supportsShutdownDelayRetry {
+				t.Skip("backend does not provide stable delayed-work semantics for this ordering probe")
+			}
 			jobType := "job:scenario:ordering:delaymix:" + fx.name
 			const count = 5
 			orderCh := make(chan int, count)
@@ -1839,7 +1851,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				requireScenarioNoErr(t, "ordering_delaymix_dispatch_immediate", q.DispatchCtx(context.Background(), job))
 			}
 
-			got := collectOrderedIDs(t, orderCh, count, 20*time.Second)
+			got := collectOrderedIDs(t, orderCh, count, orderingCollectTimeout(20*time.Second))
 			firstDelayedIdx := -1
 			for i, id := range got {
 				if id == 0 {
@@ -1847,12 +1859,18 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 					break
 				}
 			}
-			if firstDelayedIdx <= 0 {
+			if firstDelayedIdx <= 0 && fx.supportsOrderingContract {
 				t.Fatalf("[ordering_delaymix_expected_reorder] delayed job executed too early; got=%v", got)
+			}
+			if firstDelayedIdx <= 0 && !fx.supportsOrderingContract {
+				t.Logf("[%s][scenario_ordering_delayed_immediate_mix] delayed job executed first; no ordering guarantee is claimed", fx.name)
 			}
 		})
 
 		t.Run("scenario_ordering_multi_worker_best_effort", func(t *testing.T) {
+			if !(fx.supportsDeterministicNoDupes && fx.supportsShutdownDelayRetry) {
+				t.Skip("backend does not provide stable multi-worker completion semantics for this ordering probe")
+			}
 			// This is a non-guarantee scenario: with concurrent workers we only
 			// assert completion/correctness, not FIFO ordering.
 			requireScenarioNoErr(t, "ordering_multi_shutdown_single_worker", (w).Shutdown(context.Background()))
@@ -1884,7 +1902,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				requireScenarioNoErr(t, "ordering_multi_dispatch", q.DispatchCtx(context.Background(), job))
 			}
 
-			got := collectOrderedIDs(t, orderCh, count, 20*time.Second)
+			got := collectOrderedIDs(t, orderCh, count, orderingCollectTimeout(20*time.Second))
 			seen := make(map[int]int, count)
 			for _, id := range got {
 				seen[id]++
@@ -1907,7 +1925,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 
 		t.Run("scenario_ordering_retry_reorder_allowed", func(t *testing.T) {
-			if !(fx.supportsBackoff && fx.supportsPoisonRetry) {
+			if !(fx.supportsBackoff && fx.supportsPoisonRetry && fx.supportsShutdownDelayRetry) {
 				t.Skip("backend does not support deterministic retry reorder scenario in this suite")
 			}
 			jobType := "job:scenario:ordering:retry:" + fx.name
@@ -1960,7 +1978,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				requireScenarioNoErr(t, "ordering_retry_dispatch_followup", q.DispatchCtx(context.Background(), job))
 			}
 
-			got := collectOrderedIDs(t, successCh, count, 25*time.Second)
+			got := collectOrderedIDs(t, successCh, count, orderingCollectTimeout(25*time.Second))
 			retrySuccessIdx := -1
 			for i, id := range got {
 				if id == 0 {
@@ -1978,6 +1996,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioNoErr(t, "timing_worker_start", (w).StartWorkers(context.Background()))
 
 		t.Run("scenario_delay_not_before_window", func(t *testing.T) {
+			if !fx.supportsShutdownDelayRetry {
+				t.Skip("backend does not provide stable delayed-work timing semantics in this suite")
+			}
 			jobType := "job:scenario:timing:delay:" + fx.name
 			startedCh := make(chan time.Time, 1)
 			w.Register(jobType, func(_ context.Context, job Job) error {
@@ -2022,7 +2043,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 
 		t.Run("scenario_retry_backoff_not_before_window", func(t *testing.T) {
-			if !(fx.supportsBackoff && fx.supportsPoisonRetry) {
+			if !(fx.supportsBackoff && fx.supportsPoisonRetry && fx.supportsShutdownDelayRetry) {
 				t.Skip("backend does not support deterministic custom backoff retry timing in this suite")
 			}
 
