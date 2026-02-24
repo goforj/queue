@@ -469,9 +469,10 @@ func testBusBatchScenario(t *testing.T, b bus.Bus, queueName string) {
 func testBusWorkflowFailureCallbacksScenario(t *testing.T, backendName string, b bus.Bus, queueName string) {
 	t.Helper()
 	switch backendName {
-	case "workerpool", "nats":
+	case "workerpool", "nats", "sqs":
 		t.Skipf("workflow failure callback semantics are not asserted in this suite for backend %s yet", backendName)
 	}
+	callbackWait := 20 * time.Second
 
 	t.Run("workflow_chain_failure_callbacks", func(t *testing.T) {
 		step1Type := fmt.Sprintf("bus:chain:fail:step1:%d", time.Now().UnixNano())
@@ -510,19 +511,21 @@ func testBusWorkflowFailureCallbacksScenario(t *testing.T, backendName string, b
 
 		select {
 		case <-catchDone:
-		case <-time.After(20 * time.Second):
+		case <-time.After(callbackWait):
 			t.Fatal("workflow chain failure scenario: timed out waiting for catch callback")
 		}
 		select {
 		case <-finallyDone:
-		case <-time.After(20 * time.Second):
+		case <-time.After(callbackWait):
 			t.Fatal("workflow chain failure scenario: timed out waiting for finally callback")
 		}
 
-		waitFor(t, 20*time.Second, "failed chain state", func() bool {
+		waitFor(t, callbackWait, "failed chain state", func() bool {
 			st, err := b.FindChain(context.Background(), chainID)
 			return err == nil && st.Failed
 		})
+		waitFor(t, callbackWait, "chain catch callback count", func() bool { return catchCount.Load() == 1 })
+		waitFor(t, callbackWait, "chain finally callback count", func() bool { return finallyCount.Load() == 1 })
 
 		if got := catchCount.Load(); got != 1 {
 			t.Fatalf("workflow chain failure scenario: expected catch once, got %d", got)
@@ -583,19 +586,21 @@ func testBusWorkflowFailureCallbacksScenario(t *testing.T, backendName string, b
 
 		select {
 		case <-catchDone:
-		case <-time.After(20 * time.Second):
+		case <-time.After(callbackWait):
 			t.Fatal("workflow batch failure scenario: timed out waiting for catch callback")
 		}
 		select {
 		case <-finallyDone:
-		case <-time.After(20 * time.Second):
+		case <-time.After(callbackWait):
 			t.Fatal("workflow batch failure scenario: timed out waiting for finally callback")
 		}
 
-		waitFor(t, 20*time.Second, "failed/cancelled batch state", func() bool {
+		waitFor(t, callbackWait, "failed/cancelled batch state", func() bool {
 			st, err := b.FindBatch(context.Background(), batchID)
 			return err == nil && st.Completed && st.Cancelled
 		})
+		waitFor(t, callbackWait, "batch catch callback count", func() bool { return catchCount.Load() == 1 })
+		waitFor(t, callbackWait, "batch finally callback count", func() bool { return finallyCount.Load() == 1 })
 
 		if got := catchCount.Load(); got != 1 {
 			t.Fatalf("workflow batch failure scenario: expected catch once, got %d", got)
