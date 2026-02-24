@@ -12,24 +12,8 @@ import (
 )
 
 func main() {
-	example1()
-	example2()
-}
+	// Pause pauses queue consumption for drivers that support it.
 
-func example1() {
-	// Pause pauses consumption for a queue when supported by the underlying driver.
-
-	// Example: pause queue
-	q, err := queue.NewSync()
-	if err != nil {
-		return
-	}
-	if queue.SupportsPause(q) {
-		_ = q.Pause(context.Background(), "default")
-	}
-}
-
-func example2() {
 	// Example: pause queue
 	q, _ := queue.NewSync()
 	_ = queue.Pause(context.Background(), q, "default")
@@ -37,4 +21,3 @@ func example2() {
 	fmt.Println(snapshot.Paused("default"))
 	// Output: 1
 }
-

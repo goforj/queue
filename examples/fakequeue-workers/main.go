@@ -11,11 +11,6 @@ import (
 )
 
 func main() {
-	example1()
-	example2()
-}
-
-func example1() {
 	// Workers sets desired worker concurrency before StartWorkers.
 
 	// Example: set worker count
@@ -24,13 +19,3 @@ func example1() {
 	fmt.Println(q != nil)
 	// Output: true
 }
-
-func example2() {
-	// Example: workers
-	q, err := queue.NewWorkerpool()
-	if err != nil {
-		return
-	}
-	q.Workers(4)
-}
-

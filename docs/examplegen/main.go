@@ -163,6 +163,7 @@ func modulePath(root string) (string, error) {
 //
 
 type FuncDoc struct {
+	Owner       string
 	Name        string
 	Group       string
 	Description string
@@ -209,7 +210,15 @@ func extractFuncDocs(
 			if !ast.IsExported(name) {
 				continue
 			}
+			owner := ""
+			if d.Recv != nil && len(d.Recv.List) > 0 {
+				owner = receiverOwner(d.Recv.List[0].Type)
+				if owner != "" && !ast.IsExported(owner) {
+					continue
+				}
+			}
 			mergeFuncDoc(out, &FuncDoc{
+				Owner:       owner,
 				Name:        name,
 				Group:       extractGroup(d.Doc),
 				Description: extractFuncDescription(d.Doc),
@@ -245,6 +254,7 @@ func extractFuncDocs(
 							continue
 						}
 						mergeFuncDoc(out, &FuncDoc{
+							Owner:       typeSpec.Name.Name,
 							Name:        name,
 							Group:       extractGroup(doc),
 							Description: extractFuncDescription(doc),
@@ -260,7 +270,8 @@ func extractFuncDocs(
 }
 
 func mergeFuncDoc(out map[string]*FuncDoc, fd *FuncDoc) {
-	if existing, ok := out[fd.Name]; ok {
+	key := funcDocKey(fd)
+	if existing, ok := out[key]; ok {
 		existing.Examples = append(existing.Examples, fd.Examples...)
 		if existing.Description == "" && fd.Description != "" {
 			existing.Description = fd.Description
@@ -270,7 +281,31 @@ func mergeFuncDoc(out map[string]*FuncDoc, fd *FuncDoc) {
 		}
 		return
 	}
-	out[fd.Name] = fd
+	out[key] = fd
+}
+
+func funcDocKey(fd *FuncDoc) string {
+	if fd.Owner == "" {
+		return fd.Name
+	}
+	return fd.Owner + "." + fd.Name
+}
+
+func receiverOwner(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return receiverOwner(t.X)
+	case *ast.IndexExpr:
+		return receiverOwner(t.X)
+	case *ast.IndexListExpr:
+		return receiverOwner(t.X)
+	case *ast.SelectorExpr:
+		return t.Sel.Name
+	default:
+		return ""
+	}
 }
 
 func extractGroup(group *ast.CommentGroup) string {
@@ -451,7 +486,7 @@ func writeMain(base string, fd *FuncDoc, importPath string) error {
 		return fmt.Errorf("import path cannot be empty")
 	}
 
-	dir := filepath.Join(base, strings.ToLower(fd.Name))
+	dir := filepath.Join(base, exampleDirName(fd))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -595,4 +630,11 @@ func writeMain(base string, fd *FuncDoc, importPath string) error {
 	}
 
 	return os.WriteFile(filepath.Join(dir, "main.go"), buf.Bytes(), 0o644)
+}
+
+func exampleDirName(fd *FuncDoc) string {
+	if fd.Owner == "" {
+		return strings.ToLower(fd.Name)
+	}
+	return strings.ToLower(fd.Owner) + "-" + strings.ToLower(fd.Name)
 }
