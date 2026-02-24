@@ -1,0 +1,115 @@
+package readmecheck
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/goforj/queue"
+)
+
+func TestReadmeManualSnippetsCompile(t *testing.T) {
+	// Compile-check only. The helpers mirror curated manual README snippets that
+	// have drifted before (Dispatch/DispatchCtx and handler signatures).
+	_ = []any{
+		compileQuickStartQueueSnippet,
+		compileQuickStartWorkflowSnippet,
+		compileJobBuilderOptionsSnippet,
+		compileMiddlewareSnippet,
+		compileFakeQueueSnippet,
+	}
+}
+
+func compileQuickStartQueueSnippet(q *queue.Queue) {
+	if q == nil {
+		return
+	}
+
+	q.Register("emails:send", func(ctx context.Context, j queue.Context) error {
+		var payload struct {
+			To string `json:"to"`
+		}
+		_ = j.Bind(&payload)
+		return nil
+	})
+
+	_ = q.StartWorkers(context.Background())
+	defer q.Shutdown(context.Background())
+
+	_, _ = q.Dispatch(
+		queue.NewJob("emails:send").
+			Payload(map[string]any{"to": "user@example.com"}).
+			OnQueue("default"),
+	)
+}
+
+func compileQuickStartWorkflowSnippet(q *queue.Queue) {
+	if q == nil {
+		return
+	}
+
+	type EmailPayload struct {
+		ID int `json:"id"`
+	}
+
+	q.Register("reports:generate", func(context.Context, queue.Context) error { return nil })
+	q.Register("reports:upload", func(_ context.Context, j queue.Context) error {
+		var payload EmailPayload
+		return j.Bind(&payload)
+	})
+	q.Register("users:notify_report_ready", func(context.Context, queue.Context) error { return nil })
+
+	_ = q.Workers(2).StartWorkers(context.Background())
+	defer q.Shutdown(context.Background())
+
+	chainID, _ := q.Chain(
+		queue.NewJob("reports:generate").Payload(map[string]any{"report_id": "rpt_123"}),
+		queue.NewJob("reports:upload").Payload(EmailPayload{ID: 123}),
+		queue.NewJob("users:notify_report_ready").Payload(map[string]any{"user_id": 123}),
+	).OnQueue("critical").Dispatch(context.Background())
+	_ = chainID
+}
+
+func compileJobBuilderOptionsSnippet(q *queue.Queue) {
+	if q == nil {
+		return
+	}
+
+	type EmailPayload struct {
+		ID int    `json:"id"`
+		To string `json:"to"`
+	}
+
+	job := queue.NewJob("emails:send").
+		Payload(EmailPayload{ID: 123, To: "user@example.com"}).
+		OnQueue("default").
+		Timeout(20 * time.Second).
+		Retry(3).
+		Backoff(500 * time.Millisecond).
+		Delay(2 * time.Second).
+		UniqueFor(45 * time.Second)
+
+	_, _ = q.Dispatch(job)
+
+	q.Register("emails:send", func(ctx context.Context, job queue.Context) error {
+		var payload EmailPayload
+		return job.Bind(&payload)
+	})
+}
+
+func compileMiddlewareSnippet() {
+	audit := queue.MiddlewareFunc(func(ctx context.Context, j queue.Context, next queue.Next) error {
+		return next(ctx, j)
+	})
+
+	q, _ := queue.New(
+		queue.Config{Driver: queue.DriverWorkerpool},
+		queue.WithMiddleware(audit),
+	)
+	_ = q
+}
+
+func compileFakeQueueSnippet() {
+	fake := queue.NewFake()
+	fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
+}

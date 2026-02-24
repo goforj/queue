@@ -17,7 +17,7 @@ func main() {
 }
 
 func example1() {
-	// Resume resumes queue consumption for drivers that support it.
+	// Resume resumes consumption for a queue when supported by the underlying driver.
 
 	// Example: resume queue
 	q, err := queue.NewSync()

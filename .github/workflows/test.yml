@@ -49,6 +49,9 @@ jobs:
       - name: Install dependencies
         run: go mod download
 
+      - name: Verify curated README manual snippets compile
+        run: ./scripts/check-readme-snippets.sh
+
       - name: Run unit tests
         run: go test ./... -v
 

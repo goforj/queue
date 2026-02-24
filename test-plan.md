@@ -450,7 +450,7 @@ If too slow:
 
 ## 6. README manual snippet verifier
 
-- [ ] Add automated compile-checking for selected manual `README.md` Go snippets
+- [x] Add automated compile-checking for selected manual `README.md` Go snippets
 - Location:
   - new script/tool (e.g. `scripts/check-readme-snippets.sh` or `tools/readmecheck`)
   - CI workflow step
@@ -625,7 +625,7 @@ Use this section for active implementation tracking. Move items from here to com
 - [x] Retry/delay timing-window assertions
 - [ ] Workflow fault + duplicate callback integration expansion
 - [ ] CI race job added (required scope defined)
-- [ ] README manual snippet verifier in CI
+- [x] README manual snippet verifier in CI
 
 ## P1 Active
 
