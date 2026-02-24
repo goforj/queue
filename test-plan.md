@@ -472,7 +472,7 @@ Why:
 
 ## 7. Adversarial failure injection suite (“chaos-lite”)
 
-- [ ] Expand scheduled adversarial integration scenarios for backend flaps and worker churn
+- [x] Expand scheduled adversarial integration scenarios for backend flaps and worker churn
 - Location:
   - `integration/all/integration_scenarios_test.go`
   - `docs/integration-scenarios.md` (`chaos` section)
@@ -483,6 +483,7 @@ Why:
   - scenario results are visible in CI artifacts/logs with backend + scenario naming
 - Notes:
   - capability-gate unsupported fault injection paths explicitly
+  - Implemented in `.github/workflows/soak.yml` `integration-chaos` subset with shared scenario names aligned to current suite (`scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, `scenario_worker_restart_recovery`, `scenario_worker_restart_delay_recovery`, plus contention/shutdown race probes); results are emitted with backend+scenario duration lines and uploaded per-backend logs
 
 Expand scheduled integration scenarios for:
 
@@ -632,7 +633,7 @@ Use this section for active implementation tracking. Move items from here to com
 
 ## P1 Active
 
-- [ ] Chaos-lite failure injection expansion
+- [x] Chaos-lite failure injection expansion
 - [x] Repeat-run/soak flake tracking pipeline
 - [ ] Error contract tests
 

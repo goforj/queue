@@ -233,7 +233,7 @@ jobs:
           set -euo pipefail
           mkdir -p .artifacts
           go test -tags=integration ./integration/... \
-            -run "TestIntegrationScenarios_AllBackends/.*/scenario_(enqueue_during_broker_fault|consume_after_broker_recovery|shutdown_during_delay_retry|multi_worker_contention)$" \
+            -run "TestIntegrationScenarios_AllBackends/.*/scenario_(dispatch_during_broker_fault|consume_after_broker_recovery|worker_restart_recovery|worker_restart_delay_recovery|shutdown_during_delay_retry|multi_worker_contention)$" \
             -count=1 -v \
             | tee ".artifacts/integration-chaos-${{ matrix.backend }}.log"
 

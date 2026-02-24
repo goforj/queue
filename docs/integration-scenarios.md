@@ -131,7 +131,7 @@ Observability contract
 ## Execution model
 
 - `smoke`: always-on integration scenarios (current baseline).
-- `chaos`: scheduled fault-injection scenarios (`scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, and race-heavy scenarios).
+- `chaos`: scheduled fault-injection and recovery scenarios (`scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, `scenario_worker_restart_recovery`, `scenario_worker_restart_delay_recovery`, and race-heavy scenarios).
 - `soak`: extended runtime scenarios; isolated from normal CI when needed.
 
 ## Timing guardrails
