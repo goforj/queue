@@ -17,7 +17,7 @@ func main() {
 }
 
 func example1() {
-	// StartWorkers starts worker processing.
+	// StartWorkers starts worker execution.
 
 	// Example: local start workers
 	q, err := queue.NewWorkerpool()

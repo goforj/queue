@@ -17,7 +17,7 @@ func main() {
 }
 
 func example1() {
-	// Register binds a handler for a high-level job type.
+	// Register associates a handler with a job type.
 
 	// Example: local register
 	q, err := queue.NewSync()

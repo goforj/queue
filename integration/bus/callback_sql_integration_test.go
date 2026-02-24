@@ -125,3 +125,108 @@ func TestSQLStore_RuntimeBatchCatchDuplicateCallbackSuppressed(t *testing.T) {
 		t.Fatalf("expected catch to remain once after duplicate callback, got %d", catchCount)
 	}
 }
+
+func TestSQLStore_RuntimeChainFinallyDuplicateCallbackSuppressed(t *testing.T) {
+	q := bus.NewIntegrationTestRuntime()
+	store := newSQLiteStoreForRuntime(t)
+
+	b, err := bus.NewWithStore(q, store)
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	if err := b.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+
+	var finallyCount int
+	b.Register("monitor:poll", func(context.Context, bus.Context) error { return nil })
+
+	chainID, err := b.Chain(
+		bus.NewJob("monitor:poll", nil),
+	).Finally(func(context.Context, bus.ChainState) error {
+		finallyCount++
+		return nil
+	}).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch chain: %v", err)
+	}
+	if finallyCount != 1 {
+		t.Fatalf("expected finally once, got %d", finallyCount)
+	}
+
+	cbPayload := map[string]any{
+		"schema_version": 1,
+		"dispatch_id":    "dup-dispatch",
+		"kind":           "callback",
+		"job_id":         "dup-job-chain-finally",
+		"chain_id":       chainID,
+		"callback_kind":  "chain_finally",
+	}
+	if err := q.DispatchJSON(context.Background(), bus.InternalCallbackJobTypeForIntegration(), cbPayload); err != nil {
+		t.Fatalf("dispatch duplicate callback: %v", err)
+	}
+	if finallyCount != 1 {
+		t.Fatalf("expected finally to remain once after duplicate callback, got %d", finallyCount)
+	}
+}
+
+func TestSQLStore_RuntimeChainCatchAndFinallyDuplicateCallbacksSuppressed(t *testing.T) {
+	q := bus.NewIntegrationTestRuntime()
+	store := newSQLiteStoreForRuntime(t)
+
+	b, err := bus.NewWithStore(q, store)
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	if err := b.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+
+	var catchCount int
+	var finallyCount int
+	b.Register("monitor:downsample", func(context.Context, bus.Context) error { return errors.New("boom") })
+
+	chainID, err := b.Chain(
+		bus.NewJob("monitor:downsample", nil),
+	).Catch(func(context.Context, bus.ChainState, error) error {
+		catchCount++
+		return nil
+	}).Finally(func(context.Context, bus.ChainState) error {
+		finallyCount++
+		return nil
+	}).Dispatch(context.Background())
+	if err == nil {
+		t.Fatal("expected chain dispatch error")
+	}
+	if catchCount != 1 {
+		t.Fatalf("expected catch once after failed chain, got %d", catchCount)
+	}
+	if finallyCount != 1 {
+		t.Fatalf("expected finally once after failed chain, got %d", finallyCount)
+	}
+
+	for _, callbackKind := range []string{"chain_catch", "chain_finally"} {
+		cbPayload := map[string]any{
+			"schema_version": 1,
+			"dispatch_id":    "dup-dispatch",
+			"kind":           "callback",
+			"job_id":         "dup-job-" + callbackKind,
+			"chain_id":       chainID,
+			"callback_kind":  callbackKind,
+			"error":          "boom",
+		}
+		if callbackKind == "chain_finally" {
+			delete(cbPayload, "error")
+		}
+		if err := q.DispatchJSON(context.Background(), bus.InternalCallbackJobTypeForIntegration(), cbPayload); err != nil {
+			t.Fatalf("dispatch duplicate callback (%s): %v", callbackKind, err)
+		}
+	}
+
+	if catchCount != 1 {
+		t.Fatalf("expected catch to remain once after duplicate callbacks, got %d", catchCount)
+	}
+	if finallyCount != 1 {
+		t.Fatalf("expected finally to remain once after duplicate callbacks, got %d", finallyCount)
+	}
+}
