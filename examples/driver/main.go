@@ -17,7 +17,7 @@ func main() {
 }
 
 func example1() {
-	// Driver reports the configured backend driver for the underlying queue runtime.
+	// Driver returns the active queue driver.
 
 	// Example: fake driver
 	fake := queue.NewFake()

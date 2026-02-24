@@ -18,7 +18,7 @@ func main() {
 }
 
 func example1() {
-	// Dispatch enqueues a high-level job using context.Background.
+	// Dispatch records a typed job payload in-memory using the fake default queue.
 
 	// Example: dispatch to fake queue
 	fake := queue.NewFake()

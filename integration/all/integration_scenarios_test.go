@@ -1898,6 +1898,111 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		})
 	})
 
+	t.Run("scenario_retry_delay_timing_windows", func(t *testing.T) {
+		requireScenarioNoErr(t, "timing_worker_start", (w).StartWorkers(context.Background()))
+
+		t.Run("scenario_delay_not_before_window", func(t *testing.T) {
+			jobType := "job:scenario:timing:delay:" + fx.name
+			startedCh := make(chan time.Time, 1)
+			w.Register(jobType, func(_ context.Context, job Job) error {
+				var payload scenarioPayload
+				if err := job.Bind(&payload); err != nil {
+					return err
+				}
+				select {
+				case startedCh <- time.Now():
+				default:
+				}
+				return nil
+			})
+
+			const delay = 1200 * time.Millisecond
+			const earlyTolerance = 250 * time.Millisecond
+
+			dispatchAt := time.Now()
+			job := NewJob(jobType).
+				Payload(scenarioPayload{ID: 9900, Name: "timing-delay"}).
+				OnQueue(fx.queueName).
+				Delay(delay)
+			if fx.forceTimeout {
+				job = job.Timeout(jobTimeout)
+			}
+			requireScenarioNoErr(t, "timing_delay_dispatch", q.DispatchCtx(context.Background(), job))
+
+			var startedAt time.Time
+			select {
+			case startedAt = <-startedCh:
+			case <-time.After(20 * time.Second):
+				t.Fatalf("[timing_delay_collect] delayed job did not execute")
+			}
+
+			elapsed := startedAt.Sub(dispatchAt)
+			reportScenarioDuration(t, fx.name, "scenario_delay_not_before_window", elapsed)
+			minAllowed := delay - earlyTolerance
+			if elapsed < minAllowed {
+				t.Fatalf("[timing_delay_early] elapsed=%s min_allowed=%s delay=%s tolerance=%s",
+					elapsed.Round(time.Millisecond), minAllowed, delay, earlyTolerance)
+			}
+		})
+
+		t.Run("scenario_retry_backoff_not_before_window", func(t *testing.T) {
+			if !(fx.supportsBackoff && fx.supportsPoisonRetry) {
+				t.Skip("backend does not support deterministic custom backoff retry timing in this suite")
+			}
+
+			jobType := "job:scenario:timing:retry:" + fx.name
+			attemptTimes := make(chan time.Time, 2)
+			var attempts atomic.Int32
+			w.Register(jobType, func(_ context.Context, job Job) error {
+				var payload scenarioPayload
+				if err := job.Bind(&payload); err != nil {
+					return err
+				}
+				attempt := attempts.Add(1)
+				select {
+				case attemptTimes <- time.Now():
+				default:
+				}
+				if attempt == 1 {
+					return errors.New("retry timing probe")
+				}
+				return nil
+			})
+
+			const backoff = 1200 * time.Millisecond
+			const earlyTolerance = 300 * time.Millisecond
+			job := NewJob(jobType).
+				Payload(scenarioPayload{ID: 9901, Name: "timing-retry"}).
+				OnQueue(fx.queueName).
+				Retry(1).
+				Backoff(backoff)
+			if fx.forceTimeout {
+				job = job.Timeout(jobTimeout)
+			}
+			requireScenarioNoErr(t, "timing_retry_dispatch", q.DispatchCtx(context.Background(), job))
+
+			var firstAt, secondAt time.Time
+			select {
+			case firstAt = <-attemptTimes:
+			case <-time.After(15 * time.Second):
+				t.Fatalf("[timing_retry_first_attempt] first attempt did not execute")
+			}
+			select {
+			case secondAt = <-attemptTimes:
+			case <-time.After(25 * time.Second):
+				t.Fatalf("[timing_retry_second_attempt] second attempt did not execute")
+			}
+
+			elapsed := secondAt.Sub(firstAt)
+			reportScenarioDuration(t, fx.name, "scenario_retry_backoff_not_before_window", elapsed)
+			minAllowed := backoff - earlyTolerance
+			if elapsed < minAllowed {
+				t.Fatalf("[timing_retry_early] elapsed=%s min_allowed=%s backoff=%s tolerance=%s",
+					elapsed.Round(time.Millisecond), minAllowed, backoff, earlyTolerance)
+			}
+		})
+	})
+
 	t.Run("scenario_backpressure_saturation", func(t *testing.T) {
 		requireScenarioNoErr(t, "backpressure_worker_start", (w).StartWorkers(context.Background()))
 

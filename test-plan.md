@@ -379,7 +379,7 @@ Why:
 
 ## 3. Retry/delay timing-window assertions
 
-- [ ] Add tolerance-based timing-window assertions for delay/retry/backoff behavior
+- [x] Add tolerance-based timing-window assertions for delay/retry/backoff behavior
 - Location:
   - `integration/all/integration_scenarios_test.go`
   - `docs/integration-scenarios.md` (timing tolerance documentation)
@@ -621,7 +621,7 @@ Use this section for active implementation tracking. Move items from here to com
 
 - [x] Driver guarantee matrix linked to tests/docs
 - [ ] Ordering scenarios split + docs alignment
-- [ ] Retry/delay timing-window assertions
+- [x] Retry/delay timing-window assertions
 - [ ] Workflow fault + duplicate callback integration expansion
 - [ ] CI race job added (required scope defined)
 - [ ] README manual snippet verifier in CI

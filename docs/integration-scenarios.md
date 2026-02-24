@@ -26,6 +26,9 @@ Named scenarios currently enforced:
   - `scenario_ordering_single_worker_fifo`
   - `scenario_ordering_delayed_immediate_mix`
   - `scenario_ordering_retry_reorder_allowed` (capability-gated)
+- `scenario_retry_delay_timing_windows`
+  - `scenario_delay_not_before_window`
+  - `scenario_retry_backoff_not_before_window` (capability-gated)
 - `scenario_backpressure_saturation`
 - `scenario_payload_large`
 - `scenario_config_option_fuzz`
@@ -74,6 +77,7 @@ What this proves today:
 - Broker fault injection and consume-after-recovery flow is validated on supported backends.
 - FIFO ordering is validated only in the constrained `scenario_ordering_single_worker_fifo` sub-scenario for backends marked ordering-capable.
 - Delayed/immediate and retry-based reordering behavior is explicitly exercised to avoid over-claiming FIFO semantics.
+- Delay and retry timing-window semantics are validated as "not before" guarantees with backend-tolerant timing slack.
 - Backpressure saturation preserves forward progress and probe processing.
 - Large payload handling is validated end-to-end.
 - Config/job-option fuzz coverage validates mixed option combinations across backends for stability.
@@ -99,10 +103,10 @@ Backpressure and queue saturation
 - Goal: extend with stricter queue-depth and latency threshold assertions.
 - Status: planned.
 
-Context cancellation and shutdown races
+Context cancellation, shutdown, and timing races
 - Candidate scenario: `scenario_shutdown_during_delay_retry` extensions.
-- Goal: add stricter timing and race invariants under heavy mixed traffic.
-- Status: planned.
+- Goal: extend timing/race invariants under heavier mixed traffic and repeated runs.
+- Status: partially complete (`scenario_retry_delay_timing_windows` adds baseline not-before timing assertions for delay/retry).
 
 Multi-worker contention
 - Candidate scenario: `scenario_multi_worker_contention` extensions.

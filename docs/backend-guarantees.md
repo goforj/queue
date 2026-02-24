@@ -33,6 +33,7 @@ These are the primary shared-scenario proofs for the matrix above.
 | Capability / Guarantee | Proving Scenario(s) / Test(s) |
 | --- | --- |
 | Backoff support / rejection behavior | `scenario_config_option_fuzz`; Redis explicit unsupported path in `TestRedisIntegration_BackoffUnsupported` (`integration/all/integration_scenarios_test.go`) |
+| Delay/retry "not before" timing windows | `scenario_retry_delay_timing_windows` parent with `scenario_delay_not_before_window` and `scenario_retry_backoff_not_before_window` (capability-gated) |
 | Restart recovery | `scenario_worker_restart_recovery` |
 | Delayed/retry restart durability | `scenario_worker_restart_delay_recovery`; `scenario_shutdown_during_delay_retry` |
 | Poison retry semantics | `scenario_poison_message_max_retry` |
