@@ -77,7 +77,7 @@ jobs:
       - name: Install dependencies
         run: go mod download
 
-      - name: Run race tests
+      - name: Run race tests (root module scope)
         run: go test -race ./...
 
   integration-all:

@@ -426,7 +426,7 @@ Why:
 
 ## 5. Race detector in CI (required)
 
-- [ ] Add race detection to CI release gate
+- [x] Add race detection to CI release gate
 - Location:
   - CI workflow(s) in `.github/workflows/*`
   - `test-plan.md` / release gate docs if split out
@@ -435,7 +435,8 @@ Why:
   - nightly or scheduled CI runs full `go test -race ./...` if PR scope is reduced
   - failures are triaged as product bugs unless proven infrastructure/tooling issues
 - Notes:
-  - start with core packages if runtime is too high, but document the exact scope
+  - Current PR CI scope is the root module race run in `.github/workflows/test.yml` (`race` job: `go test -race ./...`)
+  - Integration-tagged race coverage is not in the PR gate and should be treated as future hardening if needed
 
 At least:
 
@@ -624,7 +625,7 @@ Use this section for active implementation tracking. Move items from here to com
 - [x] Ordering scenarios split + docs alignment
 - [x] Retry/delay timing-window assertions
 - [x] Workflow fault + duplicate callback integration expansion
-- [ ] CI race job added (required scope defined)
+- [x] CI race job added (required scope defined)
 - [x] README manual snippet verifier in CI
 
 ## P1 Active
