@@ -102,6 +102,11 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if !factory.supportsNativeStats && err == nil {
 			t.Fatal("expected native stats to be unsupported")
 		}
+		if !factory.supportsNativeStats && err != nil {
+			if !strings.Contains(err.Error(), "snapshot is unavailable") {
+				t.Fatalf("expected snapshot unavailable error, got %v", err)
+			}
+		}
 	})
 
 	t.Run("dispatch_immediate", func(t *testing.T) {
