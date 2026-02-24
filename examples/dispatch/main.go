@@ -18,7 +18,7 @@ func main() {
 }
 
 func example1() {
-	// Dispatch submits a typed job payload using the default queue.
+	// Dispatch records a typed job payload in-memory using the fake default queue.
 
 	// Example: dispatch to fake queue
 	fake := queue.NewFake()

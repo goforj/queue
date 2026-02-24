@@ -182,3 +182,50 @@ func TestQueueErrorContract_RuntimeDispatchInputValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestQueueErrorContract_WorkflowBuilderValidation(t *testing.T) {
+	q, err := NewSync()
+	if err != nil {
+		t.Fatalf("new sync queue: %v", err)
+	}
+
+	t.Run("chain_requires_jobs", func(t *testing.T) {
+		_, err := q.Chain().Dispatch(context.Background())
+		if err == nil {
+			t.Fatal("expected chain requires jobs error")
+		}
+		if !strings.Contains(err.Error(), "chain requires at least one job") {
+			t.Fatalf("expected chain requires jobs message, got %v", err)
+		}
+	})
+
+	t.Run("batch_requires_jobs", func(t *testing.T) {
+		_, err := q.Batch().Dispatch(context.Background())
+		if err == nil {
+			t.Fatal("expected batch requires jobs error")
+		}
+		if !strings.Contains(err.Error(), "batch requires at least one job") {
+			t.Fatalf("expected batch requires jobs message, got %v", err)
+		}
+	})
+
+	t.Run("chain_invalid_job", func(t *testing.T) {
+		_, err := q.Chain(NewJob("")).Dispatch(context.Background())
+		if err == nil {
+			t.Fatal("expected chain invalid job error")
+		}
+		if !strings.Contains(err.Error(), "job type is required") {
+			t.Fatalf("expected chain invalid job message, got %v", err)
+		}
+	})
+
+	t.Run("batch_invalid_job", func(t *testing.T) {
+		_, err := q.Batch(NewJob("")).Dispatch(context.Background())
+		if err == nil {
+			t.Fatal("expected batch invalid job error")
+		}
+		if !strings.Contains(err.Error(), "job type is required") {
+			t.Fatalf("expected batch invalid job message, got %v", err)
+		}
+	})
+}
