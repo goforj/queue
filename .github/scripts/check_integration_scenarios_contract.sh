@@ -3,6 +3,10 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." >/dev/null 2>&1 && pwd)"
+integration_root="${repo_root}/integration"
+integration_all_file="${integration_root}/all/integration_scenarios_test.go"
+integration_contract_file="${integration_root}/root/contract_integration_test.go"
+integration_observability_file="${integration_root}/root/observability_integration_test.go"
 
 required_backends=(redis mysql postgres sqlite nats sqs rabbitmq)
 required_integration_scenarios=(
@@ -39,8 +43,8 @@ has_pattern() {
 
 echo "Checking required integration scenarios exist in integration suite..."
 for scenario in "${required_integration_scenarios[@]}"; do
-  if ! has_pattern "t\\.Run\\(\"${scenario}\"" "${repo_root}/integration_scenarios_test.go"; then
-    echo "missing integration scenario in integration_scenarios_test.go: ${scenario}"
+  if ! has_pattern "t\\.Run\\(\"${scenario}\"" "${integration_all_file}"; then
+    echo "missing integration scenario in ${integration_all_file}: ${scenario}"
     exit 1
   fi
 done
@@ -60,22 +64,22 @@ backend_pattern() {
 }
 
 for backend in "${required_backends[@]}"; do
-  if ! has_pattern "$(backend_pattern "${backend}")" "${repo_root}/contract_integration_test.go"; then
-    echo "missing backend ${backend} in contract_integration_test.go"
+  if ! has_pattern "$(backend_pattern "${backend}")" "${integration_contract_file}"; then
+    echo "missing backend ${backend} in ${integration_contract_file}"
     exit 1
   fi
-  if ! has_pattern "$(backend_pattern "${backend}")" "${repo_root}/observability_integration_test.go"; then
-    echo "missing backend ${backend} in observability_integration_test.go"
+  if ! has_pattern "$(backend_pattern "${backend}")" "${integration_observability_file}"; then
+    echo "missing backend ${backend} in ${integration_observability_file}"
     exit 1
   fi
 done
 
 echo "Checking required observability integration contract tests exist..."
-if ! has_pattern "func TestObservabilityIntegration_AllBackends\\(" "${repo_root}/observability_integration_test.go"; then
+if ! has_pattern "func TestObservabilityIntegration_AllBackends\\(" "${integration_observability_file}"; then
   echo "missing TestObservabilityIntegration_AllBackends"
   exit 1
 fi
-if ! has_pattern "func TestObservabilityIntegration_PauseResumeSupport_AllBackends\\(" "${repo_root}/observability_integration_test.go"; then
+if ! has_pattern "func TestObservabilityIntegration_PauseResumeSupport_AllBackends\\(" "${integration_observability_file}"; then
   echo "missing TestObservabilityIntegration_PauseResumeSupport_AllBackends"
   exit 1
 fi
