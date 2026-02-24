@@ -5,11 +5,15 @@ package bus_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/goforj/queue/bus"
+	"github.com/goforj/queue/busruntime"
 	_ "modernc.org/sqlite"
 )
 
@@ -24,6 +28,43 @@ func newSQLiteStoreForRuntime(t *testing.T) bus.Store {
 		t.Fatalf("new sql store: %v", err)
 	}
 	return store
+}
+
+type failFirstCallbackKindRuntime struct {
+	inner      *bus.IntegrationTestRuntime
+	kind       string
+	failedOnce atomic.Bool
+}
+
+func newFailFirstCallbackKindRuntime(kind string) *failFirstCallbackKindRuntime {
+	return &failFirstCallbackKindRuntime{
+		inner: bus.NewIntegrationTestRuntime(),
+		kind:  kind,
+	}
+}
+
+func (r *failFirstCallbackKindRuntime) BusRegister(jobType string, handler busruntime.Handler) {
+	r.inner.BusRegister(jobType, handler)
+}
+
+func (r *failFirstCallbackKindRuntime) BusDispatch(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	if jobType == bus.InternalCallbackJobTypeForIntegration() && !r.failedOnce.Load() {
+		var env struct {
+			CallbackKind string `json:"callback_kind"`
+		}
+		if err := json.Unmarshal(payload, &env); err == nil && env.CallbackKind == r.kind {
+			r.failedOnce.Store(true)
+			return errors.New("injected callback dispatch failure")
+		}
+	}
+	return r.inner.BusDispatch(ctx, jobType, payload, opts)
+}
+
+func (r *failFirstCallbackKindRuntime) StartWorkers(ctx context.Context) error { return r.inner.StartWorkers(ctx) }
+func (r *failFirstCallbackKindRuntime) Shutdown(ctx context.Context) error     { return r.inner.Shutdown(ctx) }
+
+func (r *failFirstCallbackKindRuntime) DispatchJSON(ctx context.Context, jobType string, payload any) error {
+	return r.inner.DispatchJSON(ctx, jobType, payload)
 }
 
 func TestSQLStore_RuntimeBatchThenFinallyDuplicateCallbacksSuppressed(t *testing.T) {
@@ -228,5 +269,71 @@ func TestSQLStore_RuntimeChainCatchAndFinallyDuplicateCallbacksSuppressed(t *tes
 	}
 	if finallyCount != 1 {
 		t.Fatalf("expected finally to remain once after duplicate callbacks, got %d", finallyCount)
+	}
+}
+
+func TestSQLStore_RuntimeChainFinallyCallbackReplayAfterDispatchFaultSuppressed(t *testing.T) {
+	q := newFailFirstCallbackKindRuntime("chain_finally")
+	store := newSQLiteStoreForRuntime(t)
+
+	b, err := bus.NewWithStore(q, store)
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	if err := b.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+
+	b.Register("monitor:poll", func(context.Context, bus.Context) error { return nil })
+
+	var finallyCount atomic.Int32
+	chainID, err := b.Chain(
+		bus.NewJob("monitor:poll", nil),
+	).Finally(func(context.Context, bus.ChainState) error {
+		finallyCount.Add(1)
+		return nil
+	}).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch chain: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		st, err := b.FindChain(context.Background(), chainID)
+		if err == nil && st.Completed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	st, err := b.FindChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("find chain: %v", err)
+	}
+	if !st.Completed {
+		t.Fatalf("expected completed chain state, got %+v", st)
+	}
+	if !q.failedOnce.Load() {
+		t.Fatal("expected injected chain_finally callback dispatch failure")
+	}
+	if got := finallyCount.Load(); got != 0 {
+		t.Fatalf("expected finally callback not invoked before replay, got %d", got)
+	}
+
+	cbPayload := map[string]any{
+		"schema_version": 1,
+		"dispatch_id":    st.DispatchID,
+		"kind":           "callback",
+		"job_id":         "replay-job-chain-finally",
+		"chain_id":       chainID,
+		"callback_kind":  "chain_finally",
+	}
+	if err := q.DispatchJSON(context.Background(), bus.InternalCallbackJobTypeForIntegration(), cbPayload); err != nil {
+		t.Fatalf("dispatch replay callback first: %v", err)
+	}
+	if err := q.DispatchJSON(context.Background(), bus.InternalCallbackJobTypeForIntegration(), cbPayload); err != nil {
+		t.Fatalf("dispatch replay callback duplicate: %v", err)
+	}
+	if got := finallyCount.Load(); got != 1 {
+		t.Fatalf("expected finally callback once after replay + duplicate, got %d", got)
 	}
 }

@@ -399,7 +399,7 @@ Why:
 
 ## 4. Workflow fault and duplicate callback integration expansion
 
-- [ ] Expand workflow integration coverage for callback duplication/failure/recovery semantics
+- [x] Expand workflow integration coverage for callback duplication/failure/recovery semantics
 - Location:
   - `integration/all/runtime_integration_test.go`
   - `integration/bus/integration_test.go`
@@ -412,7 +412,7 @@ Why:
   - no double-advance / double-terminal transition under concurrent processing in covered scenarios
 - Notes:
   - this is a trust-critical P0 item, not optional polish
-  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration now covers chain + batch duplicate callback suppression and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress). Duplicate-callback-under-fault paths remain to add
+  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration now covers chain + batch duplicate callback suppression, callback replay after callback-dispatch fault (chain final callback), and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress)
 
 Extend workflow integration scenarios to cover:
 
@@ -623,7 +623,7 @@ Use this section for active implementation tracking. Move items from here to com
 - [x] Driver guarantee matrix linked to tests/docs
 - [x] Ordering scenarios split + docs alignment
 - [x] Retry/delay timing-window assertions
-- [ ] Workflow fault + duplicate callback integration expansion
+- [x] Workflow fault + duplicate callback integration expansion
 - [ ] CI race job added (required scope defined)
 - [x] README manual snippet verifier in CI
 
