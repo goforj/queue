@@ -101,3 +101,57 @@ func TestQueueErrorContract_UnsupportedCapabilities(t *testing.T) {
 		t.Fatalf("expected driver name in stats unsupported error, got %v", err)
 	}
 }
+
+func TestQueueErrorContract_WorkflowNotFound(t *testing.T) {
+	q, err := NewSync()
+	if err != nil {
+		t.Fatalf("new sync queue: %v", err)
+	}
+
+	if _, err := q.FindChain(context.Background(), "missing-chain"); !errors.Is(err, ErrWorkflowNotFound) {
+		t.Fatalf("expected ErrWorkflowNotFound for chain lookup, got %v", err)
+	}
+	if _, err := q.FindBatch(context.Background(), "missing-batch"); !errors.Is(err, ErrWorkflowNotFound) {
+		t.Fatalf("expected ErrWorkflowNotFound for batch lookup, got %v", err)
+	}
+}
+
+func TestQueueErrorContract_Constructors(t *testing.T) {
+	t.Run("unsupported_driver", func(t *testing.T) {
+		_, err := New(Config{Driver: Driver("nope")})
+		if err == nil {
+			t.Fatal("expected unsupported driver error")
+		}
+		if !strings.Contains(err.Error(), "unsupported queue driver") {
+			t.Fatalf("expected unsupported driver error message, got %v", err)
+		}
+		if !strings.Contains(err.Error(), `"nope"`) {
+			t.Fatalf("expected driver name in unsupported driver error, got %v", err)
+		}
+	})
+
+	t.Run("optional_driver_moved_guidance", func(t *testing.T) {
+		tests := []struct {
+			driver Driver
+			want   string
+		}{
+			{driver: DriverRedis, want: "driver/redisqueue"},
+			{driver: DriverNATS, want: "driver/natsqueue"},
+			{driver: DriverSQS, want: "driver/sqsqueue"},
+			{driver: DriverRabbitMQ, want: "driver/rabbitmqqueue"},
+			{driver: DriverDatabase, want: "driver/{mysqlqueue,postgresqueue,sqlitequeue}"},
+		}
+		for _, tt := range tests {
+			tt := tt
+			t.Run(string(tt.driver), func(t *testing.T) {
+				_, err := New(Config{Driver: tt.driver})
+				if err == nil {
+					t.Fatalf("expected moved-driver guidance error for %q", tt.driver)
+				}
+				if !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("expected guidance %q in error, got %v", tt.want, err)
+				}
+			})
+		}
+	})
+}
