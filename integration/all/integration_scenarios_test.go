@@ -1732,50 +1732,170 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_ordering_contract", func(t *testing.T) {
-		if !fx.supportsOrderingContract {
-			t.Skip("backend does not expose strict ordering guarantees in this suite")
-		}
 		requireScenarioNoErr(t, "ordering_shutdown_previous_worker", (w).Shutdown(context.Background()))
 		w = newOrderingWorker(t, fx)
 		requireScenarioNoErr(t, "ordering_worker_start", (w).StartWorkers(context.Background()))
 
-		jobType := "job:scenario:ordering:" + fx.name
-		const count = 20
-		orderCh := make(chan int, count)
-		w.Register(jobType, func(_ context.Context, job Job) error {
-			var payload scenarioPayload
-			if err := job.Bind(&payload); err != nil {
-				return err
+		collectOrderedIDs := func(t *testing.T, ch <-chan int, count int, timeout time.Duration) []int {
+			t.Helper()
+			got := make([]int, 0, count)
+			deadline := time.After(timeout)
+			for len(got) < count {
+				select {
+				case id := <-ch:
+					got = append(got, id)
+				case <-deadline:
+					t.Fatalf("[ordering_collect] got=%d expected=%d", len(got), count)
+				}
 			}
-			orderCh <- payload.ID
-			return nil
+			return got
+		}
+
+		t.Run("scenario_ordering_single_worker_fifo", func(t *testing.T) {
+			if !fx.supportsOrderingContract {
+				t.Skip("backend does not expose strict ordering guarantees in this suite")
+			}
+			jobType := "job:scenario:ordering:fifo:" + fx.name
+			const count = 20
+			orderCh := make(chan int, count)
+			w.Register(jobType, func(_ context.Context, job Job) error {
+				var payload scenarioPayload
+				if err := job.Bind(&payload); err != nil {
+					return err
+				}
+				orderCh <- payload.ID
+				return nil
+			})
+
+			for i := 0; i < count; i++ {
+				job := NewJob(jobType).
+					Payload(scenarioPayload{ID: i, Name: "ordering-fifo"}).
+					OnQueue(fx.queueName)
+				if fx.forceTimeout {
+					job = job.Timeout(jobTimeout)
+				}
+				requireScenarioNoErr(t, "ordering_fifo_dispatch", q.DispatchCtx(context.Background(), job))
+			}
+
+			got := collectOrderedIDs(t, orderCh, count, 15*time.Second)
+			for i := 0; i < count; i++ {
+				if got[i] != i {
+					t.Fatalf("[ordering_fifo] index=%d got=%d expected=%d", i, got[i], i)
+				}
+			}
 		})
 
-		for i := 0; i < count; i++ {
-			job := NewJob(jobType).
-				Payload(scenarioPayload{ID: i, Name: "ordering"}).
-				OnQueue(fx.queueName)
-			if fx.forceTimeout {
-				job = job.Timeout(jobTimeout)
-			}
-			requireScenarioNoErr(t, "ordering_dispatch", q.DispatchCtx(context.Background(), job))
-		}
+		t.Run("scenario_ordering_delayed_immediate_mix", func(t *testing.T) {
+			jobType := "job:scenario:ordering:delaymix:" + fx.name
+			const count = 5
+			orderCh := make(chan int, count)
+			w.Register(jobType, func(_ context.Context, job Job) error {
+				var payload scenarioPayload
+				if err := job.Bind(&payload); err != nil {
+					return err
+				}
+				orderCh <- payload.ID
+				return nil
+			})
 
-		got := make([]int, 0, count)
-		deadline := time.After(15 * time.Second)
-		for len(got) < count {
-			select {
-			case id := <-orderCh:
-				got = append(got, id)
-			case <-deadline:
-				t.Fatalf("[ordering_collect] got=%d expected=%d", len(got), count)
+			delayed := NewJob(jobType).
+				Payload(scenarioPayload{ID: 0, Name: "ordering-delay"}).
+				OnQueue(fx.queueName).
+				Delay(800 * time.Millisecond)
+			if fx.forceTimeout {
+				delayed = delayed.Timeout(jobTimeout)
 			}
-		}
-		for i := 0; i < count; i++ {
-			if got[i] != i {
-				t.Fatalf("[ordering_fifo] index=%d got=%d expected=%d", i, got[i], i)
+			requireScenarioNoErr(t, "ordering_delaymix_dispatch_delayed", q.DispatchCtx(context.Background(), delayed))
+
+			for i := 1; i < count; i++ {
+				job := NewJob(jobType).
+					Payload(scenarioPayload{ID: i, Name: "ordering-delay"}).
+					OnQueue(fx.queueName)
+				if fx.forceTimeout {
+					job = job.Timeout(jobTimeout)
+				}
+				requireScenarioNoErr(t, "ordering_delaymix_dispatch_immediate", q.DispatchCtx(context.Background(), job))
 			}
-		}
+
+			got := collectOrderedIDs(t, orderCh, count, 20*time.Second)
+			firstDelayedIdx := -1
+			for i, id := range got {
+				if id == 0 {
+					firstDelayedIdx = i
+					break
+				}
+			}
+			if firstDelayedIdx <= 0 {
+				t.Fatalf("[ordering_delaymix_expected_reorder] delayed job executed too early; got=%v", got)
+			}
+		})
+
+		t.Run("scenario_ordering_retry_reorder_allowed", func(t *testing.T) {
+			if !(fx.supportsBackoff && fx.supportsPoisonRetry) {
+				t.Skip("backend does not support deterministic retry reorder scenario in this suite")
+			}
+			jobType := "job:scenario:ordering:retry:" + fx.name
+			const count = 4
+			successCh := make(chan int, count)
+			var attempts sync.Map
+
+			w.Register(jobType, func(_ context.Context, job Job) error {
+				var payload scenarioPayload
+				if err := job.Bind(&payload); err != nil {
+					return err
+				}
+				if payload.ID == 0 {
+					var n int32 = 1
+					if v, ok := attempts.Load(payload.ID); ok {
+						n = atomic.AddInt32(v.(*int32), 1)
+					} else {
+						ptr := new(int32)
+						*ptr = 1
+						actual, loaded := attempts.LoadOrStore(payload.ID, ptr)
+						if loaded {
+							n = atomic.AddInt32(actual.(*int32), 1)
+						}
+					}
+					if n == 1 {
+						return errors.New("retry ordering probe")
+					}
+				}
+				successCh <- payload.ID
+				return nil
+			})
+
+			first := NewJob(jobType).
+				Payload(scenarioPayload{ID: 0, Name: "ordering-retry"}).
+				OnQueue(fx.queueName).
+				Retry(1).
+				Backoff(800 * time.Millisecond)
+			if fx.forceTimeout {
+				first = first.Timeout(jobTimeout)
+			}
+			requireScenarioNoErr(t, "ordering_retry_dispatch_first", q.DispatchCtx(context.Background(), first))
+
+			for i := 1; i < count; i++ {
+				job := NewJob(jobType).
+					Payload(scenarioPayload{ID: i, Name: "ordering-retry"}).
+					OnQueue(fx.queueName)
+				if fx.forceTimeout {
+					job = job.Timeout(jobTimeout)
+				}
+				requireScenarioNoErr(t, "ordering_retry_dispatch_followup", q.DispatchCtx(context.Background(), job))
+			}
+
+			got := collectOrderedIDs(t, successCh, count, 25*time.Second)
+			retrySuccessIdx := -1
+			for i, id := range got {
+				if id == 0 {
+					retrySuccessIdx = i
+					break
+				}
+			}
+			if retrySuccessIdx <= 0 {
+				t.Fatalf("[ordering_retry_expected_reorder] retried job did not move behind immediate work; got=%v", got)
+			}
+		})
 	})
 
 	t.Run("scenario_backpressure_saturation", func(t *testing.T) {

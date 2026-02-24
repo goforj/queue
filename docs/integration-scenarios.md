@@ -23,6 +23,9 @@ Named scenarios currently enforced:
 - `scenario_dispatch_during_broker_fault`
 - `scenario_consume_after_broker_recovery`
 - `scenario_ordering_contract`
+  - `scenario_ordering_single_worker_fifo`
+  - `scenario_ordering_delayed_immediate_mix`
+  - `scenario_ordering_retry_reorder_allowed` (capability-gated)
 - `scenario_backpressure_saturation`
 - `scenario_payload_large`
 - `scenario_config_option_fuzz`
@@ -69,7 +72,8 @@ What this proves today:
 - Multi-worker contention is validated for deterministic backends to ensure single successful processing per job.
 - Duplicate-delivery idempotency patterns are validated under forced retry with single side-effect commit.
 - Broker fault injection and consume-after-recovery flow is validated on supported backends.
-- FIFO ordering contract is validated for backends marked ordering-capable.
+- FIFO ordering is validated only in the constrained `scenario_ordering_single_worker_fifo` sub-scenario for backends marked ordering-capable.
+- Delayed/immediate and retry-based reordering behavior is explicitly exercised to avoid over-claiming FIFO semantics.
 - Backpressure saturation preserves forward progress and probe processing.
 - Large payload handling is validated end-to-end.
 - Config/job-option fuzz coverage validates mixed option combinations across backends for stability.

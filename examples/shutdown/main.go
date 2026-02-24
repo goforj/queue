@@ -17,7 +17,7 @@ func main() {
 }
 
 func example1() {
-	// Shutdown drains running work and releases resources.
+	// Shutdown drains workers and closes underlying resources.
 
 	// Example: local shutdown
 	q, err := queue.NewWorkerpool()

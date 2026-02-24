@@ -14,6 +14,7 @@ All backends are expected to provide at-least-once delivery semantics. Handlers 
 ## Capability Matrix (Integration Fixture-Aligned)
 
 The table below reflects the capability gates used in `integration/all/integration_scenarios_test.go` and the shared scenario suite.
+Every capability/guarantee row should be justifiable by a concrete scenario or test. If a cell changes, update the linked scenario references in the same PR.
 
 | Backend | Backoff | Restart Recovery | Delayed/Retry Restart Durability | Poison Retry | Dispatch Context Cancel | Deterministic No-Dupes (suite) | Ordering Contract (suite) | Broker Fault Scenarios | Shutdown During Delay/Retry |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -25,6 +26,25 @@ The table below reflects the capability gates used in `integration/all/integrati
 | `sqs` | Yes | Yes | No | Yes | Yes | Yes | No | No | No |
 | `rabbitmq` | Yes | Yes | Yes | Yes | No | Yes | No | No | Yes |
 
+### Scenario References (Proof Links)
+
+These are the primary shared-scenario proofs for the matrix above.
+
+| Capability / Guarantee | Proving Scenario(s) / Test(s) |
+| --- | --- |
+| Backoff support / rejection behavior | `scenario_config_option_fuzz`; Redis explicit unsupported path in `TestRedisIntegration_BackoffUnsupported` (`integration/all/integration_scenarios_test.go`) |
+| Restart recovery | `scenario_worker_restart_recovery` |
+| Delayed/retry restart durability | `scenario_worker_restart_delay_recovery`; `scenario_shutdown_during_delay_retry` |
+| Poison retry semantics | `scenario_poison_message_max_retry` |
+| Dispatch context cancellation | `scenario_dispatch_context_cancellation` |
+| Deterministic no-duplicate processing (suite-level capability) | `scenario_multi_worker_contention`; `scenario_duplicate_delivery_idempotency` |
+| Ordering contract (suite-level capability) | `scenario_ordering_contract` parent with `scenario_ordering_single_worker_fifo`; reordering behavior probed by `scenario_ordering_delayed_immediate_mix` and `scenario_ordering_retry_reorder_allowed` |
+| Broker fault handling | `scenario_dispatch_during_broker_fault`; `scenario_consume_after_broker_recovery` |
+| Shutdown during delay/retry workloads | `scenario_shutdown_during_delay_retry` |
+| Pause/Resume capability behavior | `TestObservabilityIntegration_PauseResumeSupport_AllBackends` (`integration/root/observability_integration_test.go`) |
+| Native stats capability behavior | `TestObservabilityIntegration_AllBackends` (`integration/root/observability_integration_test.go`) |
+| Queue/workflow chain/batch integration baseline | `TestIntegrationQueue_AllBackends` (`integration/all/runtime_integration_test.go`); `TestIntegrationBus_AllBackends` (`integration/bus/integration_test.go`) |
+
 \* `sqlite` is promoted to full restart/durability coverage in the shared suite when queue and worker use the same test-local DSN (see fixture override logic in `integration/all/integration_scenarios_test.go`).
 
 ## Backend Notes
@@ -33,7 +53,8 @@ The table below reflects the capability gates used in `integration/all/integrati
 
 - Uses Asynq-backed runtime semantics.
 - Shared suite treats custom backoff as unsupported in this runtime path (`supportsBackoff=false`).
-- Ordering contract is tested in-suite (`supportsOrderingContract=true`).
+- Ordering contract is tested in-suite (`supportsOrderingContract=true`) under the current shared scenario's constrained FIFO assumptions.
+- Do not generalize this to multi-worker, retry, or delayed/immediate mixed workloads unless explicitly documented and tested.
 - Broker fault scenarios are covered in the shared suite (`supportsBrokerFault=true`).
 
 ### Database (`DriverDatabase`: MySQL/Postgres/SQLite)
@@ -41,12 +62,14 @@ The table below reflects the capability gates used in `integration/all/integrati
 - Supports retry/backoff, poison retry, dispatch context cancellation, and deterministic duplicate prevention in the shared suite.
 - Broker fault injection scenarios are not enabled in the shared suite for DB backends.
 - DB backends rely on stale-`processing` recovery behavior for crash recovery (`process_recovered` event visibility is important operationally).
+- Ordering is not currently claimed in the shared suite for MySQL/Postgres. SQLite ordering is only claimed in the suite under test-local conditions (see matrix note).
 
 ### NATS (`DriverNATS`)
 
 - Supports core dispatch/processing and backoff/poison retry semantics in the shared suite.
 - Shared suite does not claim restart durability guarantees for delayed/retried work (`supportsRestart=false`, `supportsRestartDelayedDurability=false`).
 - Deterministic no-duplicate and ordering guarantees are not claimed in the suite.
+- Users should treat ordering as non-guaranteed unless a stronger constrained contract is explicitly added and tested.
 
 ### SQS (`DriverSQS`)
 
@@ -60,6 +83,14 @@ The table below reflects the capability gates used in `integration/all/integrati
 - Supports restart recovery and delayed/retry restart durability in the shared suite.
 - Broker fault scenarios are not deterministically exercised in the shared suite.
 - Ordering guarantees are not claimed.
+
+## Ordering Guarantee Rules (Current Public Position)
+
+Until the shared ordering contract is split into condition-specific scenarios, the safe public posture is:
+
+- Ordering is **not guaranteed by default** across backends.
+- Any FIFO behavior observed under a specific backend/test setup should be treated as a constrained implementation detail unless documented here with explicit preconditions.
+- Retries, delays, and multi-worker concurrency can reorder execution and should be assumed to do so unless a backend-specific guarantee says otherwise.
 
 ## Production Guidance Notes
 
