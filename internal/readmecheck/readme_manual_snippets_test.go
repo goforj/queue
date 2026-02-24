@@ -24,25 +24,23 @@ func compileQuickStartQueueSnippet(q *queue.Queue) {
 	if q == nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	type EmailPayload struct {
+		To string `json:"to"`
+	}
 
 	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
-		var payload struct {
-			To string `json:"to"`
-		}
+		var payload EmailPayload
 		_ = m.Bind(&payload)
-		cancel()
 		return nil
 	})
 
-	go func() {
-		_, _ = q.Dispatch(
-			queue.NewJob("emails:send").
-				Payload(map[string]any{"to": "user@example.com"}),
-		)
-	}()
+	_ = q.StartWorkers(context.Background())
+	defer q.Shutdown(context.Background())
 
-	_ = q.Run(ctx)
+	_, _ = q.Dispatch(
+		queue.NewJob("emails:send").
+			Payload(EmailPayload{To: "user@example.com"}),
+	)
 }
 
 func compileQuickStartWorkflowSnippet(q *queue.Queue) {
