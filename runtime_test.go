@@ -2,8 +2,10 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
@@ -160,5 +162,57 @@ func TestNew_WithObserver(t *testing.T) {
 	}
 	if observed.Load() == 0 {
 		t.Fatal("expected workflow observer to receive events")
+	}
+}
+
+func TestQueue_Run_WorkerpoolStartsAndShutsDownOnCancel(t *testing.T) {
+	q, err := NewWorkerpool()
+	if err != nil {
+		t.Fatalf("new workerpool queue: %v", err)
+	}
+
+	done := make(chan struct{}, 1)
+	q.Register("job:run:test", func(context.Context, Message) error {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- q.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var dispatchErr error
+	for time.Now().Before(deadline) {
+		_, dispatchErr = q.Dispatch(NewJob("job:run:test").OnQueue("default"))
+		if dispatchErr == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if dispatchErr != nil {
+		cancel()
+		t.Fatalf("dispatch after Run start failed: %v", dispatchErr)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("handler did not run under Run lifecycle")
+	}
+
+	cancel()
+
+	select {
+	case err := <-runErr:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancellation")
 	}
 }

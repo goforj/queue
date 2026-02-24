@@ -420,6 +420,38 @@ func (r *Queue) StartWorkers(ctx context.Context) error {
 	return r.b.StartWorkers(ctx)
 }
 
+// Run starts worker processing, blocks until ctx is canceled, then gracefully shuts down.
+// @group Queue
+//
+// Example: run until canceled
+//
+//	ctx, cancel := context.WithCancel(context.Background())
+//	defer cancel()
+//	q, err := queue.NewWorkerpool()
+//	if err != nil {
+//		return
+//	}
+//	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+//	go func() {
+//		time.Sleep(100 * time.Millisecond)
+//		cancel()
+//	}()
+//	_ = q.Run(ctx)
+func (r *Queue) Run(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := r.StartWorkers(ctx); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	// Use a fresh background context so cancellation triggers graceful shutdown instead of short-circuiting it.
+	return r.Shutdown(context.Background())
+}
+
 // Shutdown drains workers and closes underlying resources.
 // @group Queue
 //
