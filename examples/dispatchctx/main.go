@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	// DispatchCtx enqueues a high-level job using the provided context.
+	// DispatchCtx submits a typed job payload using the provided context.
 
 	// Example: dispatch with context
 	fake := queue.NewFake()

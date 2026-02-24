@@ -18,7 +18,7 @@ func main() {
 }
 
 func example1() {
-	// Dispatch enqueues a high-level job using context.Background.
+	// Dispatch submits a typed job payload using the default queue.
 
 	// Example: dispatch to fake queue
 	fake := queue.NewFake()

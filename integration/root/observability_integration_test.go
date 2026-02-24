@@ -209,7 +209,12 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				if fx.name != "redis" {
 					requireScenarioTrue(t, "collector_retried", counters.Retry >= 1, "retry=%d expected>=1", counters.Retry)
 				}
-				waitForObservabilityScenario(t, "collector_drained", 8*time.Second, func() bool {
+				drainWait := 8 * time.Second
+				if fx.name == "redis" {
+					// Redis/Asynq can lag event-driven counters slightly under CI load.
+					drainWait = 20 * time.Second
+				}
+				waitForObservabilityScenario(t, "collector_drained", drainWait, func() bool {
 					snapshot := collector.Snapshot()
 					return snapshot.Pending(fx.queue) == 0 && snapshot.Active(fx.queue) == 0
 				})
