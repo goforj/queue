@@ -591,7 +591,7 @@ Add smoke thresholds (not optimization benchmarks):
 
 ## 12. Versioned compatibility matrix automation
 
-- [ ] Make tested backend versions explicit per release
+- [x] Make tested backend versions explicit per release
 - Location:
   - `docs/compatibility-policy.md`
   - CI config / release docs
@@ -601,6 +601,7 @@ Add smoke thresholds (not optimization benchmarks):
   - capability differences are documented for supported versions where relevant
 - Notes:
   - users need to know what combinations are actually exercised
+  - Implemented with `docs/compatibility-policy.md` + generated `docs/compatibility-matrix.md` (`scripts/gen-compatibility-matrix.sh`) and CI drift guard in `.github/workflows/test.yml`; release notes should link the matrix at the tagged commit
 
 Track/test supported backend versions per release so users know what combinations are actually exercised.
 
@@ -643,7 +644,7 @@ Use this section for active implementation tracking. Move items from here to com
 
 - [x] Fuzz/property suites
 - [x] Performance regression guardrails
-- [ ] Versioned compatibility matrix automation
+- [x] Versioned compatibility matrix automation
 
 ## Maintenance Rules
 
