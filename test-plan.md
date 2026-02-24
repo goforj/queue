@@ -551,7 +551,7 @@ Why:
 
 ## 10. Fuzz/property suites
 
-- [ ] Add fuzz/property tests for decoding, naming, and option-validation boundaries
+- [x] Add fuzz/property tests for decoding, naming, and option-validation boundaries
 - Location:
   - root package tests (`Fuzz...`)
   - `bus` package where parsing/validation applies
@@ -560,6 +560,7 @@ Why:
   - at least one fuzz/property target for queue-name normalization/validation
   - corpus seeds include malformed/edge payloads observed in integration tests
 - Notes:
+  - Implemented root fuzz/property targets in `fuzz_queue_test.go`: `FuzzJobBindMatchesJSONUnmarshal` (payload decode parity with `json.Unmarshal`, including malformed seeds) and `FuzzNormalizeQueueName` (empty->`default`, non-empty unchanged property)
   - keep runtime bounded for CI; run deeper fuzzing manually/nightly
 
 Targets:
@@ -639,7 +640,7 @@ Use this section for active implementation tracking. Move items from here to com
 
 ## P2 Active
 
-- [ ] Fuzz/property suites
+- [x] Fuzz/property suites
 - [ ] Performance regression guardrails
 - [ ] Versioned compatibility matrix automation
 
