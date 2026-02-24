@@ -17,6 +17,9 @@ Named scenarios currently enforced:
 - `scenario_bind_invalid_json`
 - `scenario_unique_queue_scope`
 - `scenario_dispatch_context_cancellation`
+  - `scenario_dispatch_context_precanceled`
+  - `scenario_dispatch_context_deadline_exceeded`
+  - `scenario_dispatch_context_followup_health`
 - `scenario_shutdown_during_delay_retry`
 - `scenario_multi_worker_contention`
 - `scenario_duplicate_delivery_idempotency`
@@ -70,7 +73,7 @@ What this proves today:
 - Worker restart recovery is validated only on backends marked restart-capable in the fixture matrix.
 - Invalid JSON payload decode behavior via `Job.Bind` is exercised, followed by successful processing of a valid payload.
 - Queue-scoped uniqueness is validated (same queue duplicate rejected, different queue accepted).
-- Dispatch context-cancellation behavior is validated per backend capability, with healthy follow-up job processing.
+- Dispatch context-cancellation behavior is validated per backend capability for pre-canceled and deadline-exceeded contexts, with healthy follow-up job processing.
 - Shutdown during delayed and retry workloads is validated with restart/recovery checks on supported backends.
 - Multi-worker contention is validated for deterministic backends to ensure single successful processing per job.
 - Duplicate-delivery idempotency patterns are validated under forced retry with single side-effect commit.

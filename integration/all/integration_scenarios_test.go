@@ -1391,39 +1391,61 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
-		cancelCtx, cancel := context.WithCancel(context.Background())
-		cancel()
-		cancelJob := NewJob(cancelType).
-			Payload(scenarioPayload{ID: 9400, Name: "ctx-cancel"}).
-			OnQueue(fx.queueName)
-		if fx.forceTimeout {
-			cancelJob = cancelJob.Timeout(jobTimeout)
+		dispatchCanceledJob := func(t *testing.T, step string, ctx context.Context, payloadID int) error {
+			t.Helper()
+			job := NewJob(cancelType).
+				Payload(scenarioPayload{ID: payloadID, Name: "ctx-cancel"}).
+				OnQueue(fx.queueName)
+			if fx.forceTimeout {
+				job = job.Timeout(jobTimeout)
+			}
+			return q.DispatchCtx(ctx, job)
 		}
-		err := q.DispatchCtx(cancelCtx, cancelJob)
-		if fx.supportsDispatchCtxCancel {
+
+		requireCancelBehavior := func(t *testing.T, step string, err error) {
+			t.Helper()
+			if !fx.supportsDispatchCtxCancel {
+				return
+			}
 			requireScenarioTrue(
 				t,
-				"dispatch_ctx_cancel_err",
+				step+"_err",
 				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
 				"expected context cancellation error, got %v",
 				err,
 			)
 			time.Sleep(250 * time.Millisecond)
-			requireScenarioTrue(t, "dispatch_ctx_cancel_not_processed", cancelSeen.Load() == 0, "unexpected processed count=%d", cancelSeen.Load())
+			requireScenarioTrue(t, step+"_not_processed", cancelSeen.Load() == 0, "unexpected processed count=%d", cancelSeen.Load())
 		}
 
-		goodJob := NewJob(goodType).
-			Payload(scenarioPayload{ID: 9401, Name: "ctx-good"}).
-			OnQueue(fx.queueName)
-		if fx.forceTimeout {
-			goodJob = goodJob.Timeout(jobTimeout)
-		}
-		requireScenarioNoErr(t, "dispatch_ctx_good_dispatch", q.DispatchCtx(context.Background(), goodJob))
-		select {
-		case <-goodDone:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("[dispatch_ctx_good_processed] follow-up job was not processed")
-		}
+		t.Run("scenario_dispatch_context_precanceled", func(t *testing.T) {
+			cancelCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+			err := dispatchCanceledJob(t, "dispatch_ctx_precanceled", cancelCtx, 9400)
+			requireCancelBehavior(t, "dispatch_ctx_precanceled", err)
+		})
+
+		t.Run("scenario_dispatch_context_deadline_exceeded", func(t *testing.T) {
+			deadlineCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-1*time.Second))
+			defer cancel()
+			err := dispatchCanceledJob(t, "dispatch_ctx_deadline", deadlineCtx, 9402)
+			requireCancelBehavior(t, "dispatch_ctx_deadline", err)
+		})
+
+		t.Run("scenario_dispatch_context_followup_health", func(t *testing.T) {
+			goodJob := NewJob(goodType).
+				Payload(scenarioPayload{ID: 9401, Name: "ctx-good"}).
+				OnQueue(fx.queueName)
+			if fx.forceTimeout {
+				goodJob = goodJob.Timeout(jobTimeout)
+			}
+			requireScenarioNoErr(t, "dispatch_ctx_good_dispatch", q.DispatchCtx(context.Background(), goodJob))
+			select {
+			case <-goodDone:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("[dispatch_ctx_good_processed] follow-up job was not processed")
+			}
+		})
 	})
 
 	t.Run("scenario_shutdown_during_delay_retry", func(t *testing.T) {

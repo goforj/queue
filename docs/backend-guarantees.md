@@ -37,7 +37,7 @@ These are the primary shared-scenario proofs for the matrix above.
 | Restart recovery | `scenario_worker_restart_recovery` |
 | Delayed/retry restart durability | `scenario_worker_restart_delay_recovery`; `scenario_shutdown_during_delay_retry` |
 | Poison retry semantics | `scenario_poison_message_max_retry` |
-| Dispatch context cancellation | `scenario_dispatch_context_cancellation` |
+| Dispatch context cancellation | `scenario_dispatch_context_cancellation` parent with `scenario_dispatch_context_precanceled`, `scenario_dispatch_context_deadline_exceeded`, and `scenario_dispatch_context_followup_health` |
 | Deterministic no-duplicate processing (suite-level capability) | `scenario_multi_worker_contention`; `scenario_duplicate_delivery_idempotency` |
 | Ordering contract (suite-level capability) | `scenario_ordering_contract` parent with `scenario_ordering_single_worker_fifo`; reordering behavior probed by `scenario_ordering_delayed_immediate_mix` and `scenario_ordering_retry_reorder_allowed` |
 | Broker fault handling | `scenario_dispatch_during_broker_fault`; `scenario_consume_after_broker_recovery` |
