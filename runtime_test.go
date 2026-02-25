@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/goforj/queue/bus"
 )
 
 func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
@@ -214,5 +216,89 @@ func TestQueue_Run_WorkerpoolStartsAndShutsDownOnCancel(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after cancellation")
+	}
+}
+
+func TestNew_WithStoreClockMiddlewareAndPrune(t *testing.T) {
+	fixedNow := time.Date(2024, time.January, 1, 12, 0, 0, 0, time.UTC)
+	var mwCalls atomic.Int32
+	var observed atomic.Int32
+
+	q, err := New(
+		Config{Driver: DriverSync},
+		WithStore(bus.NewMemoryStore()),
+		WithClock(func() time.Time { return fixedNow }),
+		WithObserver(WorkflowObserverFunc(func(WorkflowEvent) { observed.Add(1) })),
+		WithMiddleware(MiddlewareFunc(func(ctx context.Context, m Message, next Next) error {
+			mwCalls.Add(1)
+			return next(ctx, m)
+		})),
+	)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+
+	q.Register("mw:test", func(context.Context, Message) error { return nil })
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Shutdown(context.Background()) })
+
+	if _, err := q.Dispatch(NewJob("mw:test").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if mwCalls.Load() == 0 {
+		t.Fatal("expected middleware to be invoked")
+	}
+	if observed.Load() == 0 {
+		t.Fatal("expected workflow observer events")
+	}
+
+	chainID, err := q.Chain(NewJob("mw:test")).OnQueue("critical").Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("chain dispatch: %v", err)
+	}
+	chainState, err := q.FindChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("find chain: %v", err)
+	}
+	if !chainState.CreatedAt.Equal(fixedNow) {
+		t.Fatalf("expected fixed chain CreatedAt %v, got %v", fixedNow, chainState.CreatedAt)
+	}
+	if chainState.Queue != "critical" {
+		t.Fatalf("expected chain queue critical, got %q", chainState.Queue)
+	}
+
+	batchID, err := q.Batch(NewJob("mw:test")).
+		Name("nightly").
+		OnQueue("bulk").
+		AllowFailures().
+		Progress(func(context.Context, BatchState) error { return nil }).
+		Then(func(context.Context, BatchState) error { return nil }).
+		Catch(func(context.Context, BatchState, error) error { return nil }).
+		Finally(func(context.Context, BatchState) error { return nil }).
+		Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("batch dispatch: %v", err)
+	}
+	batchState, err := q.FindBatch(context.Background(), batchID)
+	if err != nil {
+		t.Fatalf("find batch: %v", err)
+	}
+	if batchState.Name != "nightly" {
+		t.Fatalf("expected batch name nightly, got %q", batchState.Name)
+	}
+	if batchState.Queue != "bulk" {
+		t.Fatalf("expected batch queue bulk, got %q", batchState.Queue)
+	}
+	if !batchState.AllowFailed {
+		t.Fatal("expected allow failures enabled")
+	}
+	if !batchState.CreatedAt.Equal(fixedNow) {
+		t.Fatalf("expected fixed batch CreatedAt %v, got %v", fixedNow, batchState.CreatedAt)
+	}
+
+	if err := q.Prune(context.Background(), fixedNow.Add(24*time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
 	}
 }

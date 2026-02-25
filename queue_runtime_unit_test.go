@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/goforj/queue/busruntime"
 )
 
 type runtimeBackendStub struct {
@@ -49,6 +52,56 @@ func (q *queueBackendRecorder) Dispatch(_ context.Context, job Job) error {
 func (q *queueBackendRecorder) Shutdown(context.Context) error {
 	q.shutdowns++
 	return nil
+}
+
+type driverQueueBackendStub struct {
+	driver      Driver
+	dispatched   []Job
+	shutdowns    int
+	pauseErr     error
+	resumeErr    error
+	stats        StatsSnapshot
+	statsErr     error
+	lastQueueArg string
+}
+
+func (s *driverQueueBackendStub) Driver() Driver { return s.driver }
+func (s *driverQueueBackendStub) Dispatch(_ context.Context, job Job) error {
+	s.dispatched = append(s.dispatched, job)
+	return nil
+}
+func (s *driverQueueBackendStub) Shutdown(context.Context) error {
+	s.shutdowns++
+	return nil
+}
+func (s *driverQueueBackendStub) Pause(_ context.Context, queueName string) error {
+	s.lastQueueArg = queueName
+	return s.pauseErr
+}
+func (s *driverQueueBackendStub) Resume(_ context.Context, queueName string) error {
+	s.lastQueueArg = queueName
+	return s.resumeErr
+}
+func (s *driverQueueBackendStub) Stats(context.Context) (StatsSnapshot, error) {
+	return s.stats, s.statsErr
+}
+
+type driverRuntimeBackendStub struct {
+	*driverQueueBackendStub
+	registered map[string]Handler
+	startErr    error
+	startCalls  int
+}
+
+func (s *driverRuntimeBackendStub) Register(jobType string, h Handler) {
+	if s.registered == nil {
+		s.registered = map[string]Handler{}
+	}
+	s.registered[jobType] = h
+}
+func (s *driverRuntimeBackendStub) StartWorkers(context.Context) error {
+	s.startCalls++
+	return s.startErr
 }
 
 func TestQueueCommon_JobFromAnyAndHelpers(t *testing.T) {
@@ -138,6 +191,9 @@ func TestExternalQueueRuntimeRegisterShutdownAndWorkers(t *testing.T) {
 	q.started = true
 
 	q.Register("job:external", func(context.Context, Job) error { return nil })
+	if q.Driver() != DriverNATS {
+		t.Fatalf("expected external driver nats, got %q", q.Driver())
+	}
 	if _, ok := worker.registered["job:external"]; !ok {
 		t.Fatal("expected register to forward to started external worker")
 	}
@@ -155,6 +211,118 @@ func TestExternalQueueRuntimeRegisterShutdownAndWorkers(t *testing.T) {
 	}
 	if inner.shutdowns != 1 {
 		t.Fatalf("expected inner shutdown once, got %d", inner.shutdowns)
+	}
+}
+
+func TestQueueCommon_PauseResumeStatsUnsupported(t *testing.T) {
+	common := &queueCommon{
+		inner:  &queueBackendRecorder{},
+		driver: DriverNull,
+	}
+	if err := common.Pause(context.Background(), "default"); !errors.Is(err, ErrPauseUnsupported) {
+		t.Fatalf("expected ErrPauseUnsupported, got %v", err)
+	}
+	if err := common.Resume(context.Background(), "default"); !errors.Is(err, ErrPauseUnsupported) {
+		t.Fatalf("expected ErrPauseUnsupported, got %v", err)
+	}
+	if _, err := common.Stats(context.Background()); err == nil {
+		t.Fatal("expected stats unsupported error")
+	}
+}
+
+func TestRuntimeBusWrappers_NilRegisterAndDispatchCtx(t *testing.T) {
+	inner := &queueBackendRecorder{}
+	nativeBackend := &runtimeBackendStub{}
+	native := &nativeQueueRuntime{
+		common:     &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+		runtime:    nativeBackend,
+		registered: map[string]Handler{},
+	}
+	externalWorker := &runtimeBackendStub{}
+	external := &externalQueueRuntime{
+		common:     &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverNATS},
+		registered: map[string]Handler{},
+		worker:     externalWorker,
+		started:    true,
+	}
+
+	native.BusRegister("job:nil:native", nil)
+	external.BusRegister("job:nil:external", nil)
+	if _, ok := native.registered["job:nil:native"]; !ok {
+		t.Fatal("expected native BusRegister(nil) to store registration")
+	}
+	if h, ok := externalWorker.registered["job:nil:external"]; !ok || h != nil {
+		t.Fatal("expected external BusRegister(nil) to forward nil handler")
+	}
+
+	opts := busruntime.JobOptions{
+		Queue:     "critical",
+		Delay:     10 * time.Millisecond,
+		Timeout:   20 * time.Millisecond,
+		Retry:     2,
+		Backoff:   5 * time.Millisecond,
+		UniqueFor: 30 * time.Millisecond,
+	}
+	if err := native.BusDispatch(context.Background(), "job:native", []byte(`{"n":1}`), opts); err != nil {
+		t.Fatalf("native BusDispatch failed: %v", err)
+	}
+	if err := external.BusDispatch(context.Background(), "job:external", []byte(`{"n":1}`), opts); err != nil {
+		t.Fatalf("external BusDispatch failed: %v", err)
+	}
+	if got := len(inner.dispatched); got != 2 {
+		t.Fatalf("expected 2 bus-dispatched jobs recorded, got %d", got)
+	}
+	for _, job := range inner.dispatched {
+		jopts := job.jobOptions()
+		if jopts.queueName != "critical" || jopts.timeout == nil || jopts.maxRetry == nil || jopts.backoff == nil {
+			t.Fatalf("expected mapped bus job options, got %+v", jopts)
+		}
+	}
+}
+
+func TestDriverAdapters_PauseResumeStats_Branches(t *testing.T) {
+	a := driverQueueBackendAdapter{&queueBackendRecorder{}}
+	if err := a.Pause(context.Background(), "q"); !errors.Is(err, ErrPauseUnsupported) {
+		t.Fatalf("expected unsupported pause, got %v", err)
+	}
+	if err := a.Resume(context.Background(), "q"); !errors.Is(err, ErrPauseUnsupported) {
+		t.Fatalf("expected unsupported resume, got %v", err)
+	}
+	if _, err := a.Stats(context.Background()); err == nil {
+		t.Fatal("expected unsupported stats error")
+	}
+
+	supported := &driverQueueBackendStub{
+		driver: DriverRedis,
+		stats: StatsSnapshot{ByQueue: map[string]QueueCounters{"default": {Pending: 1}}},
+	}
+	a2 := driverQueueBackendAdapter{supported}
+	if err := a2.Pause(context.Background(), "default"); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if err := a2.Resume(context.Background(), "default"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	snap, err := a2.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if snap.Pending("default") != 1 {
+		t.Fatalf("expected pending=1, got %d", snap.Pending("default"))
+	}
+	if supported.lastQueueArg != "default" {
+		t.Fatalf("expected queue arg default, got %q", supported.lastQueueArg)
+	}
+
+	ar := driverRuntimeQueueBackendAdapter{&runtimeBackendStub{}}
+	if err := ar.Pause(context.Background(), "q"); !errors.Is(err, ErrPauseUnsupported) {
+		t.Fatalf("expected unsupported runtime pause, got %v", err)
+	}
+	if err := ar.Resume(context.Background(), "q"); !errors.Is(err, ErrPauseUnsupported) {
+		t.Fatalf("expected unsupported runtime resume, got %v", err)
+	}
+	if _, err := ar.Stats(context.Background()); err == nil {
+		t.Fatal("expected unsupported runtime stats error")
 	}
 }
 

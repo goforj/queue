@@ -40,6 +40,14 @@ func (s *queueBackendStub) Stats(context.Context) (StatsSnapshot, error) {
 	return s.stats, s.statsErr
 }
 
+type queueBackendOnlyStub struct {
+	dispatchErr error
+}
+
+func (s *queueBackendOnlyStub) Driver() Driver                        { return DriverNull }
+func (s *queueBackendOnlyStub) Dispatch(context.Context, Job) error   { return s.dispatchErr }
+func (s *queueBackendOnlyStub) Shutdown(context.Context) error        { return nil }
+
 type observerRecorder struct {
 	events []Event
 }
@@ -185,6 +193,46 @@ func TestObservedQueue_WrapperMethods(t *testing.T) {
 	}
 }
 
+func TestObservedQueue_UnsupportedAndErrorBranches(t *testing.T) {
+	recorder := &observerRecorder{}
+	oqNoRuntime := &observedQueue{
+		inner:    &queueBackendOnlyStub{},
+		driver:   DriverNull,
+		observer: recorder,
+	}
+	if err := oqNoRuntime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers no-runtime branch should be nil, got %v", err)
+	}
+	if _, err := oqNoRuntime.Stats(context.Background()); err == nil {
+		t.Fatal("expected unsupported stats error")
+	}
+	if err := oqNoRuntime.Pause(context.Background(), "default"); !errors.Is(err, ErrPauseUnsupported) {
+		t.Fatalf("expected ErrPauseUnsupported, got %v", err)
+	}
+	if err := oqNoRuntime.Resume(context.Background(), "default"); !errors.Is(err, ErrPauseUnsupported) {
+		t.Fatalf("expected ErrPauseUnsupported, got %v", err)
+	}
+
+	oqErrs := &observedQueue{
+		inner: &queueBackendStub{
+			pauseErr:  errors.New("pause failed"),
+			resumeErr: errors.New("resume failed"),
+			statsErr:  errors.New("stats failed"),
+		},
+		driver:   DriverSync,
+		observer: recorder,
+	}
+	if err := oqErrs.Pause(context.Background(), "default"); err == nil {
+		t.Fatal("expected pause error")
+	}
+	if err := oqErrs.Resume(context.Background(), "default"); err == nil {
+		t.Fatal("expected resume error")
+	}
+	if _, err := oqErrs.Stats(context.Background()); err == nil {
+		t.Fatal("expected stats error")
+	}
+}
+
 func TestObservedQueue_RegisterBranches(t *testing.T) {
 	inner := &queueBackendStub{}
 	recorder := &observerRecorder{}
@@ -225,6 +273,43 @@ func TestPruneBefore_Branches(t *testing.T) {
 	unchanged := pruneBefore(pruned, now.Add(-24*time.Hour))
 	if len(unchanged) != len(pruned) {
 		t.Fatalf("expected unchanged slice length %d, got %d", len(pruned), len(unchanged))
+	}
+}
+
+func TestObservabilityHelpers_ResolveAndSnapshotFallbacks(t *testing.T) {
+	if SupportsPause(nil) {
+		t.Fatal("nil should not support pause")
+	}
+	var qnil *Queue
+	if SupportsPause(qnil) || SupportsNativeStats(qnil) {
+		t.Fatal("nil *Queue should not report capabilities")
+	}
+	if SupportsPause(struct{}{}) || SupportsNativeStats(struct{}{}) {
+		t.Fatal("unsupported values should not report capabilities")
+	}
+
+	qSync, err := NewSync()
+	if err != nil {
+		t.Fatalf("new sync: %v", err)
+	}
+	if !SupportsPause(qSync) || !SupportsNativeStats(qSync) {
+		t.Fatal("sync queue should support pause and native stats")
+	}
+
+	collector := NewStatsCollector()
+	collector.Observe(Event{Kind: EventEnqueueAccepted, Driver: DriverNull, Queue: "default", Time: time.Now()})
+
+	snap, err := Snapshot(context.Background(), &queueBackendStub{statsErr: errors.New("driver stats failed")}, collector)
+	if err != nil {
+		t.Fatalf("snapshot with collector fallback: %v", err)
+	}
+	if got := snap.Pending("default") + snap.Processed("default") + snap.Scheduled("default") + snap.Active("default"); got == 0 {
+		// Enqueue accepted increments pending in collector snapshots.
+		t.Fatal("expected non-empty collector fallback snapshot")
+	}
+
+	if _, err := Snapshot(context.Background(), &queueBackendOnlyStub{}, nil); err == nil {
+		t.Fatal("expected snapshot unavailable error without provider or collector")
 	}
 }
 
