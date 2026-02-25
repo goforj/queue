@@ -200,6 +200,40 @@ q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 | <img src="https://img.shields.io/badge/SQS-FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 | <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | ✓ | ✓ | ✓ |
 
+### Driver constructor quick examples
+
+Use root constructors for in-process backends, and driver-module constructors for external backends. See the `Driver Constructors` API section below for full constructor shapes (`New(...)` and `NewWithConfig(...)`).
+
+```go
+package main
+
+import (
+	"github.com/goforj/queue"
+	"github.com/goforj/queue/driver/mysqlqueue"
+	"github.com/goforj/queue/driver/natsqueue"
+	"github.com/goforj/queue/driver/postgresqueue"
+	"github.com/goforj/queue/driver/rabbitmqqueue"
+	"github.com/goforj/queue/driver/redisqueue"
+	"github.com/goforj/queue/driver/sqlitequeue"
+	"github.com/goforj/queue/driver/sqsqueue"
+)
+
+func main() {
+	queue.NewSync()       // in-process sync
+	queue.NewWorkerpool() // in-process worker pool
+	queue.NewNull()       // drop-only / disabled mode
+
+	sqlitequeue.New("file:queue.db?_busy_timeout=5000") // SQL durable queue (SQLite)
+	mysqlqueue.New("user:pass@tcp(127.0.0.1:3306)/app") // SQL durable queue (MySQL)
+	postgresqueue.New("postgres://user:pass@127.0.0.1:5432/app?sslmode=disable") // SQL durable queue (Postgres)
+
+	redisqueue.New("127.0.0.1:6379")                           // Redis/Asynq
+	natsqueue.New("nats://127.0.0.1:4222")                     // NATS
+	sqsqueue.New("us-east-1")                                  // SQS
+	rabbitmqqueue.New("amqp://guest:guest@127.0.0.1:5672/")    // RabbitMQ
+}
+```
+
 ## Middleware
 
 Use `queue.WithMiddleware(...)` to apply cross-cutting workflow behavior (logging, filtering, error policy) to chains/batches/dispatch orchestration.
@@ -226,23 +260,6 @@ _ = q
 | Middleware | Cross-cutting execution policy | `Queue` middleware (`queue.WithMiddleware`) |
 | Events | Lifecycle hooks and observability | queue runtime events (`queue.Observer`) + workflow events (advanced plumbing) |
 | Backends | Driver/runtime transport | `queue.New(...)` and driver module `New(...)` constructors |
-
-## Queue Backends
-
-Use `queue` and driver-module constructors to choose the backend. `Queue` composes these backends for workflow features.
-For optional backend migration examples, see `docs/driver-migration.md`.
-
-| Backend | Constructor |
-| ---: | --- |
-| In-process sync | `queue.NewSync()` |
-| In-process worker pool | `queue.NewWorkerpool()` |
-| SQL durable queue | `sqlitequeue.New(dsn)` (`github.com/goforj/queue/driver/sqlitequeue`) / `mysqlqueue.New(dsn)` / `postgresqueue.New(dsn)` |
-| Redis/Asynq | `redisqueue.New(addr)` (`github.com/goforj/queue/driver/redisqueue`) |
-| NATS | `natsqueue.New(url)` (`github.com/goforj/queue/driver/natsqueue`) |
-| SQS | `sqsqueue.New(region)` (`github.com/goforj/queue/driver/sqsqueue`) |
-| RabbitMQ | `rabbitmqqueue.New(url)` (`github.com/goforj/queue/driver/rabbitmqqueue`) |
-| Drop-only (disabled mode) | `queue.NewNull()` |
-
 
 ## Observability
 
@@ -1141,6 +1158,8 @@ _, _ = q.FindChain(context.Background(), chainID)
 #### <a id="queue-queue-pause"></a>Queue.Pause
 
 Pause pauses consumption for a queue when supported by the underlying driver.
+See the README "Queue Backends" table for Pause/Resume support and
+docs/backend-guarantees.md (Capability Matrix) for broader backend differences.
 
 ```go
 q, err := queue.NewSync()

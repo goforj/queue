@@ -12,6 +12,8 @@ import (
 
 func main() {
 	// Pause pauses consumption for a queue when supported by the underlying driver.
+	// See the README "Queue Backends" table for Pause/Resume support and
+	// docs/backend-guarantees.md (Capability Matrix) for broader backend differences.
 
 	// Example: pause queue
 	q, err := queue.NewSync()
