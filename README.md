@@ -193,14 +193,57 @@ func main() {
 
 ## Core Concepts
 
-| Concept | Purpose | Primary API |
-| --- | --- | --- |
-| Job | Typed work unit for app handlers | `queue.NewJob`, `Dispatch` |
-| Chain | Ordered workflow (A then B then C) | `Chain(...).Dispatch(...)` |
-| Batch | Parallel workflow with callbacks | `Batch(...).Then/Catch/Finally` |
-| Middleware | Cross-cutting execution policy | `Queue` middleware (`queue.WithMiddleware`) |
-| Events | Lifecycle hooks and observability | queue runtime events (`queue.Observer`) + workflow events (advanced plumbing) |
-| Backends | Driver/runtime transport | `queue.New(...)` and driver module `New(...)` constructors |
+**Job**: Typed work unit for app handlers.
+
+```go
+_, _ = q.Dispatch(
+	queue.NewJob("emails:send").Payload(EmailPayload{To: "user@example.com"}),
+)
+```
+
+**Chain**: Ordered workflow (A then B then C).
+
+```go
+_, _ = q.Chain(
+	queue.NewJob("reports:generate"),
+	queue.NewJob("reports:upload"),
+	queue.NewJob("users:notify_report_ready"),
+).Dispatch(context.Background())
+```
+
+**Batch**: Parallel workflow with callbacks.
+
+```go
+_, _ = q.Batch(
+	queue.NewJob("emails:send"),
+	queue.NewJob("sms:send"),
+).Then(queue.NewJob("notifications:done")).Dispatch(context.Background())
+```
+
+**Middleware**: Cross-cutting execution policy.
+
+```go
+q, _ := queue.New(
+	queue.Config{Driver: queue.DriverWorkerpool},
+	queue.WithMiddleware(audit, skipMaintenance, fatalValidation),
+)
+```
+
+**Events**: Lifecycle hooks and observability.
+
+```go
+q, _ := queue.New(
+	queue.Config{Driver: queue.DriverWorkerpool, Observer: queue.NewStatsCollector()},
+)
+```
+
+**Backends**: Driver/runtime transport selection.
+
+```go
+q, _ := queue.NewWorkerpool()
+rq, _ := redisqueue.New("127.0.0.1:6379")
+_, _ = q, rq
+```
 
 
 ## Job builder options
