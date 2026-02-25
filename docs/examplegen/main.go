@@ -630,35 +630,35 @@ func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) er
 	}
 
 	buf.WriteString("func main() {\n")
-	for i := range fd.Examples {
-		buf.WriteString(fmt.Sprintf("\texample%d()\n", i+1))
+	if fd.Description != "" {
+		for _, line := range strings.Split(fd.Description, "\n") {
+			buf.WriteString("\t// " + line + "\n")
+		}
+		buf.WriteString("\n")
 	}
-	buf.WriteString("}\n\n")
 
 	for i, ex := range fd.Examples {
-		buf.WriteString(fmt.Sprintf("func example%d() {\n", i+1))
-
-		if i == 0 && fd.Description != "" {
-			for _, line := range strings.Split(fd.Description, "\n") {
-				buf.WriteString("\t// " + line + "\n")
-			}
+		if i > 0 {
 			buf.WriteString("\n")
 		}
-
 		if ex.Label != "" {
 			buf.WriteString("\t// Example: " + ex.Label + "\n")
 		}
+		// Isolate each example body in an IIFE so snippets can reuse names and
+		// use `return` without exiting the whole generated main().
+		buf.WriteString("\tfunc() {\n")
 
 		ex.Code = strings.TrimLeft(ex.Code, "\n")
 		for _, line := range strings.Split(ex.Code, "\n") {
 			if strings.TrimSpace(line) == "" {
 				buf.WriteString("\n")
 			} else {
-				buf.WriteString("\t" + line + "\n")
+				buf.WriteString("\t\t" + line + "\n")
 			}
 		}
-		buf.WriteString("}\n\n")
+		buf.WriteString("\t}()\n")
 	}
+	buf.WriteString("}\n")
 
 	return os.WriteFile(filepath.Join(dir, "main.go"), buf.Bytes(), 0o644)
 }
