@@ -267,24 +267,24 @@ INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=benchrender ./d
 
 ### Tables
 
-### Integration Dispatch Throughput
+### External Dispatch Throughput
 
 | Driver | ns/op | ops/s | Relative | B/op | allocs/op |
 |:------|-----:|-----:|--------:|-----:|---------:|
-| nats | 702 | 1424299 | 1.00x | 1249 | 13 |
-| redis | 87204 | 11467 | 124.20x | 2112 | 33 |
-| rabbitmq | 141768 | 7054 | 201.92x | 1881 | 57 |
-| postgres | 710673 | 1407 | 1012.21x | 3602 | 74 |
-| sqs | 1366986 | 732 | 1947.00x | 93303 | 1078 |
-| mysql | 1975123 | 506 | 2813.16x | 3405 | 65 |
+| nats | 719 | 1390821 | 1.00x | 1258 | 13 |
+| redis | 88619 | 11284 | 123.25x | 2112 | 33 |
+| rabbitmq | 137518 | 7272 | 191.26x | 1881 | 57 |
+| postgres | 835023 | 1198 | 1161.37x | 3579 | 74 |
+| sqs | 1500298 | 667 | 2086.65x | 94752 | 1094 |
+| mysql | 1779421 | 562 | 2474.86x | 3433 | 65 |
 
 ### Local Dispatch Throughput
 
 | Driver | ns/op | ops/s | Relative | B/op | allocs/op |
 |:------|-----:|-----:|--------:|-----:|---------:|
-| null | 38 | 26001040 | 1.00x | 128 | 1 |
-| sync | 264 | 3790751 | 6.86x | 408 | 6 |
-| workerpool | 655 | 1526718 | 17.03x | 456 | 7 |
+| null | 35 | 28694405 | 1.00x | 128 | 1 |
+| sync | 247 | 4043672 | 7.10x | 408 | 6 |
+| workerpool | 574 | 1742464 | 16.47x | 456 | 7 |
 
 <!-- bench:embed:end -->
 

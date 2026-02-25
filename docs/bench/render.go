@@ -227,7 +227,7 @@ func renderTable(rows []benchRow) string {
 			buf.WriteByte('\n')
 		}
 		buf.WriteString("### ")
-		buf.WriteString(set)
+		buf.WriteString(displaySetLabel(set))
 		buf.WriteString(" Dispatch Throughput\n\n")
 		buf.WriteString("| Driver | ns/op | ops/s | Relative | B/op | allocs/op |\n")
 		buf.WriteString("|:------|-----:|-----:|--------:|-----:|---------:|\n")
@@ -319,7 +319,7 @@ func writeMetricSVG(root, fileName, title, unit string, higherBetter bool, rows 
 		centerY := y + rowHeight/2
 		label := row.Driver
 		if row.Set != "" {
-			label = row.Set + "/" + row.Driver
+			label = displaySetLabel(row.Set) + "/" + row.Driver
 		}
 		// track
 		svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="%d" height="%d" rx="4" fill="#1f2937"/>`+"\n", axisX0, y, plotW, rowHeight))
@@ -340,7 +340,7 @@ func writeMetricSVG(root, fileName, title, unit string, higherBetter bool, rows 
 	svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="12" height="12" fill="#60a5fa"/>`+"\n", leftPad, legendY-10))
 	svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" fill="#d1d5db" font-size="12" font-family="Arial, sans-serif">Local</text>`+"\n", leftPad+18, legendY))
 	svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="12" height="12" fill="#34d399"/>`+"\n", leftPad+80, legendY-10))
-	svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" fill="#d1d5db" font-size="12" font-family="Arial, sans-serif">Integration</text>`+"\n", leftPad+98, legendY))
+	svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" fill="#d1d5db" font-size="12" font-family="Arial, sans-serif">External</text>`+"\n", leftPad+98, legendY))
 
 	svg.WriteString(`</svg>` + "\n")
 	return os.WriteFile(filepath.Join(root, "docs", "bench", fileName), svg.Bytes(), 0o644)
@@ -362,6 +362,15 @@ func xmlEscape(s string) string {
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
 	return s
+}
+
+func displaySetLabel(set string) string {
+	switch set {
+	case "Integration":
+		return "External"
+	default:
+		return set
+	}
 }
 
 func replaceBenchBlock(readme, rendered string) (string, error) {

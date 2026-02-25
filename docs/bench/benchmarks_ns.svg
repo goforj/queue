@@ -6,53 +6,53 @@
 <line x1="280" y1="80" x2="280" y2="504" stroke="#374151" stroke-width="1"/>
 <text x="280" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">0</text>
 <line x1="440" y1="80" x2="440" y2="504" stroke="#374151" stroke-width="1"/>
-<text x="440" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">434.5k</text>
+<text x="440" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">391.5k</text>
 <line x1="600" y1="80" x2="600" y2="504" stroke="#374151" stroke-width="1"/>
-<text x="600" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">869.1k</text>
+<text x="600" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">782.9k</text>
 <line x1="760" y1="80" x2="760" y2="504" stroke="#374151" stroke-width="1"/>
-<text x="760" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">1.3M</text>
+<text x="760" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">1.2M</text>
 <line x1="920" y1="80" x2="920" y2="504" stroke="#374151" stroke-width="1"/>
-<text x="920" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">1.7M</text>
+<text x="920" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">1.6M</text>
 <line x1="1080" y1="80" x2="1080" y2="504" stroke="#374151" stroke-width="1"/>
-<text x="1080" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">2.2M</text>
+<text x="1080" y="82" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">2.0M</text>
 <rect x="280" y="90" width="800" height="34" rx="4" fill="#1f2937"/>
 <rect x="280" y="90" width="1" height="34" rx="4" fill="#34d399"/>
-<text x="270" y="112" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Integration/nats</text>
-<text x="289" y="112" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">702</text>
+<text x="270" y="112" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">External/nats</text>
+<text x="289" y="112" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">719</text>
 <rect x="280" y="136" width="800" height="34" rx="4" fill="#1f2937"/>
-<rect x="280" y="136" width="32" height="34" rx="4" fill="#34d399"/>
-<text x="270" y="158" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Integration/redis</text>
-<text x="320" y="158" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">87.2k</text>
+<rect x="280" y="136" width="36" height="34" rx="4" fill="#34d399"/>
+<text x="270" y="158" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">External/redis</text>
+<text x="324" y="158" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">88.6k</text>
 <rect x="280" y="182" width="800" height="34" rx="4" fill="#1f2937"/>
-<rect x="280" y="182" width="52" height="34" rx="4" fill="#34d399"/>
-<text x="270" y="204" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Integration/rabbitmq</text>
-<text x="340" y="204" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">141.8k</text>
+<rect x="280" y="182" width="56" height="34" rx="4" fill="#34d399"/>
+<text x="270" y="204" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">External/rabbitmq</text>
+<text x="344" y="204" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">137.5k</text>
 <rect x="280" y="228" width="800" height="34" rx="4" fill="#1f2937"/>
-<rect x="280" y="228" width="261" height="34" rx="4" fill="#34d399"/>
-<text x="270" y="250" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Integration/postgres</text>
-<text x="549" y="250" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">710.7k</text>
+<rect x="280" y="228" width="341" height="34" rx="4" fill="#34d399"/>
+<text x="270" y="250" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">External/postgres</text>
+<text x="629" y="250" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">835.0k</text>
 <rect x="280" y="274" width="800" height="34" rx="4" fill="#1f2937"/>
-<rect x="280" y="274" width="503" height="34" rx="4" fill="#34d399"/>
-<text x="270" y="296" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Integration/sqs</text>
-<text x="791" y="296" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">1.4M</text>
+<rect x="280" y="274" width="613" height="34" rx="4" fill="#34d399"/>
+<text x="270" y="296" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">External/sqs</text>
+<text x="901" y="296" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">1.5M</text>
 <rect x="280" y="320" width="800" height="34" rx="4" fill="#1f2937"/>
 <rect x="280" y="320" width="727" height="34" rx="4" fill="#34d399"/>
-<text x="270" y="342" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Integration/mysql</text>
-<text x="1015" y="342" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">2.0M</text>
+<text x="270" y="342" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">External/mysql</text>
+<text x="1015" y="342" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">1.8M</text>
 <rect x="280" y="366" width="800" height="34" rx="4" fill="#1f2937"/>
 <rect x="280" y="366" width="1" height="34" rx="4" fill="#60a5fa"/>
 <text x="270" y="388" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Local/null</text>
-<text x="289" y="388" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">38</text>
+<text x="289" y="388" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">35</text>
 <rect x="280" y="412" width="800" height="34" rx="4" fill="#1f2937"/>
 <rect x="280" y="412" width="1" height="34" rx="4" fill="#60a5fa"/>
 <text x="270" y="434" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Local/sync</text>
-<text x="289" y="434" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">264</text>
+<text x="289" y="434" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">247</text>
 <rect x="280" y="458" width="800" height="34" rx="4" fill="#1f2937"/>
 <rect x="280" y="458" width="1" height="34" rx="4" fill="#60a5fa"/>
 <text x="270" y="480" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">Local/workerpool</text>
-<text x="289" y="480" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">655</text>
+<text x="289" y="480" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">574</text>
 <rect x="280" y="520" width="12" height="12" fill="#60a5fa"/>
 <text x="298" y="530" fill="#d1d5db" font-size="12" font-family="Arial, sans-serif">Local</text>
 <rect x="360" y="520" width="12" height="12" fill="#34d399"/>
-<text x="378" y="530" fill="#d1d5db" font-size="12" font-family="Arial, sans-serif">Integration</text>
+<text x="378" y="530" fill="#d1d5db" font-size="12" font-family="Arial, sans-serif">External</text>
 </svg>
