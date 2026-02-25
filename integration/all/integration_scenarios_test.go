@@ -2163,6 +2163,23 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		// saturation behavior rather than dynamic handler/subscription propagation.
 		requireScenarioNoErr(t, "backpressure_worker_start", (w).StartWorkers(context.Background()))
 
+		// Prove workers are actively draining the saturated queue before publishing the probe.
+		progressDeadline := time.After(20 * time.Second)
+		progressTicker := time.NewTicker(50 * time.Millisecond)
+		defer progressTicker.Stop()
+		progressSeen := false
+		for !progressSeen {
+			if processed.Load() > 0 {
+				progressSeen = true
+				break
+			}
+			select {
+			case <-progressDeadline:
+				t.Fatalf("[backpressure_progress_before_probe] processed=%d expected>0", processed.Load())
+			case <-progressTicker.C:
+			}
+		}
+
 		probe := NewJob(probeType).
 			Payload(scenarioPayload{ID: 9800, Name: "probe"}).
 			OnQueue(fx.queueName)
