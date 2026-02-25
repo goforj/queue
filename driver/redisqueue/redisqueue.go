@@ -18,11 +18,43 @@ type Config struct {
 }
 
 // New creates a high-level Queue using the Redis backend.
-func New(addr string) (*queue.Queue, error) {
-	return NewWithConfig(Config{Addr: addr})
+// @group Constructors
+//
+// Example: redis shorthand constructor
+//
+//	q, err := redisqueue.New(
+//		"127.0.0.1:6379",
+//		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func New(addr string, opts ...queue.Option) (*queue.Queue, error) {
+	return NewWithConfig(Config{Addr: addr}, opts...)
 }
 
 // NewWithConfig creates a high-level Queue using an explicit Redis driver config.
+// @group Constructors
+//
+// Example: redis config constructor
+//
+//	q, err := redisqueue.NewWithConfig(
+//		redisqueue.Config{
+//			DriverBaseConfig: queueconfig.DriverBaseConfig{
+//				DefaultQueue: "critical", // default if empty: "default"
+//				Observer:     nil,        // default: nil
+//			},
+//			Addr: "127.0.0.1:6379", // required
+//			Password: "",           // optional; default empty
+//			DB: 0,                  // optional; default 0
+//		},
+//		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	if cfg.Addr == "" {
 		return nil, fmt.Errorf("redis addr is required")

@@ -100,6 +100,7 @@ type Option func(*runtimeOptions)
 
 type runtimeOptions struct {
 	busOpts []bus.Option
+	workers int
 }
 
 func (o *runtimeOptions) apply(opts []Option) {
@@ -184,6 +185,28 @@ func WithMiddleware(middlewares ...Middleware) Option {
 	}
 }
 
+// WithWorkers sets desired worker concurrency before StartWorkers.
+// It applies to high-level queue constructors (for example NewWorkerpool/New/NewSync).
+// @group Queue
+//
+// Example: constructor workers option
+//
+//	q, err := queue.NewWorkerpool(
+//		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func WithWorkers(count int) Option {
+	return func(o *runtimeOptions) {
+		if count <= 0 {
+			return
+		}
+		o.workers = count
+	}
+}
+
 // Queue is the high-level user-facing queue API.
 // It composes the queue runtime with the internal orchestration engine.
 // @group Queue
@@ -203,6 +226,9 @@ func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
+	if ro.workers > 0 && q != nil {
+		q = q.Workers(ro.workers)
+	}
 	b, err := bus.New(q, ro.busOpts...)
 	if err != nil {
 		return nil, err
@@ -220,8 +246,8 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 //		return
 //	}
 //	_ = q
-func NewNull() (*Queue, error) {
-	return New(Config{Driver: DriverNull})
+func NewNull(opts ...Option) (*Queue, error) {
+	return New(Config{Driver: DriverNull}, opts...)
 }
 
 // NewSync creates a Queue on the synchronous in-process backend.
@@ -234,8 +260,8 @@ func NewNull() (*Queue, error) {
 //		return
 //	}
 //	_ = q
-func NewSync() (*Queue, error) {
-	return New(Config{Driver: DriverSync})
+func NewSync(opts ...Option) (*Queue, error) {
+	return New(Config{Driver: DriverSync}, opts...)
 }
 
 // NewWorkerpool creates a Queue on the in-process workerpool backend.
@@ -248,8 +274,8 @@ func NewSync() (*Queue, error) {
 //		return
 //	}
 //	_ = q
-func NewWorkerpool() (*Queue, error) {
-	return New(Config{Driver: DriverWorkerpool})
+func NewWorkerpool(opts ...Option) (*Queue, error) {
+	return New(Config{Driver: DriverWorkerpool}, opts...)
 }
 
 // Register binds a handler for a high-level job type.
@@ -297,7 +323,7 @@ func (r *Queue) Driver() Driver {
 	return r.q.Driver()
 }
 
-// Workers sets desired worker concurrency before StartWorkers.
+// WithWorkers sets desired worker concurrency before StartWorkers.
 // @group Queue
 //
 // Example: workers
@@ -306,8 +332,8 @@ func (r *Queue) Driver() Driver {
 //	if err != nil {
 //		return
 //	}
-//	q.Workers(4)
-func (r *Queue) Workers(count int) *Queue {
+//	q.WithWorkers(4) // optional; default: runtime.NumCPU() (min 1)
+func (r *Queue) WithWorkers(count int) *Queue {
 	if r == nil || r.q == nil {
 		return r
 	}

@@ -48,9 +48,7 @@ func compileQuickStartQueueSnippet(q *queue.Queue) {
 }
 
 func compileQuickStartWorkflowSnippet(q *queue.Queue) {
-	if q == nil {
-		return
-	}
+	q, _ = queue.NewWorkerpool(queue.WithWorkers(2))
 
 	type EmailPayload struct {
 		ID int `json:"id"`
@@ -63,7 +61,7 @@ func compileQuickStartWorkflowSnippet(q *queue.Queue) {
 	})
 	q.Register("users:notify_report_ready", func(context.Context, queue.Message) error { return nil })
 
-	_ = q.Workers(2).StartWorkers(context.Background())
+	_ = q.StartWorkers(context.Background())
 	defer q.Shutdown(context.Background())
 
 	chainID, _ := q.Chain(

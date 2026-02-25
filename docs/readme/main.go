@@ -63,6 +63,7 @@ func run() error {
 //
 
 type FuncDoc struct {
+	Category    string
 	Package     string
 	Owner       string
 	Name        string
@@ -103,13 +104,23 @@ var (
 )
 
 func parseFuncs(root string) ([]*FuncDoc, error) {
-	dirs := []string{
-		root,
+	type parseTarget struct {
+		dir      string
+		category string
+	}
+	targets := []parseTarget{{dir: root, category: "Core"}}
+	driverDirs, err := filepath.Glob(filepath.Join(root, "driver", "*queue"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(driverDirs)
+	for _, dir := range driverDirs {
+		targets = append(targets, parseTarget{dir: dir, category: "Driver Modules"})
 	}
 
 	var out []*FuncDoc
-	for _, dir := range dirs {
-		funcs, err := parseFuncsInDir(dir)
+	for _, target := range targets {
+		funcs, err := parseFuncsInDir(target.dir, target.category)
 		if err != nil {
 			return nil, err
 		}
@@ -117,13 +128,16 @@ func parseFuncs(root string) ([]*FuncDoc, error) {
 	}
 
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Package == out[j].Package {
-			if out[i].Owner == out[j].Owner {
-				return out[i].Name < out[j].Name
+		if out[i].Category == out[j].Category {
+			if out[i].Package == out[j].Package {
+				if out[i].Owner == out[j].Owner {
+					return out[i].Name < out[j].Name
+				}
+				return out[i].Owner < out[j].Owner
 			}
-			return out[i].Owner < out[j].Owner
+			return out[i].Package < out[j].Package
 		}
-		return out[i].Package < out[j].Package
+		return out[i].Category < out[j].Category
 	})
 
 	return out, nil
@@ -171,7 +185,14 @@ func ownerQualifiedName(fd *FuncDoc) string {
 	return fd.Owner + "." + fd.Name
 }
 
-func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
+func packageCategoryLabel(category, pkg string) string {
+	if category == "Core" && pkg == "queue" {
+		return "Queue (root package)"
+	}
+	return pkg
+}
+
+func parseFuncsInDir(dir string, category string) ([]*FuncDoc, error) {
 	fset := token.NewFileSet()
 
 	pkgs, err := parser.ParseDir(
@@ -213,6 +234,7 @@ func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
 					}
 				}
 				fd := &FuncDoc{
+					Category:    category,
 					Package:     pkgName,
 					Owner:       owner,
 					Name:        d.Name.Name,
@@ -252,6 +274,7 @@ func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
 								continue
 							}
 							fd := &FuncDoc{
+								Category:    category,
 								Package:     pkgName,
 								Owner:       typeSpec.Name.Name,
 								Name:        name.Name,
@@ -288,7 +311,7 @@ func parseFuncsInDir(dir string) ([]*FuncDoc, error) {
 }
 
 func mergeFuncDoc(funcs map[string]*FuncDoc, fd *FuncDoc) {
-	key := fd.Package + "." + fd.Owner + "." + fd.Name
+	key := fd.Category + "." + fd.Package + "." + fd.Owner + "." + fd.Name
 	if existing, ok := funcs[key]; ok {
 		existing.Examples = append(existing.Examples, fd.Examples...)
 		if existing.Description == "" && fd.Description != "" {
@@ -459,27 +482,34 @@ func selectPackage(pkgs map[string]*ast.Package) (string, error) {
 //
 
 func renderAPI(funcs []*FuncDoc) string {
-	byPackageGroup := map[string]map[string][]*FuncDoc{}
+	byCategoryPackageGroup := map[string]map[string]map[string][]*FuncDoc{}
 	bareCounts := map[string]int{}
 	ownerQualifiedCounts := map[string]int{}
 	for _, fd := range funcs {
 		if !includeInReadmeAPI(fd) {
 			continue
 		}
-		if byPackageGroup[fd.Package] == nil {
-			byPackageGroup[fd.Package] = map[string][]*FuncDoc{}
+		if byCategoryPackageGroup[fd.Category] == nil {
+			byCategoryPackageGroup[fd.Category] = map[string]map[string][]*FuncDoc{}
 		}
-		byPackageGroup[fd.Package][fd.Group] = append(byPackageGroup[fd.Package][fd.Group], fd)
+		if byCategoryPackageGroup[fd.Category][fd.Package] == nil {
+			byCategoryPackageGroup[fd.Category][fd.Package] = map[string][]*FuncDoc{}
+		}
+		byCategoryPackageGroup[fd.Category][fd.Package][fd.Group] = append(byCategoryPackageGroup[fd.Category][fd.Package][fd.Group], fd)
 		bareCounts[bareName(fd)]++
 		ownerQualifiedCounts[ownerQualifiedName(fd)]++
 	}
 
-	packages := make([]string, 0, len(byPackageGroup))
-	for p := range byPackageGroup {
-		packages = append(packages, p)
+	categories := make([]string, 0, len(byCategoryPackageGroup))
+	for c := range byCategoryPackageGroup {
+		categories = append(categories, c)
 	}
-	sort.Strings(packages)
-	singlePackage := len(packages) == 1
+	sort.Strings(categories)
+	totalPackages := 0
+	for _, c := range categories {
+		totalPackages += len(byCategoryPackageGroup[c])
+	}
+	singlePackage := totalPackages == 1
 	qualifiedLabel := func(fd *FuncDoc) string {
 		bare := bareName(fd)
 		if bareCounts[bare] <= 1 {
@@ -496,15 +526,14 @@ func renderAPI(funcs []*FuncDoc) string {
 
 	// ---------------- Index ----------------
 	buf.WriteString("## API Index\n\n")
-	for _, pkg := range packages {
-		if !singlePackage {
-			buf.WriteString("### " + pkg + "\n\n")
-		}
-		buf.WriteString("| Group | Functions |\n")
-		buf.WriteString("|------:|:-----------|\n")
+	buf.WriteString("| Group | Functions |\n")
+	buf.WriteString("|------:|:-----------|\n")
 
-		groupNames := make([]string, 0, len(byPackageGroup[pkg]))
-		for g := range byPackageGroup[pkg] {
+	// Keep the original root-package index layout and add a single driver category row.
+	corePkg := "queue"
+	if coreGroups, ok := byCategoryPackageGroup["Core"][corePkg]; ok {
+		groupNames := make([]string, 0, len(coreGroups))
+		for g := range coreGroups {
 			groupNames = append(groupNames, g)
 		}
 		sort.Strings(groupNames)
@@ -513,7 +542,7 @@ func renderAPI(funcs []*FuncDoc) string {
 			if group == "Testing" {
 				continue
 			}
-			groupFns := byPackageGroup[pkg][group]
+			groupFns := coreGroups[group]
 			sort.Slice(groupFns, func(i, j int) bool {
 				left := groupFns[i]
 				right := groupFns[j]
@@ -538,90 +567,139 @@ func renderAPI(funcs []*FuncDoc) string {
 				if groupOwnerQualifiedCounts[ownerQualified] <= 1 {
 					return ownerQualified
 				}
-				if singlePackage {
-					return ownerQualified
-				}
-				return fn.Package + "." + ownerQualified
+				return ownerQualified
 			}
 
 			var links []string
 			for _, fn := range groupFns {
-				anchor := anchorFor(fn)
-				label := indexLabel(fn)
-				links = append(links, fmt.Sprintf("[%s](#%s)", label, anchor))
+				links = append(links, fmt.Sprintf("[%s](#%s)", indexLabel(fn), anchorFor(fn)))
 			}
-
-			buf.WriteString(fmt.Sprintf("| **%s** | %s |\n",
-				group,
-				strings.Join(links, " "),
-			))
+			buf.WriteString(fmt.Sprintf("| **%s** | %s |\n", group, strings.Join(links, " ")))
 		}
-		buf.WriteString("\n")
 	}
+
+	if driverPkgs, ok := byCategoryPackageGroup["Driver Modules"]; ok && len(driverPkgs) > 0 {
+		packages := make([]string, 0, len(driverPkgs))
+		for p := range driverPkgs {
+			packages = append(packages, p)
+		}
+		sort.Strings(packages)
+		var links []string
+		for _, pkg := range packages {
+			ctors := driverPkgs[pkg]["Constructors"]
+			if len(ctors) == 0 {
+				continue
+			}
+			// Prefer package-qualified constructor links in a compact format.
+			hasNew := false
+			hasNewWithConfig := false
+			for _, fn := range ctors {
+				if fn.Name == "New" {
+					hasNew = true
+				}
+				if fn.Name == "NewWithConfig" {
+					hasNewWithConfig = true
+				}
+			}
+			var pkgLinks []string
+			if hasNew {
+				pkgLinks = append(pkgLinks, fmt.Sprintf("[%s.New](#%s)", pkg, strings.ToLower(pkg+"-new")))
+			}
+			if hasNewWithConfig {
+				pkgLinks = append(pkgLinks, fmt.Sprintf("[%s.NewWithConfig](#%s)", pkg, strings.ToLower(pkg+"-newwithconfig")))
+			}
+			if len(pkgLinks) > 0 {
+				links = append(links, strings.Join(pkgLinks, " "))
+			}
+		}
+		if len(links) > 0 {
+			buf.WriteString(fmt.Sprintf("| **Driver Constructors** | %s |\n", strings.Join(links, " · ")))
+		}
+	}
+
+	buf.WriteString("\n")
 
 	buf.WriteString("\n\n")
 
 	// ---------------- Details ----------------
-	for _, pkg := range packages {
-		if singlePackage {
+	for _, category := range categories {
+		if category == "Core" {
 			buf.WriteString("## API\n\n")
+		} else if category == "Driver Modules" {
+			buf.WriteString("## Driver Constructors\n\n")
 		} else {
-			buf.WriteString("## " + pkg + " API\n\n")
+			buf.WriteString("## " + category + " API\n\n")
 		}
-		groupNames := make([]string, 0, len(byPackageGroup[pkg]))
-		for g := range byPackageGroup[pkg] {
-			groupNames = append(groupNames, g)
+		packages := make([]string, 0, len(byCategoryPackageGroup[category]))
+		for p := range byCategoryPackageGroup[category] {
+			packages = append(packages, p)
 		}
-		sort.Strings(groupNames)
+		sort.Strings(packages)
 
-		for _, group := range groupNames {
-			buf.WriteString("### " + group + "\n\n")
-			sort.Slice(byPackageGroup[pkg][group], func(i, j int) bool {
-				left := byPackageGroup[pkg][group][i]
-				right := byPackageGroup[pkg][group][j]
-				if left.Name == right.Name {
-					return left.Owner < right.Owner
-				}
-				return left.Name < right.Name
-			})
-			for _, fn := range byPackageGroup[pkg][group] {
-				anchor := anchorFor(fn)
+		for _, pkg := range packages {
+			if category == "Core" && pkg == "queue" {
+				// Preserve original root API detail layout (no extra package heading).
+			} else {
+				buf.WriteString("### " + packageCategoryLabel(category, pkg) + "\n\n")
+			}
+			groupNames := make([]string, 0, len(byCategoryPackageGroup[category][pkg]))
+			for g := range byCategoryPackageGroup[category][pkg] {
+				groupNames = append(groupNames, g)
+			}
+			sort.Strings(groupNames)
 
-				header := qualifiedLabel(fn)
-				if fn.Behavior != "" {
-					header += " · " + fn.Behavior
-				}
-				if fn.Fluent == "true" {
-					header += " · fluent"
-				}
+			for _, group := range groupNames {
+				buf.WriteString("#### " + group + "\n\n")
+				sort.Slice(byCategoryPackageGroup[category][pkg][group], func(i, j int) bool {
+					left := byCategoryPackageGroup[category][pkg][group][i]
+					right := byCategoryPackageGroup[category][pkg][group][j]
+					if left.Name == right.Name {
+						return left.Owner < right.Owner
+					}
+					return left.Name < right.Name
+				})
+				for _, fn := range byCategoryPackageGroup[category][pkg][group] {
+					anchor := anchorFor(fn)
 
-				buf.WriteString(fmt.Sprintf("#### <a id=\"%s\"></a>%s\n\n", anchor, header))
-
-				if fn.Description != "" {
-					buf.WriteString(fn.Description + "\n\n")
-				}
-
-				for _, ex := range fn.Examples {
-					if ex.Label != "" && len(fn.Examples) > 1 {
-						buf.WriteString(fmt.Sprintf("_Example: %s_\n\n", ex.Label))
+					header := qualifiedLabel(fn)
+					if fn.Group == "Testing" && fn.Owner != "" {
+						header = ownerQualifiedName(fn)
+					}
+					if fn.Behavior != "" {
+						header += " · " + fn.Behavior
+					}
+					if fn.Fluent == "true" {
+						header += " · fluent"
 					}
 
-					buf.WriteString("```go\n")
-					for _, line := range strings.Split(ex.Code, "\n") {
-						trimmed := strings.TrimSpace(line)
-						if trimmed == "" {
-							continue
-						}
-						if strings.HasPrefix(trimmed, "_ =") {
-							continue
-						}
-						buf.WriteString(line + "\n")
+					buf.WriteString(fmt.Sprintf("#### <a id=\"%s\"></a>%s\n\n", anchor, header))
+
+					if fn.Description != "" {
+						buf.WriteString(fn.Description + "\n\n")
 					}
-					buf.WriteString("```\n\n")
+
+					for _, ex := range fn.Examples {
+						if ex.Label != "" && len(fn.Examples) > 1 {
+							buf.WriteString(fmt.Sprintf("_Example: %s_\n\n", ex.Label))
+						}
+
+						buf.WriteString("```go\n")
+						for _, line := range strings.Split(ex.Code, "\n") {
+							trimmed := strings.TrimSpace(line)
+							if trimmed == "" {
+								continue
+							}
+							if strings.HasPrefix(trimmed, "_ =") {
+								continue
+							}
+							buf.WriteString(line + "\n")
+						}
+						buf.WriteString("```\n\n")
+					}
 				}
 			}
+			buf.WriteString("\n")
 		}
-		buf.WriteString("\n")
 	}
 
 	return strings.TrimRight(buf.String(), "\n")

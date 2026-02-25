@@ -15,11 +15,41 @@ type Config struct {
 }
 
 // New creates a high-level Queue using the NATS backend.
-func New(url string) (*queue.Queue, error) {
-	return NewWithConfig(Config{URL: url})
+// @group Constructors
+//
+// Example: nats shorthand constructor
+//
+//	q, err := natsqueue.New(
+//		"nats://127.0.0.1:4222",
+//		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func New(url string, opts ...queue.Option) (*queue.Queue, error) {
+	return NewWithConfig(Config{URL: url}, opts...)
 }
 
 // NewWithConfig creates a high-level Queue using an explicit NATS driver config.
+// @group Constructors
+//
+// Example: nats config constructor
+//
+//	q, err := natsqueue.NewWithConfig(
+//		natsqueue.Config{
+//			DriverBaseConfig: queueconfig.DriverBaseConfig{
+//				DefaultQueue: "critical", // default if empty: "default"
+//				Observer:     nil,        // default: nil
+//			},
+//			URL: "nats://127.0.0.1:4222", // required
+//		},
+//		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("nats url is required")

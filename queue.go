@@ -102,7 +102,7 @@ func newSyncQueue() queueBackend {
 //		_ = payload
 //		return nil
 //	})
-//	_ = q.Workers(1).StartWorkers(context.Background())
+//	_ = q.WithWorkers(1).StartWorkers(context.Background()) // optional; default: runtime.NumCPU() (min 1)
 //	defer q.Shutdown(context.Background())
 //	_, _ = q.Dispatch(
 //		queue.NewJob("emails:send").

@@ -143,7 +143,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			t.Parallel()
 
 			q, queueName := backend.newQ(t)
-			q = q.Workers(4)
+			q = q.WithWorkers(4)
 			if err := q.StartWorkers(context.Background()); err != nil {
 				t.Fatalf("start workers failed: %v", err)
 			}

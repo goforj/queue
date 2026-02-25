@@ -18,7 +18,7 @@ Treat these values as starting points. Tune them using workload measurements, in
 
 ### `Workers(count)`
 
-Use `q.Workers(count)` to control worker concurrency.
+Use `q.WithWorkers(count)` to control worker concurrency.
 
 Guidance:
 

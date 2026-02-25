@@ -18,8 +18,8 @@ func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
 	if got := rt.Driver(); got != DriverSync {
 		t.Fatalf("driver=%q expected=%q", got, DriverSync)
 	}
-	if rt.Workers(2) != rt {
-		t.Fatal("Workers should return same runtime pointer")
+	if rt.WithWorkers(2) != rt {
+		t.Fatal("WithWorkers should return same runtime pointer")
 	}
 
 	var dispatchCalls atomic.Int32
@@ -166,7 +166,7 @@ func TestNew_WithObserver(t *testing.T) {
 }
 
 func TestQueue_Run_WorkerpoolStartsAndShutsDownOnCancel(t *testing.T) {
-	q, err := NewWorkerpool()
+	q, err := NewWorkerpool(WithWorkers(2))
 	if err != nil {
 		t.Fatalf("new workerpool queue: %v", err)
 	}

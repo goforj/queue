@@ -16,11 +16,44 @@ type Config struct {
 }
 
 // New creates a high-level Queue using the SQS backend.
-func New(region string) (*queue.Queue, error) {
-	return NewWithConfig(Config{Region: region})
+// @group Constructors
+//
+// Example: sqs shorthand constructor
+//
+//	q, err := sqsqueue.New(
+//		"us-east-1",
+//		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
+func New(region string, opts ...queue.Option) (*queue.Queue, error) {
+	return NewWithConfig(Config{Region: region}, opts...)
 }
 
 // NewWithConfig creates a high-level Queue using an explicit SQS driver config.
+// @group Constructors
+//
+// Example: sqs config constructor
+//
+//	q, err := sqsqueue.NewWithConfig(
+//		sqsqueue.Config{
+//			DriverBaseConfig: queueconfig.DriverBaseConfig{
+//				DefaultQueue: "critical", // default if empty: "default"
+//				Observer:     nil,        // default: nil
+//			},
+//			Region: "us-east-1", // default if empty: "us-east-1"
+//			Endpoint: "",        // optional; set for LocalStack/custom endpoint
+//			AccessKey: "",       // optional; static credentials
+//			SecretKey: "",       // optional; static credentials
+//		},
+//		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	cfg = normalizeConfig(cfg)
 	rootCfg := queue.Config{
