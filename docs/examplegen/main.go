@@ -48,49 +48,61 @@ func run() error {
 		return err
 	}
 
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, root, nil, parser.ParseComments)
-	if err != nil {
-		return err
+	type target struct {
+		dir        string
+		importPath string
 	}
-
-	pkgName, err := selectPackage(pkgs)
-	if err != nil {
-		return err
-	}
-
-	pkg, ok := pkgs[pkgName]
-	if !ok {
-		return fmt.Errorf(`package %q not found in %s`, pkgName, root)
-	}
-
-	funcs := map[string]*FuncDoc{}
-
-	for filename, file := range pkg.Files {
-		if strings.Contains(filename, "_test.go") {
-			continue
-		}
-
-		for name, fd := range extractFuncDocs(fset, filename, file) {
-			if existing, ok := funcs[name]; ok {
-				existing.Examples = append(existing.Examples, fd.Examples...)
-			} else {
-				funcs[name] = fd
-			}
-		}
-	}
-
-	for _, fd := range funcs {
-		sort.Slice(fd.Examples, func(i, j int) bool {
-			return fd.Examples[i].Line < fd.Examples[j].Line
+	targets := []target{{dir: root, importPath: modPath}}
+	if st, err := os.Stat(filepath.Join(root, "queuefake")); err == nil && st.IsDir() {
+		targets = append(targets, target{
+			dir:        filepath.Join(root, "queuefake"),
+			importPath: modPath + "/queuefake",
 		})
+	}
 
-		if err := writeMain(examplesDir, fd, modPath); err != nil {
+	for _, target := range targets {
+		fset := token.NewFileSet()
+		pkgs, err := parser.ParseDir(fset, target.dir, nil, parser.ParseComments)
+		if err != nil {
 			return err
 		}
 
-		// Debug / inspection hook (optional)
-		//env.Dump(fd)
+		pkgName, err := selectPackage(pkgs)
+		if err != nil {
+			return err
+		}
+
+		pkg, ok := pkgs[pkgName]
+		if !ok {
+			return fmt.Errorf(`package %q not found in %s`, pkgName, target.dir)
+		}
+
+		funcs := map[string]*FuncDoc{}
+
+		for filename, file := range pkg.Files {
+			if strings.Contains(filename, "_test.go") {
+				continue
+			}
+
+			for name, fd := range extractFuncDocs(fset, filename, file) {
+				fd.Package = pkgName
+				if existing, ok := funcs[name]; ok {
+					existing.Examples = append(existing.Examples, fd.Examples...)
+				} else {
+					funcs[name] = fd
+				}
+			}
+		}
+
+		for _, fd := range funcs {
+			sort.Slice(fd.Examples, func(i, j int) bool {
+				return fd.Examples[i].Line < fd.Examples[j].Line
+			})
+
+			if err := writeMain(examplesDir, fd, modPath, target.importPath); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -163,6 +175,7 @@ func modulePath(root string) (string, error) {
 //
 
 type FuncDoc struct {
+	Package     string
 	Owner       string
 	Name        string
 	Group       string
@@ -477,7 +490,7 @@ func selectPackage(pkgs map[string]*ast.Package) (string, error) {
 // ------------------------------------------------------------
 //
 
-func writeMain(base string, fd *FuncDoc, importPath string) error {
+func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) error {
 	if len(fd.Examples) == 0 {
 		return nil
 	}
@@ -522,6 +535,15 @@ func writeMain(base string, fd *FuncDoc, importPath string) error {
 		}
 		if strings.Contains(ex.Code, "context.") {
 			imports["context"] = true
+		}
+		if strings.Contains(ex.Code, "queue.") && importPath != moduleImportPath {
+			imports[moduleImportPath] = true
+		}
+		if strings.Contains(ex.Code, "queuefake.") && importPath != moduleImportPath+"/queuefake" {
+			imports[moduleImportPath+"/queuefake"] = true
+		}
+		if strings.Contains(ex.Code, "bus.") {
+			imports[moduleImportPath+"/bus"] = true
 		}
 		if strings.Contains(ex.Code, "regexp.") {
 			imports["regexp"] = true
@@ -633,8 +655,14 @@ func writeMain(base string, fd *FuncDoc, importPath string) error {
 }
 
 func exampleDirName(fd *FuncDoc) string {
+	if fd.Package != "" && fd.Package != "queue" && fd.Owner == "" {
+		return strings.ToLower(fd.Package) + "-" + strings.ToLower(fd.Name)
+	}
 	if fd.Owner == "" {
 		return strings.ToLower(fd.Name)
+	}
+	if fd.Package != "" && fd.Package != "queue" {
+		return strings.ToLower(fd.Package) + "-" + strings.ToLower(fd.Owner) + "-" + strings.ToLower(fd.Name)
 	}
 	return strings.ToLower(fd.Owner) + "-" + strings.ToLower(fd.Name)
 }

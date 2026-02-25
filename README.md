@@ -563,8 +563,10 @@ q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 	if err := m.Bind(&payload); err != nil {
 		return err
 	}
+	_ = payload
 	return nil
 })
+_ = q.WithWorkers(1).StartWorkers(context.Background()) // optional; default: runtime.NumCPU() (min 1)
 defer q.Shutdown(context.Background())
 _, _ = q.Dispatch(
 	queue.NewJob("emails:send").
@@ -641,6 +643,7 @@ var payload EmailPayload
 if err := job.Bind(&payload); err != nil {
 	return
 }
+_ = payload.To
 ```
 
 #### <a id="queue-job-delay"></a>Delay
@@ -875,6 +878,7 @@ Pause pauses queue consumption for drivers that support it.
 
 ```go
 q, _ := queue.NewSync()
+_ = queue.Pause(context.Background(), q, "default")
 snapshot, _ := queue.Snapshot(context.Background(), q, nil)
 fmt.Println(snapshot.Paused("default"))
 // Output: 1
@@ -967,6 +971,8 @@ Resume resumes queue consumption for drivers that support it.
 
 ```go
 q, _ := queue.NewSync()
+_ = queue.Pause(context.Background(), q, "default")
+_ = queue.Resume(context.Background(), q, "default")
 snapshot, _ := queue.Snapshot(context.Background(), q, nil)
 fmt.Println(snapshot.Paused("default"))
 // Output: 0
@@ -1207,6 +1213,7 @@ if err != nil {
 	return
 }
 if queue.SupportsPause(q) {
+	_ = q.Pause(context.Background(), "default")
 }
 ```
 
@@ -1219,6 +1226,7 @@ q, err := queue.NewSync()
 if err != nil {
 	return
 }
+_ = q.Prune(context.Background(), time.Now().Add(-24*time.Hour))
 ```
 
 #### <a id="queue-queue-register"></a>Queue.Register
@@ -1238,6 +1246,7 @@ q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 	if err := m.Bind(&payload); err != nil {
 		return err
 	}
+	_ = payload
 	return nil
 })
 ```
@@ -1252,6 +1261,7 @@ if err != nil {
 	return
 }
 if queue.SupportsPause(q) {
+	_ = q.Resume(context.Background(), "default")
 }
 ```
 
@@ -1271,6 +1281,7 @@ go func() {
 	time.Sleep(100 * time.Millisecond)
 	cancel()
 }()
+_ = q.Run(ctx)
 ```
 
 #### <a id="queue-queue-shutdown"></a>Queue.Shutdown
@@ -1282,6 +1293,8 @@ q, err := queue.NewWorkerpool()
 if err != nil {
 	return
 }
+_ = q.StartWorkers(context.Background())
+_ = q.Shutdown(context.Background())
 ```
 
 #### <a id="queue-queue-startworkers"></a>Queue.StartWorkers
@@ -1293,6 +1306,7 @@ q, err := queue.NewWorkerpool()
 if err != nil {
 	return
 }
+_ = q.StartWorkers(context.Background())
 ```
 
 #### <a id="queue-queue-stats"></a>Stats
@@ -1343,6 +1357,7 @@ WithObserver installs a workflow lifecycle observer.
 
 ```go
 observer := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
+	_ = event.Kind
 })
 q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))
 if err != nil {
@@ -1396,6 +1411,7 @@ AssertCount fails when dispatch count is not expected.
 
 ```go
 fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send"))
 fake.AssertCount(nil, 1)
 ```
 
@@ -1405,6 +1421,7 @@ AssertDispatched fails when jobType was not dispatched.
 
 ```go
 fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send"))
 fake.AssertDispatched(nil, "emails:send")
 ```
 
@@ -1414,6 +1431,7 @@ AssertDispatchedOn fails when jobType was not dispatched on queueName.
 
 ```go
 fake := queue.NewFake()
+_ = fake.Dispatch(
 	queue.NewJob("emails:send").
 		OnQueue("critical"),
 )
@@ -1426,6 +1444,8 @@ AssertDispatchedTimes fails when jobType dispatch count does not match expected.
 
 ```go
 fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send"))
+_ = fake.Dispatch(queue.NewJob("emails:send"))
 fake.AssertDispatchedTimes(nil, "emails:send", 2)
 ```
 
@@ -1435,6 +1455,7 @@ AssertNotDispatched fails when jobType was dispatched.
 
 ```go
 fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send"))
 fake.AssertNotDispatched(nil, "emails:cancel")
 ```
 
@@ -1483,6 +1504,7 @@ NewFake creates a queue fake that records dispatches and provides assertions.
 
 ```go
 fake := queue.NewFake()
+_ = fake.Dispatch(
 	queue.NewJob("emails:send").
 		Payload(map[string]any{"id": 1}).
 		OnQueue("critical"),
@@ -1498,6 +1520,7 @@ Records returns a copy of all dispatch records.
 
 ```go
 fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 records := fake.Records()
 fmt.Println(len(records), records[0].Job.Type)
 // Output: 1 emails:send
@@ -1518,6 +1541,7 @@ Reset clears all recorded dispatches.
 
 ```go
 fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 fmt.Println(len(fake.Records()))
 fake.Reset()
 fmt.Println(len(fake.Records()))
@@ -1870,6 +1894,8 @@ AssertCount fails when total dispatch count is not expected.
 ```go
 f := queuefake.New()
 q := f.Queue()
+_ = q.Dispatch(queue.NewJob("a"))
+_ = q.Dispatch(queue.NewJob("b"))
 f.AssertCount(nil, 2)
 ```
 
@@ -1879,6 +1905,7 @@ AssertDispatched fails when jobType was not dispatched.
 
 ```go
 f := queuefake.New()
+_ = f.Queue().Dispatch(queue.NewJob("emails:send"))
 f.AssertDispatched(nil, "emails:send")
 ```
 
@@ -1888,6 +1915,7 @@ AssertDispatchedOn fails when jobType was not dispatched on queueName.
 
 ```go
 f := queuefake.New()
+_ = f.Queue().Dispatch(queue.NewJob("emails:send").OnQueue("critical"))
 f.AssertDispatchedOn(nil, "critical", "emails:send")
 ```
 
@@ -1898,6 +1926,8 @@ AssertDispatchedTimes fails when jobType dispatch count does not match expected.
 ```go
 f := queuefake.New()
 q := f.Queue()
+_ = q.Dispatch(queue.NewJob("emails:send"))
+_ = q.Dispatch(queue.NewJob("emails:send"))
 f.AssertDispatchedTimes(nil, "emails:send", 2)
 ```
 
@@ -1985,6 +2015,9 @@ Count returns the total number of recorded dispatches.
 ```go
 f := queuefake.New()
 q := f.Queue()
+_ = q.Dispatch(queue.NewJob("a"))
+_ = q.Dispatch(queue.NewJob("b"))
+_ = f.Count()
 ```
 
 #### <a id="queuefake-fake-countjob"></a>Fake.CountJob
@@ -1994,6 +2027,9 @@ CountJob returns how many times a job type was dispatched.
 ```go
 f := queuefake.New()
 q := f.Queue()
+_ = q.Dispatch(queue.NewJob("emails:send"))
+_ = q.Dispatch(queue.NewJob("emails:send"))
+_ = f.CountJob("emails:send")
 ```
 
 #### <a id="queuefake-fake-counton"></a>Fake.CountOn
@@ -2003,6 +2039,8 @@ CountOn returns how many times a job type was dispatched on a queue.
 ```go
 f := queuefake.New()
 q := f.Queue()
+_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("critical"))
+_ = f.CountOn("critical", "emails:send")
 ```
 
 #### <a id="queuefake-new"></a>queuefake.New
@@ -2012,6 +2050,7 @@ New creates a fake queue harness backed by queue.NewFake().
 ```go
 f := queuefake.New()
 q := f.Queue()
+_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 f.AssertDispatched(nil, "emails:send")
 f.AssertCount(nil, 1)
 ```
@@ -2023,6 +2062,7 @@ Queue returns the queue fake to inject into code under test.
 ```go
 f := queuefake.New()
 q := f.Queue()
+_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 ```
 
 #### <a id="queuefake-fake-records"></a>Fake.Records
@@ -2031,6 +2071,7 @@ Records returns a copy of recorded dispatches.
 
 ```go
 f := queuefake.New()
+_ = f.Queue().Dispatch(queue.NewJob("emails:send"))
 records := f.Records()
 ```
 
@@ -2041,6 +2082,7 @@ Reset clears recorded dispatches.
 ```go
 f := queuefake.New()
 q := f.Queue()
+_ = q.Dispatch(queue.NewJob("emails:send"))
 f.Reset()
 f.AssertNothingDispatched(nil)
 ```

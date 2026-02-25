@@ -101,6 +101,8 @@ var (
 	behaviorHeader = regexp.MustCompile(`(?i)^\s*@behavior\s+(.+)$`)
 	fluentHeader   = regexp.MustCompile(`(?i)^\s*@fluent\s+(.+)$`)
 	exampleHeader  = regexp.MustCompile(`(?i)^\s*Example:\s*(.*)$`)
+	discardVarLine = regexp.MustCompile(`^\s*_\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*$`)
+	shortDeclLine  = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:=`)
 )
 
 func parseFuncs(root string) ([]*FuncDoc, error) {
@@ -721,12 +723,13 @@ func renderAPI(funcs []*FuncDoc) string {
 						}
 
 						buf.WriteString("```go\n")
-						for _, line := range strings.Split(ex.Code, "\n") {
+						lines := strings.Split(ex.Code, "\n")
+						for i, line := range lines {
 							trimmed := strings.TrimSpace(line)
 							if trimmed == "" {
 								continue
 							}
-							if strings.HasPrefix(trimmed, "_ =") {
+							if shouldDropExampleLine(lines, i) {
 								continue
 							}
 							buf.WriteString(line + "\n")
@@ -787,6 +790,41 @@ func findRoot() (string, error) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+func shouldDropExampleLine(lines []string, i int) bool {
+	if i <= 0 {
+		return false
+	}
+	trimmed := strings.TrimSpace(lines[i])
+	m := discardVarLine.FindStringSubmatch(trimmed)
+	if m == nil {
+		return false
+	}
+	name := m[1]
+	prev := strings.TrimSpace(lines[i-1])
+	if sm := shortDeclLine.FindStringSubmatch(prev); sm != nil && sm[1] == name {
+		return true
+	}
+	if strings.HasPrefix(prev, "var "+name+" ") || prev == "var "+name {
+		return true
+	}
+	if strings.HasPrefix(prev, "var "+name+"=") || strings.HasPrefix(prev, "var "+name+" =") {
+		return true
+	}
+	// Also drop trailing "_ = x" sinks when x is otherwise never referenced in the example.
+	var refs int
+	pat := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+	for j, line := range lines {
+		if j == i {
+			continue
+		}
+		refs += len(pat.FindAllStringIndex(line, -1))
+	}
+	if refs <= 1 {
+		return true
+	}
+	return false
 }
 
 func normalizeIndent(lines []string) []string {
