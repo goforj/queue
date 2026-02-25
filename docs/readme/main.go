@@ -670,6 +670,8 @@ func renderAPI(funcs []*FuncDoc) string {
 		for _, pkg := range packages {
 			if category == "Core" && pkg == "queue" {
 				// Preserve original root API detail layout (no extra package heading).
+			} else if category == "Testing" {
+				// Testing API currently renders queuefake only; skip redundant package heading.
 			} else {
 				buf.WriteString("### " + packageCategoryLabel(category, pkg) + "\n\n")
 			}
@@ -680,8 +682,9 @@ func renderAPI(funcs []*FuncDoc) string {
 			sort.Strings(groupNames)
 
 			flattenDriverConstructors := category == "Driver Modules"
+			flattenTestingGroup := category == "Testing"
 			for _, group := range groupNames {
-				if !(flattenDriverConstructors && group == "Constructors") {
+				if !((flattenDriverConstructors && group == "Constructors") || (flattenTestingGroup && group == "Testing")) {
 					buf.WriteString("#### " + group + "\n\n")
 				}
 				sort.Slice(byCategoryPackageGroup[category][pkg][group], func(i, j int) bool {

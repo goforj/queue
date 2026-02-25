@@ -1838,10 +1838,6 @@ if err != nil {
 
 ## Testing API
 
-### queuefake
-
-#### Testing
-
 #### <a id="queuefake-fake-assertbatchcount"></a>Fake.AssertBatchCount
 
 AssertBatchCount fails if total recorded workflow batch count does not match n.
