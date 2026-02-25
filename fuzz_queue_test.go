@@ -54,9 +54,9 @@ func FuzzNormalizeQueueName(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, name string) {
-		got := NormalizeQueueName(name)
+		got := normalizeQueueName(name)
 		if got == "" {
-			t.Fatal("NormalizeQueueName returned empty string")
+			t.Fatal("normalizeQueueName returned empty string")
 		}
 		if name == "" && got != "default" {
 			t.Fatalf("expected empty name to normalize to default, got %q", got)

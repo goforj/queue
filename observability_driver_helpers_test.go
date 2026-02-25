@@ -11,10 +11,10 @@ func TestSafeObserve_RecoversObserverPanic(t *testing.T) {
 }
 
 func TestNormalizeQueueName_DefaultsEmpty(t *testing.T) {
-	if got := NormalizeQueueName(""); got != "default" {
-		t.Fatalf("NormalizeQueueName(\"\") = %q, want %q", got, "default")
+	if got := normalizeQueueName(""); got != "default" {
+		t.Fatalf("normalizeQueueName(\"\") = %q, want %q", got, "default")
 	}
-	if got := NormalizeQueueName("critical"); got != "critical" {
-		t.Fatalf("NormalizeQueueName(\"critical\") = %q, want %q", got, "critical")
+	if got := normalizeQueueName("critical"); got != "critical" {
+		t.Fatalf("normalizeQueueName(\"critical\") = %q, want %q", got, "critical")
 	}
 }

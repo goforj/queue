@@ -898,14 +898,6 @@ func jobEventKey(job Job) string {
 }
 
 func normalizeQueueName(name string) string {
-	return NormalizeQueueName(name)
-}
-
-// NormalizeQueueName returns the default logical queue name when empty.
-//
-// This is an advanced helper intended for driver-module implementations.
-// @group Observability
-func NormalizeQueueName(name string) string {
 	if name == "" {
 		return "default"
 	}

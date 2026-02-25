@@ -28,4 +28,9 @@ func DriverWithAttempt(job queue.Job, attempt int) queue.Job {
 func SafeObserve(observer queue.Observer, event queue.Event) { queue.SafeObserve(observer, event) }
 
 // NormalizeQueueName returns "default" when the provided queue name is empty.
-func NormalizeQueueName(name string) string { return queue.NormalizeQueueName(name) }
+func NormalizeQueueName(name string) string {
+	if name == "" {
+		return "default"
+	}
+	return name
+}
