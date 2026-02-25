@@ -498,6 +498,11 @@ func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) er
 	if len(fd.Examples) == 0 {
 		return nil
 	}
+	// Assertion helpers require testing.TB and are useful as docs snippets,
+	// but they are not runnable in a generated main package.
+	if strings.HasPrefix(fd.Name, "Assert") {
+		return nil
+	}
 
 	if importPath == "" {
 		return fmt.Errorf("import path cannot be empty")
