@@ -191,6 +191,18 @@ func main() {
 }
 ```
 
+## Core Concepts
+
+| Concept | Purpose | Primary API |
+| --- | --- | --- |
+| Job | Typed work unit for app handlers | `queue.NewJob`, `Dispatch` |
+| Chain | Ordered workflow (A then B then C) | `Chain(...).Dispatch(...)` |
+| Batch | Parallel workflow with callbacks | `Batch(...).Then/Catch/Finally` |
+| Middleware | Cross-cutting execution policy | `Queue` middleware (`queue.WithMiddleware`) |
+| Events | Lifecycle hooks and observability | queue runtime events (`queue.Observer`) + workflow events (advanced plumbing) |
+| Backends | Driver/runtime transport | `queue.New(...)` and driver module `New(...)` constructors |
+
+
 ## Job builder options
 
 ```go
@@ -320,16 +332,6 @@ q, _ := queue.New(
 _ = q
 ```
 
-## Core Concepts
-
-| Concept | Purpose | Primary API |
-| --- | --- | --- |
-| Job | Typed work unit for app handlers | `queue.NewJob`, `Dispatch` |
-| Chain | Ordered workflow (A then B then C) | `Chain(...).Dispatch(...)` |
-| Batch | Parallel workflow with callbacks | `Batch(...).Then/Catch/Finally` |
-| Middleware | Cross-cutting execution policy | `Queue` middleware (`queue.WithMiddleware`) |
-| Events | Lifecycle hooks and observability | queue runtime events (`queue.Observer`) + workflow events (advanced plumbing) |
-| Backends | Driver/runtime transport | `queue.New(...)` and driver module `New(...)` constructors |
 
 ## Observability
 
