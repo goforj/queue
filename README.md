@@ -233,7 +233,7 @@ func main() {
 	redisqueue.New("127.0.0.1:6379")                           // Redis/Asynq
 	natsqueue.New("nats://127.0.0.1:4222")                     // NATS
 	sqsqueue.New("us-east-1")                                  // SQS
-rabbitmqqueue.New("amqp://guest:guest@127.0.0.1:5672/")    // RabbitMQ
+    rabbitmqqueue.New("amqp://guest:guest@127.0.0.1:5672/")    // RabbitMQ
 }
 ```
 
