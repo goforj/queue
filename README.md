@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    queue provides a queue and workflow runtime with middleware, observability, and multiple backend drivers.
+    queue is a queue and workflow library with pluggable backends and runtime extensions.
 </p>
 
 <p align="center">
