@@ -18,5 +18,5 @@ func main() {
 	q := f.Queue()
 	_ = q.Dispatch(queue.NewJob("emails:send"))
 	f.Reset()
-	f.AssertNothingDispatched(nil)
+	f.AssertNothingDispatched(t)
 }

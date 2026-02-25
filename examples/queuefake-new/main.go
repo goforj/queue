@@ -17,6 +17,6 @@ func main() {
 	f := queuefake.New()
 	q := f.Queue()
 	_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
-	f.AssertDispatched(nil, "emails:send")
-	f.AssertCount(nil, 1)
+	f.AssertDispatched(t, "emails:send")
+	f.AssertCount(t, 1)
 }

@@ -21,5 +21,5 @@ func main() {
 		bus.NewJob("a", nil),
 		bus.NewJob("b", nil),
 	).Dispatch(context.Background())
-	f.AssertChained(nil, []string{"a", "b"})
+	f.AssertChained(t, []string{"a", "b"})
 }

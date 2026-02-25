@@ -215,7 +215,7 @@ func (f *FakeQueue) Records() []DispatchRecord {
 // Example: assert nothing dispatched
 //
 //	fake := queue.NewFake()
-//	fake.AssertNothingDispatched(nil)
+//	fake.AssertNothingDispatched(t)
 func (f *FakeQueue) AssertNothingDispatched(t testing.TB) {
 	t.Helper()
 	if got := len(f.Records()); got != 0 {
@@ -230,7 +230,7 @@ func (f *FakeQueue) AssertNothingDispatched(t testing.TB) {
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
-//	fake.AssertCount(nil, 1)
+//	fake.AssertCount(t, 1)
 func (f *FakeQueue) AssertCount(t testing.TB, expected int) {
 	t.Helper()
 	if got := len(f.Records()); got != expected {
@@ -245,7 +245,7 @@ func (f *FakeQueue) AssertCount(t testing.TB, expected int) {
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
-//	fake.AssertDispatched(nil, "emails:send")
+//	fake.AssertDispatched(t, "emails:send")
 func (f *FakeQueue) AssertDispatched(t testing.TB, jobType string) {
 	t.Helper()
 	for _, record := range f.Records() {
@@ -266,7 +266,7 @@ func (f *FakeQueue) AssertDispatched(t testing.TB, jobType string) {
 //		queue.NewJob("emails:send").
 //			OnQueue("critical"),
 //	)
-//	fake.AssertDispatchedOn(nil, "critical", "emails:send")
+//	fake.AssertDispatchedOn(t, "critical", "emails:send")
 func (f *FakeQueue) AssertDispatchedOn(t testing.TB, queueName, jobType string) {
 	t.Helper()
 	for _, record := range f.Records() {
@@ -285,7 +285,7 @@ func (f *FakeQueue) AssertDispatchedOn(t testing.TB, queueName, jobType string) 
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
-//	fake.AssertDispatchedTimes(nil, "emails:send", 2)
+//	fake.AssertDispatchedTimes(t, "emails:send", 2)
 func (f *FakeQueue) AssertDispatchedTimes(t testing.TB, jobType string, expected int) {
 	t.Helper()
 	var count int
@@ -306,7 +306,7 @@ func (f *FakeQueue) AssertDispatchedTimes(t testing.TB, jobType string, expected
 //
 //	fake := queue.NewFake()
 //	_ = fake.Dispatch(queue.NewJob("emails:send"))
-//	fake.AssertNotDispatched(nil, "emails:cancel")
+//	fake.AssertNotDispatched(t, "emails:cancel")
 func (f *FakeQueue) AssertNotDispatched(t testing.TB, jobType string) {
 	t.Helper()
 	for _, record := range f.Records() {

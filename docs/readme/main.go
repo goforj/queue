@@ -662,6 +662,9 @@ func renderAPI(funcs []*FuncDoc) string {
 			buf.WriteString("## Driver Constructors\n\n")
 		} else {
 			buf.WriteString("## " + category + " API\n\n")
+			if category == "Testing" {
+				buf.WriteString("Examples in this section assume they are used inside tests and `t` is a `*testing.T` (or `testing.TB`).\n\n")
+			}
 		}
 		packages := make([]string, 0, len(byCategoryPackageGroup[category]))
 		for p := range byCategoryPackageGroup[category] {

@@ -1417,7 +1417,7 @@ AssertCount fails when dispatch count is not expected.
 ```go
 fake := queue.NewFake()
 _ = fake.Dispatch(queue.NewJob("emails:send"))
-fake.AssertCount(nil, 1)
+fake.AssertCount(t, 1)
 ```
 
 #### <a id="queue-fakequeue-assertdispatched"></a>FakeQueue.AssertDispatched
@@ -1427,7 +1427,7 @@ AssertDispatched fails when jobType was not dispatched.
 ```go
 fake := queue.NewFake()
 _ = fake.Dispatch(queue.NewJob("emails:send"))
-fake.AssertDispatched(nil, "emails:send")
+fake.AssertDispatched(t, "emails:send")
 ```
 
 #### <a id="queue-fakequeue-assertdispatchedon"></a>FakeQueue.AssertDispatchedOn
@@ -1440,7 +1440,7 @@ _ = fake.Dispatch(
 	queue.NewJob("emails:send").
 		OnQueue("critical"),
 )
-fake.AssertDispatchedOn(nil, "critical", "emails:send")
+fake.AssertDispatchedOn(t, "critical", "emails:send")
 ```
 
 #### <a id="queue-fakequeue-assertdispatchedtimes"></a>FakeQueue.AssertDispatchedTimes
@@ -1451,7 +1451,7 @@ AssertDispatchedTimes fails when jobType dispatch count does not match expected.
 fake := queue.NewFake()
 _ = fake.Dispatch(queue.NewJob("emails:send"))
 _ = fake.Dispatch(queue.NewJob("emails:send"))
-fake.AssertDispatchedTimes(nil, "emails:send", 2)
+fake.AssertDispatchedTimes(t, "emails:send", 2)
 ```
 
 #### <a id="queue-fakequeue-assertnotdispatched"></a>FakeQueue.AssertNotDispatched
@@ -1461,7 +1461,7 @@ AssertNotDispatched fails when jobType was dispatched.
 ```go
 fake := queue.NewFake()
 _ = fake.Dispatch(queue.NewJob("emails:send"))
-fake.AssertNotDispatched(nil, "emails:cancel")
+fake.AssertNotDispatched(t, "emails:cancel")
 ```
 
 #### <a id="queue-fakequeue-assertnothingdispatched"></a>FakeQueue.AssertNothingDispatched
@@ -1470,7 +1470,7 @@ AssertNothingDispatched fails when any dispatch was recorded.
 
 ```go
 fake := queue.NewFake()
-fake.AssertNothingDispatched(nil)
+fake.AssertNothingDispatched(t)
 ```
 
 #### <a id="queue-fakequeue-dispatch"></a>FakeQueue.Dispatch
@@ -1862,6 +1862,8 @@ if err != nil {
 
 ## Testing API
 
+Examples in this section assume they are used inside tests and `t` is a `*testing.T` (or `testing.TB`).
+
 #### <a id="queuefake-fake-assertbatchcount"></a>Fake.AssertBatchCount
 
 AssertBatchCount fails if total recorded workflow batch count does not match n.
@@ -1869,7 +1871,7 @@ AssertBatchCount fails if total recorded workflow batch count does not match n.
 ```go
 f := queuefake.New()
 _, _ = f.Workflow().Batch(bus.NewJob("a", nil)).Dispatch(nil)
-f.AssertBatchCount(nil, 1)
+f.AssertBatchCount(t, 1)
 ```
 
 #### <a id="queuefake-fake-assertbatched"></a>Fake.AssertBatched
@@ -1879,7 +1881,7 @@ AssertBatched fails unless at least one recorded workflow batch matches predicat
 ```go
 f := queuefake.New()
 _, _ = f.Workflow().Batch(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(nil)
-f.AssertBatched(nil, func(spec bus.BatchSpec) bool { return len(spec.Jobs) == 2 })
+f.AssertBatched(t, func(spec bus.BatchSpec) bool { return len(spec.JobTypes) == 2 })
 ```
 
 #### <a id="queuefake-fake-assertchained"></a>Fake.AssertChained
@@ -1889,7 +1891,7 @@ AssertChained fails if no recorded workflow chain matches expected job type orde
 ```go
 f := queuefake.New()
 _, _ = f.Workflow().Chain(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(nil)
-f.AssertChained(nil, []string{"a", "b"})
+f.AssertChained(t, []string{"a", "b"})
 ```
 
 #### <a id="queuefake-fake-assertcount"></a>Fake.AssertCount
@@ -1901,7 +1903,7 @@ f := queuefake.New()
 q := f.Queue()
 _ = q.Dispatch(queue.NewJob("a"))
 _ = q.Dispatch(queue.NewJob("b"))
-f.AssertCount(nil, 2)
+f.AssertCount(t, 2)
 ```
 
 #### <a id="queuefake-fake-assertdispatched"></a>Fake.AssertDispatched
@@ -1911,7 +1913,7 @@ AssertDispatched fails when jobType was not dispatched.
 ```go
 f := queuefake.New()
 _ = f.Queue().Dispatch(queue.NewJob("emails:send"))
-f.AssertDispatched(nil, "emails:send")
+f.AssertDispatched(t, "emails:send")
 ```
 
 #### <a id="queuefake-fake-assertdispatchedon"></a>Fake.AssertDispatchedOn
@@ -1921,7 +1923,7 @@ AssertDispatchedOn fails when jobType was not dispatched on queueName.
 ```go
 f := queuefake.New()
 _ = f.Queue().Dispatch(queue.NewJob("emails:send").OnQueue("critical"))
-f.AssertDispatchedOn(nil, "critical", "emails:send")
+f.AssertDispatchedOn(t, "critical", "emails:send")
 ```
 
 #### <a id="queuefake-fake-assertdispatchedtimes"></a>Fake.AssertDispatchedTimes
@@ -1933,7 +1935,7 @@ f := queuefake.New()
 q := f.Queue()
 _ = q.Dispatch(queue.NewJob("emails:send"))
 _ = q.Dispatch(queue.NewJob("emails:send"))
-f.AssertDispatchedTimes(nil, "emails:send", 2)
+f.AssertDispatchedTimes(t, "emails:send", 2)
 ```
 
 #### <a id="queuefake-fake-assertnotdispatched"></a>Fake.AssertNotDispatched
@@ -1942,7 +1944,7 @@ AssertNotDispatched fails when jobType was dispatched.
 
 ```go
 f := queuefake.New()
-f.AssertNotDispatched(nil, "emails:send")
+f.AssertNotDispatched(t, "emails:send")
 ```
 
 #### <a id="queuefake-fake-assertnothingbatched"></a>Fake.AssertNothingBatched
@@ -1951,7 +1953,7 @@ AssertNothingBatched fails if any workflow batch was recorded.
 
 ```go
 f := queuefake.New()
-f.AssertNothingBatched(nil)
+f.AssertNothingBatched(t)
 ```
 
 #### <a id="queuefake-fake-assertnothingdispatched"></a>Fake.AssertNothingDispatched
@@ -1960,7 +1962,7 @@ AssertNothingDispatched fails when any dispatch was recorded.
 
 ```go
 f := queuefake.New()
-f.AssertNothingDispatched(nil)
+f.AssertNothingDispatched(t)
 ```
 
 #### <a id="queuefake-fake-assertnothingworkflowdispatched"></a>Fake.AssertNothingWorkflowDispatched
@@ -1969,7 +1971,7 @@ AssertNothingWorkflowDispatched fails when any workflow dispatch was recorded.
 
 ```go
 f := queuefake.New()
-f.AssertNothingWorkflowDispatched(nil)
+f.AssertNothingWorkflowDispatched(t)
 ```
 
 #### <a id="queuefake-fake-assertworkflowdispatched"></a>Fake.AssertWorkflowDispatched
@@ -1979,7 +1981,7 @@ AssertWorkflowDispatched fails when jobType was not workflow-dispatched.
 ```go
 f := queuefake.New()
 _, _ = f.Workflow().Chain(bus.NewJob("a", nil)).Dispatch(nil)
-f.AssertWorkflowDispatched(nil, "a")
+f.AssertWorkflowDispatched(t, "a")
 ```
 
 #### <a id="queuefake-fake-assertworkflowdispatchedon"></a>Fake.AssertWorkflowDispatchedOn
@@ -1989,7 +1991,7 @@ AssertWorkflowDispatchedOn fails when jobType was not workflow-dispatched on que
 ```go
 f := queuefake.New()
 _, _ = f.Workflow().Chain(bus.NewJob("a", nil)).OnQueue("critical").Dispatch(nil)
-f.AssertWorkflowDispatchedOn(nil, "critical", "a")
+f.AssertWorkflowDispatchedOn(t, "critical", "a")
 ```
 
 #### <a id="queuefake-fake-assertworkflowdispatchedtimes"></a>Fake.AssertWorkflowDispatchedTimes
@@ -2001,7 +2003,7 @@ f := queuefake.New()
 wf := f.Workflow()
 _, _ = wf.Chain(bus.NewJob("a", nil)).Dispatch(nil)
 _, _ = wf.Chain(bus.NewJob("a", nil)).Dispatch(nil)
-f.AssertWorkflowDispatchedTimes(nil, "a", 2)
+f.AssertWorkflowDispatchedTimes(t, "a", 2)
 ```
 
 #### <a id="queuefake-fake-assertworkflownotdispatched"></a>Fake.AssertWorkflowNotDispatched
@@ -2010,7 +2012,7 @@ AssertWorkflowNotDispatched fails when jobType was workflow-dispatched.
 
 ```go
 f := queuefake.New()
-f.AssertWorkflowNotDispatched(nil, "emails:send")
+f.AssertWorkflowNotDispatched(t, "emails:send")
 ```
 
 #### <a id="queuefake-fake-count"></a>Fake.Count
@@ -2056,8 +2058,8 @@ New creates a fake queue harness backed by queue.NewFake().
 f := queuefake.New()
 q := f.Queue()
 _ = q.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
-f.AssertDispatched(nil, "emails:send")
-f.AssertCount(nil, 1)
+f.AssertDispatched(t, "emails:send")
+f.AssertCount(t, 1)
 ```
 
 #### <a id="queuefake-fake-queue"></a>Fake.Queue
@@ -2089,7 +2091,7 @@ f := queuefake.New()
 q := f.Queue()
 _ = q.Dispatch(queue.NewJob("emails:send"))
 f.Reset()
-f.AssertNothingDispatched(nil)
+f.AssertNothingDispatched(t)
 ```
 
 #### <a id="queuefake-fake-workflow"></a>Fake.Workflow
@@ -2103,7 +2105,7 @@ _, _ = wf.Chain(
 	bus.NewJob("a", nil),
 	bus.NewJob("b", nil),
 ).Dispatch(context.Background())
-f.AssertChained(nil, []string{"a", "b"})
+f.AssertChained(t, []string{"a", "b"})
 ```
 <!-- api:embed:end -->
 
