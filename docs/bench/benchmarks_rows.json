@@ -1,0 +1,74 @@
+[
+  {
+    "set": "Local",
+    "driver": "null",
+    "n": 34190869,
+    "ns_op": 38.46,
+    "b_op": 128,
+    "allocs_op": 1
+  },
+  {
+    "set": "Local",
+    "driver": "sync",
+    "n": 4395702,
+    "ns_op": 263.8,
+    "b_op": 408,
+    "allocs_op": 6
+  },
+  {
+    "set": "Local",
+    "driver": "workerpool",
+    "n": 1830190,
+    "ns_op": 655,
+    "b_op": 456,
+    "allocs_op": 7
+  },
+  {
+    "set": "Integration",
+    "driver": "redis",
+    "n": 12746,
+    "ns_op": 87204,
+    "b_op": 2112,
+    "allocs_op": 33
+  },
+  {
+    "set": "Integration",
+    "driver": "nats",
+    "n": 1701228,
+    "ns_op": 702.1,
+    "b_op": 1249,
+    "allocs_op": 13
+  },
+  {
+    "set": "Integration",
+    "driver": "sqs",
+    "n": 816,
+    "ns_op": 1366986,
+    "b_op": 93303,
+    "allocs_op": 1078
+  },
+  {
+    "set": "Integration",
+    "driver": "rabbitmq",
+    "n": 9175,
+    "ns_op": 141768,
+    "b_op": 1881,
+    "allocs_op": 57
+  },
+  {
+    "set": "Integration",
+    "driver": "mysql",
+    "n": 591,
+    "ns_op": 1975123,
+    "b_op": 3405,
+    "allocs_op": 65
+  },
+  {
+    "set": "Integration",
+    "driver": "postgres",
+    "n": 1686,
+    "ns_op": 710673,
+    "b_op": 3602,
+    "allocs_op": 74
+  }
+]

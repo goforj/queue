@@ -233,9 +233,60 @@ func main() {
 	redisqueue.New("127.0.0.1:6379")                           // Redis/Asynq
 	natsqueue.New("nats://127.0.0.1:4222")                     // NATS
 	sqsqueue.New("us-east-1")                                  // SQS
-	rabbitmqqueue.New("amqp://guest:guest@127.0.0.1:5672/")    // RabbitMQ
+rabbitmqqueue.New("amqp://guest:guest@127.0.0.1:5672/")    // RabbitMQ
 }
 ```
+
+## Benchmarks
+
+Run local + integration-backed benchmarks (requires Docker/testcontainers):
+
+```bash
+INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=benchrender ./docs/bench -run '^TestRenderBenchmarks$'
+```
+
+<!-- bench:embed:start -->
+
+> Benchmark results focus on dispatch throughput (`BenchmarkDriverDispatch_*`). Lower `ns/op` means higher throughput. `ops/s` is derived as `1e9 / ns/op`.
+
+### Latency (ns/op)
+
+![Queue benchmark latency chart](docs/bench/benchmarks_ns.svg)
+
+### Throughput (ops/s)
+
+![Queue benchmark throughput chart](docs/bench/benchmarks_ops.svg)
+
+### Allocated Bytes (B/op)
+
+![Queue benchmark bytes chart](docs/bench/benchmarks_bytes.svg)
+
+### Allocations (allocs/op)
+
+![Queue benchmark allocations chart](docs/bench/benchmarks_allocs.svg)
+
+### Tables
+
+### Integration Dispatch Throughput
+
+| Driver | ns/op | ops/s | Relative | B/op | allocs/op |
+|:------|-----:|-----:|--------:|-----:|---------:|
+| nats | 702 | 1424299 | 1.00x | 1249 | 13 |
+| redis | 87204 | 11467 | 124.20x | 2112 | 33 |
+| rabbitmq | 141768 | 7054 | 201.92x | 1881 | 57 |
+| postgres | 710673 | 1407 | 1012.21x | 3602 | 74 |
+| sqs | 1366986 | 732 | 1947.00x | 93303 | 1078 |
+| mysql | 1975123 | 506 | 2813.16x | 3405 | 65 |
+
+### Local Dispatch Throughput
+
+| Driver | ns/op | ops/s | Relative | B/op | allocs/op |
+|:------|-----:|-----:|--------:|-----:|---------:|
+| null | 38 | 26001040 | 1.00x | 128 | 1 |
+| sync | 264 | 3790751 | 6.86x | 408 | 6 |
+| workerpool | 655 | 1526718 | 17.03x | 456 | 7 |
+
+<!-- bench:embed:end -->
 
 ## Middleware
 
