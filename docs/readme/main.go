@@ -622,34 +622,26 @@ func renderAPI(funcs []*FuncDoc) string {
 	}
 
 	if testingPkgs, ok := byCategoryPackageGroup["Testing"]; ok && len(testingPkgs) > 0 {
-		packages := make([]string, 0, len(testingPkgs))
-		for p := range testingPkgs {
-			packages = append(packages, p)
-		}
-		sort.Strings(packages)
 		var links []string
-		for _, pkg := range packages {
-			groupNames := make([]string, 0, len(testingPkgs[pkg]))
-			for g := range testingPkgs[pkg] {
-				groupNames = append(groupNames, g)
+		if queuefakeGroups, ok := testingPkgs["queuefake"]; ok {
+			var fns []*FuncDoc
+			for _, groupFns := range queuefakeGroups {
+				fns = append(fns, groupFns...)
 			}
-			sort.Strings(groupNames)
-			for _, group := range groupNames {
-				fns := testingPkgs[pkg][group]
-				sort.Slice(fns, func(i, j int) bool {
-					if fns[i].Name == fns[j].Name {
-						return fns[i].Owner < fns[j].Owner
-					}
-					return fns[i].Name < fns[j].Name
-				})
-				for _, fn := range fns {
-					label := pkg + "." + fn.Name
-					if fn.Owner != "" {
-						label = pkg + "." + fn.Owner + "." + fn.Name
-					}
-					links = append(links, fmt.Sprintf("[%s](#%s)", label, anchorFor(fn)))
+			sort.Slice(fns, func(i, j int) bool {
+				if fns[i].Name == fns[j].Name {
+					return fns[i].Owner < fns[j].Owner
 				}
+				return fns[i].Name < fns[j].Name
+			})
+			// Compact labels: keep all methods, but drop repeated package/receiver prefixes in the row.
+			for _, fn := range fns {
+				label := fn.Name
+				links = append(links, fmt.Sprintf("[%s](#%s)", label, anchorFor(fn)))
 			}
+		}
+		if len(links) == 0 {
+			links = append(links, "[Testing API](#testing-api)")
 		}
 		if len(links) > 0 {
 			buf.WriteString(fmt.Sprintf("| **Testing** | %s |\n", strings.Join(links, " ")))
