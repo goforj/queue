@@ -208,7 +208,6 @@ func renderTable(rows []benchRow) string {
 	sort.Strings(sets)
 
 	var buf bytes.Buffer
-	buf.WriteString("> Benchmark results focus on dispatch throughput (`BenchmarkDriverDispatch_*`). Lower `ns/op` means higher throughput. `ops/s` is derived as `1e9 / ns/op`. `Throughput vs Fastest` is computed within each class (`Local`/`External`).\n\n")
 	buf.WriteString("### Latency (ns/op)\n\n")
 	buf.WriteString("![Queue benchmark latency chart](docs/bench/benchmarks_ns.svg)\n\n")
 	buf.WriteString("### Throughput (ops/s)\n\n")
@@ -229,21 +228,13 @@ func renderTable(rows []benchRow) string {
 			}
 			return allRows[i].NsOp < allRows[j].NsOp
 		})
-		fastestBySet := map[string]float64{}
-		for _, row := range allRows {
-			if fastestBySet[row.Set] == 0 || row.NsOp < fastestBySet[row.Set] {
-				fastestBySet[row.Set] = row.NsOp
-			}
-		}
-
-		buf.WriteString("| Class | Driver | ns/op | ops/s | Throughput vs Fastest | B/op | allocs/op |\n")
-		buf.WriteString("|:------|:------|-----:|-----:|---------------------:|-----:|---------:|\n")
+		buf.WriteString("| Class | Driver | ns/op | ops/s | B/op | allocs/op |\n")
+		buf.WriteString("|:------|:------|-----:|-----:|-----:|---------:|\n")
 		for _, row := range allRows {
 			opsPerSec := 1e9 / row.NsOp
-			throughputPct := (fastestBySet[row.Set] / row.NsOp) * 100
 			buf.WriteString(fmt.Sprintf(
-				"| %s | %s | %.0f | %.0f | %s | %d | %d |\n",
-				displaySetLabel(row.Set), row.Driver, row.NsOp, opsPerSec, formatPercent(throughputPct), row.BOp, row.AllocsOp,
+				"| %s | %s | %.0f | %.0f | %d | %d |\n",
+				displaySetLabel(row.Set), row.Driver, row.NsOp, opsPerSec, row.BOp, row.AllocsOp,
 			))
 		}
 	}
@@ -361,19 +352,6 @@ func formatMetric(v float64) string {
 		return fmt.Sprintf("%.1fk", v/1_000)
 	default:
 		return fmt.Sprintf("%.0f", v)
-	}
-}
-
-func formatPercent(p float64) string {
-	switch {
-	case p >= 10:
-		return fmt.Sprintf("%.1f%%", p)
-	case p >= 1:
-		return fmt.Sprintf("%.2f%%", p)
-	case p >= 0.1:
-		return fmt.Sprintf("%.3f%%", p)
-	default:
-		return fmt.Sprintf("%.4f%%", p)
 	}
 }
 

@@ -265,18 +265,18 @@ INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=benchrender ./d
 
 ### Tables
 
-| Class | Driver | ns/op | ops/s | Throughput vs Fastest | B/op | allocs/op |
-|:------|:------|-----:|-----:|---------------------:|-----:|---------:|
-| External | nats | 774 | 1291823 | 100.0% | 1258 | 13 |
-| External | redis | 95295 | 10494 | 0.812% | 2113 | 33 |
-| External | rabbitmq | 165780 | 6032 | 0.467% | 1882 | 57 |
-| External | sqlite | 202380 | 4941 | 0.382% | 1931 | 47 |
-| External | postgres | 1056731 | 946 | 0.0733% | 3809 | 78 |
-| External | sqs | 1873911 | 534 | 0.0413% | 94784 | 1082 |
-| External | mysql | 2286406 | 437 | 0.0339% | 3303 | 62 |
-| Local | null | 37 | 26673780 | 100.0% | 128 | 1 |
-| Local | sync | 282 | 3539823 | 13.3% | 408 | 6 |
-| Local | workerpool | 650 | 1538462 | 5.77% | 456 | 7 |
+| Class | Driver | ns/op | ops/s | B/op | allocs/op |
+|:------|:------|-----:|-----:|-----:|---------:|
+| External | nats | 774 | 1291823 | 1258 | 13 |
+| External | redis | 95295 | 10494 | 2113 | 33 |
+| External | rabbitmq | 165780 | 6032 | 1882 | 57 |
+| External | sqlite | 202380 | 4941 | 1931 | 47 |
+| External | postgres | 1056731 | 946 | 3809 | 78 |
+| External | sqs | 1873911 | 534 | 94784 | 1082 |
+| External | mysql | 2286406 | 437 | 3303 | 62 |
+| Local | null | 37 | 26673780 | 128 | 1 |
+| Local | sync | 282 | 3539823 | 408 | 6 |
+| Local | workerpool | 650 | 1538462 | 456 | 7 |
 
 <!-- bench:embed:end -->
 
