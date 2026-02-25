@@ -2131,8 +2131,6 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	})
 
 	t.Run("scenario_backpressure_saturation", func(t *testing.T) {
-		requireScenarioNoErr(t, "backpressure_worker_start", (w).StartWorkers(context.Background()))
-
 		jobType := "job:scenario:backpressure:" + fx.name
 		var processed atomic.Int32
 		w.Register(jobType, func(_ context.Context, _ Job) error {
@@ -2161,6 +2159,10 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			}
 			return nil
 		})
+		// Register both handlers before starting workers so this scenario measures
+		// saturation behavior rather than dynamic handler/subscription propagation.
+		requireScenarioNoErr(t, "backpressure_worker_start", (w).StartWorkers(context.Background()))
+
 		probe := NewJob(probeType).
 			Payload(scenarioPayload{ID: 9800, Name: "probe"}).
 			OnQueue(fx.queueName)
