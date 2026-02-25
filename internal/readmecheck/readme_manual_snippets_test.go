@@ -29,16 +29,6 @@ func compileQuickStartQueueSnippet(q *queue.Queue) {
 	if q == nil {
 		return
 	}
-	// Other constructors:
-	// queue.NewSync() // in-process sync
-	// queue.NewNull() // drop-only / disabled mode (testing)
-	// sqlitequeue.New("file:queue.db?_busy_timeout=5000") // SQL durable queue (SQLite)
-	// mysqlqueue.New("user:pass@tcp(127.0.0.1:3306)/app") // SQL durable queue (MySQL)
-	// postgresqueue.New("postgres://user:pass@127.0.0.1:5432/app?sslmode=disable") // SQL durable queue (Postgres)
-	// redisqueue.New("127.0.0.1:6379") // Redis/Asynq
-	// natsqueue.New("nats://127.0.0.1:4222") // NATS
-	// sqsqueue.New("us-east-1") // SQS
-	// rabbitmqqueue.New("amqp://guest:guest@127.0.0.1:5672/") // RabbitMQ
 	type EmailPayload struct {
 		To string `json:"to"`
 	}

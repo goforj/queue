@@ -26,6 +26,41 @@
 go get github.com/goforj/queue
 ```
 
+## Quick Start
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/goforj/queue"
+)
+
+func main() {
+	q, _ := queue.NewWorkerpool(
+		queue.WithWorkers(2), // optional; default: runtime.NumCPU() (min 1)
+	)
+	type EmailPayload struct {
+		To string `json:"to"`
+	}
+
+	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
+		var payload EmailPayload
+		_ = m.Bind(&payload)
+		fmt.Println("send to", payload.To)
+		return nil
+	})
+
+	_ = q.StartWorkers(context.Background())
+	defer q.Shutdown(context.Background())
+
+	_, _ = q.Dispatch(
+		queue.NewJob("emails:send").
+			Payload(EmailPayload{To: "user@example.com"}),
+	)
+}
+```
+
 ## Drivers
 
 | Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout | Native Stats |
@@ -75,41 +110,6 @@ func main() {
 	natsqueue.New("nats://127.0.0.1:4222") // NATS
 	sqsqueue.New("us-east-1") // SQS
 	rabbitmqqueue.New("amqp://guest:guest@127.0.0.1:5672/") // RabbitMQ
-}
-```
-
-## Quick Start
-
-```go
-import (
-	"context"
-	"fmt"
-
-	"github.com/goforj/queue"
-)
-
-func main() {
-	q, _ := queue.NewWorkerpool(
-		queue.WithWorkers(2), // optional; default: runtime.NumCPU() (min 1)
-	)
-	type EmailPayload struct {
-		To string `json:"to"`
-	}
-
-	q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
-		var payload EmailPayload
-		_ = m.Bind(&payload)
-		fmt.Println("send to", payload.To)
-		return nil
-	})
-
-	_ = q.StartWorkers(context.Background())
-	defer q.Shutdown(context.Background())
-
-	_, _ = q.Dispatch(
-		queue.NewJob("emails:send").
-			Payload(EmailPayload{To: "user@example.com"}),
-	)
 }
 ```
 
@@ -236,6 +236,7 @@ q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 	return nil
 })
 ```
+
 
 ## Benchmarks
 
