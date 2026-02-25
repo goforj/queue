@@ -988,6 +988,36 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioNoErr(t, "worker_start_idempotent", (w).StartWorkers(context.Background()))
 	})
 
+	t.Run("scenario_worker_ready_probe", func(t *testing.T) {
+		probeType := "job:scenario:startup-probe:" + fx.name
+		probeDone := make(chan struct{}, 1)
+		w.Register(probeType, func(_ context.Context, _ Job) error {
+			select {
+			case probeDone <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+		probe := NewJob(probeType).
+			Payload(scenarioPayload{ID: -1, Name: "startup-probe"}).
+			OnQueue(fx.queueName)
+		if fx.forceTimeout {
+			probe = probe.Timeout(jobTimeout)
+		}
+		requireScenarioNoErr(t, "worker_ready_probe_dispatch", q.DispatchCtx(context.Background(), probe))
+
+		waitBudget := 5 * time.Second
+		if fx.name == "nats" {
+			waitBudget = 15 * time.Second
+		}
+		select {
+		case <-probeDone:
+		case <-time.After(waitBudget):
+			t.Fatalf("[worker_ready_probe_processed] startup probe not processed within %s", waitBudget)
+		}
+	})
+
 	t.Run("scenario_dispatch_burst", func(t *testing.T) {
 		var wg sync.WaitGroup
 		errCh := make(chan error, total)
