@@ -613,7 +613,7 @@ func renderAPI(funcs []*FuncDoc) string {
 			}
 		}
 		if len(links) > 0 {
-			buf.WriteString(fmt.Sprintf("| **Driver Constructors** | %s |\n", strings.Join(links, " · ")))
+			buf.WriteString(fmt.Sprintf("| **Driver Constructors** | %s |\n", strings.Join(links, " ")))
 		}
 	}
 
@@ -648,8 +648,11 @@ func renderAPI(funcs []*FuncDoc) string {
 			}
 			sort.Strings(groupNames)
 
+			flattenDriverConstructors := category == "Driver Modules"
 			for _, group := range groupNames {
-				buf.WriteString("#### " + group + "\n\n")
+				if !(flattenDriverConstructors && group == "Constructors") {
+					buf.WriteString("#### " + group + "\n\n")
+				}
 				sort.Slice(byCategoryPackageGroup[category][pkg][group], func(i, j int) bool {
 					left := byCategoryPackageGroup[category][pkg][group][i]
 					right := byCategoryPackageGroup[category][pkg][group][j]
