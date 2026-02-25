@@ -601,7 +601,7 @@ Add smoke thresholds (not optimization benchmarks):
   - capability differences are documented for supported versions where relevant
 - Notes:
   - users need to know what combinations are actually exercised
-  - Implemented with `docs/compatibility-policy.md` + generated `docs/compatibility-matrix.md` (`scripts/gen-compatibility-matrix.sh`) and CI drift guard in `.github/workflows/test.yml`; release notes should link the matrix at the tagged commit
+  - Implemented with `docs/compatibility-policy.md`; release notes should state tested backends/versions and link CI-backed compatibility evidence for the tagged commit
 
 Track/test supported backend versions per release so users know what combinations are actually exercised.
 

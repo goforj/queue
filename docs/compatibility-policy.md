@@ -4,8 +4,7 @@ This document defines how queue backend compatibility is communicated for releas
 
 ## Policy
 
-- The project documents the backend/runtime versions exercised by CI integration suites.
-- Release notes should link the committed `docs/compatibility-matrix.md` from the tagged release.
+- The project documents backend/runtime compatibility expectations in release notes and supporting docs.
 - Capability differences are documented separately (see `docs/backend-guarantees.md`).
 
 ## What "supported" means here
@@ -13,9 +12,7 @@ This document defines how queue backend compatibility is communicated for releas
 - The backend/version combination is exercised in CI integration tests for the release line.
 - Behavior is still subject to the documented guarantee/capability matrix (not every backend supports every feature).
 
-## CI-tested matrix source
+## CI evidence source
 
-- Generated file: `docs/compatibility-matrix.md`
-- Generator: `scripts/gen-compatibility-matrix.sh`
-
-The generated matrix is kept in sync by CI checks so version drift is visible in pull requests.
+- CI workflows and integration suites in this repository are the source of compatibility evidence.
+- Release notes should link to the relevant CI-backed docs for the tagged release.
