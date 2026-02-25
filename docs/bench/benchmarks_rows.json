@@ -2,73 +2,81 @@
   {
     "set": "Local",
     "driver": "null",
-    "n": 33427046,
-    "ns_op": 34.85,
+    "n": 27002066,
+    "ns_op": 37.49,
     "b_op": 128,
     "allocs_op": 1
   },
   {
     "set": "Local",
     "driver": "sync",
-    "n": 4894717,
-    "ns_op": 247.3,
+    "n": 4324056,
+    "ns_op": 282.5,
     "b_op": 408,
     "allocs_op": 6
   },
   {
     "set": "Local",
     "driver": "workerpool",
-    "n": 1881306,
-    "ns_op": 573.9,
+    "n": 1753606,
+    "ns_op": 650,
     "b_op": 456,
     "allocs_op": 7
   },
   {
     "set": "Integration",
     "driver": "redis",
-    "n": 12481,
-    "ns_op": 88619,
-    "b_op": 2112,
+    "n": 12192,
+    "ns_op": 95295,
+    "b_op": 2113,
     "allocs_op": 33
   },
   {
     "set": "Integration",
     "driver": "nats",
-    "n": 1612005,
-    "ns_op": 719,
+    "n": 1551589,
+    "ns_op": 774.1,
     "b_op": 1258,
     "allocs_op": 13
   },
   {
     "set": "Integration",
     "driver": "sqs",
-    "n": 814,
-    "ns_op": 1500298,
-    "b_op": 94752,
-    "allocs_op": 1094
+    "n": 602,
+    "ns_op": 1873911,
+    "b_op": 94784,
+    "allocs_op": 1082
   },
   {
     "set": "Integration",
     "driver": "rabbitmq",
-    "n": 9279,
-    "ns_op": 137518,
-    "b_op": 1881,
+    "n": 7213,
+    "ns_op": 165780,
+    "b_op": 1882,
     "allocs_op": 57
   },
   {
     "set": "Integration",
     "driver": "mysql",
-    "n": 607,
-    "ns_op": 1779421,
-    "b_op": 3433,
-    "allocs_op": 65
+    "n": 568,
+    "ns_op": 2286406,
+    "b_op": 3303,
+    "allocs_op": 62
   },
   {
     "set": "Integration",
     "driver": "postgres",
-    "n": 1482,
-    "ns_op": 835023,
-    "b_op": 3579,
-    "allocs_op": 74
+    "n": 1008,
+    "ns_op": 1056731,
+    "b_op": 3809,
+    "allocs_op": 78
+  },
+  {
+    "set": "Integration",
+    "driver": "sqlite",
+    "n": 5756,
+    "ns_op": 202380,
+    "b_op": 1931,
+    "allocs_op": 47
   }
 ]

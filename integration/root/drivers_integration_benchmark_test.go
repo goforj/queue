@@ -107,6 +107,21 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		b.Cleanup(func() { _ = q.Shutdown(ctx) })
 		return q
 	}, benchJob("bench:postgres", "default"))
+
+	runIntegrationDriverBench(b, "sqlite", func(b *testing.B) QueueRuntime {
+		dsn := fmt.Sprintf("%s/bench-%d.db", b.TempDir(), b.N)
+		cfg := withDefaultQueue(sqliteCfg(dsn), "default")
+		q, err := newQueueRuntime(cfg)
+		if err != nil {
+			b.Fatalf("new sqlite queue failed: %v", err)
+		}
+		q.Register("bench:sqlite", func(context.Context, queue.Job) error { return nil })
+		if err := q.StartWorkers(ctx); err != nil {
+			b.Fatalf("start sqlite workers failed: %v", err)
+		}
+		b.Cleanup(func() { _ = q.Shutdown(ctx) })
+		return q
+	}, benchJob("bench:sqlite", "default"))
 }
 
 func runIntegrationDriverBench(b *testing.B, backend string, ctor func(b *testing.B) QueueRuntime, job queue.Job) {
