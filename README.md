@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    queue gives your services one queue API with Redis, SQL, NATS, SQS, RabbitMQ, and in-process drivers.
+    queue provides a queue and workflow runtime with middleware, observability, and multiple backend drivers.
 </p>
 
 <p align="center">
