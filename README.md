@@ -15,8 +15,8 @@
     <a href="https://goreportcard.com/report/github.com/goforj/queue"><img src="https://goreportcard.com/badge/github.com/goforj/queue" alt="Go Report Card"></a>
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/unit_tests-249-brightgreen" alt="Unit tests (executed count)">
-    <img src="https://img.shields.io/badge/integration_tests-517-blue" alt="Integration tests (executed count)">
+    <img src="https://img.shields.io/badge/unit_tests-260-brightgreen" alt="Unit tests (executed count)">
+    <img src="https://img.shields.io/badge/integration_tests-522-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
 
@@ -298,7 +298,7 @@ q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 Run local + integration-backed benchmarks (requires Docker/testcontainers):
 
 ```bash
-INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=benchrender ./docs/bench -run '^TestRenderBenchmarks$'
+cd docs && GOWORK=off INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=benchrender ./bench -run '^TestRenderBenchmarks$'
 ```
 
 <!-- bench:embed:start -->

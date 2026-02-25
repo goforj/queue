@@ -11,11 +11,11 @@ echo "Watching for .go file changes to regenerate documentation..."
 
 echo "Starting API/examples watcher (non-test .go files)..."
 wgo -verbose -file=.go -xfile '_test\\.go$' -xdir examples \
-  go run ./docs/examplegen/main.go :: \
-  go run ./docs/readme/main.go &
+  sh -c 'cd docs && GOWORK=off go run ./examplegen/main.go' :: \
+  sh -c 'cd docs && GOWORK=off go run ./readme/main.go' &
 
 echo "Starting test badge watcher (_test.go files, runs tests)..."
 wgo -verbose -file '_test\\.go$' \
-  go run ./docs/readme/testcounts/main.go &
+  sh -c 'cd docs && GOWORK=off go run ./readme/testcounts/main.go' &
 
 wait

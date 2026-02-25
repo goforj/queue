@@ -392,11 +392,23 @@ func findRepoRoot() string {
 	if err != nil {
 		panic(fmt.Errorf("getwd: %w", err))
 	}
-	root := filepath.Clean(filepath.Join(wd, "..", ".."))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		panic(fmt.Errorf("find repo root from %q: %w", wd, err))
+	candidates := []string{
+		wd,
+		filepath.Join(wd, ".."),
+		filepath.Join(wd, "..", ".."),
+		filepath.Join(wd, "..", "..", ".."),
 	}
-	return root
+	for _, c := range candidates {
+		root := filepath.Clean(c)
+		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+			if _, err := os.Stat(filepath.Join(root, "README.md")); err == nil {
+				if _, err := os.Stat(filepath.Join(root, "docs")); err == nil {
+					return root
+				}
+			}
+		}
+	}
+	panic(fmt.Errorf("find repo root from %q: no candidate with go.mod + README.md + docs dir", wd))
 }
 
 func saveBenchmarkRows(path string, rows []benchRow) error {

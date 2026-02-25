@@ -777,12 +777,16 @@ func replaceAPISection(readme, api string) (string, error) {
 
 func findRoot() (string, error) {
 	wd, _ := os.Getwd()
-	if fileExists(filepath.Join(wd, "go.mod")) {
-		return wd, nil
+	candidates := []string{
+		wd,
+		filepath.Join(wd, ".."),
+		filepath.Join(wd, "..", ".."),
 	}
-	parent := filepath.Join(wd, "..")
-	if fileExists(filepath.Join(parent, "go.mod")) {
-		return filepath.Clean(parent), nil
+	for _, c := range candidates {
+		c = filepath.Clean(c)
+		if fileExists(filepath.Join(c, "go.mod")) && fileExists(filepath.Join(c, "README.md")) && fileExists(filepath.Join(c, "docs")) {
+			return c, nil
+		}
 	}
 	return "", fmt.Errorf("could not find project root")
 }
