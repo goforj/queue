@@ -2,6 +2,7 @@ package readmecheck
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os/signal"
 	"syscall"
@@ -115,13 +116,31 @@ func compileJobBuilderOptionsSnippet(q *queue.Queue) {
 }
 
 func compileMiddlewareSnippet() {
+	var errValidation = errors.New("validation failed")
+	maintenanceMode := false
+
 	audit := queue.MiddlewareFunc(func(ctx context.Context, m queue.Message, next queue.Next) error {
-		return next(ctx, m)
+		log.Printf("start job=%s", m.JobType)
+		err := next(ctx, m)
+		log.Printf("done job=%s err=%v", m.JobType, err)
+		return err
 	})
+
+	skipMaintenance := queue.SkipWhen{
+		Predicate: func(context.Context, queue.Message) bool {
+			return maintenanceMode
+		},
+	}
+
+	fatalValidation := queue.FailOnError{
+		When: func(err error) bool {
+			return errors.Is(err, errValidation)
+		},
+	}
 
 	q, _ := queue.New(
 		queue.Config{Driver: queue.DriverWorkerpool},
-		queue.WithMiddleware(audit),
+		queue.WithMiddleware(audit, skipMaintenance, fatalValidation),
 	)
 	_ = q
 }

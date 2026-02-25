@@ -203,6 +203,7 @@ q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 ### Driver constructor quick examples
 
 Use root constructors for in-process backends, and driver-module constructors for external backends. See the `Driver Constructors` API section below for full constructor shapes (`New(...)` and `NewWithConfig(...)`).
+Driver backends live in separate packages so applications only import/link the optional backend dependencies they actually use (smaller builds, less dependency overhead, cleaner deploys).
 
 ```go
 package main
@@ -236,16 +237,39 @@ func main() {
 
 ## Middleware
 
-Use `queue.WithMiddleware(...)` to apply cross-cutting workflow behavior (logging, filtering, error policy) to chains/batches/dispatch orchestration.
+Use `queue.WithMiddleware(...)` to apply cross-cutting workflow behavior to workflow job execution (logging, filtering, and error policy).
+
+Common patterns:
+- wrap handler execution (before/after logging, timing, tracing)
+- skip jobs conditionally (maintenance mode, feature flags)
+- convert matched errors into terminal failures (no retry)
 
 ```go
+var errValidation = errors.New("validation failed")
+maintenanceMode := false
+
 audit := queue.MiddlewareFunc(func(ctx context.Context, m queue.Message, next queue.Next) error {
-    return next(ctx, m)
+	log.Printf("start job=%s", m.JobType)
+	err := next(ctx, m)
+	log.Printf("done job=%s err=%v", m.JobType, err)
+	return err
 })
 
+skipMaintenance := queue.SkipWhen{
+	Predicate: func(context.Context, queue.Message) bool {
+		return maintenanceMode
+	},
+}
+
+fatalValidation := queue.FailOnError{
+	When: func(err error) bool {
+		return errors.Is(err, errValidation)
+	},
+}
+
 q, _ := queue.New(
-    queue.Config{Driver: queue.DriverWorkerpool},
-    queue.WithMiddleware(audit),
+	queue.Config{Driver: queue.DriverWorkerpool},
+	queue.WithMiddleware(audit, skipMaintenance, fatalValidation),
 )
 _ = q
 ```
