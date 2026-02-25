@@ -247,8 +247,6 @@ INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=benchrender ./d
 
 <!-- bench:embed:start -->
 
-> Benchmark results focus on dispatch throughput (`BenchmarkDriverDispatch_*`). Lower `ns/op` means higher throughput. `ops/s` is derived as `1e9 / ns/op`. `Throughput vs Fastest` is computed within each class (`Local`/`External`).
-
 ### Latency (ns/op)
 
 ![Queue benchmark latency chart](docs/bench/benchmarks_ns.svg)
