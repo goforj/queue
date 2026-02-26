@@ -52,6 +52,10 @@ jobs:
       - name: Verify curated README manual snippets compile
         run: ./scripts/check-readme-snippets.sh
 
+      - name: Verify generated examples compile
+        working-directory: examples
+        run: go test ./... -run TestExamplesBuild -count=1
+
       - name: Run unit tests
         run: go test ./... -v
 
