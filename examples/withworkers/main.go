@@ -5,10 +5,7 @@
 
 package main
 
-import (
-	"github.com/goforj/queue"
-	"time"
-)
+import "github.com/goforj/queue"
 
 func main() {
 	// WithWorkers sets desired worker concurrency before StartWorkers.

@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"github.com/goforj/queue"
-	"time"
 )
 
 func main() {

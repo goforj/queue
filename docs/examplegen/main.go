@@ -156,6 +156,32 @@ func findRoot() (string, error) {
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
+func containsPkgSelector(code, pkg string) bool {
+	target := pkg + "."
+	searchFrom := 0
+	for {
+		idx := strings.Index(code[searchFrom:], target)
+		if idx < 0 {
+			return false
+		}
+		idx += searchFrom
+		if idx == 0 || !isIdentByte(code[idx-1]) {
+			return true
+		}
+		searchFrom = idx + len(target)
+		if searchFrom >= len(code) {
+			return false
+		}
+	}
+}
+
+func isIdentByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9') ||
+		b == '_'
+}
+
 func modulePath(root string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
@@ -203,6 +229,8 @@ type Example struct {
 
 var exampleHeader = regexp.MustCompile(`(?i)^\s*Example:\s*(.*)$`)
 var groupHeader = regexp.MustCompile(`(?i)^\s*@group\s+(.+)$`)
+var testTBAssertionCall = regexp.MustCompile(`\bAssert[A-Za-z0-9_]*\(\s*t\b`)
+var testVarMethodCall = regexp.MustCompile(`\bt\.(Helper|Fatal|Fatalf|Error|Errorf|Log|Logf|Skip|Skipf|SkipNow)\(`)
 
 type docLine struct {
 	text string
@@ -495,6 +523,7 @@ func selectPackage(pkgs map[string]*ast.Package) (string, error) {
 //
 
 func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) error {
+	fd.Examples = runnableExamples(fd.Examples)
 	if len(fd.Examples) == 0 {
 		return nil
 	}
@@ -563,7 +592,7 @@ func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) er
 		if strings.Contains(ex.Code, "redis.") {
 			imports["github.com/redis/go-redis/v9"] = true
 		}
-		if strings.Contains(ex.Code, "time.") {
+		if containsPkgSelector(ex.Code, "time") {
 			imports["time"] = true
 		}
 		if strings.Contains(ex.Code, "gocron") {
@@ -661,6 +690,30 @@ func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) er
 	buf.WriteString("}\n")
 
 	return os.WriteFile(filepath.Join(dir, "main.go"), buf.Bytes(), 0o644)
+}
+
+func runnableExamples(in []Example) []Example {
+	out := make([]Example, 0, len(in))
+	for _, ex := range in {
+		if requiresTestingTB(ex.Code) {
+			continue
+		}
+		out = append(out, ex)
+	}
+	return out
+}
+
+func requiresTestingTB(code string) bool {
+	if strings.Contains(code, "testing.") {
+		return true
+	}
+	if testTBAssertionCall.MatchString(code) {
+		return true
+	}
+	if testVarMethodCall.MatchString(code) {
+		return true
+	}
+	return false
 }
 
 func exampleDirName(fd *FuncDoc) string {
