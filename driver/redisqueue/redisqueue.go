@@ -12,9 +12,11 @@ import (
 // Config configures the Redis/Asynq driver module constructor.
 type Config struct {
 	queueconfig.DriverBaseConfig
-	Addr     string
-	Password string
-	DB       int
+	Addr          string
+	Password      string
+	DB            int
+	AsynqLogger   asynq.Logger
+	AsynqLogLevel asynq.LogLevel
 }
 
 // New creates a high-level Queue using the Redis backend.
@@ -48,6 +50,8 @@ func New(addr string, opts ...queue.Option) (*queue.Queue, error) {
 //			Addr: "127.0.0.1:6379", // required
 //			Password: "",           // optional; default empty
 //			DB: 0,                  // optional; default 0
+//			AsynqLogger: nil,       // optional; default Asynq logger
+//			AsynqLogLevel: 0,       // optional; default Asynq info level
 //		},
 //		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
 //	)
@@ -71,12 +75,24 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 				Addr:     cfg.Addr,
 				Password: cfg.Password,
 				DB:       cfg.DB,
-			}, asynq.Config{Concurrency: workers}),
+			}, asynqServerConfig(cfg, workers)),
 			asynq.NewServeMux(),
+			cfg.Observer,
 		), nil
 	}, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return q, nil
+}
+
+func asynqServerConfig(cfg Config, workers int) asynq.Config {
+	serverCfg := asynq.Config{Concurrency: workers}
+	if cfg.AsynqLogger != nil {
+		serverCfg.Logger = cfg.AsynqLogger
+	}
+	if cfg.AsynqLogLevel > 0 {
+		serverCfg.LogLevel = cfg.AsynqLogLevel
+	}
+	return serverCfg
 }

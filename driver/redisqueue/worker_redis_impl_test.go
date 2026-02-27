@@ -28,7 +28,7 @@ func (s *asynqServerStub) Stop()     {}
 func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
 	server := &asynqServerStub{}
 	mux := asynq.NewServeMux()
-	w := newRedisWorker(server, mux)
+	w := newRedisWorker(server, mux, nil)
 
 	// Register no-op branches.
 	w.Register("", func(context.Context, queue.Job) error { return nil })
@@ -65,12 +65,94 @@ func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
 
 func TestRedisWorker_StartError(t *testing.T) {
 	server := &asynqServerStub{startErr: errors.New("start failed")}
-	w := newRedisWorker(server, asynq.NewServeMux())
+	w := newRedisWorker(server, asynq.NewServeMux(), nil)
 
 	if err := w.StartWorkers(context.Background()); err == nil {
 		t.Fatal("expected start error")
 	}
 	if w.started {
 		t.Fatal("worker should remain not started on start error")
+	}
+}
+
+func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
+	server := &asynqServerStub{}
+	var events []queue.Event
+	observer := queue.ObserverFunc(func(event queue.Event) { events = append(events, event) })
+	w := newRedisWorker(server, asynq.NewServeMux(), observer)
+
+	w.Register("job:ok", func(context.Context, queue.Job) error { return nil })
+	w.Register("job:fail", func(context.Context, queue.Job) error { return errors.New("boom") })
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+	if server.lastStartHandler == nil {
+		t.Fatal("expected start handler")
+	}
+
+	if err := server.lastStartHandler.ProcessTask(context.Background(), asynq.NewTask("job:ok", []byte("ok"))); err != nil {
+		t.Fatalf("process ok task failed: %v", err)
+	}
+	if err := server.lastStartHandler.ProcessTask(context.Background(), asynq.NewTask("job:fail", []byte("fail"))); err == nil {
+		t.Fatal("expected failing task error")
+	}
+	if len(events) != 4 {
+		t.Fatalf("expected 4 process events, got %d", len(events))
+	}
+	if events[0].Kind != queue.EventProcessStarted || events[1].Kind != queue.EventProcessSucceeded {
+		t.Fatalf("unexpected first pair kinds: %s, %s", events[0].Kind, events[1].Kind)
+	}
+	if events[2].Kind != queue.EventProcessStarted || events[3].Kind != queue.EventProcessFailed {
+		t.Fatalf("unexpected second pair kinds: %s, %s", events[2].Kind, events[3].Kind)
+	}
+	for _, event := range events {
+		if event.Driver != queue.DriverRedis {
+			t.Fatalf("expected redis driver, got %q", event.Driver)
+		}
+		if event.Queue == "" {
+			t.Fatal("expected queue to be set")
+		}
+	}
+	if events[1].Duration < 0 {
+		t.Fatalf("expected non-negative success duration, got %s", events[1].Duration)
+	}
+	if events[3].Err == nil {
+		t.Fatal("expected failed event error")
+	}
+	if events[1].Time.IsZero() || events[3].Time.IsZero() {
+		t.Fatal("expected event timestamps to be set")
+	}
+}
+
+func TestRedisWorker_NoObserverFastPath(t *testing.T) {
+	server := &asynqServerStub{}
+	w := newRedisWorker(server, asynq.NewServeMux(), nil)
+
+	called := 0
+	w.Register("job:plain", func(_ context.Context, job queue.Job) error {
+		called++
+		if job.Type != "job:plain" {
+			t.Fatalf("expected job type job:plain, got %q", job.Type)
+		}
+		opts := queue.DriverOptions(job)
+		if opts.QueueName != "" {
+			t.Fatalf("expected empty queue name in no-observer path, got %q", opts.QueueName)
+		}
+		if opts.Attempt != 0 {
+			t.Fatalf("expected zero attempt in no-observer path, got %d", opts.Attempt)
+		}
+		if opts.MaxRetry != nil {
+			t.Fatalf("expected nil max retry in no-observer path, got %v", *opts.MaxRetry)
+		}
+		return nil
+	})
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+	if err := server.lastStartHandler.ProcessTask(context.Background(), asynq.NewTask("job:plain", []byte("ok"))); err != nil {
+		t.Fatalf("process task failed: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("expected handler called once, got %d", called)
 	}
 }

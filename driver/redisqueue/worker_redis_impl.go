@@ -3,8 +3,10 @@ package redisqueue
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/queuecore"
 	"github.com/hibiken/asynq"
 )
 
@@ -17,21 +19,63 @@ type asynqServer interface {
 type redisWorker struct {
 	server asynqServer
 	mux    *asynq.ServeMux
+	obs    queue.Observer
 
 	mu      sync.Mutex
 	started bool
 }
 
-func newRedisWorker(server asynqServer, mux *asynq.ServeMux) *redisWorker {
-	return &redisWorker{server: server, mux: mux}
+func newRedisWorker(server asynqServer, mux *asynq.ServeMux, observer queue.Observer) *redisWorker {
+	return &redisWorker{server: server, mux: mux, obs: observer}
 }
 
 func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 	if jobType == "" || handler == nil {
 		return
 	}
+	if w.obs == nil {
+		w.mux.HandleFunc(jobType, func(ctx context.Context, job *asynq.Task) error {
+			return handler(ctx, queue.NewJob(job.Type()).Payload(job.Payload()))
+		})
+		return
+	}
 	w.mux.HandleFunc(jobType, func(ctx context.Context, job *asynq.Task) error {
-		return handler(ctx, queue.NewJob(job.Type()).Payload(job.Payload()))
+		attempt, _ := asynq.GetRetryCount(ctx)
+		maxRetry, _ := asynq.GetMaxRetry(ctx)
+		queueName, _ := asynq.GetQueueName(ctx)
+		queueName = queuecore.NormalizeQueueName(queueName)
+
+		start := time.Now()
+		base := queue.Event{
+			Driver:   queue.DriverRedis,
+			Queue:    queueName,
+			JobType:  job.Type(),
+			Attempt:  attempt,
+			MaxRetry: maxRetry,
+			Time:     start,
+		}
+		base.Kind = queue.EventProcessStarted
+		queuecore.SafeObserve(w.obs, base)
+
+		err := handler(ctx, queuecore.DriverWithAttempt(
+			queue.NewJob(job.Type()).
+				Payload(job.Payload()).
+				OnQueue(queueName).
+				Retry(maxRetry),
+			attempt,
+		))
+		finish := base
+		finish.Time = time.Now()
+		finish.Duration = time.Since(start)
+		finish.Err = err
+		if err == nil {
+			finish.Kind = queue.EventProcessSucceeded
+			queuecore.SafeObserve(w.obs, finish)
+			return nil
+		}
+		finish.Kind = queue.EventProcessFailed
+		queuecore.SafeObserve(w.obs, finish)
+		return err
 	})
 }
 
