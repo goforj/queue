@@ -7,25 +7,25 @@ import (
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/queuecore"
-	"github.com/hibiken/asynq"
+	backend "github.com/hibiken/asynq"
 )
 
-type asynqServer interface {
-	Start(handler asynq.Handler) error
+type server interface {
+	Start(handler backend.Handler) error
 	Shutdown()
 	Stop()
 }
 
 type redisWorker struct {
-	server asynqServer
-	mux    *asynq.ServeMux
+	server server
+	mux    *backend.ServeMux
 	obs    queue.Observer
 
 	mu      sync.Mutex
 	started bool
 }
 
-func newRedisWorker(server asynqServer, mux *asynq.ServeMux, observer queue.Observer) *redisWorker {
+func newRedisWorker(server server, mux *backend.ServeMux, observer queue.Observer) *redisWorker {
 	return &redisWorker{server: server, mux: mux, obs: observer}
 }
 
@@ -34,15 +34,15 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 		return
 	}
 	if w.obs == nil {
-		w.mux.HandleFunc(jobType, func(ctx context.Context, job *asynq.Task) error {
+		w.mux.HandleFunc(jobType, func(ctx context.Context, job *backend.Task) error {
 			return handler(ctx, queue.NewJob(job.Type()).Payload(job.Payload()))
 		})
 		return
 	}
-	w.mux.HandleFunc(jobType, func(ctx context.Context, job *asynq.Task) error {
-		attempt, _ := asynq.GetRetryCount(ctx)
-		maxRetry, _ := asynq.GetMaxRetry(ctx)
-		queueName, _ := asynq.GetQueueName(ctx)
+	w.mux.HandleFunc(jobType, func(ctx context.Context, job *backend.Task) error {
+		attempt, _ := backend.GetRetryCount(ctx)
+		maxRetry, _ := backend.GetMaxRetry(ctx)
+		queueName, _ := backend.GetQueueName(ctx)
 		queueName = queuecore.NormalizeQueueName(queueName)
 
 		start := time.Now()

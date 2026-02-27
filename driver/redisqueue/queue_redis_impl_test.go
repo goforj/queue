@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
-	"github.com/hibiken/asynq"
+	backend "github.com/hibiken/asynq"
 )
 
 type redisInspectorStub struct {
 	pauseQueueArg   string
 	unpauseQueueArg string
 	queues          []string
-	queueInfos      map[string]*asynq.QueueInfo
+	queueInfos      map[string]*backend.QueueInfo
 	queuesErr       error
 	infoErr         error
 	pauseErr        error
@@ -27,9 +27,9 @@ type redisEnqueueClientStub struct {
 	closeN     int
 }
 
-func (s *redisEnqueueClientStub) Enqueue(*asynq.Task, ...asynq.Option) (*asynq.TaskInfo, error) {
+func (s *redisEnqueueClientStub) Enqueue(*backend.Task, ...backend.Option) (*backend.TaskInfo, error) {
 	s.enqueueN++
-	return &asynq.TaskInfo{}, s.enqueueErr
+	return &backend.TaskInfo{}, s.enqueueErr
 }
 
 func (s *redisEnqueueClientStub) Close() error {
@@ -44,7 +44,7 @@ func (s *redisInspectorStub) Queues() ([]string, error) {
 	return s.queues, nil
 }
 
-func (s *redisInspectorStub) GetQueueInfo(string) (*asynq.QueueInfo, error) {
+func (s *redisInspectorStub) GetQueueInfo(string) (*backend.QueueInfo, error) {
 	if s.infoErr != nil {
 		return nil, s.infoErr
 	}
@@ -116,7 +116,7 @@ func TestRedisQueue_StatsBranches(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		inspector := &redisInspectorStub{
 			queues: []string{"default"},
-			queueInfos: map[string]*asynq.QueueInfo{
+			queueInfos: map[string]*backend.QueueInfo{
 				"default": {
 					Queue:     "default",
 					Pending:   1,
@@ -170,7 +170,7 @@ func TestRedisQueue_DispatchBranches(t *testing.T) {
 	})
 
 	t.Run("duplicate mapping", func(t *testing.T) {
-		client := &redisEnqueueClientStub{enqueueErr: asynq.ErrDuplicateTask}
+		client := &redisEnqueueClientStub{enqueueErr: backend.ErrDuplicateTask}
 		r := &redisQueue{client: client}
 		if err := r.Dispatch(context.Background(), queue.NewJob("job:redis").OnQueue("default")); !errors.Is(err, queue.ErrDuplicate) {
 			t.Fatalf("expected duplicate mapping error, got %v", err)

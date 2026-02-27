@@ -9,17 +9,17 @@ import (
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/queuecore"
-	"github.com/hibiken/asynq"
+	backend "github.com/hibiken/asynq"
 )
 
 type redisEnqueueClient interface {
-	Enqueue(job *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+	Enqueue(job *backend.Task, opts ...backend.Option) (*backend.TaskInfo, error)
 	Close() error
 }
 
 type redisInspector interface {
 	Queues() ([]string, error)
-	GetQueueInfo(queue string) (*asynq.QueueInfo, error)
+	GetQueueInfo(queue string) (*backend.QueueInfo, error)
 	PauseQueue(queue string) error
 	UnpauseQueue(queue string) error
 }
@@ -38,16 +38,16 @@ func newRedisQueue(client redisEnqueueClient, inspector redisInspector, ownsClie
 	return &redisQueue{client: client, inspector: inspector, ownsClient: ownsClient}
 }
 
-func newAsynqClient(cfg Config) redisEnqueueClient {
-	return asynq.NewClient(asynq.RedisClientOpt{
+func newRedisClient(cfg Config) redisEnqueueClient {
+	return backend.NewClient(backend.RedisClientOpt{
 		Addr:     cfg.Addr,
 		Password: cfg.Password,
 		DB:       cfg.DB,
 	})
 }
 
-func newAsynqInspector(cfg Config) redisInspector {
-	return asynq.NewInspector(asynq.RedisClientOpt{
+func newRedisInspector(cfg Config) redisInspector {
+	return backend.NewInspector(backend.RedisClientOpt{
 		Addr:     cfg.Addr,
 		Password: cfg.Password,
 		DB:       cfg.DB,
@@ -78,27 +78,27 @@ func (d *redisQueue) Dispatch(_ context.Context, job queue.Job) error {
 	if parsed.QueueName == "" {
 		return fmt.Errorf("job queue is required")
 	}
-	asynqOpts := make([]asynq.Option, 0, 5)
-	asynqOpts = append(asynqOpts, asynq.Queue(parsed.QueueName))
+	backendOpts := make([]backend.Option, 0, 5)
+	backendOpts = append(backendOpts, backend.Queue(parsed.QueueName))
 	if parsed.Timeout != nil {
-		asynqOpts = append(asynqOpts, asynq.Timeout(*parsed.Timeout))
+		backendOpts = append(backendOpts, backend.Timeout(*parsed.Timeout))
 	} else {
-		asynqOpts = append(asynqOpts, asynq.Timeout(redisDefaultJobTimeout))
+		backendOpts = append(backendOpts, backend.Timeout(redisDefaultJobTimeout))
 	}
 	if parsed.MaxRetry != nil {
-		asynqOpts = append(asynqOpts, asynq.MaxRetry(*parsed.MaxRetry))
+		backendOpts = append(backendOpts, backend.MaxRetry(*parsed.MaxRetry))
 	}
 	if parsed.Backoff != nil && *parsed.Backoff > 0 {
 		return queuecore.ErrBackoffUnsupported
 	}
 	if parsed.Delay > 0 {
-		asynqOpts = append(asynqOpts, asynq.ProcessIn(parsed.Delay))
+		backendOpts = append(backendOpts, backend.ProcessIn(parsed.Delay))
 	}
 	if parsed.UniqueTTL > 0 {
-		asynqOpts = append(asynqOpts, asynq.Unique(parsed.UniqueTTL))
+		backendOpts = append(backendOpts, backend.Unique(parsed.UniqueTTL))
 	}
-	_, err := d.client.Enqueue(asynq.NewTask(job.Type, job.PayloadBytes()), asynqOpts...)
-	if errors.Is(err, asynq.ErrDuplicateTask) {
+	_, err := d.client.Enqueue(backend.NewTask(job.Type, job.PayloadBytes()), backendOpts...)
+	if errors.Is(err, backend.ErrDuplicateTask) {
 		return queuecore.ErrDuplicate
 	}
 	return err

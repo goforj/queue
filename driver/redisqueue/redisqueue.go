@@ -6,17 +6,42 @@ import (
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/internal/driverbridge"
 	"github.com/goforj/queue/queueconfig"
-	"github.com/hibiken/asynq"
+	backend "github.com/hibiken/asynq"
 )
 
-// Config configures the Redis/Asynq driver module constructor.
+// ServerLogger is the Redis worker server logger contract.
+//
+// It intentionally mirrors common leveled logger methods while avoiding
+// exposing the underlying server implementation type in Config.
+type ServerLogger interface {
+	Debug(args ...interface{})
+	Info(args ...interface{})
+	Warn(args ...interface{})
+	Error(args ...interface{})
+	Fatal(args ...interface{})
+}
+
+// ServerLogLevel configures Redis worker server log verbosity.
+type ServerLogLevel int
+
+const (
+	// ServerLogLevelDefault leaves backend default log level unchanged.
+	ServerLogLevelDefault ServerLogLevel = iota
+	ServerLogLevelDebug
+	ServerLogLevelInfo
+	ServerLogLevelWarn
+	ServerLogLevelError
+	ServerLogLevelFatal
+)
+
+// Config configures the Redis driver module constructor.
 type Config struct {
 	queueconfig.DriverBaseConfig
-	Addr          string
-	Password      string
-	DB            int
-	AsynqLogger   asynq.Logger
-	AsynqLogLevel asynq.LogLevel
+	Addr           string
+	Password       string
+	DB             int
+	ServerLogger   ServerLogger
+	ServerLogLevel ServerLogLevel
 }
 
 // New creates a high-level Queue using the Redis backend.
@@ -50,8 +75,8 @@ func New(addr string, opts ...queue.Option) (*queue.Queue, error) {
 //			Addr: "127.0.0.1:6379", // required
 //			Password: "",           // optional; default empty
 //			DB: 0,                  // optional; default 0
-//			AsynqLogger: nil,       // optional; default Asynq logger
-//			AsynqLogLevel: 0,       // optional; default Asynq info level
+//			ServerLogger: nil,      // optional; default backend logger
+//			ServerLogLevel: redisqueue.ServerLogLevelDefault, // optional
 //		},
 //		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
 //	)
@@ -68,15 +93,15 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 		DefaultQueue: cfg.DefaultQueue,
 		Observer:     cfg.Observer,
 	}
-	backend := newRedisQueue(newAsynqClient(cfg), newAsynqInspector(cfg), true)
-	q, err := driverbridge.NewQueueFromDriver(rootCfg, backend, func(workers int) (any, error) {
+	driverBackend := newRedisQueue(newRedisClient(cfg), newRedisInspector(cfg), true)
+	q, err := driverbridge.NewQueueFromDriver(rootCfg, driverBackend, func(workers int) (any, error) {
 		return newRedisWorker(
-			asynq.NewServer(asynq.RedisClientOpt{
+			backend.NewServer(backend.RedisClientOpt{
 				Addr:     cfg.Addr,
 				Password: cfg.Password,
 				DB:       cfg.DB,
-			}, asynqServerConfig(cfg, workers)),
-			asynq.NewServeMux(),
+			}, serverConfig(cfg, workers)),
+			backend.NewServeMux(),
 			cfg.Observer,
 		), nil
 	}, opts...)
@@ -86,13 +111,30 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	return q, nil
 }
 
-func asynqServerConfig(cfg Config, workers int) asynq.Config {
-	serverCfg := asynq.Config{Concurrency: workers}
-	if cfg.AsynqLogger != nil {
-		serverCfg.Logger = cfg.AsynqLogger
+func serverConfig(cfg Config, workers int) backend.Config {
+	serverCfg := backend.Config{Concurrency: workers}
+	if cfg.ServerLogger != nil {
+		serverCfg.Logger = cfg.ServerLogger
 	}
-	if cfg.AsynqLogLevel > 0 {
-		serverCfg.LogLevel = cfg.AsynqLogLevel
+	if level, ok := serverLogLevel(cfg.ServerLogLevel); ok {
+		serverCfg.LogLevel = level
 	}
 	return serverCfg
+}
+
+func serverLogLevel(level ServerLogLevel) (backend.LogLevel, bool) {
+	switch level {
+	case ServerLogLevelDebug:
+		return backend.DebugLevel, true
+	case ServerLogLevelInfo:
+		return backend.InfoLevel, true
+	case ServerLogLevelWarn:
+		return backend.WarnLevel, true
+	case ServerLogLevelError:
+		return backend.ErrorLevel, true
+	case ServerLogLevelFatal:
+		return backend.FatalLevel, true
+	default:
+		return 0, false
+	}
 }

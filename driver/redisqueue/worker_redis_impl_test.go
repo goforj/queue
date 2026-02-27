@@ -6,28 +6,28 @@ import (
 	"testing"
 
 	"github.com/goforj/queue"
-	"github.com/hibiken/asynq"
+	backend "github.com/hibiken/asynq"
 )
 
-type asynqServerStub struct {
+type serverStub struct {
 	startErr         error
 	startCalls       int
 	shutdownCalls    int
-	lastStartHandler asynq.Handler
+	lastStartHandler backend.Handler
 }
 
-func (s *asynqServerStub) Start(handler asynq.Handler) error {
+func (s *serverStub) Start(handler backend.Handler) error {
 	s.startCalls++
 	s.lastStartHandler = handler
 	return s.startErr
 }
 
-func (s *asynqServerStub) Shutdown() { s.shutdownCalls++ }
-func (s *asynqServerStub) Stop()     {}
+func (s *serverStub) Shutdown() { s.shutdownCalls++ }
+func (s *serverStub) Stop()     {}
 
 func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
-	server := &asynqServerStub{}
-	mux := asynq.NewServeMux()
+	server := &serverStub{}
+	mux := backend.NewServeMux()
 	w := newRedisWorker(server, mux, nil)
 
 	// Register no-op branches.
@@ -64,8 +64,8 @@ func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
 }
 
 func TestRedisWorker_StartError(t *testing.T) {
-	server := &asynqServerStub{startErr: errors.New("start failed")}
-	w := newRedisWorker(server, asynq.NewServeMux(), nil)
+	server := &serverStub{startErr: errors.New("start failed")}
+	w := newRedisWorker(server, backend.NewServeMux(), nil)
 
 	if err := w.StartWorkers(context.Background()); err == nil {
 		t.Fatal("expected start error")
@@ -76,10 +76,10 @@ func TestRedisWorker_StartError(t *testing.T) {
 }
 
 func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
-	server := &asynqServerStub{}
+	server := &serverStub{}
 	var events []queue.Event
 	observer := queue.ObserverFunc(func(event queue.Event) { events = append(events, event) })
-	w := newRedisWorker(server, asynq.NewServeMux(), observer)
+	w := newRedisWorker(server, backend.NewServeMux(), observer)
 
 	w.Register("job:ok", func(context.Context, queue.Job) error { return nil })
 	w.Register("job:fail", func(context.Context, queue.Job) error { return errors.New("boom") })
@@ -90,10 +90,10 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 		t.Fatal("expected start handler")
 	}
 
-	if err := server.lastStartHandler.ProcessTask(context.Background(), asynq.NewTask("job:ok", []byte("ok"))); err != nil {
+	if err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("job:ok", []byte("ok"))); err != nil {
 		t.Fatalf("process ok task failed: %v", err)
 	}
-	if err := server.lastStartHandler.ProcessTask(context.Background(), asynq.NewTask("job:fail", []byte("fail"))); err == nil {
+	if err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("job:fail", []byte("fail"))); err == nil {
 		t.Fatal("expected failing task error")
 	}
 	if len(events) != 4 {
@@ -125,8 +125,8 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 }
 
 func TestRedisWorker_NoObserverFastPath(t *testing.T) {
-	server := &asynqServerStub{}
-	w := newRedisWorker(server, asynq.NewServeMux(), nil)
+	server := &serverStub{}
+	w := newRedisWorker(server, backend.NewServeMux(), nil)
 
 	called := 0
 	w.Register("job:plain", func(_ context.Context, job queue.Job) error {
@@ -149,7 +149,7 @@ func TestRedisWorker_NoObserverFastPath(t *testing.T) {
 	if err := w.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)
 	}
-	if err := server.lastStartHandler.ProcessTask(context.Background(), asynq.NewTask("job:plain", []byte("ok"))); err != nil {
+	if err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("job:plain", []byte("ok"))); err != nil {
 		t.Fatalf("process task failed: %v", err)
 	}
 	if called != 1 {
