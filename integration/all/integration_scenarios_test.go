@@ -2139,6 +2139,12 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			return nil
 		})
 
+		// Non-durable backends (for example NATS) can drop messages published
+		// before workers subscribe. Start workers first for those backends.
+		if !fx.supportsRestartDelayedDurability {
+			requireScenarioNoErr(t, "backpressure_worker_start", (w).StartWorkers(context.Background()))
+		}
+
 		const total = 80
 		for i := 0; i < total; i++ {
 			job := NewJob(jobType).
@@ -2159,9 +2165,12 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			}
 			return nil
 		})
-		// Register both handlers before starting workers so this scenario measures
-		// saturation behavior rather than dynamic handler/subscription propagation.
-		requireScenarioNoErr(t, "backpressure_worker_start", (w).StartWorkers(context.Background()))
+		// For durable backends, start after dispatch to maximize initial saturation.
+		if fx.supportsRestartDelayedDurability {
+			// Register both handlers before starting workers so this scenario measures
+			// saturation behavior rather than dynamic handler/subscription propagation.
+			requireScenarioNoErr(t, "backpressure_worker_start", (w).StartWorkers(context.Background()))
+		}
 
 		// Prove workers are actively draining the saturated queue before publishing the probe.
 		progressDeadline := time.After(20 * time.Second)
