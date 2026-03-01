@@ -8,16 +8,17 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 )
 
 func TestQueueContract_Redis(t *testing.T) {
-	if !integrationBackendEnabled("redis") {
+	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
 	ensureRedis(t)
 
 	factory := contractFactory{
-		name:           "redis",
+		name:           testenv.BackendRedis,
 		expectedDriver: queue.DriverRedis,
 		newQueue: func(t *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
@@ -39,12 +40,12 @@ func TestQueueContract_Redis(t *testing.T) {
 }
 
 func TestQueueContract_DatabaseMySQL(t *testing.T) {
-	if !integrationBackendEnabled("mysql") {
+	if !integrationBackendEnabled(testenv.BackendMySQL) {
 		t.Skip("mysql integration backend not selected")
 	}
 	ensureMySQLDB(t)
 	cfg := queue.DatabaseConfig{
-		DriverName:   "mysql",
+		DriverName:   testenv.BackendMySQL,
 		DSN:          mysqlDSN(integrationMySQL.addr),
 		Workers:      1,
 		PollInterval: 10 * time.Millisecond,
@@ -72,7 +73,7 @@ func TestQueueContract_DatabaseMySQL(t *testing.T) {
 }
 
 func TestQueueContract_DatabasePostgres(t *testing.T) {
-	if !integrationBackendEnabled("postgres") {
+	if !integrationBackendEnabled(testenv.BackendPostgres) {
 		t.Skip("postgres integration backend not selected")
 	}
 	ensurePostgresDB(t)
@@ -105,7 +106,7 @@ func TestQueueContract_DatabasePostgres(t *testing.T) {
 }
 
 func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
-	if !integrationBackendEnabled("sqlite") {
+	if !integrationBackendEnabled(testenv.BackendSQLite) {
 		t.Skip("sqlite integration backend not selected")
 	}
 	factory := contractFactory{
@@ -113,7 +114,7 @@ func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 		expectedDriver: queue.DriverDatabase,
 		newQueue: func(t *testing.T) QueueRuntime {
 			cfg := queue.DatabaseConfig{
-				DriverName:   "sqlite",
+				DriverName:   testenv.BackendSQLite,
 				DSN:          fmt.Sprintf("%s/contract-integration-%d.db", t.TempDir(), time.Now().UnixNano()),
 				Workers:      1,
 				PollInterval: 10 * time.Millisecond,
@@ -134,12 +135,12 @@ func TestQueueContract_DatabaseSQLiteIntegration(t *testing.T) {
 }
 
 func TestQueueContract_NATS(t *testing.T) {
-	if !integrationBackendEnabled("nats") {
+	if !integrationBackendEnabled(testenv.BackendNATS) {
 		t.Skip("nats integration backend not selected")
 	}
 	ensureNATS(t)
 	factory := contractFactory{
-		name:           "nats",
+		name:           testenv.BackendNATS,
 		expectedDriver: queue.DriverNATS,
 		newQueue: func(_ *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(natsCfg(integrationNATS.url))
@@ -158,12 +159,12 @@ func TestQueueContract_NATS(t *testing.T) {
 }
 
 func TestQueueContract_SQS(t *testing.T) {
-	if !integrationBackendEnabled("sqs") {
+	if !integrationBackendEnabled(testenv.BackendSQS) {
 		t.Skip("sqs integration backend not selected")
 	}
 	ensureSQS(t)
 	factory := contractFactory{
-		name:           "sqs",
+		name:           testenv.BackendSQS,
 		expectedDriver: queue.DriverSQS,
 		newQueue: func(_ *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(sqsCfg(
@@ -187,12 +188,12 @@ func TestQueueContract_SQS(t *testing.T) {
 }
 
 func TestQueueContract_RabbitMQ(t *testing.T) {
-	if !integrationBackendEnabled("rabbitmq") {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	ensureRabbitMQ(t)
 	factory := contractFactory{
-		name:           "rabbitmq",
+		name:           testenv.BackendRabbitMQ,
 		expectedDriver: queue.DriverRabbitMQ,
 		newQueue: func(_ *testing.T) QueueRuntime {
 			q, err := newQueueRuntime(rabbitmqCfg(integrationRabbitMQ.url))

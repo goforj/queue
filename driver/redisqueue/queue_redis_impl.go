@@ -58,6 +58,20 @@ func (d *redisQueue) Driver() queue.Driver {
 	return queue.DriverRedis
 }
 
+func (d *redisQueue) Preflight(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d.inspector == nil {
+		return fmt.Errorf("redis inspector is unavailable")
+	}
+	_, err := d.inspector.Queues()
+	return err
+}
+
 func (d *redisQueue) Shutdown(_ context.Context) error {
 	if d.ownsClient && d.client != nil {
 		d.closeOnce.Do(func() {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	. "github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 )
 
 func TestIntegrationQueue_AllBackends(t *testing.T) {
@@ -21,7 +22,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 		newQ     func(t *testing.T) (*Queue, string)
 	}{
 		{
-			name:     "null",
+			name:     testenv.BackendNull,
 			executes: false,
 			newQ: func(t *testing.T) (*Queue, string) {
 				q, err := newQueue(nullCfg())
@@ -32,7 +33,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "sync",
+			name:     testenv.BackendSync,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				q, err := newQueue(syncCfg())
@@ -43,7 +44,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "workerpool",
+			name:     testenv.BackendWorkerpool,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				q, err := newQueue(workerpoolCfg())
@@ -54,7 +55,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "redis",
+			name:     testenv.BackendRedis,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				q, err := newQueue(withDefaultQueue(redisCfg(integrationRedis.addr), "default"))
@@ -65,7 +66,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "mysql",
+			name:     testenv.BackendMySQL,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				q, err := newQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)))
@@ -76,7 +77,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "postgres",
+			name:     testenv.BackendPostgres,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				q, err := newQueue(postgresCfg(postgresDSN(integrationPostgres.addr)))
@@ -87,7 +88,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "sqlite",
+			name:     testenv.BackendSQLite,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				q, err := newQueue(sqliteCfg(fmt.Sprintf("%s/queue-integration-%d.db", t.TempDir(), time.Now().UnixNano())))
@@ -98,7 +99,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "nats",
+			name:     testenv.BackendNATS,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				q, err := newQueue(natsCfg(integrationNATS.url))
@@ -109,7 +110,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "sqs",
+			name:     testenv.BackendSQS,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				physical := uniqueQueueName("queue-sqs")
@@ -121,7 +122,7 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "rabbitmq",
+			name:     testenv.BackendRabbitMQ,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
 				physical := uniqueQueueName("queue-rabbitmq")

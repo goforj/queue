@@ -52,6 +52,18 @@ func (q *rabbitMQQueue) Driver() queue.Driver {
 	return queue.DriverRabbitMQ
 }
 
+func (q *rabbitMQQueue) Preflight(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.ensureConnectedLocked()
+}
+
 func (q *rabbitMQQueue) Shutdown(_ context.Context) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()

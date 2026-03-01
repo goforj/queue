@@ -726,6 +726,18 @@ func (q *observedQueue) Stats(ctx context.Context) (StatsSnapshot, error) {
 	return provider.Stats(ctx)
 }
 
+func (q *observedQueue) Ready(ctx context.Context) error {
+	checker, ok := q.inner.(interface{ Ready(context.Context) error })
+	if !ok {
+		legacy, ok := q.inner.(interface{ Preflight(context.Context) error })
+		if !ok {
+			return nil
+		}
+		return legacy.Preflight(ctx)
+	}
+	return checker.Ready(ctx)
+}
+
 func (q *observedQueue) Pause(ctx context.Context, queueName string) error {
 	controller, ok := q.inner.(QueueController)
 	if !ok {

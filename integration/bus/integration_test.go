@@ -60,7 +60,7 @@ func TestMain(m *testing.M) {
 	ctx := context.Background()
 	backends := selectedIntegrationBackends()
 
-	if backends["redis"] {
+	if backends[testenv.BackendRedis] {
 		c, addr, err := startRedisContainer(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to start redis integration container: %v\n", err)
@@ -69,7 +69,7 @@ func TestMain(m *testing.M) {
 		integrationRedis.container = c
 		integrationRedis.addr = addr
 	}
-	if backends["mysql"] {
+	if backends[testenv.BackendMySQL] {
 		c, addr, err := startMySQLContainer(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to start mysql integration container: %v\n", err)
@@ -79,7 +79,7 @@ func TestMain(m *testing.M) {
 		integrationMySQL.container = c
 		integrationMySQL.addr = addr
 	}
-	if backends["postgres"] {
+	if backends[testenv.BackendPostgres] {
 		c, addr, err := startPostgresContainer(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to start postgres integration container: %v\n", err)
@@ -89,7 +89,7 @@ func TestMain(m *testing.M) {
 		integrationPostgres.container = c
 		integrationPostgres.addr = addr
 	}
-	if backends["nats"] {
+	if backends[testenv.BackendNATS] {
 		c, url, err := startNATSContainer(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to start nats integration container: %v\n", err)
@@ -99,7 +99,7 @@ func TestMain(m *testing.M) {
 		integrationNATS.container = c
 		integrationNATS.url = url
 	}
-	if backends["sqs"] {
+	if backends[testenv.BackendSQS] {
 		c, endpoint, err := startSQSContainer(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to start sqs integration container: %v\n", err)
@@ -112,7 +112,7 @@ func TestMain(m *testing.M) {
 		integrationSQS.accessKey = "test"
 		integrationSQS.secretKey = "test"
 	}
-	if backends["rabbitmq"] {
+	if backends[testenv.BackendRabbitMQ] {
 		c, url, err := startRabbitMQContainer(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to start rabbitmq integration container: %v\n", err)
@@ -160,7 +160,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 		newQ     func(t *testing.T) QueueRuntime
 	}{
 		{
-			name:     "null",
+			name:     testenv.BackendNull,
 			executes: false,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(nullCfg())
@@ -171,7 +171,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "sync",
+			name:     testenv.BackendSync,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(syncCfg())
@@ -182,7 +182,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "workerpool",
+			name:     testenv.BackendWorkerpool,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(workerpoolCfg())
@@ -193,7 +193,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "redis",
+			name:     testenv.BackendRedis,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
@@ -204,7 +204,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "mysql",
+			name:     testenv.BackendMySQL,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(mysqlCfg(mysqlDSN(integrationMySQL.addr)))
@@ -215,7 +215,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "postgres",
+			name:     testenv.BackendPostgres,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(postgresCfg(postgresDSN(integrationPostgres.addr)))
@@ -226,7 +226,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "sqlite",
+			name:     testenv.BackendSQLite,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(sqliteCfg(fmt.Sprintf("%s/bus-integration-%d.db", t.TempDir(), time.Now().UnixNano())))
@@ -237,7 +237,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "nats",
+			name:     testenv.BackendNATS,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(natsCfg(integrationNATS.url))
@@ -248,7 +248,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "sqs",
+			name:     testenv.BackendSQS,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(sqsCfg(
@@ -264,7 +264,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "rabbitmq",
+			name:     testenv.BackendRabbitMQ,
 			executes: true,
 			newQ: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(rabbitmqCfg(integrationRabbitMQ.url))
@@ -299,7 +299,7 @@ func TestIntegrationBus_AllBackends(t *testing.T) {
 			}()
 
 			queueName := uniqueQueueName("bus-integration")
-			if backend.name == "redis" || backend.name == "rabbitmq" {
+			if backend.name == testenv.BackendRedis || backend.name == testenv.BackendRabbitMQ {
 				queueName = "default"
 			}
 			if !backend.executes {
@@ -469,7 +469,7 @@ func testBusBatchScenario(t *testing.T, b bus.Bus, queueName string) {
 func testBusWorkflowFailureCallbacksScenario(t *testing.T, backendName string, b bus.Bus, queueName string) {
 	t.Helper()
 	switch backendName {
-	case "workerpool", "nats", "sqs":
+	case testenv.BackendWorkerpool, testenv.BackendNATS, testenv.BackendSQS:
 		t.Skipf("workflow failure callback semantics are not asserted in this suite for backend %s yet", backendName)
 	}
 	callbackWait := 20 * time.Second

@@ -143,6 +143,21 @@ func (f *FakeQueue) Workers(int) queueRuntime { return f }
 //	_ = err
 func (f *FakeQueue) Shutdown(context.Context) error { return nil }
 
+// Ready validates fake queue readiness.
+// @group Testing
+//
+// Example: fake ready
+//
+//	fake := queue.NewFake()
+//	fmt.Println(fake.Ready(context.Background()) == nil)
+//	// true
+func (f *FakeQueue) Ready(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
+}
+
 // BusRegister satisfies the internal orchestration runtime adapter.
 // @group Testing
 func (f *FakeQueue) BusRegister(string, busruntime.Handler) {}

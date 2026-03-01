@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 )
 
 type processEventRecorder struct {
@@ -59,7 +60,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 		newQueue func(t *testing.T, observer queue.Observer) QueueRuntime
 	}{
 		{
-			name:    "redis",
+			name:    testenv.BackendRedis,
 			queue:   "default",
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
@@ -72,7 +73,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "mysql",
+			name:    testenv.BackendMySQL,
 			queue:   "obs_events_mysql",
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
@@ -85,7 +86,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "postgres",
+			name:    testenv.BackendPostgres,
 			queue:   "obs_events_postgres",
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
@@ -98,7 +99,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "sqlite",
+			name:    testenv.BackendSQLite,
 			queue:   "obs_events_sqlite",
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
@@ -111,7 +112,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "nats",
+			name:    testenv.BackendNATS,
 			queue:   "obs_events_nats",
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
@@ -124,7 +125,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "sqs",
+			name:    testenv.BackendSQS,
 			queue:   "obs_events_sqs",
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
@@ -143,7 +144,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "rabbitmq",
+			name:    testenv.BackendRabbitMQ,
 			queue:   "obs_events_rabbitmq",
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {

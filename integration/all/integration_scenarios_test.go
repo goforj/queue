@@ -72,12 +72,12 @@ type runtimeWorkerBackend interface {
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 	backends := selectedIntegrationBackends()
-	needsRedis := backends["redis"]
-	needsMySQL := backends["mysql"]
-	needsPostgres := backends["postgres"]
-	needsNATS := backends["nats"]
-	needsSQS := backends["sqs"]
-	needsRabbitMQ := backends["rabbitmq"]
+	needsRedis := backends[testenv.BackendRedis]
+	needsMySQL := backends[testenv.BackendMySQL]
+	needsPostgres := backends[testenv.BackendPostgres]
+	needsNATS := backends[testenv.BackendNATS]
+	needsSQS := backends[testenv.BackendSQS]
+	needsRabbitMQ := backends[testenv.BackendRabbitMQ]
 
 	if needsRedis {
 		redisContainer, redisAddr, err := startRedisContainer(ctx)
@@ -232,7 +232,7 @@ func integrationBackendEnabled(name string) bool {
 }
 
 func TestRedisIntegration_DispatchSmoke(t *testing.T) {
-	if !integrationBackendEnabled("redis") {
+	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
@@ -258,7 +258,7 @@ func TestRedisIntegration_DispatchSmoke(t *testing.T) {
 }
 
 func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
-	if !integrationBackendEnabled("redis") {
+	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
@@ -302,7 +302,7 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 }
 
 func TestRedisIntegration_DefaultTimeoutApplied(t *testing.T) {
-	if !integrationBackendEnabled("redis") {
+	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
 	inspector := newRedisInspector(t)
@@ -329,7 +329,7 @@ func TestRedisIntegration_DefaultTimeoutApplied(t *testing.T) {
 }
 
 func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
-	if !integrationBackendEnabled("redis") {
+	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
 	_ = newRedisInspector(t)
@@ -353,7 +353,7 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 }
 
 func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
-	if !integrationBackendEnabled("redis") {
+	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
 	_ = newRedisInspector(t)
@@ -369,7 +369,7 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 }
 
 func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
-	if !integrationBackendEnabled("redis") {
+	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
 
@@ -748,7 +748,7 @@ type scenarioPayload struct {
 func TestIntegrationScenarios_AllBackends(t *testing.T) {
 	fixtures := []scenarioFixture{
 		{
-			name:      "redis",
+			name:      testenv.BackendRedis,
 			queueName: "default",
 			newQueue: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
@@ -772,7 +772,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsShutdownDelayRetry:       true,
 		},
 		{
-			name:      "mysql",
+			name:      testenv.BackendMySQL,
 			queueName: "scenario_mysql",
 			newQueue: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(mysqlCfg(mysqlDSN(integrationMySQL.addr)))
@@ -795,7 +795,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsShutdownDelayRetry:       true,
 		},
 		{
-			name:      "postgres",
+			name:      testenv.BackendPostgres,
 			queueName: "scenario_postgres",
 			newQueue: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(postgresCfg(postgresDSN(integrationPostgres.addr)))
@@ -818,7 +818,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsShutdownDelayRetry:       true,
 		},
 		{
-			name:      "sqlite",
+			name:      testenv.BackendSQLite,
 			queueName: "scenario_sqlite",
 			newQueue: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(sqliteCfg(fmt.Sprintf("%s/scenario-%d.db", t.TempDir(), time.Now().UnixNano())))
@@ -843,7 +843,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsShutdownDelayRetry:       true,
 		},
 		{
-			name:      "nats",
+			name:      testenv.BackendNATS,
 			queueName: "scenario_nats",
 			newQueue: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(natsCfg(integrationNATS.url))
@@ -866,7 +866,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsShutdownDelayRetry:       false,
 		},
 		{
-			name:      "sqs",
+			name:      testenv.BackendSQS,
 			queueName: "scenario_sqs",
 			newQueue: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(withDefaultQueue(
@@ -895,7 +895,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsShutdownDelayRetry:       false,
 		},
 		{
-			name:      "rabbitmq",
+			name:      testenv.BackendRabbitMQ,
 			queueName: "scenario_rabbitmq",
 			newQueue: func(t *testing.T) QueueRuntime {
 				q, err := newQueueRuntime(withDefaultQueue(rabbitmqCfg(integrationRabbitMQ.url), "scenario_rabbitmq"))
@@ -928,7 +928,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			t.Parallel()
 
 			// SQLite needs a shared DSN between producer and worker; build it inline.
-			if fx.name == "sqlite" {
+			if fx.name == testenv.BackendSQLite {
 				dsn := fmt.Sprintf("%s/scenario-%d.db", t.TempDir(), time.Now().UnixNano())
 				fx.newQueue = func(t *testing.T) QueueRuntime {
 					q, err := newQueueRuntime(sqliteCfg(dsn))
@@ -1008,7 +1008,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioNoErr(t, "worker_ready_probe_dispatch", q.DispatchCtx(context.Background(), probe))
 
 		waitBudget := 5 * time.Second
-		if fx.name == "nats" {
+		if fx.name == testenv.BackendNATS {
 			waitBudget = 15 * time.Second
 		}
 		select {
@@ -1066,7 +1066,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 	t.Run("scenario_wait_all_processed", func(t *testing.T) {
 		want := expected.Load()
 		waitBudget := 25 * time.Second
-		if fx.name == "nats" {
+		if fx.name == testenv.BackendNATS {
 			// NATS can run close to the deadline under full all-backends parallel CI load.
 			waitBudget = 45 * time.Second
 		}
@@ -1102,7 +1102,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			Payload(scenarioPayload{ID: 9001, Name: "poison"}).
 			OnQueue(fx.queueName)
 		poisonRetries := 2
-		if fx.name == "redis" {
+		if fx.name == testenv.BackendRedis {
 			// Redis/Asynq uses driver-managed retry delays when custom backoff is unsupported.
 			// Use fewer retries here to keep the poison/recovery invariant fast in CI.
 			poisonRetries = 1
@@ -1117,7 +1117,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioNoErr(t, "poison_dispatch", q.DispatchCtx(context.Background(), poison))
 
 		poisonWait := 10 * time.Second
-		if fx.name == "mysql" || fx.name == "postgres" || fx.name == "sqlite" {
+		if fx.name == testenv.BackendMySQL || fx.name == testenv.BackendPostgres || fx.name == testenv.BackendSQLite {
 			// DB-backed workers can need extra time to recover from transient driver/connection
 			// errors in CI before retry attempts resume.
 			poisonWait = 30 * time.Second
@@ -1162,7 +1162,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		restartQ := q
 		restartW := w
 		restartQueueName := fx.queueName
-		if fx.name == "sqs" {
+		if fx.name == testenv.BackendSQS {
 			// SQS can retain duplicate deliveries from earlier scenarios long enough to
 			// interfere with restart timing. Use an isolated physical queue for this
 			// recovery invariant subtest so the result reflects restart behavior.
@@ -1202,7 +1202,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		}
 		requireScenarioNoErr(t, "restart_basic_dispatch_while_worker_down", restartQ.DispatchCtx(context.Background(), job))
 
-		if fx.name == "sqs" {
+		if fx.name == testenv.BackendSQS {
 			restartCfg := withDefaultQueue(
 				sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
 				restartQueueName,
@@ -1230,7 +1230,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		elapsed := time.Since(start)
 		reportScenarioDuration(t, fx.name, "scenario_worker_restart_recovery", elapsed)
 		limit := 20 * time.Second
-		if fx.name == "sqs" {
+		if fx.name == testenv.BackendSQS {
 			limit = 30 * time.Second
 		}
 		requireScenarioDurationLTE(t, fx.name, "scenario_worker_restart_recovery", elapsed, limit)
@@ -1637,7 +1637,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		idempotencyQ := q
 		idempotencyW := w
 		idempotencyQueueName := fx.queueName
-		if fx.name == "sqs" {
+		if fx.name == testenv.BackendSQS {
 			// SQS can retain invisible deliveries from earlier scenarios long enough to
 			// delay duplicate-processing timing by the queue visibility timeout. Isolate
 			// this subtest to a dedicated physical queue so it measures idempotency logic.
@@ -1708,7 +1708,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		requireScenarioTrue(t, "idempotency_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
 		elapsed := time.Since(start)
 		reportScenarioDuration(t, fx.name, "scenario_duplicate_delivery_idempotency", elapsed)
-		if fx.name == "sqs" {
+		if fx.name == testenv.BackendSQS {
 			requireScenarioDurationLTE(t, fx.name, "scenario_duplicate_delivery_idempotency", elapsed, 45*time.Second)
 		}
 	})
@@ -1806,7 +1806,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			// SQS/localstack can take significantly longer to drain small bursts in
 			// some CI environments; treat this as a timing budget issue, not an
 			// ordering semantic difference.
-			if fx.name == "sqs" && defaultTimeout < 60*time.Second {
+			if fx.name == testenv.BackendSQS && defaultTimeout < 60*time.Second {
 				return 60 * time.Second
 			}
 			return defaultTimeout
@@ -2466,11 +2466,11 @@ func (w *queueBackedWorker) Shutdown(ctx context.Context) error {
 func newOrderingWorker(t *testing.T, fx scenarioFixture) runtimeWorkerBackend {
 	t.Helper()
 	switch fx.name {
-	case "redis":
+	case testenv.BackendRedis:
 		return newQueueBackedWorker(t, redisCfg(integrationRedis.addr), 1)
-	case "mysql":
+	case testenv.BackendMySQL:
 		return newQueueBackedWorker(t, mysqlCfg(mysqlDSN(integrationMySQL.addr)), 1)
-	case "postgres":
+	case testenv.BackendPostgres:
 		return newQueueBackedWorker(t, postgresCfg(postgresDSN(integrationPostgres.addr)), 1)
 	default:
 		return fx.newWorker(t)

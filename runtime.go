@@ -628,6 +628,28 @@ func (r *Queue) Stats(ctx context.Context) (StatsSnapshot, error) {
 	return provider.Stats(ctx)
 }
 
+// Ready validates queue backend readiness for dispatch/worker operation.
+// @group Queue
+//
+// Example: queue ready
+//
+//	q, err := queue.NewSync()
+//	if err != nil {
+//		return
+//	}
+//	fmt.Println(q.Ready(context.Background()) == nil)
+//	// true
+func (r *Queue) Ready(ctx context.Context) error {
+	if r == nil || r.q == nil {
+		return fmt.Errorf("runtime is nil")
+	}
+	checker, ok := r.q.(interface{ Ready(context.Context) error })
+	if !ok {
+		return nil
+	}
+	return checker.Ready(ctx)
+}
+
 // ChainBuilder is the high-level chain workflow builder.
 // @group Queue
 type ChainBuilder interface {

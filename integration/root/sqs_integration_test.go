@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -74,7 +75,7 @@ func newSQSIntegrationConfig(t *testing.T, defaultQueue string) any {
 }
 
 func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
-	if !integrationBackendEnabled("sqs") {
+	if !integrationBackendEnabled(testenv.BackendSQS) {
 		t.Skip("sqs integration backend not selected")
 	}
 	type payload struct {
@@ -116,7 +117,7 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 }
 
 func TestSQSIntegration_OptionBehavior(t *testing.T) {
-	if !integrationBackendEnabled("sqs") {
+	if !integrationBackendEnabled(testenv.BackendSQS) {
 		t.Skip("sqs integration backend not selected")
 	}
 	delay := 1200 * time.Millisecond
@@ -182,7 +183,7 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 }
 
 func TestSQSIntegration_UniqueDuplicate(t *testing.T) {
-	if !integrationBackendEnabled("sqs") {
+	if !integrationBackendEnabled(testenv.BackendSQS) {
 		t.Skip("sqs integration backend not selected")
 	}
 	queueName := uniqueQueueName("sqs-unique")

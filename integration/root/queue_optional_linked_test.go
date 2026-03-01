@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 )
 
 func testQueueDriver(q QueueRuntime) queue.Driver {
@@ -18,7 +19,7 @@ func testQueueDriver(q QueueRuntime) queue.Driver {
 }
 
 func TestDriverModuleNewQueues(t *testing.T) {
-	t.Run("redis", func(t *testing.T) {
+	t.Run(testenv.BackendRedis, func(t *testing.T) {
 		q, err := newQueueRuntime(redisCfg("127.0.0.1:6379"))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
@@ -27,7 +28,7 @@ func TestDriverModuleNewQueues(t *testing.T) {
 			t.Fatalf("expected redis driver, got %q", testQueueDriver(q))
 		}
 	})
-	t.Run("nats", func(t *testing.T) {
+	t.Run(testenv.BackendNATS, func(t *testing.T) {
 		q, err := newQueueRuntime(natsCfg("nats://127.0.0.1:4222"))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
@@ -36,7 +37,7 @@ func TestDriverModuleNewQueues(t *testing.T) {
 			t.Fatalf("expected nats driver, got %q", testQueueDriver(q))
 		}
 	})
-	t.Run("sqs", func(t *testing.T) {
+	t.Run(testenv.BackendSQS, func(t *testing.T) {
 		q, err := newQueueRuntime(sqsCfg("us-east-1", "", "", ""))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
@@ -45,7 +46,7 @@ func TestDriverModuleNewQueues(t *testing.T) {
 			t.Fatalf("expected sqs driver, got %q", testQueueDriver(q))
 		}
 	})
-	t.Run("rabbitmq", func(t *testing.T) {
+	t.Run(testenv.BackendRabbitMQ, func(t *testing.T) {
 		q, err := newQueueRuntime(rabbitmqCfg("amqp://guest:guest@127.0.0.1:5672/"))
 		if err != nil {
 			t.Fatalf("new q failed: %v", err)
@@ -76,10 +77,10 @@ func TestDriverModuleQueueSelectionByConfig(t *testing.T) {
 			cfg:    sqliteCfg(t.TempDir() + "/queue.db"),
 			driver: queue.DriverDatabase,
 		},
-		{name: "redis", cfg: redisCfg("127.0.0.1:6379"), driver: queue.DriverRedis},
-		{name: "nats", cfg: natsCfg("nats://127.0.0.1:4222"), driver: queue.DriverNATS},
-		{name: "sqs", cfg: sqsCfg("us-east-1", "", "", ""), driver: queue.DriverSQS},
-		{name: "rabbitmq", cfg: rabbitmqCfg("amqp://guest:guest@127.0.0.1:5672/"), driver: queue.DriverRabbitMQ},
+		{name: testenv.BackendRedis, cfg: redisCfg("127.0.0.1:6379"), driver: queue.DriverRedis},
+		{name: testenv.BackendNATS, cfg: natsCfg("nats://127.0.0.1:4222"), driver: queue.DriverNATS},
+		{name: testenv.BackendSQS, cfg: sqsCfg("us-east-1", "", "", ""), driver: queue.DriverSQS},
+		{name: testenv.BackendRabbitMQ, cfg: rabbitmqCfg("amqp://guest:guest@127.0.0.1:5672/"), driver: queue.DriverRabbitMQ},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,10 +150,10 @@ func TestRootNewQueue_RejectsOptionalDrivers(t *testing.T) {
 		cfg  queue.Config
 		want string
 	}{
-		{name: "redis", cfg: queue.Config{Driver: queue.DriverRedis}, want: "driver moved; use"},
-		{name: "nats", cfg: queue.Config{Driver: queue.DriverNATS}, want: "driver moved; use"},
-		{name: "sqs", cfg: queue.Config{Driver: queue.DriverSQS}, want: "driver moved; use"},
-		{name: "rabbitmq", cfg: queue.Config{Driver: queue.DriverRabbitMQ}, want: "driver moved; use"},
+		{name: testenv.BackendRedis, cfg: queue.Config{Driver: queue.DriverRedis}, want: "driver moved; use"},
+		{name: testenv.BackendNATS, cfg: queue.Config{Driver: queue.DriverNATS}, want: "driver moved; use"},
+		{name: testenv.BackendSQS, cfg: queue.Config{Driver: queue.DriverSQS}, want: "driver moved; use"},
+		{name: testenv.BackendRabbitMQ, cfg: queue.Config{Driver: queue.DriverRabbitMQ}, want: "driver moved; use"},
 		{name: "database", cfg: queue.Config{Driver: queue.DriverDatabase}, want: "database drivers moved; use"},
 	}
 	for _, tc := range testCases {

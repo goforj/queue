@@ -2,20 +2,33 @@ package testenv
 
 import "strings"
 
+const (
+	BackendNull       = "null"
+	BackendSync       = "sync"
+	BackendWorkerpool = "workerpool"
+	BackendSQLite     = "sqlite"
+	BackendRedis      = "redis"
+	BackendMySQL      = "mysql"
+	BackendPostgres   = "postgres"
+	BackendNATS       = "nats"
+	BackendSQS        = "sqs"
+	BackendRabbitMQ   = "rabbitmq"
+)
+
 var LocalBackends = []string{
-	"null",
-	"sync",
-	"workerpool",
-	"sqlite",
+	BackendNull,
+	BackendSync,
+	BackendWorkerpool,
+	BackendSQLite,
 }
 
 var ExternalBackends = []string{
-	"redis",
-	"mysql",
-	"postgres",
-	"nats",
-	"sqs",
-	"rabbitmq",
+	BackendRedis,
+	BackendMySQL,
+	BackendPostgres,
+	BackendNATS,
+	BackendSQS,
+	BackendRabbitMQ,
 }
 
 // SelectedBackends returns the enabled backend set for INTEGRATION_BACKEND.
@@ -53,4 +66,3 @@ func SelectedBackends(envValue string) map[string]bool {
 func BackendEnabled(envValue, name string) bool {
 	return SelectedBackends(envValue)[strings.ToLower(strings.TrimSpace(name))]
 }
-

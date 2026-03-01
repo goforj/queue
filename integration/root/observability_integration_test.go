@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 )
 
 func TestObservabilityIntegration_AllBackends(t *testing.T) {
@@ -22,7 +23,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 		newQueue func(t *testing.T, collector *queue.StatsCollector) QueueRuntime
 	}{
 		{
-			name:    "redis",
+			name:    testenv.BackendRedis,
 			queue:   "default",
 			native:  true,
 			workers: 2,
@@ -36,7 +37,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "mysql",
+			name:    testenv.BackendMySQL,
 			queue:   "obs_mysql",
 			native:  true,
 			workers: 2,
@@ -50,7 +51,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "postgres",
+			name:    testenv.BackendPostgres,
 			queue:   "obs_postgres",
 			native:  true,
 			workers: 2,
@@ -64,7 +65,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "sqlite",
+			name:    testenv.BackendSQLite,
 			queue:   "obs_sqlite",
 			native:  true,
 			workers: 2,
@@ -78,7 +79,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "nats",
+			name:    testenv.BackendNATS,
 			queue:   "obs_nats",
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
@@ -91,7 +92,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "sqs",
+			name:    testenv.BackendSQS,
 			queue:   "obs_sqs",
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
@@ -110,7 +111,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    "rabbitmq",
+			name:    testenv.BackendRabbitMQ,
 			queue:   "obs_rabbitmq",
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
@@ -181,7 +182,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				})
 			})
 
-			if fx.name != "redis" {
+			if fx.name != testenv.BackendRedis {
 				t.Run("scenario_dispatch_retried_job", func(t *testing.T) {
 					retryJob := queue.NewJob(failType).
 						Payload(scenarioPayload{ID: 3, Name: "obs-retry"}).
@@ -206,11 +207,11 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				requireScenarioTrue(t, "collector_processed", counters.Processed >= 1, "processed=%d expected>=1", counters.Processed)
 				requireScenarioTrue(t, "collector_failed", counters.Failed >= 1, "failed=%d expected>=1", counters.Failed)
 				requireScenarioTrue(t, "collector_archived", counters.Archived >= 1, "archived=%d expected>=1", counters.Archived)
-				if fx.name != "redis" {
+				if fx.name != testenv.BackendRedis {
 					requireScenarioTrue(t, "collector_retried", counters.Retry >= 1, "retry=%d expected>=1", counters.Retry)
 				}
 				drainWait := 8 * time.Second
-				if fx.name == "redis" {
+				if fx.name == testenv.BackendRedis {
 					// Redis/Asynq can lag event-driven counters slightly under CI load.
 					drainWait = 20 * time.Second
 				}
@@ -225,7 +226,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				requireScenarioTrue(t, "collector_hour_failed", throughput.Hour.Failed >= 1, "hour_failed=%d expected>=1", throughput.Hour.Failed)
 				requireScenarioTrue(t, "collector_getter_processed", snapshot.Processed(fx.queue) == counters.Processed, "getter_processed=%d counters_processed=%d", snapshot.Processed(fx.queue), counters.Processed)
 				requireScenarioTrue(t, "collector_getter_failed", snapshot.Failed(fx.queue) == counters.Failed, "getter_failed=%d counters_failed=%d", snapshot.Failed(fx.queue), counters.Failed)
-				if fx.name != "redis" {
+				if fx.name != testenv.BackendRedis {
 					requireScenarioTrue(t, "collector_getter_retry", snapshot.RetryCount(fx.queue) == counters.Retry, "getter_retry=%d counters_retry=%d", snapshot.RetryCount(fx.queue), counters.Retry)
 				}
 			})
@@ -237,10 +238,10 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				requireScenarioTrue(t, "snapshot_queue_present", queueOK, "queue=%q not found in snapshot", fx.queue)
 				if fx.native {
 					switch fx.name {
-					case "redis":
+					case testenv.BackendRedis:
 						requireScenarioTrue(t, "snapshot_native_redis_processed", nativeCounters.Processed >= 1, "processed=%d expected>=1", nativeCounters.Processed)
 						requireScenarioTrue(t, "snapshot_native_redis_failed", nativeCounters.Failed >= 1, "failed=%d expected>=1", nativeCounters.Failed)
-					case "mysql", "postgres", "sqlite":
+					case testenv.BackendMySQL, testenv.BackendPostgres, testenv.BackendSQLite:
 						waitForObservabilityScenario(t, "snapshot_native_db_drained", 8*time.Second, func() bool {
 							latest, latestErr := queue.Snapshot(context.Background(), q, collector)
 							if latestErr != nil {
@@ -261,7 +262,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 }
 
 func TestObservabilityIntegration_RedisPauseResume(t *testing.T) {
-	if !integrationBackendEnabled("redis") {
+	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
 	collector := queue.NewStatsCollector()
@@ -307,7 +308,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 		newQueue func(t *testing.T, collector *queue.StatsCollector) QueueRuntime
 	}{
 		{
-			name:     "redis",
+			name:     testenv.BackendRedis,
 			supports: true,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensureRedis(t)
@@ -319,7 +320,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "mysql",
+			name:     testenv.BackendMySQL,
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensureMySQLDB(t)
@@ -331,7 +332,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "postgres",
+			name:     testenv.BackendPostgres,
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensurePostgresDB(t)
@@ -343,7 +344,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "sqlite",
+			name:     testenv.BackendSQLite,
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				q, err := newQueueRuntime(withObserver(sqliteCfg(fmt.Sprintf("%s/pause-%d.db", t.TempDir(), time.Now().UnixNano())), collector))
@@ -354,7 +355,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "nats",
+			name:     testenv.BackendNATS,
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensureNATS(t)
@@ -366,7 +367,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "sqs",
+			name:     testenv.BackendSQS,
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensureSQS(t)
@@ -381,7 +382,7 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:     "rabbitmq",
+			name:     testenv.BackendRabbitMQ,
 			supports: false,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensureRabbitMQ(t)
@@ -440,7 +441,7 @@ type noStatsQueue struct{}
 
 func (noStatsQueue) Driver() queue.Driver               { return queue.DriverSync }
 func (noStatsQueue) StartWorkers(context.Context) error { return nil }
-func (noStatsQueue) Workers(int) QueueRuntime     { return noStatsQueue{} }
+func (noStatsQueue) Workers(int) QueueRuntime           { return noStatsQueue{} }
 func (noStatsQueue) Shutdown(context.Context) error     { return nil }
 func (noStatsQueue) Register(string, queue.Handler)     {}
 func (noStatsQueue) Dispatch(any) error                 { return nil }

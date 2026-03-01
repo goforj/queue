@@ -11,6 +11,7 @@ type queueBackendStub struct {
 	dispatchErr error
 	pauseErr    error
 	resumeErr   error
+	readyErr    error
 	stats       StatsSnapshot
 	statsErr    error
 	startErr    error
@@ -39,14 +40,17 @@ func (s *queueBackendStub) Resume(context.Context, string) error {
 func (s *queueBackendStub) Stats(context.Context) (StatsSnapshot, error) {
 	return s.stats, s.statsErr
 }
+func (s *queueBackendStub) Ready(context.Context) error {
+	return s.readyErr
+}
 
 type queueBackendOnlyStub struct {
 	dispatchErr error
 }
 
-func (s *queueBackendOnlyStub) Driver() Driver                        { return DriverNull }
-func (s *queueBackendOnlyStub) Dispatch(context.Context, Job) error   { return s.dispatchErr }
-func (s *queueBackendOnlyStub) Shutdown(context.Context) error        { return nil }
+func (s *queueBackendOnlyStub) Driver() Driver                      { return DriverNull }
+func (s *queueBackendOnlyStub) Dispatch(context.Context, Job) error { return s.dispatchErr }
+func (s *queueBackendOnlyStub) Shutdown(context.Context) error      { return nil }
 
 type observerRecorder struct {
 	events []Event
@@ -295,6 +299,9 @@ func TestObservabilityHelpers_ResolveAndSnapshotFallbacks(t *testing.T) {
 	if !SupportsPause(qSync) || !SupportsNativeStats(qSync) {
 		t.Fatal("sync queue should support pause and native stats")
 	}
+	if err := Ready(context.Background(), qSync); err != nil {
+		t.Fatalf("expected ready success for sync queue, got %v", err)
+	}
 
 	collector := NewStatsCollector()
 	collector.Observe(Event{Kind: EventEnqueueAccepted, Driver: DriverNull, Queue: "default", Time: time.Now()})
@@ -310,6 +317,26 @@ func TestObservabilityHelpers_ResolveAndSnapshotFallbacks(t *testing.T) {
 
 	if _, err := Snapshot(context.Background(), &queueBackendOnlyStub{}, nil); err == nil {
 		t.Fatal("expected snapshot unavailable error without provider or collector")
+	}
+	if err := Ready(context.Background(), &queueBackendOnlyStub{}); err == nil {
+		t.Fatal("expected ready error for unsupported value")
+	}
+	wantErr := errors.New("ready failed")
+	readyRuntime := &externalQueueRuntime{
+		common: &queueCommon{
+			inner:  &queueBackendStub{readyErr: wantErr},
+			cfg:    Config{Driver: DriverNull},
+			driver: DriverNull,
+		},
+		registered: map[string]Handler{},
+	}
+	if err := Ready(context.Background(), readyRuntime); !errors.Is(err, wantErr) {
+		t.Fatalf("expected ready error %v, got %v", wantErr, err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Ready(canceled, qSync); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled ready context error, got %v", err)
 	}
 }
 

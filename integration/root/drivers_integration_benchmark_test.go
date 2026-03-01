@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 )
 
 func BenchmarkDriverDispatch_Integration(b *testing.B) {
 	ctx := context.Background()
 
-	runIntegrationDriverBench(b, "redis", func(b *testing.B) QueueRuntime {
+	runIntegrationDriverBench(b, testenv.BackendRedis, func(b *testing.B) QueueRuntime {
 		ensureRedis(b)
 		cfg := withDefaultQueue(redisCfg(integrationRedis.addr), uniqueQueueName("bench-redis"))
 		q, err := newQueueRuntime(cfg)
@@ -28,7 +29,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		return q
 	}, benchJob("bench:redis", uniqueQueueName("bench-redis-q")))
 
-	runIntegrationDriverBench(b, "nats", func(b *testing.B) QueueRuntime {
+	runIntegrationDriverBench(b, testenv.BackendNATS, func(b *testing.B) QueueRuntime {
 		ensureNATS(b)
 		cfg := withDefaultQueue(natsCfg(integrationNATS.url), uniqueQueueName("bench-nats"))
 		q, err := newQueueRuntime(cfg)
@@ -43,7 +44,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		return q
 	}, benchJob("bench:nats", uniqueQueueName("bench-nats-q")))
 
-	runIntegrationDriverBench(b, "sqs", func(b *testing.B) QueueRuntime {
+	runIntegrationDriverBench(b, testenv.BackendSQS, func(b *testing.B) QueueRuntime {
 		ensureSQS(b)
 		cfg := withDefaultQueue(sqsCfg(
 			integrationSQS.region,
@@ -63,7 +64,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		return q
 	}, benchJob("bench:sqs", uniqueQueueName("bench-sqs-q")))
 
-	runIntegrationDriverBench(b, "rabbitmq", func(b *testing.B) QueueRuntime {
+	runIntegrationDriverBench(b, testenv.BackendRabbitMQ, func(b *testing.B) QueueRuntime {
 		ensureRabbitMQ(b)
 		cfg := withDefaultQueue(rabbitmqCfg(integrationRabbitMQ.url), uniqueQueueName("bench-rmq"))
 		q, err := newQueueRuntime(cfg)
@@ -78,7 +79,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		return q
 	}, benchJob("bench:rabbitmq", uniqueQueueName("bench-rmq-q")))
 
-	runIntegrationDriverBench(b, "mysql", func(b *testing.B) QueueRuntime {
+	runIntegrationDriverBench(b, testenv.BackendMySQL, func(b *testing.B) QueueRuntime {
 		ensureMySQLDB(b)
 		cfg := withDefaultQueue(mysqlCfg(fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr)), "default")
 		q, err := newQueueRuntime(cfg)
@@ -93,7 +94,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		return q
 	}, benchJob("bench:mysql", "default"))
 
-	runIntegrationDriverBench(b, "postgres", func(b *testing.B) QueueRuntime {
+	runIntegrationDriverBench(b, testenv.BackendPostgres, func(b *testing.B) QueueRuntime {
 		ensurePostgresDB(b)
 		cfg := withDefaultQueue(postgresCfg(fmt.Sprintf("postgres://queue:queue@%s/queue_test?sslmode=disable", integrationPostgres.addr)), "default")
 		q, err := newQueueRuntime(cfg)
@@ -108,7 +109,7 @@ func BenchmarkDriverDispatch_Integration(b *testing.B) {
 		return q
 	}, benchJob("bench:postgres", "default"))
 
-	runIntegrationDriverBench(b, "sqlite", func(b *testing.B) QueueRuntime {
+	runIntegrationDriverBench(b, testenv.BackendSQLite, func(b *testing.B) QueueRuntime {
 		dsn := fmt.Sprintf("%s/bench-%d.db", b.TempDir(), b.N)
 		cfg := withDefaultQueue(sqliteCfg(dsn), "default")
 		q, err := newQueueRuntime(cfg)

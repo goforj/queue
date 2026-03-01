@@ -151,6 +151,16 @@ func (d *databaseQueue) Driver() queue.Driver {
 	return queue.DriverDatabase
 }
 
+func (d *databaseQueue) Preflight(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return d.db.PingContext(ctx)
+}
+
 func (d *databaseQueue) Register(jobType string, handler queue.Handler) {
 	if jobType == "" || handler == nil {
 		return

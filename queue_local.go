@@ -155,6 +155,13 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+func (d *localQueue) Ready(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
+}
+
 // Dispatch submits a typed job payload using the default queue.
 // @group Queue
 //

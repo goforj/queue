@@ -65,6 +65,20 @@ func (q *sqsQueue) Driver() queue.Driver {
 	return queue.DriverSQS
 }
 
+func (q *sqsQueue) Preflight(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := q.ensureClient(ctx); err != nil {
+		return err
+	}
+	_, err := q.ensureQueue(ctx, q.physicalQueueName())
+	return err
+}
+
 func (q *sqsQueue) ensureClient(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()

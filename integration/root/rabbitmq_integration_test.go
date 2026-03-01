@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -74,7 +75,7 @@ func newRabbitMQIntegrationConfigForQueue(t *testing.T, queueName string) any {
 }
 
 func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
-	if !integrationBackendEnabled("rabbitmq") {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	type payload struct {
@@ -115,7 +116,7 @@ func TestRabbitMQIntegration_BindPayloadThroughWorker(t *testing.T) {
 }
 
 func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
-	if !integrationBackendEnabled("rabbitmq") {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	delay := 250 * time.Millisecond
@@ -180,7 +181,7 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 }
 
 func TestRabbitMQIntegration_UniqueDuplicate(t *testing.T) {
-	if !integrationBackendEnabled("rabbitmq") {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	q, err := newQueueRuntime(newRabbitMQIntegrationConfig(t))
@@ -207,7 +208,7 @@ func TestRabbitMQIntegration_UniqueDuplicate(t *testing.T) {
 }
 
 func TestRabbitMQIntegration_RoutesToJobQueue(t *testing.T) {
-	if !integrationBackendEnabled("rabbitmq") {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	queueName := uniqueQueueName("rabbitmq-route")
@@ -248,7 +249,7 @@ func TestRabbitMQIntegration_RoutesToJobQueue(t *testing.T) {
 }
 
 func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
-	if !integrationBackendEnabled("rabbitmq") {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	queueName := uniqueQueueName("rabbitmq-delay-restart")
@@ -317,7 +318,7 @@ func TestRabbitMQIntegration_DelaySurvivesWorkerRestart(t *testing.T) {
 }
 
 func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
-	if !integrationBackendEnabled("rabbitmq") {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	queueName := uniqueQueueName("rabbitmq-retry-restart")
@@ -403,7 +404,7 @@ func TestRabbitMQIntegration_RetryBackoffSurvivesWorkerRestart(t *testing.T) {
 }
 
 func TestRabbitMQIntegration_DelayQueueBehavior(t *testing.T) {
-	if !integrationBackendEnabled("rabbitmq") {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
 		t.Skip("rabbitmq integration backend not selected")
 	}
 	queueName := uniqueQueueName("rabbitmq-delay-queue")

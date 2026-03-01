@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -60,7 +61,7 @@ func resetQueueTables(t *testing.T, cfg queue.DatabaseConfig) {
 	if cfg.DriverName == "" || cfg.DSN == "" {
 		return
 	}
-	if cfg.DriverName == "sqlite" {
+	if cfg.DriverName == testenv.BackendSQLite {
 		return
 	}
 	db, err := sql.Open(cfg.DriverName, cfg.DSN)
@@ -71,12 +72,12 @@ func resetQueueTables(t *testing.T, cfg queue.DatabaseConfig) {
 
 	var stmts []string
 	switch cfg.DriverName {
-	case "pgx", "postgres":
+	case "pgx", testenv.BackendPostgres:
 		stmts = []string{
 			"TRUNCATE TABLE queue_jobs RESTART IDENTITY",
 			"TRUNCATE TABLE queue_unique_locks",
 		}
-	case "mysql":
+	case testenv.BackendMySQL:
 		stmts = []string{
 			"TRUNCATE TABLE queue_jobs",
 			"TRUNCATE TABLE queue_unique_locks",

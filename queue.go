@@ -39,6 +39,10 @@ type queueRuntime interface {
 	// Shutdown drains running work and releases resources.
 	// @group Driver Integration
 	Shutdown(ctx context.Context) error
+
+	// Ready checks backend readiness for dispatch/worker operation.
+	// @group Driver Integration
+	Ready(ctx context.Context) error
 }
 
 // WorkerpoolConfig configures the in-memory workerpool q.
@@ -438,6 +442,16 @@ func (q *queueCommon) Stats(ctx context.Context) (StatsSnapshot, error) {
 	return provider.Stats(ctx)
 }
 
+func (q *queueCommon) Ready(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return runtimeReadyCheck(ctx, q.inner)
+}
+
 func (q *nativeQueueRuntime) Pause(ctx context.Context, queueName string) error {
 	return q.common.Pause(ctx, queueName)
 }
@@ -447,6 +461,9 @@ func (q *nativeQueueRuntime) Resume(ctx context.Context, queueName string) error
 func (q *nativeQueueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
 	return q.common.Stats(ctx)
 }
+func (q *nativeQueueRuntime) Ready(ctx context.Context) error {
+	return q.common.Ready(ctx)
+}
 func (q *externalQueueRuntime) Pause(ctx context.Context, queueName string) error {
 	return q.common.Pause(ctx, queueName)
 }
@@ -455,6 +472,9 @@ func (q *externalQueueRuntime) Resume(ctx context.Context, queueName string) err
 }
 func (q *externalQueueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
 	return q.common.Stats(ctx)
+}
+func (q *externalQueueRuntime) Ready(ctx context.Context) error {
+	return q.common.Ready(ctx)
 }
 
 func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Handler {
@@ -535,6 +555,10 @@ func (a driverQueueBackendAdapter) Stats(ctx context.Context) (StatsSnapshot, er
 	return provider.Stats(ctx)
 }
 
+func (a driverQueueBackendAdapter) Ready(ctx context.Context) error {
+	return runtimeReadyCheck(ctx, a.driverQueueBackend)
+}
+
 func (a driverRuntimeQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
 	controller, ok := a.driverRuntimeQueueBackend.(QueueController)
 	if !ok {
@@ -557,6 +581,21 @@ func (a driverRuntimeQueueBackendAdapter) Stats(ctx context.Context) (StatsSnaps
 		return StatsSnapshot{}, fmt.Errorf("stats provider is not available for driver %q", a.Driver())
 	}
 	return provider.Stats(ctx)
+}
+
+func (a driverRuntimeQueueBackendAdapter) Ready(ctx context.Context) error {
+	return runtimeReadyCheck(ctx, a.driverRuntimeQueueBackend)
+}
+
+func runtimeReadyCheck(ctx context.Context, raw any) error {
+	if checker, ok := raw.(interface{ Ready(context.Context) error }); ok {
+		return checker.Ready(ctx)
+	}
+	// Backward-compatible bridge for older backend implementations.
+	if checker, ok := raw.(interface{ Preflight(context.Context) error }); ok {
+		return checker.Preflight(ctx)
+	}
+	return nil
 }
 
 func optionalDriverMovedError(driver Driver) error {

@@ -54,6 +54,13 @@ func (q *nullQueue) Shutdown(context.Context) error {
 	return nil
 }
 
+func (q *nullQueue) Ready(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
+}
+
 func (q *nullQueue) claimUnique(job Job, queueName string, ttl time.Duration) bool {
 	now := time.Now()
 	key := queueName + ":" + jobEventKey(job)

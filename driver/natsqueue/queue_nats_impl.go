@@ -36,6 +36,19 @@ func (q *natsQueue) Driver() queue.Driver {
 	return queue.DriverNATS
 }
 
+func (q *natsQueue) Preflight(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := q.ensureConn(); err != nil {
+		return err
+	}
+	return q.nc.FlushWithContext(ctx)
+}
+
 func newNATSQueue(url string) *natsQueue {
 	return &natsQueue{
 		url:    url,

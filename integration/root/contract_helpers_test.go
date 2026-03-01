@@ -68,6 +68,9 @@ func runQueueContractSuite(t *testing.T, factory contractFactory) {
 		if !queue.SupportsNativeStats(d) {
 			t.Fatal("queue runtime should expose StatsProvider surface")
 		}
+		if err := queue.Ready(context.Background(), d); err != nil {
+			t.Fatalf("expected ready success, got %v", err)
+		}
 
 		pauseErr := queue.Pause(context.Background(), d, "default")
 		resumeErr := queue.Resume(context.Background(), d, "default")

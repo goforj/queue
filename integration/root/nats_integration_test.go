@@ -61,7 +61,7 @@ func ensureNATS(t testing.TB) string {
 }
 
 func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
-	if !integrationBackendEnabled("nats") {
+	if !integrationBackendEnabled(testenv.BackendNATS) {
 		t.Skip("nats integration backend not selected")
 	}
 	type payload struct {
@@ -102,7 +102,7 @@ func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
 }
 
 func TestNATSIntegration_OptionBehavior(t *testing.T) {
-	if !integrationBackendEnabled("nats") {
+	if !integrationBackendEnabled(testenv.BackendNATS) {
 		t.Skip("nats integration backend not selected")
 	}
 	delay := 200 * time.Millisecond
@@ -167,7 +167,7 @@ func TestNATSIntegration_OptionBehavior(t *testing.T) {
 }
 
 func TestNATSIntegration_UniqueDuplicate(t *testing.T) {
-	if !integrationBackendEnabled("nats") {
+	if !integrationBackendEnabled(testenv.BackendNATS) {
 		t.Skip("nats integration backend not selected")
 	}
 	q, err := newQueueRuntime(natsCfg(ensureNATS(t)))

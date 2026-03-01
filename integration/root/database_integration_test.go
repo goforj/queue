@@ -13,6 +13,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/integration/testenv"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
@@ -21,11 +22,11 @@ func newDatabaseQueueIntegration(t *testing.T, cfg queue.DatabaseConfig) QueueRu
 	t.Helper()
 	var runtimeCfg any
 	switch cfg.DriverName {
-	case "mysql":
+	case testenv.BackendMySQL:
 		runtimeCfg = withDefaultQueue(withDBHandle(mysqlCfg(cfg.DSN), cfg.DB), cfg.DefaultQueue)
-	case "pgx", "postgres":
+	case "pgx", testenv.BackendPostgres:
 		runtimeCfg = withDefaultQueue(withDBHandle(postgresCfg(cfg.DSN), cfg.DB), cfg.DefaultQueue)
-	case "sqlite":
+	case testenv.BackendSQLite:
 		runtimeCfg = withDefaultQueue(withDBHandle(sqliteCfg(cfg.DSN), cfg.DB), cfg.DefaultQueue)
 	default:
 		t.Fatalf("unsupported database driver %q", cfg.DriverName)
@@ -188,34 +189,34 @@ func logDatabaseQueueState(t *testing.T, cfg queue.DatabaseConfig, reason string
 }
 
 func TestDatabaseIntegration_SQLite(t *testing.T) {
-	if !integrationBackendEnabled("sqlite") {
+	if !integrationBackendEnabled(testenv.BackendSQLite) {
 		t.Skip("sqlite integration backend not selected")
 	}
 	cfg := queue.DatabaseConfig{
-		DriverName:   "sqlite",
+		DriverName:   testenv.BackendSQLite,
 		DSN:          fmt.Sprintf("%s/queue-%d.db", t.TempDir(), time.Now().UnixNano()),
 		Workers:      1,
 		PollInterval: 10 * time.Millisecond,
 	}
-	runDatabaseIntegrationSuite(t, "sqlite", cfg)
+	runDatabaseIntegrationSuite(t, testenv.BackendSQLite, cfg)
 }
 
 func TestDatabaseIntegration_MySQL(t *testing.T) {
-	if !integrationBackendEnabled("mysql") {
+	if !integrationBackendEnabled(testenv.BackendMySQL) {
 		t.Skip("mysql integration backend not selected")
 	}
 	ensureMySQLDB(t)
 	cfg := queue.DatabaseConfig{
-		DriverName:   "mysql",
+		DriverName:   testenv.BackendMySQL,
 		DSN:          fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr),
 		Workers:      1,
 		PollInterval: 10 * time.Millisecond,
 	}
-	runDatabaseIntegrationSuite(t, "mysql", cfg)
+	runDatabaseIntegrationSuite(t, testenv.BackendMySQL, cfg)
 }
 
 func TestDatabaseIntegration_Postgres(t *testing.T) {
-	if !integrationBackendEnabled("postgres") {
+	if !integrationBackendEnabled(testenv.BackendPostgres) {
 		t.Skip("postgres integration backend not selected")
 	}
 	ensurePostgresDB(t)
@@ -225,5 +226,5 @@ func TestDatabaseIntegration_Postgres(t *testing.T) {
 		Workers:      1,
 		PollInterval: 10 * time.Millisecond,
 	}
-	runDatabaseIntegrationSuite(t, "postgres", cfg)
+	runDatabaseIntegrationSuite(t, testenv.BackendPostgres, cfg)
 }
