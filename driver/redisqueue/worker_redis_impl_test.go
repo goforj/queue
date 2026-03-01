@@ -96,14 +96,17 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 	if err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("job:fail", []byte("fail"))); err == nil {
 		t.Fatal("expected failing task error")
 	}
-	if len(events) != 4 {
-		t.Fatalf("expected 4 process events, got %d", len(events))
+	if len(events) != 5 {
+		t.Fatalf("expected 5 process events, got %d", len(events))
 	}
 	if events[0].Kind != queue.EventProcessStarted || events[1].Kind != queue.EventProcessSucceeded {
 		t.Fatalf("unexpected first pair kinds: %s, %s", events[0].Kind, events[1].Kind)
 	}
 	if events[2].Kind != queue.EventProcessStarted || events[3].Kind != queue.EventProcessFailed {
 		t.Fatalf("unexpected second pair kinds: %s, %s", events[2].Kind, events[3].Kind)
+	}
+	if events[4].Kind != queue.EventProcessArchived {
+		t.Fatalf("unexpected terminal event kind: %s", events[4].Kind)
 	}
 	for _, event := range events {
 		if event.Driver != queue.DriverRedis {
@@ -121,6 +124,9 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 	}
 	if events[1].Time.IsZero() || events[3].Time.IsZero() {
 		t.Fatal("expected event timestamps to be set")
+	}
+	if events[4].Err != nil {
+		t.Fatal("expected archived event error to be nil")
 	}
 }
 

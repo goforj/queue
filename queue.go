@@ -461,6 +461,11 @@ func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Han
 	if handler == nil || q.cfg.Observer == nil {
 		return handler
 	}
+	// Redis worker emits process lifecycle events natively.
+	// Skip shared handler wrapping to avoid duplicate process_* events.
+	if q.cfg.Driver == DriverRedis {
+		return handler
+	}
 	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, handler)
 }
 
