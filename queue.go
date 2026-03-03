@@ -559,6 +559,54 @@ func (a driverQueueBackendAdapter) Ready(ctx context.Context) error {
 	return runtimeReadyCheck(ctx, a.driverQueueBackend)
 }
 
+func (a driverQueueBackendAdapter) ListJobs(ctx context.Context, opts ListJobsOptions) (ListJobsResult, error) {
+	admin, ok := a.driverQueueBackend.(QueueAdmin)
+	if !ok {
+		return ListJobsResult{}, ErrQueueAdminUnsupported
+	}
+	return admin.ListJobs(ctx, opts)
+}
+
+func (a driverQueueBackendAdapter) RetryJob(ctx context.Context, queueName, jobID string) error {
+	admin, ok := a.driverQueueBackend.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.RetryJob(ctx, queueName, jobID)
+}
+
+func (a driverQueueBackendAdapter) CancelJob(ctx context.Context, jobID string) error {
+	admin, ok := a.driverQueueBackend.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.CancelJob(ctx, jobID)
+}
+
+func (a driverQueueBackendAdapter) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	admin, ok := a.driverQueueBackend.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.DeleteJob(ctx, queueName, jobID)
+}
+
+func (a driverQueueBackendAdapter) ClearQueue(ctx context.Context, queueName string) error {
+	admin, ok := a.driverQueueBackend.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.ClearQueue(ctx, queueName)
+}
+
+func (a driverQueueBackendAdapter) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	admin, ok := a.driverQueueBackend.(QueueAdmin)
+	if !ok {
+		return nil, ErrQueueAdminUnsupported
+	}
+	return admin.History(ctx, queueName, window)
+}
+
 func (a driverRuntimeQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
 	controller, ok := a.driverRuntimeQueueBackend.(QueueController)
 	if !ok {
@@ -585,6 +633,54 @@ func (a driverRuntimeQueueBackendAdapter) Stats(ctx context.Context) (StatsSnaps
 
 func (a driverRuntimeQueueBackendAdapter) Ready(ctx context.Context) error {
 	return runtimeReadyCheck(ctx, a.driverRuntimeQueueBackend)
+}
+
+func (a driverRuntimeQueueBackendAdapter) ListJobs(ctx context.Context, opts ListJobsOptions) (ListJobsResult, error) {
+	admin, ok := a.driverRuntimeQueueBackend.(QueueAdmin)
+	if !ok {
+		return ListJobsResult{}, ErrQueueAdminUnsupported
+	}
+	return admin.ListJobs(ctx, opts)
+}
+
+func (a driverRuntimeQueueBackendAdapter) RetryJob(ctx context.Context, queueName, jobID string) error {
+	admin, ok := a.driverRuntimeQueueBackend.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.RetryJob(ctx, queueName, jobID)
+}
+
+func (a driverRuntimeQueueBackendAdapter) CancelJob(ctx context.Context, jobID string) error {
+	admin, ok := a.driverRuntimeQueueBackend.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.CancelJob(ctx, jobID)
+}
+
+func (a driverRuntimeQueueBackendAdapter) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	admin, ok := a.driverRuntimeQueueBackend.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.DeleteJob(ctx, queueName, jobID)
+}
+
+func (a driverRuntimeQueueBackendAdapter) ClearQueue(ctx context.Context, queueName string) error {
+	admin, ok := a.driverRuntimeQueueBackend.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.ClearQueue(ctx, queueName)
+}
+
+func (a driverRuntimeQueueBackendAdapter) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	admin, ok := a.driverRuntimeQueueBackend.(QueueAdmin)
+	if !ok {
+		return nil, ErrQueueAdminUnsupported
+	}
+	return admin.History(ctx, queueName, window)
 }
 
 func runtimeReadyCheck(ctx context.Context, raw any) error {

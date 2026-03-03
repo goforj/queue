@@ -13,9 +13,11 @@ type localQueue struct {
 	driver       Driver
 	cfg          WorkerpoolConfig
 	mu           sync.RWMutex
+	metricsMu    sync.RWMutex
 	queueMu      sync.RWMutex
 	handlers     map[string]Handler
 	unique       map[string]time.Time
+	metrics      map[string]*localQueueMetrics
 	pausedQueues map[string]bool
 	workQueue    chan queuedJob
 	shutdownCh   chan struct{}
@@ -39,6 +41,14 @@ type queuedJob struct {
 	opts jobOptions
 }
 
+type localQueueMetrics struct {
+	Pending   int64
+	Active    int64
+	Processed int64
+	Failed    int64
+	Delayed   int64
+}
+
 func newLocalQueue(driver Driver) *localQueue {
 	return newLocalQueueWithConfig(driver, WorkerpoolConfig{})
 }
@@ -49,6 +59,7 @@ func newLocalQueueWithConfig(driver Driver, cfg WorkerpoolConfig) *localQueue {
 		cfg:          cfg.normalize(),
 		handlers:     make(map[string]Handler),
 		unique:       make(map[string]time.Time),
+		metrics:      make(map[string]*localQueueMetrics),
 		pausedQueues: make(map[string]bool),
 		shutdownCh:   make(chan struct{}),
 	}
@@ -195,8 +206,9 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 		return err
 	}
 	parsed := job.jobOptions()
+	queueName := normalizeQueueName(parsed.queueName)
 	if parsed.uniqueTTL > 0 {
-		if !d.claimUnique(job, parsed.queueName, parsed.uniqueTTL) {
+		if !d.claimUnique(job, queueName, parsed.uniqueTTL) {
 			return ErrDuplicate
 		}
 	}
@@ -205,9 +217,17 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	}
 	d.delayedWG.Add(1)
 	d.delayed.Add(1)
+	d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
+		metrics.Delayed++
+	})
 	go func() {
 		defer d.delayedWG.Done()
 		defer d.delayed.Add(-1)
+		defer d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
+			if metrics.Delayed > 0 {
+				metrics.Delayed--
+			}
+		})
 		timer := time.NewTimer(parsed.delay)
 		defer timer.Stop()
 		select {
@@ -221,7 +241,8 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 }
 
 func (d *localQueue) enqueueNow(ctx context.Context, job Job, parsed jobOptions) error {
-	if d.isPaused(parsed.queueName) {
+	queueName := normalizeQueueName(parsed.queueName)
+	if d.isPaused(queueName) {
 		return ErrQueuePaused
 	}
 	if _, ok := d.lookup(job.Type); !ok {
@@ -230,7 +251,21 @@ func (d *localQueue) enqueueNow(ctx context.Context, job Job, parsed jobOptions)
 	if d.driver == DriverWorkerpool {
 		return d.enqueueAsync(ctx, job, parsed)
 	}
-	return d.runWithRetry(ctx, job, parsed)
+	d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
+		metrics.Active++
+	})
+	err := d.runWithRetry(ctx, job, parsed)
+	d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
+		if metrics.Active > 0 {
+			metrics.Active--
+		}
+		if err == nil {
+			metrics.Processed++
+			return
+		}
+		metrics.Failed++
+	})
+	return err
 }
 
 func (d *localQueue) enqueueAsync(ctx context.Context, job Job, parsed jobOptions) error {
@@ -247,6 +282,9 @@ func (d *localQueue) enqueueAsync(ctx context.Context, job Job, parsed jobOption
 	select {
 	case workQueue <- queuedJob{ctx: ctx, job: job, opts: parsed}:
 		d.enqueued.Add(1)
+		d.updateQueueMetrics(normalizeQueueName(parsed.queueName), func(metrics *localQueueMetrics) {
+			metrics.Pending++
+		})
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -303,18 +341,40 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	jobTimeout := d.cfg.DefaultJobTimeout
 	for job := range workQueue {
 		func() {
-			defer func() {
-				_ = recover()
-			}()
 			d.started.Add(1)
 			defer d.finished.Add(1)
+			queueName := normalizeQueueName(job.opts.queueName)
+			d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
+				if metrics.Pending > 0 {
+					metrics.Pending--
+				}
+				metrics.Active++
+			})
+			var runErr error
+			defer d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
+				if metrics.Active > 0 {
+					metrics.Active--
+				}
+				if runErr == nil {
+					metrics.Processed++
+					return
+				}
+				metrics.Failed++
+			})
 			workerCtx := context.WithValue(job.ctx, workerEnqueueKey, true)
 			if jobTimeout > 0 {
 				var cancel context.CancelFunc
 				workerCtx, cancel = context.WithTimeout(workerCtx, jobTimeout)
 				defer cancel()
 			}
-			_ = d.runWithRetry(workerCtx, job.job, job.opts)
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						runErr = fmt.Errorf("panic: %v", recovered)
+					}
+				}()
+				runErr = d.runWithRetry(workerCtx, job.job, job.opts)
+			}()
 		}()
 	}
 }
@@ -399,30 +459,53 @@ func (d *localQueue) isPaused(queueName string) bool {
 }
 
 func (d *localQueue) Stats(_ context.Context) (StatsSnapshot, error) {
-	queueName := "default"
-	d.queueMu.RLock()
-	queued := int64(0)
-	if d.workQueue != nil {
-		queued = int64(len(d.workQueue))
-	}
-	d.queueMu.RUnlock()
+	metricsByQueue := d.snapshotQueueMetrics()
 	d.mu.RLock()
-	paused := d.pausedQueues[queueName]
-	d.mu.RUnlock()
-	counters := QueueCounters{
-		Pending:   queued + d.delayed.Load(),
-		Active:    d.started.Load() - d.finished.Load(),
-		Processed: d.finished.Load(),
-		Paused:    boolToInt64(paused),
+	pausedQueues := make(map[string]bool, len(d.pausedQueues))
+	for queueName, paused := range d.pausedQueues {
+		pausedQueues[queueName] = paused
 	}
+	d.mu.RUnlock()
+
+	byQueue := make(map[string]QueueCounters, len(metricsByQueue))
+	throughputByQueue := make(map[string]QueueThroughput, len(metricsByQueue))
+	for queueName, metrics := range metricsByQueue {
+		counters := QueueCounters{
+			Pending:   metrics.Pending + metrics.Delayed,
+			Active:    metrics.Active,
+			Processed: metrics.Processed,
+			Failed:    metrics.Failed,
+			Paused:    boolToInt64(pausedQueues[queueName]),
+		}
+		byQueue[queueName] = counters
+		throughputByQueue[queueName] = QueueThroughput{}
+		delete(pausedQueues, queueName)
+	}
+	for queueName, paused := range pausedQueues {
+		byQueue[queueName] = QueueCounters{Paused: boolToInt64(paused)}
+		throughputByQueue[queueName] = QueueThroughput{}
+	}
+	if len(byQueue) == 0 {
+		byQueue["default"] = QueueCounters{}
+		throughputByQueue["default"] = QueueThroughput{}
+	}
+
 	return StatsSnapshot{
-		ByQueue: map[string]QueueCounters{
-			queueName: counters,
-		},
-		ThroughputByQueue: map[string]QueueThroughput{
-			queueName: {},
-		},
+		ByQueue:           byQueue,
+		ThroughputByQueue: throughputByQueue,
 	}, nil
+}
+
+func (d *localQueue) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	snapshot, err := d.Stats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	points := TimelineHistoryFromSnapshot(snapshot, queueName, window)
+	if len(points) > 0 {
+		return points, nil
+	}
+	return SinglePointHistory(snapshot, queueName), nil
 }
 
 func (d *localQueue) claimUnique(job Job, queueName string, ttl time.Duration) bool {
@@ -442,6 +525,34 @@ func (d *localQueue) claimUnique(job Job, queueName string, ttl time.Duration) b
 	}
 	d.unique[key] = now.Add(ttl)
 	return true
+}
+
+func (d *localQueue) updateQueueMetrics(queueName string, update func(metrics *localQueueMetrics)) {
+	if update == nil {
+		return
+	}
+	name := normalizeQueueName(queueName)
+	d.metricsMu.Lock()
+	metrics, ok := d.metrics[name]
+	if !ok {
+		metrics = &localQueueMetrics{}
+		d.metrics[name] = metrics
+	}
+	update(metrics)
+	d.metricsMu.Unlock()
+}
+
+func (d *localQueue) snapshotQueueMetrics() map[string]localQueueMetrics {
+	d.metricsMu.RLock()
+	defer d.metricsMu.RUnlock()
+	out := make(map[string]localQueueMetrics, len(d.metrics))
+	for queueName, metrics := range d.metrics {
+		if metrics == nil {
+			continue
+		}
+		out[queueName] = *metrics
+	}
+	return out
 }
 
 func boolToInt64(v bool) int64 {

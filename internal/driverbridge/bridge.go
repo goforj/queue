@@ -110,6 +110,54 @@ func (a runtimeQueueBackendAdapter) Stats(ctx context.Context) (queue.StatsSnaps
 	return a.queueBackendAdapter.Stats(ctx)
 }
 
+type queueBackendAdminAdapter struct {
+	queueBackendAdapter
+	admin queue.QueueAdmin
+}
+
+func (a queueBackendAdminAdapter) ListJobs(ctx context.Context, opts queue.ListJobsOptions) (queue.ListJobsResult, error) {
+	return a.admin.ListJobs(ctx, opts)
+}
+func (a queueBackendAdminAdapter) RetryJob(ctx context.Context, queueName, jobID string) error {
+	return a.admin.RetryJob(ctx, queueName, jobID)
+}
+func (a queueBackendAdminAdapter) CancelJob(ctx context.Context, jobID string) error {
+	return a.admin.CancelJob(ctx, jobID)
+}
+func (a queueBackendAdminAdapter) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	return a.admin.DeleteJob(ctx, queueName, jobID)
+}
+func (a queueBackendAdminAdapter) ClearQueue(ctx context.Context, queueName string) error {
+	return a.admin.ClearQueue(ctx, queueName)
+}
+func (a queueBackendAdminAdapter) History(ctx context.Context, queueName string, window queue.QueueHistoryWindow) ([]queue.QueueHistoryPoint, error) {
+	return a.admin.History(ctx, queueName, window)
+}
+
+type runtimeQueueBackendAdminAdapter struct {
+	runtimeQueueBackendAdapter
+	admin queue.QueueAdmin
+}
+
+func (a runtimeQueueBackendAdminAdapter) ListJobs(ctx context.Context, opts queue.ListJobsOptions) (queue.ListJobsResult, error) {
+	return a.admin.ListJobs(ctx, opts)
+}
+func (a runtimeQueueBackendAdminAdapter) RetryJob(ctx context.Context, queueName, jobID string) error {
+	return a.admin.RetryJob(ctx, queueName, jobID)
+}
+func (a runtimeQueueBackendAdminAdapter) CancelJob(ctx context.Context, jobID string) error {
+	return a.admin.CancelJob(ctx, jobID)
+}
+func (a runtimeQueueBackendAdminAdapter) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	return a.admin.DeleteJob(ctx, queueName, jobID)
+}
+func (a runtimeQueueBackendAdminAdapter) ClearQueue(ctx context.Context, queueName string) error {
+	return a.admin.ClearQueue(ctx, queueName)
+}
+func (a runtimeQueueBackendAdminAdapter) History(ctx context.Context, queueName string, window queue.QueueHistoryWindow) ([]queue.QueueHistoryPoint, error) {
+	return a.admin.History(ctx, queueName, window)
+}
+
 type workerBackendAdapter struct {
 	inner workerBackend
 }
@@ -127,13 +175,27 @@ func adaptQueueBackend(v any) (any, error) {
 		return nil, fmt.Errorf("driver backend is nil")
 	}
 	if native, ok := v.(runtimeQueueBackend); ok {
-		return runtimeQueueBackendAdapter{
+		base := runtimeQueueBackendAdapter{
 			queueBackendAdapter: queueBackendAdapter{inner: native},
 			inner:               native,
-		}, nil
+		}
+		if admin, ok := v.(queue.QueueAdmin); ok {
+			return runtimeQueueBackendAdminAdapter{
+				runtimeQueueBackendAdapter: base,
+				admin:                      admin,
+			}, nil
+		}
+		return base, nil
 	}
 	if basic, ok := v.(queueBackend); ok {
-		return queueBackendAdapter{inner: basic}, nil
+		base := queueBackendAdapter{inner: basic}
+		if admin, ok := v.(queue.QueueAdmin); ok {
+			return queueBackendAdminAdapter{
+				queueBackendAdapter: base,
+				admin:               admin,
+			}, nil
+		}
+		return base, nil
 	}
 	return nil, fmt.Errorf("unsupported driver backend type %T", v)
 }

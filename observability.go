@@ -772,6 +772,54 @@ func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
 	return nil
 }
 
+func (q *observedQueue) ListJobs(ctx context.Context, opts ListJobsOptions) (ListJobsResult, error) {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ListJobsResult{}, ErrQueueAdminUnsupported
+	}
+	return admin.ListJobs(ctx, opts)
+}
+
+func (q *observedQueue) RetryJob(ctx context.Context, queueName, jobID string) error {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.RetryJob(ctx, queueName, jobID)
+}
+
+func (q *observedQueue) CancelJob(ctx context.Context, jobID string) error {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.CancelJob(ctx, jobID)
+}
+
+func (q *observedQueue) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.DeleteJob(ctx, queueName, jobID)
+}
+
+func (q *observedQueue) ClearQueue(ctx context.Context, queueName string) error {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.ClearQueue(ctx, queueName)
+}
+
+func (q *observedQueue) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	history, ok := q.inner.(QueueHistoryProvider)
+	if !ok {
+		return nil, ErrQueueAdminUnsupported
+	}
+	return history.History(ctx, queueName, window)
+}
+
 func (q *observedQueue) Dispatch(ctx context.Context, job Job) error {
 	err := q.inner.Dispatch(ctx, job)
 	opts := job.jobOptions()
