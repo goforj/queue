@@ -569,7 +569,8 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-err := queue.CancelJob(context.Background(), q, "job-id")
+err = queue.CancelJob(context.Background(), q, "job-id")
+_ = err
 ```
 
 #### <a id="queue-queue-canceljob"></a>Queue.CancelJob
@@ -581,7 +582,11 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-err := q.CancelJob(context.Background(), "job-id")
+if !queue.SupportsQueueAdmin(q) {
+	return
+}
+err = q.CancelJob(context.Background(), "job-id")
+_ = err
 ```
 
 #### <a id="queue-clearqueue"></a>ClearQueue
@@ -593,7 +598,8 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-err := queue.ClearQueue(context.Background(), q, "default")
+err = queue.ClearQueue(context.Background(), q, "default")
+_ = err
 ```
 
 #### <a id="queue-queue-clearqueue"></a>Queue.ClearQueue
@@ -605,7 +611,11 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-err := q.ClearQueue(context.Background(), "default")
+if !queue.SupportsQueueAdmin(q) {
+	return
+}
+err = q.ClearQueue(context.Background(), "default")
+_ = err
 ```
 
 #### <a id="queue-deletejob"></a>DeleteJob
@@ -617,7 +627,8 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-err := queue.DeleteJob(context.Background(), q, "default", "job-id")
+err = queue.DeleteJob(context.Background(), q, "default", "job-id")
+_ = err
 ```
 
 #### <a id="queue-queue-deletejob"></a>Queue.DeleteJob
@@ -629,7 +640,11 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-err := q.DeleteJob(context.Background(), "default", "job-id")
+if !queue.SupportsQueueAdmin(q) {
+	return
+}
+err = q.DeleteJob(context.Background(), "default", "job-id")
+_ = err
 ```
 
 #### <a id="queue-queue-history"></a>History
@@ -710,7 +725,8 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-err := queue.RetryJob(context.Background(), q, "default", "job-id")
+err = queue.RetryJob(context.Background(), q, "default", "job-id")
+_ = err
 ```
 
 #### <a id="queue-queue-retryjob"></a>Queue.RetryJob
@@ -722,7 +738,11 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-err := q.RetryJob(context.Background(), "default", "job-id")
+if !queue.SupportsQueueAdmin(q) {
+	return
+}
+err = q.RetryJob(context.Background(), "default", "job-id")
+_ = err
 ```
 
 #### <a id="queue-singlepointhistory"></a>SinglePointHistory

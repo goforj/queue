@@ -583,6 +583,9 @@ func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) er
 		if strings.Contains(ex.Code, "bus.") {
 			imports[moduleImportPath+"/bus"] = true
 		}
+		if strings.Contains(ex.Code, "redisqueue.") {
+			imports[moduleImportPath+"/driver/redisqueue"] = true
+		}
 		if strings.Contains(ex.Code, "regexp.") {
 			imports["regexp"] = true
 		}

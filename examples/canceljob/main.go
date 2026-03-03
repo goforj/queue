@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/driver/redisqueue"
 )
 
 func main() {
@@ -18,6 +19,6 @@ func main() {
 	if err != nil {
 		return
 	}
-	err := queue.CancelJob(context.Background(), q, "job-id")
+	err = queue.CancelJob(context.Background(), q, "job-id")
 	_ = err
 }

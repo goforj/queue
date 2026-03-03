@@ -165,7 +165,7 @@ func ListJobs(ctx context.Context, q any, opts ListJobsOptions) (ListJobsResult,
 //	if err != nil {
 //		return
 //	}
-//	err := queue.RetryJob(context.Background(), q, "default", "job-id")
+//	err = queue.RetryJob(context.Background(), q, "default", "job-id")
 //	_ = err
 func RetryJob(ctx context.Context, q any, queueName, jobID string) error {
 	admin := resolveQueueAdmin(q)
@@ -184,7 +184,7 @@ func RetryJob(ctx context.Context, q any, queueName, jobID string) error {
 //	if err != nil {
 //		return
 //	}
-//	err := queue.CancelJob(context.Background(), q, "job-id")
+//	err = queue.CancelJob(context.Background(), q, "job-id")
 //	_ = err
 func CancelJob(ctx context.Context, q any, jobID string) error {
 	admin := resolveQueueAdmin(q)
@@ -203,7 +203,7 @@ func CancelJob(ctx context.Context, q any, jobID string) error {
 //	if err != nil {
 //		return
 //	}
-//	err := queue.DeleteJob(context.Background(), q, "default", "job-id")
+//	err = queue.DeleteJob(context.Background(), q, "default", "job-id")
 //	_ = err
 func DeleteJob(ctx context.Context, q any, queueName, jobID string) error {
 	admin := resolveQueueAdmin(q)
@@ -222,7 +222,7 @@ func DeleteJob(ctx context.Context, q any, queueName, jobID string) error {
 //	if err != nil {
 //		return
 //	}
-//	err := queue.ClearQueue(context.Background(), q, "default")
+//	err = queue.ClearQueue(context.Background(), q, "default")
 //	_ = err
 func ClearQueue(ctx context.Context, q any, queueName string) error {
 	admin := resolveQueueAdmin(q)
@@ -339,7 +339,10 @@ func (r *Queue) ListJobs(ctx context.Context, opts ListJobsOptions) (ListJobsRes
 //	if err != nil {
 //		return
 //	}
-//	err := q.RetryJob(context.Background(), "default", "job-id")
+//	if !queue.SupportsQueueAdmin(q) {
+//		return
+//	}
+//	err = q.RetryJob(context.Background(), "default", "job-id")
 //	_ = err
 func (r *Queue) RetryJob(ctx context.Context, queueName, jobID string) error {
 	if r == nil || r.q == nil {
@@ -361,7 +364,10 @@ func (r *Queue) RetryJob(ctx context.Context, queueName, jobID string) error {
 //	if err != nil {
 //		return
 //	}
-//	err := q.CancelJob(context.Background(), "job-id")
+//	if !queue.SupportsQueueAdmin(q) {
+//		return
+//	}
+//	err = q.CancelJob(context.Background(), "job-id")
 //	_ = err
 func (r *Queue) CancelJob(ctx context.Context, jobID string) error {
 	if r == nil || r.q == nil {
@@ -383,7 +389,10 @@ func (r *Queue) CancelJob(ctx context.Context, jobID string) error {
 //	if err != nil {
 //		return
 //	}
-//	err := q.DeleteJob(context.Background(), "default", "job-id")
+//	if !queue.SupportsQueueAdmin(q) {
+//		return
+//	}
+//	err = q.DeleteJob(context.Background(), "default", "job-id")
 //	_ = err
 func (r *Queue) DeleteJob(ctx context.Context, queueName, jobID string) error {
 	if r == nil || r.q == nil {
@@ -405,7 +414,10 @@ func (r *Queue) DeleteJob(ctx context.Context, queueName, jobID string) error {
 //	if err != nil {
 //		return
 //	}
-//	err := q.ClearQueue(context.Background(), "default")
+//	if !queue.SupportsQueueAdmin(q) {
+//		return
+//	}
+//	err = q.ClearQueue(context.Background(), "default")
 //	_ = err
 func (r *Queue) ClearQueue(ctx context.Context, queueName string) error {
 	if r == nil || r.q == nil {

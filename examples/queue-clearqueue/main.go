@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/driver/redisqueue"
 )
 
 func main() {
@@ -18,6 +19,9 @@ func main() {
 	if err != nil {
 		return
 	}
-	err := q.ClearQueue(context.Background(), "default")
+	if !queue.SupportsQueueAdmin(q) {
+		return
+	}
+	err = q.ClearQueue(context.Background(), "default")
 	_ = err
 }

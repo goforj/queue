@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/driver/redisqueue"
 )
 
 func main() {
