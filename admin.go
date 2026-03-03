@@ -439,7 +439,7 @@ func (r *Queue) ClearQueue(ctx context.Context, queueName string) error {
 //	if err != nil {
 //		return
 //	}
-//	points, err = q.History(context.Background(), "default", queue.QueueHistoryHour)
+//	points, err := q.History(context.Background(), "default", queue.QueueHistoryHour)
 //	_ = points
 //	_ = err
 func (r *Queue) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {

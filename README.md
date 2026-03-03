@@ -656,7 +656,7 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-points, err = q.History(context.Background(), "default", queue.QueueHistoryHour)
+points, err := q.History(context.Background(), "default", queue.QueueHistoryHour)
 _ = err
 ```
 
