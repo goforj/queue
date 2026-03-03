@@ -19,6 +19,14 @@ type redisInspectorStub struct {
 	infoErr         error
 	pauseErr        error
 	unpauseErr      error
+	tasksByQueue    map[string]map[string][]*backend.TaskInfo
+	history         []*backend.DailyStats
+	historyErr      error
+	canceledJobID   string
+	deletedTaskID   string
+	runTaskID       string
+	archivedTaskID  string
+	deleteAllErr    error
 }
 
 type redisEnqueueClientStub struct {
@@ -65,6 +73,103 @@ func (s *redisInspectorStub) PauseQueue(queueName string) error {
 func (s *redisInspectorStub) UnpauseQueue(queueName string) error {
 	s.unpauseQueueArg = queueName
 	return s.unpauseErr
+}
+
+func (s *redisInspectorStub) tasks(queueName string, state backend.TaskState) []*backend.TaskInfo {
+	if s.tasksByQueue == nil {
+		return nil
+	}
+	if perQueue, ok := s.tasksByQueue[queueName]; ok {
+		return perQueue[state.String()]
+	}
+	return nil
+}
+
+func (s *redisInspectorStub) ListPendingTasks(queue string, _ ...backend.ListOption) ([]*backend.TaskInfo, error) {
+	return s.tasks(queue, backend.TaskStatePending), nil
+}
+
+func (s *redisInspectorStub) ListActiveTasks(queue string, _ ...backend.ListOption) ([]*backend.TaskInfo, error) {
+	return s.tasks(queue, backend.TaskStateActive), nil
+}
+
+func (s *redisInspectorStub) ListScheduledTasks(queue string, _ ...backend.ListOption) ([]*backend.TaskInfo, error) {
+	return s.tasks(queue, backend.TaskStateScheduled), nil
+}
+
+func (s *redisInspectorStub) ListRetryTasks(queue string, _ ...backend.ListOption) ([]*backend.TaskInfo, error) {
+	return s.tasks(queue, backend.TaskStateRetry), nil
+}
+
+func (s *redisInspectorStub) ListArchivedTasks(queue string, _ ...backend.ListOption) ([]*backend.TaskInfo, error) {
+	return s.tasks(queue, backend.TaskStateArchived), nil
+}
+
+func (s *redisInspectorStub) ListCompletedTasks(queue string, _ ...backend.ListOption) ([]*backend.TaskInfo, error) {
+	return s.tasks(queue, backend.TaskStateCompleted), nil
+}
+
+func (s *redisInspectorStub) CancelProcessing(id string) error {
+	s.canceledJobID = id
+	return nil
+}
+
+func (s *redisInspectorStub) DeleteTask(_ string, id string) error {
+	s.deletedTaskID = id
+	return nil
+}
+
+func (s *redisInspectorStub) RunTask(_ string, id string) error {
+	s.runTaskID = id
+	return nil
+}
+
+func (s *redisInspectorStub) ArchiveTask(_ string, id string) error {
+	s.archivedTaskID = id
+	return nil
+}
+
+func (s *redisInspectorStub) DeleteAllPendingTasks(_ string) (int, error) {
+	return 0, s.deleteAllErr
+}
+
+func (s *redisInspectorStub) DeleteAllScheduledTasks(_ string) (int, error) {
+	return 0, s.deleteAllErr
+}
+
+func (s *redisInspectorStub) DeleteAllRetryTasks(_ string) (int, error) {
+	return 0, s.deleteAllErr
+}
+
+func (s *redisInspectorStub) DeleteAllArchivedTasks(_ string) (int, error) {
+	return 0, s.deleteAllErr
+}
+
+func (s *redisInspectorStub) DeleteAllCompletedTasks(_ string) (int, error) {
+	return 0, s.deleteAllErr
+}
+
+func (s *redisInspectorStub) History(_ string, _ int) ([]*backend.DailyStats, error) {
+	return s.history, s.historyErr
+}
+
+func (s *redisInspectorStub) GetTaskInfo(queueName, id string) (*backend.TaskInfo, error) {
+	states := []backend.TaskState{
+		backend.TaskStatePending,
+		backend.TaskStateActive,
+		backend.TaskStateScheduled,
+		backend.TaskStateRetry,
+		backend.TaskStateArchived,
+		backend.TaskStateCompleted,
+	}
+	for _, state := range states {
+		for _, task := range s.tasks(queueName, state) {
+			if task != nil && task.ID == id {
+				return task, nil
+			}
+		}
+	}
+	return nil, backend.ErrTaskNotFound
 }
 
 func TestRedisQueue_PauseResumeNormalization(t *testing.T) {
@@ -142,6 +247,69 @@ func TestRedisQueue_StatsBranches(t *testing.T) {
 			t.Fatalf("expected paused=1, got %d", got)
 		}
 	})
+}
+
+func TestRedisQueue_AdminBranches(t *testing.T) {
+	inspector := &redisInspectorStub{
+		queues: []string{"default"},
+		queueInfos: map[string]*backend.QueueInfo{
+			"default": {
+				Queue:     "default",
+				Processed: 3,
+				Failed:    1,
+			},
+		},
+		tasksByQueue: map[string]map[string][]*backend.TaskInfo{
+			"default": {
+				backend.TaskStatePending.String(): {
+					{ID: "job-pending", Queue: "default", Type: "job:pending", Payload: []byte("payload"), State: backend.TaskStatePending},
+				},
+			},
+		},
+		history: []*backend.DailyStats{{Queue: "default", Processed: 3, Failed: 1, Date: time.Now()}},
+	}
+	r := &redisQueue{inspector: inspector}
+
+	list, err := r.ListJobs(context.Background(), queue.ListJobsOptions{Queue: "default", State: queue.JobStatePending})
+	if err != nil {
+		t.Fatalf("list jobs failed: %v", err)
+	}
+	if list.Total != 1 || len(list.Jobs) != 1 {
+		t.Fatalf("expected one job, got total=%d len=%d", list.Total, len(list.Jobs))
+	}
+
+	if err := r.CancelJob(context.Background(), "job-pending"); err != nil {
+		t.Fatalf("cancel job failed: %v", err)
+	}
+	if inspector.archivedTaskID != "job-pending" {
+		t.Fatalf("expected archived task id to be set, got %q", inspector.archivedTaskID)
+	}
+
+	if err := r.RetryJob(context.Background(), "default", "job-pending"); err != nil {
+		t.Fatalf("retry job failed: %v", err)
+	}
+	if inspector.runTaskID != "job-pending" {
+		t.Fatalf("expected run task id to be set, got %q", inspector.runTaskID)
+	}
+
+	if err := r.DeleteJob(context.Background(), "default", "job-pending"); err != nil {
+		t.Fatalf("delete job failed: %v", err)
+	}
+	if inspector.deletedTaskID != "job-pending" {
+		t.Fatalf("expected deleted task id to be set, got %q", inspector.deletedTaskID)
+	}
+
+	if err := r.ClearQueue(context.Background(), "default"); err != nil {
+		t.Fatalf("clear queue failed: %v", err)
+	}
+
+	history, err := r.History(context.Background(), "default", queue.QueueHistoryDay)
+	if err != nil {
+		t.Fatalf("history failed: %v", err)
+	}
+	if len(history) != 1 || history[0].Processed != 3 || history[0].Failed != 1 {
+		t.Fatalf("unexpected history payload: %+v", history)
+	}
 }
 
 func TestRedisQueue_DispatchBranches(t *testing.T) {

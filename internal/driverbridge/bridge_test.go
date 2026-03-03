@@ -10,6 +10,15 @@ import (
 type externalBackendStub struct {
 	driver queue.Driver
 	stats  queue.StatsSnapshot
+
+	listJobsResult queue.ListJobsResult
+	historyResult  []queue.QueueHistoryPoint
+	listCalled     bool
+	retryCalled    bool
+	cancelCalled   bool
+	deleteCalled   bool
+	clearCalled    bool
+	historyCalled  bool
 }
 
 func (b *externalBackendStub) Driver() queue.Driver { return b.driver }
@@ -25,6 +34,30 @@ func (b *externalBackendStub) Resume(context.Context, string) error {
 }
 func (b *externalBackendStub) Stats(context.Context) (queue.StatsSnapshot, error) {
 	return b.stats, nil
+}
+func (b *externalBackendStub) ListJobs(context.Context, queue.ListJobsOptions) (queue.ListJobsResult, error) {
+	b.listCalled = true
+	return b.listJobsResult, nil
+}
+func (b *externalBackendStub) RetryJob(context.Context, string, string) error {
+	b.retryCalled = true
+	return nil
+}
+func (b *externalBackendStub) CancelJob(context.Context, string) error {
+	b.cancelCalled = true
+	return nil
+}
+func (b *externalBackendStub) DeleteJob(context.Context, string, string) error {
+	b.deleteCalled = true
+	return nil
+}
+func (b *externalBackendStub) ClearQueue(context.Context, string) error {
+	b.clearCalled = true
+	return nil
+}
+func (b *externalBackendStub) History(context.Context, string, queue.QueueHistoryWindow) ([]queue.QueueHistoryPoint, error) {
+	b.historyCalled = true
+	return b.historyResult, nil
 }
 
 type workerStub struct {
@@ -66,6 +99,13 @@ func TestNewQueueFromDriver_ExternalWorkerFactoryAndOptionalCapabilities(t *test
 				"default": {Pending: 2},
 			},
 		},
+		listJobsResult: queue.ListJobsResult{
+			Jobs:  []queue.JobSnapshot{{ID: "job-1", Queue: "default"}},
+			Total: 1,
+		},
+		historyResult: []queue.QueueHistoryPoint{
+			{Processed: 10, Failed: 1},
+		},
 	}
 	w := &workerStub{}
 
@@ -84,8 +124,43 @@ func TestNewQueueFromDriver_ExternalWorkerFactoryAndOptionalCapabilities(t *test
 	if !queue.SupportsNativeStats(q) {
 		t.Fatal("expected native stats support to be preserved through driver bridge")
 	}
+	if !queue.SupportsQueueAdmin(q) {
+		t.Fatal("expected queue admin support to be preserved through driver bridge")
+	}
 	if _, err := q.Stats(context.Background()); err != nil {
 		t.Fatalf("expected stats to succeed, got %v", err)
+	}
+	list, err := q.ListJobs(context.Background(), queue.ListJobsOptions{Queue: "default", State: queue.JobStatePending, Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("expected list jobs to succeed, got %v", err)
+	}
+	if list.Total != 1 || len(list.Jobs) != 1 {
+		t.Fatalf("unexpected list jobs result: %+v", list)
+	}
+	if !backend.listCalled {
+		t.Fatal("expected list jobs to be forwarded")
+	}
+	if err := q.RetryJob(context.Background(), "default", "job-1"); err != nil {
+		t.Fatalf("expected retry job to succeed, got %v", err)
+	}
+	if err := q.CancelJob(context.Background(), "job-1"); err != nil {
+		t.Fatalf("expected cancel job to succeed, got %v", err)
+	}
+	if err := q.DeleteJob(context.Background(), "default", "job-1"); err != nil {
+		t.Fatalf("expected delete job to succeed, got %v", err)
+	}
+	if err := q.ClearQueue(context.Background(), "default"); err != nil {
+		t.Fatalf("expected clear queue to succeed, got %v", err)
+	}
+	history, err := q.History(context.Background(), "default", queue.QueueHistoryHour)
+	if err != nil {
+		t.Fatalf("expected history to succeed, got %v", err)
+	}
+	if len(history) != 1 || history[0].Processed != 10 || history[0].Failed != 1 {
+		t.Fatalf("unexpected history result: %+v", history)
+	}
+	if !backend.retryCalled || !backend.cancelCalled || !backend.deleteCalled || !backend.clearCalled || !backend.historyCalled {
+		t.Fatal("expected all queue admin methods to be forwarded")
 	}
 	if err := q.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)

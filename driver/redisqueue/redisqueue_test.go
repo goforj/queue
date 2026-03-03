@@ -1,6 +1,7 @@
 package redisqueue
 
 import (
+	"reflect"
 	"testing"
 
 	backend "github.com/hibiken/asynq"
@@ -25,6 +26,9 @@ func TestServerConfig_Defaults(t *testing.T) {
 	if cfg.LogLevel != 0 {
 		t.Fatalf("expected unset log level, got %v", cfg.LogLevel)
 	}
+	if !reflect.DeepEqual(cfg.Queues, map[string]int{"default": 1}) {
+		t.Fatalf("expected default queue map, got %#v", cfg.Queues)
+	}
 }
 
 func TestServerConfig_LoggerAndLogLevelPassthrough(t *testing.T) {
@@ -32,6 +36,11 @@ func TestServerConfig_LoggerAndLogLevelPassthrough(t *testing.T) {
 	cfg := serverConfig(Config{
 		ServerLogger:   logger,
 		ServerLogLevel: ServerLogLevelError,
+		Queues: map[string]int{
+			"critical": 5,
+			"default":  3,
+			"low":      1,
+		},
 	}, 3)
 	if cfg.Concurrency != 3 {
 		t.Fatalf("expected concurrency 3, got %d", cfg.Concurrency)
@@ -41,6 +50,22 @@ func TestServerConfig_LoggerAndLogLevelPassthrough(t *testing.T) {
 	}
 	if cfg.LogLevel != backend.ErrorLevel {
 		t.Fatalf("expected error log level, got %v", cfg.LogLevel)
+	}
+	if !reflect.DeepEqual(cfg.Queues, map[string]int{"critical": 5, "default": 3, "low": 1}) {
+		t.Fatalf("unexpected queues map: %#v", cfg.Queues)
+	}
+}
+
+func TestNormalizeQueues(t *testing.T) {
+	got := normalizeQueues(map[string]int{"": 2, " critical ": 3, "zero": 0, "neg": -1}, "")
+	want := map[string]int{"default": 2, "critical": 3}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalize queues mismatch: got=%#v want=%#v", got, want)
+	}
+
+	fallback := normalizeQueues(nil, "low")
+	if !reflect.DeepEqual(fallback, map[string]int{"low": 1}) {
+		t.Fatalf("fallback queues mismatch: got=%#v", fallback)
 	}
 }
 

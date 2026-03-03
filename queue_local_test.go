@@ -301,3 +301,85 @@ func TestLocalQueue_WorkerpoolRetriesWithBackoff(t *testing.T) {
 		t.Fatalf("expected 2 attempts, got %d", calls.Load())
 	}
 }
+
+func TestLocalQueue_WorkerpoolStatsTrackPerQueue(t *testing.T) {
+	d := newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{Workers: 2, QueueCapacity: 8})
+	done := make(chan string, 8)
+	d.Register("job:stats-per-queue", func(_ context.Context, job Job) error {
+		done <- normalizeQueueName(job.jobOptions().queueName)
+		return nil
+	})
+
+	jobs := []Job{
+		NewJob("job:stats-per-queue").OnQueue("critical"),
+		NewJob("job:stats-per-queue").OnQueue("default"),
+		NewJob("job:stats-per-queue").OnQueue("low"),
+	}
+	for _, job := range jobs {
+		if err := d.Dispatch(context.Background(), job); err != nil {
+			t.Fatalf("dispatch failed: %v", err)
+		}
+	}
+
+	timeout := time.After(500 * time.Millisecond)
+	for i := 0; i < len(jobs); i++ {
+		select {
+		case <-done:
+		case <-timeout:
+			t.Fatal("expected workerpool jobs to finish")
+		}
+	}
+
+	snapshot, err := d.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("stats failed: %v", err)
+	}
+	for _, queueName := range []string{"critical", "default", "low"} {
+		counters, ok := snapshot.Queue(queueName)
+		if !ok {
+			t.Fatalf("expected queue %q in snapshot", queueName)
+		}
+		if counters.Processed != 1 {
+			t.Fatalf("expected processed=1 for %q, got %d", queueName, counters.Processed)
+		}
+		if counters.Failed != 0 {
+			t.Fatalf("expected failed=0 for %q, got %d", queueName, counters.Failed)
+		}
+	}
+}
+
+func TestLocalQueue_SyncStatsTrackFailuresPerQueue(t *testing.T) {
+	d := newLocalQueue(DriverSync)
+	d.Register("job:sync-ok", func(_ context.Context, _ Job) error {
+		return nil
+	})
+	d.Register("job:sync-fail", func(_ context.Context, _ Job) error {
+		return errors.New("boom")
+	})
+
+	if err := d.Dispatch(context.Background(), NewJob("job:sync-ok").OnQueue("critical")); err != nil {
+		t.Fatalf("dispatch ok job failed: %v", err)
+	}
+	if err := d.Dispatch(context.Background(), NewJob("job:sync-fail").OnQueue("low")); err == nil {
+		t.Fatal("expected sync failure")
+	}
+
+	snapshot, err := d.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("stats failed: %v", err)
+	}
+	critical, ok := snapshot.Queue("critical")
+	if !ok {
+		t.Fatal("expected critical queue in snapshot")
+	}
+	if critical.Processed != 1 || critical.Failed != 0 {
+		t.Fatalf("unexpected critical counters: %+v", critical)
+	}
+	low, ok := snapshot.Queue("low")
+	if !ok {
+		t.Fatal("expected low queue in snapshot")
+	}
+	if low.Processed != 0 || low.Failed != 1 {
+		t.Fatalf("unexpected low counters: %+v", low)
+	}
+}
