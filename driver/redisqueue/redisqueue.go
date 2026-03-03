@@ -6,6 +6,7 @@ import (
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/internal/driverbridge"
 	"github.com/goforj/queue/queueconfig"
+	"github.com/goforj/queue/queuecore"
 	backend "github.com/hibiken/asynq"
 )
 
@@ -40,6 +41,7 @@ type Config struct {
 	Addr           string
 	Password       string
 	DB             int
+	Queues         map[string]int
 	ServerLogger   ServerLogger
 	ServerLogLevel ServerLogLevel
 }
@@ -93,7 +95,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 		DefaultQueue: cfg.DefaultQueue,
 		Observer:     cfg.Observer,
 	}
-	driverBackend := newRedisQueue(newRedisClient(cfg), newRedisInspector(cfg), true)
+	driverBackend := newRedisQueue(newRedisClient(cfg), newRedisInspector(cfg), newRedisTimelineStore(cfg), true)
 	q, err := driverbridge.NewQueueFromDriver(rootCfg, driverBackend, func(workers int) (any, error) {
 		return newRedisWorker(
 			backend.NewServer(backend.RedisClientOpt{
@@ -113,6 +115,9 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 
 func serverConfig(cfg Config, workers int) backend.Config {
 	serverCfg := backend.Config{Concurrency: workers}
+	if queues := normalizeQueues(cfg.Queues, cfg.DefaultQueue); len(queues) > 0 {
+		serverCfg.Queues = queues
+	}
 	if cfg.ServerLogger != nil {
 		serverCfg.Logger = cfg.ServerLogger
 	}
@@ -120,6 +125,24 @@ func serverConfig(cfg Config, workers int) backend.Config {
 		serverCfg.LogLevel = level
 	}
 	return serverCfg
+}
+
+func normalizeQueues(raw map[string]int, fallbackDefault string) map[string]int {
+	if len(raw) == 0 {
+		return map[string]int{queuecore.NormalizeQueueName(fallbackDefault): 1}
+	}
+	out := make(map[string]int, len(raw))
+	for name, weight := range raw {
+		normalized := queuecore.NormalizeQueueName(name)
+		if weight <= 0 {
+			continue
+		}
+		out[normalized] = weight
+	}
+	if len(out) == 0 {
+		return map[string]int{queuecore.NormalizeQueueName(fallbackDefault): 1}
+	}
+	return out
 }
 
 func serverLogLevel(level ServerLogLevel) (backend.LogLevel, bool) {

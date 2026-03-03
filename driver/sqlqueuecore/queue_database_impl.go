@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -330,6 +331,203 @@ func (d *databaseQueue) Stats(ctx context.Context) (queue.StatsSnapshot, error) 
 		throughput[queueName] = queue.QueueThroughput{}
 	}
 	return queue.StatsSnapshot{ByQueue: byQueue, ThroughputByQueue: throughput}, nil
+}
+
+func (d *databaseQueue) ListJobs(ctx context.Context, opts queue.ListJobsOptions) (queue.ListJobsResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return queue.ListJobsResult{}, err
+	}
+	opts = opts.Normalize()
+	if opts.State == queue.JobStateCompleted {
+		return queue.ListJobsResult{}, nil
+	}
+
+	now := time.Now().UnixMilli()
+	where, args, err := d.jobsWhereClause(opts, now)
+	if err != nil {
+		return queue.ListJobsResult{}, err
+	}
+
+	countQuery := d.rebind(fmt.Sprintf("SELECT COUNT(*) FROM queue_jobs WHERE %s", where))
+	var total int64
+	if err := d.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return queue.ListJobsResult{}, err
+	}
+
+	listQuery := d.rebind(fmt.Sprintf(`SELECT id, queue_name, job_type, payload, max_retry, attempt, available_at, state, last_error
+FROM queue_jobs
+WHERE %s
+ORDER BY id DESC
+LIMIT ? OFFSET ?`, where))
+	queryArgs := append(append([]any{}, args...), opts.PageSize, (opts.Page-1)*opts.PageSize)
+	rows, err := d.db.QueryContext(ctx, listQuery, queryArgs...)
+	if err != nil {
+		return queue.ListJobsResult{}, err
+	}
+	defer rows.Close()
+
+	jobs := make([]queue.JobSnapshot, 0, opts.PageSize)
+	for rows.Next() {
+		var (
+			id          int64
+			queueName   string
+			jobType     string
+			payload     []byte
+			maxRetry    int
+			attempt     int
+			availableAt int64
+			state       string
+			lastErr     sql.NullString
+		)
+		if scanErr := rows.Scan(&id, &queueName, &jobType, &payload, &maxRetry, &attempt, &availableAt, &state, &lastErr); scanErr != nil {
+			return queue.ListJobsResult{}, scanErr
+		}
+		var nextProcessAt *time.Time
+		if availableAt > 0 {
+			t := time.UnixMilli(availableAt)
+			nextProcessAt = &t
+		}
+		jobs = append(jobs, queue.JobSnapshot{
+			ID:            strconv.FormatInt(id, 10),
+			Queue:         queueName,
+			State:         databaseJobState(state, attempt, availableAt, now),
+			Type:          jobType,
+			Payload:       string(payload),
+			Attempt:       attempt,
+			MaxRetry:      maxRetry,
+			LastError:     lastErr.String,
+			NextProcessAt: nextProcessAt,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return queue.ListJobsResult{}, err
+	}
+	return queue.ListJobsResult{Jobs: jobs, Total: total}, nil
+}
+
+func (d *databaseQueue) RetryJob(ctx context.Context, queueName, jobID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(jobID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid job id %q", jobID)
+	}
+	now := time.Now().UnixMilli()
+	query := d.rebind(`UPDATE queue_jobs
+SET state='pending', available_at=?, processing_started_at=NULL, last_error=NULL, updated_at=?
+WHERE id=? AND queue_name=?`)
+	_, execErr := d.db.ExecContext(ctx, query, now, now, id, queuecore.NormalizeQueueName(queueName))
+	return execErr
+}
+
+func (d *databaseQueue) CancelJob(ctx context.Context, jobID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(jobID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid job id %q", jobID)
+	}
+	now := time.Now().UnixMilli()
+	query := d.rebind(`UPDATE queue_jobs
+SET state='dead', processing_started_at=NULL, last_error=?, updated_at=?
+WHERE id=?`)
+	_, execErr := d.db.ExecContext(ctx, query, "canceled from queue admin", now, id)
+	return execErr
+}
+
+func (d *databaseQueue) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(jobID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid job id %q", jobID)
+	}
+	query := d.rebind(`DELETE FROM queue_jobs WHERE id=? AND queue_name=?`)
+	_, execErr := d.db.ExecContext(ctx, query, id, queuecore.NormalizeQueueName(queueName))
+	return execErr
+}
+
+func (d *databaseQueue) ClearQueue(ctx context.Context, queueName string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	query := d.rebind(`DELETE FROM queue_jobs WHERE queue_name=?`)
+	_, execErr := d.db.ExecContext(ctx, query, queuecore.NormalizeQueueName(queueName))
+	return execErr
+}
+
+func (d *databaseQueue) History(ctx context.Context, queueName string, window queue.QueueHistoryWindow) ([]queue.QueueHistoryPoint, error) {
+	snapshot, err := d.Stats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	points := queue.TimelineHistoryFromSnapshot(snapshot, queueName, window)
+	if len(points) > 0 {
+		return points, nil
+	}
+	return queue.SinglePointHistory(snapshot, queueName), nil
+}
+
+func (d *databaseQueue) jobsWhereClause(opts queue.ListJobsOptions, now int64) (string, []any, error) {
+	queueName := queuecore.NormalizeQueueName(opts.Queue)
+	where := []string{"queue_name = ?"}
+	args := []any{queueName}
+
+	switch opts.State {
+	case queue.JobStatePending:
+		where = append(where, "state = 'pending'", "attempt = 0", "available_at <= ?")
+		args = append(args, now)
+	case queue.JobStateActive:
+		where = append(where, "state = 'processing'")
+	case queue.JobStateScheduled:
+		where = append(where, "state = 'pending'", "attempt = 0", "available_at > ?")
+		args = append(args, now)
+	case queue.JobStateRetry:
+		where = append(where, "state = 'pending'", "attempt > 0")
+	case queue.JobStateArchived:
+		where = append(where, "state = 'dead'")
+	default:
+		return "", nil, fmt.Errorf("unsupported queue job state %q", opts.State)
+	}
+
+	return strings.Join(where, " AND "), args, nil
+}
+
+func databaseJobState(state string, attempt int, availableAt, now int64) queue.JobState {
+	switch state {
+	case "processing":
+		return queue.JobStateActive
+	case "dead":
+		return queue.JobStateArchived
+	case "pending":
+		if attempt > 0 {
+			return queue.JobStateRetry
+		}
+		if availableAt > now {
+			return queue.JobStateScheduled
+		}
+		return queue.JobStatePending
+	default:
+		return queue.JobStatePending
+	}
 }
 
 func (d *databaseQueue) lookup(jobType string) (queue.Handler, bool) {
