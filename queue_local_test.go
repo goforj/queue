@@ -330,21 +330,35 @@ func TestLocalQueue_WorkerpoolStatsTrackPerQueue(t *testing.T) {
 		}
 	}
 
-	snapshot, err := d.Stats(context.Background())
-	if err != nil {
-		t.Fatalf("stats failed: %v", err)
-	}
-	for _, queueName := range []string{"critical", "default", "low"} {
-		counters, ok := snapshot.Queue(queueName)
-		if !ok {
-			t.Fatalf("expected queue %q in snapshot", queueName)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		snapshot, err := d.Stats(context.Background())
+		if err != nil {
+			t.Fatalf("stats failed: %v", err)
 		}
-		if counters.Processed != 1 {
-			t.Fatalf("expected processed=1 for %q, got %d", queueName, counters.Processed)
+		allProcessed := true
+		for _, queueName := range []string{"critical", "default", "low"} {
+			counters, ok := snapshot.Queue(queueName)
+			if !ok {
+				t.Fatalf("expected queue %q in snapshot", queueName)
+			}
+			if counters.Processed != 1 {
+				allProcessed = false
+			}
+			if counters.Failed != 0 {
+				t.Fatalf("expected failed=0 for %q, got %d", queueName, counters.Failed)
+			}
 		}
-		if counters.Failed != 0 {
-			t.Fatalf("expected failed=0 for %q, got %d", queueName, counters.Failed)
+		if allProcessed {
+			break
 		}
+		if time.Now().After(deadline) {
+			for _, queueName := range []string{"critical", "default", "low"} {
+				counters, _ := snapshot.Queue(queueName)
+				t.Fatalf("expected processed=1 for %q, got %d", queueName, counters.Processed)
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
