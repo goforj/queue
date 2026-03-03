@@ -19,6 +19,6 @@ func main() {
 	if err != nil {
 		return
 	}
-	_, err := queue.QueueHistory(context.Background(), q, "default", queue.QueueHistoryHour)
+	_, err = queue.QueueHistory(context.Background(), q, "default", queue.QueueHistoryHour)
 	_ = err
 }

@@ -143,7 +143,7 @@ func SupportsQueueAdmin(q any) bool {
 //	if err != nil {
 //		return
 //	}
-//	_, err := queue.ListJobs(context.Background(), q, queue.ListJobsOptions{
+//	_, err = queue.ListJobs(context.Background(), q, queue.ListJobsOptions{
 //		Queue: "default",
 //		State: queue.JobStatePending,
 //	})
@@ -241,7 +241,7 @@ func ClearQueue(ctx context.Context, q any, queueName string) error {
 //	if err != nil {
 //		return
 //	}
-//	_, err := queue.QueueHistory(context.Background(), q, "default", queue.QueueHistoryHour)
+//	_, err = queue.QueueHistory(context.Background(), q, "default", queue.QueueHistoryHour)
 //	_ = err
 func QueueHistory(ctx context.Context, q any, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
 	history := resolveQueueHistory(q)
@@ -314,7 +314,7 @@ func resolveQueueHistory(v any) QueueHistoryProvider {
 //	if err != nil {
 //		return
 //	}
-//	_, err := q.ListJobs(context.Background(), queue.ListJobsOptions{
+//	_, err = q.ListJobs(context.Background(), queue.ListJobsOptions{
 //		Queue: "default",
 //		State: queue.JobStatePending,
 //	})
@@ -439,7 +439,7 @@ func (r *Queue) ClearQueue(ctx context.Context, queueName string) error {
 //	if err != nil {
 //		return
 //	}
-//	points, err := q.History(context.Background(), "default", queue.QueueHistoryHour)
+//	points, err = q.History(context.Background(), "default", queue.QueueHistoryHour)
 //	_ = points
 //	_ = err
 func (r *Queue) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {

@@ -656,7 +656,7 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-points, err := q.History(context.Background(), "default", queue.QueueHistoryHour)
+points, err = q.History(context.Background(), "default", queue.QueueHistoryHour)
 _ = err
 ```
 
@@ -669,7 +669,7 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-_, err := queue.ListJobs(context.Background(), q, queue.ListJobsOptions{
+_, err = queue.ListJobs(context.Background(), q, queue.ListJobsOptions{
 	Queue: "default",
 	State: queue.JobStatePending,
 })
@@ -685,7 +685,7 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-_, err := q.ListJobs(context.Background(), queue.ListJobsOptions{
+_, err = q.ListJobs(context.Background(), queue.ListJobsOptions{
 	Queue: "default",
 	State: queue.JobStatePending,
 })
@@ -712,7 +712,7 @@ q, err := redisqueue.New("127.0.0.1:6379")
 if err != nil {
 	return
 }
-_, err := queue.QueueHistory(context.Background(), q, "default", queue.QueueHistoryHour)
+_, err = queue.QueueHistory(context.Background(), q, "default", queue.QueueHistoryHour)
 _ = err
 ```
 

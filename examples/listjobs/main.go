@@ -19,7 +19,7 @@ func main() {
 	if err != nil {
 		return
 	}
-	_, err := queue.ListJobs(context.Background(), q, queue.ListJobsOptions{
+	_, err = queue.ListJobs(context.Background(), q, queue.ListJobsOptions{
 		Queue: "default",
 		State: queue.JobStatePending,
 	})
