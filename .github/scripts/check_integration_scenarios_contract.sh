@@ -60,6 +60,23 @@ done
 echo "Checking backend coverage in integration contract suites..."
 backend_pattern() {
   local backend="$1"
+  local backend_const=""
+  case "${backend}" in
+    redis) backend_const="BackendRedis" ;;
+    mysql) backend_const="BackendMySQL" ;;
+    postgres) backend_const="BackendPostgres" ;;
+    sqlite) backend_const="BackendSQLite" ;;
+    nats) backend_const="BackendNATS" ;;
+    sqs) backend_const="BackendSQS" ;;
+    rabbitmq) backend_const="BackendRabbitMQ" ;;
+    *) backend_const="" ;;
+  esac
+
+  if [[ -n "${backend_const}" ]]; then
+    printf 'integrationBackendEnabled\("%s"\)|integrationBackendEnabled\(testenv\.%s\)|backend:[[:space:]]*"%s"|backend:[[:space:]]*testenv\.%s|name:[[:space:]]*"%s"|name:[[:space:]]*testenv\.%s' "${backend}" "${backend_const}" "${backend}" "${backend_const}" "${backend}" "${backend_const}"
+    return
+  fi
+
   printf 'integrationBackendEnabled\("%s"\)|backend:[[:space:]]*"%s"|name:[[:space:]]*"%s"' "${backend}" "${backend}" "${backend}"
 }
 
