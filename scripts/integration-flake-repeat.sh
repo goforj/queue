@@ -111,5 +111,30 @@ done
 echo "Wrote ${summary_md}"
 echo "Wrote ${attempts_tsv}"
 
+# Print the computed summary to stdout so CI logs are informative on failure.
+echo
+echo "=== Flake Repeat Summary (${backend_label}) ==="
+cat "${summary_md}"
+
+# Print failing attempts (if any) and a tail of each failing log file.
+if [[ "${overall_exit}" -ne 0 ]]; then
+  echo
+  echo "=== Failing Attempts (${backend_label}) ==="
+  awk -F '\t' 'NR==1 || $4=="fail"' "${attempts_tsv}"
+
+  echo
+  echo "=== Failing Log Tails (${backend_label}) ==="
+  awk -F '\t' 'NR>1 && $4=="fail" {print $6}' "${attempts_tsv}" | while IFS= read -r out; do
+    [[ -z "${out}" ]] && continue
+    file="${artifacts_dir}/${out}"
+    echo "--- ${file} ---"
+    if [[ -f "${file}" ]]; then
+      tail -n 120 "${file}"
+    else
+      echo "missing log file: ${file}"
+    fi
+  done
+fi
+
 # Keep a non-zero exit on failures so scheduled runs surface flakes in job status.
 exit "${overall_exit}"
