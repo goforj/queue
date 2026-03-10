@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-labelledby="title">
-  <title>SQS icon</title>
-  <rect width="16" height="16" rx="3" fill="#FF9900"/>
-  <path d="M5 6.2h6M5 8h6M5 9.8h4" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="1.4"/>
-  <path d="M4.4 4.2h7.2c.8 0 1.4.6 1.4 1.4v4.8c0 .8-.6 1.4-1.4 1.4H4.4C3.6 11.8 3 11.2 3 10.4V5.6c0-.8.6-1.4 1.4-1.4Z" fill="none" stroke="#fff" stroke-width="1.2"/>
-</svg>
