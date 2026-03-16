@@ -7,4 +7,5 @@ import "github.com/goforj/queue"
 type DriverBaseConfig struct {
 	DefaultQueue string
 	Observer     queue.Observer
+	Logger       queue.Logger
 }

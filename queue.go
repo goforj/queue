@@ -66,6 +66,7 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 type Config struct {
 	Driver   Driver
 	Observer Observer
+	Logger   Logger
 
 	DefaultQueue string
 }

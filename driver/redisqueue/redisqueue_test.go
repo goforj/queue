@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/goforj/queue/queueconfig"
 	backend "github.com/hibiken/asynq"
 )
 
@@ -53,6 +54,21 @@ func TestServerConfig_LoggerAndLogLevelPassthrough(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.Queues, map[string]int{"critical": 5, "default": 3, "low": 1}) {
 		t.Fatalf("unexpected queues map: %#v", cfg.Queues)
+	}
+}
+
+func TestServerConfig_GenericLoggerPassthrough(t *testing.T) {
+	logger := serverLoggerStub{}
+	cfg := serverConfig(Config{
+		DriverBaseConfig: queueconfig.DriverBaseConfig{
+			Logger: logger,
+		},
+	}, 2)
+	if cfg.Concurrency != 2 {
+		t.Fatalf("expected concurrency 2, got %d", cfg.Concurrency)
+	}
+	if cfg.Logger == nil {
+		t.Fatal("expected generic logger passthrough")
 	}
 }
 

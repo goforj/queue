@@ -23,6 +23,7 @@ type DatabaseConfig struct {
 	ProcessingRecoveryGrace  time.Duration
 	ProcessingLeaseNoTimeout time.Duration
 	Observer                 Observer
+	Logger                   Logger
 }
 
 func (c DatabaseConfig) normalize() DatabaseConfig {
@@ -44,4 +45,3 @@ func (c DatabaseConfig) normalize() DatabaseConfig {
 	}
 	return c
 }
-

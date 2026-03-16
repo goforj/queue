@@ -11,16 +11,8 @@ import (
 )
 
 // ServerLogger is the Redis worker server logger contract.
-//
-// It intentionally mirrors common leveled logger methods while avoiding
-// exposing the underlying server implementation type in Config.
-type ServerLogger interface {
-	Debug(args ...interface{})
-	Info(args ...interface{})
-	Warn(args ...interface{})
-	Error(args ...interface{})
-	Fatal(args ...interface{})
-}
+// Deprecated: use queue.Logger via Config.DriverBaseConfig.Logger.
+type ServerLogger = queue.Logger
 
 // ServerLogLevel configures Redis worker server log verbosity.
 type ServerLogLevel int
@@ -94,6 +86,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 		Driver:       queue.DriverRedis,
 		DefaultQueue: cfg.DefaultQueue,
 		Observer:     cfg.Observer,
+		Logger:       cfg.Logger,
 	}
 	driverBackend := newRedisQueue(newRedisClient(cfg), newRedisInspector(cfg), newRedisTimelineStore(cfg), true)
 	q, err := driverbridge.NewQueueFromDriver(rootCfg, driverBackend, func(workers int) (any, error) {
@@ -120,6 +113,8 @@ func serverConfig(cfg Config, workers int) backend.Config {
 	}
 	if cfg.ServerLogger != nil {
 		serverCfg.Logger = cfg.ServerLogger
+	} else if cfg.Logger != nil {
+		serverCfg.Logger = cfg.Logger
 	}
 	if level, ok := serverLogLevel(cfg.ServerLogLevel); ok {
 		serverCfg.LogLevel = level

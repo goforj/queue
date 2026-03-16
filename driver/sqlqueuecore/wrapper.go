@@ -30,6 +30,7 @@ func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue
 		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
 		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
 		Observer:                 cfg.Observer,
+		Logger:                   cfg.Logger,
 	})
 	if err != nil {
 		return nil, err
@@ -38,6 +39,7 @@ func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue
 		Driver:       queue.DriverDatabase,
 		DefaultQueue: cfg.DefaultQueue,
 		Observer:     cfg.Observer,
+		Logger:       cfg.Logger,
 	}
 	return driverbridge.NewQueueFromDriver(rootCfg, backend, nil, opts...)
 }
