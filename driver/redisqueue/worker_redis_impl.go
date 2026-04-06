@@ -106,7 +106,7 @@ func (w *redisWorker) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
-func (w *redisWorker) Shutdown(_ context.Context) error {
+func (w *redisWorker) Shutdown(ctx context.Context) error {
 	w.mu.Lock()
 	started := w.started
 	w.started = false
@@ -115,6 +115,21 @@ func (w *redisWorker) Shutdown(_ context.Context) error {
 	if !started {
 		return nil
 	}
-	w.server.Shutdown()
-	return nil
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.server.Shutdown()
+	}()
+
+	if ctx == nil {
+		<-done
+		return nil
+	}
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

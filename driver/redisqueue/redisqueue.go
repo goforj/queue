@@ -2,6 +2,8 @@ package redisqueue
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/internal/driverbridge"
@@ -30,12 +32,13 @@ const (
 // Config configures the Redis driver module constructor.
 type Config struct {
 	queueconfig.DriverBaseConfig
-	Addr           string
-	Password       string
-	DB             int
-	Queues         map[string]int
-	ServerLogger   ServerLogger
-	ServerLogLevel ServerLogLevel
+	Addr            string
+	Password        string
+	DB              int
+	Queues          map[string]int
+	ServerLogger    ServerLogger
+	ServerLogLevel  ServerLogLevel
+	ShutdownTimeout time.Duration
 }
 
 // New creates a high-level Queue using the Redis backend.
@@ -119,6 +122,9 @@ func serverConfig(cfg Config, workers int) backend.Config {
 	if level, ok := serverLogLevel(cfg.ServerLogLevel); ok {
 		serverCfg.LogLevel = level
 	}
+	if cfg.ShutdownTimeout > 0 {
+		serverCfg.ShutdownTimeout = cfg.ShutdownTimeout
+	}
 	return serverCfg
 }
 
@@ -128,7 +134,7 @@ func normalizeQueues(raw map[string]int, fallbackDefault string) map[string]int 
 	}
 	out := make(map[string]int, len(raw))
 	for name, weight := range raw {
-		normalized := queuecore.NormalizeQueueName(name)
+		normalized := queuecore.NormalizeQueueName(strings.TrimSpace(name))
 		if weight <= 0 {
 			continue
 		}

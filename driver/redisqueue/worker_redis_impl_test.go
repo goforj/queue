@@ -13,6 +13,7 @@ type serverStub struct {
 	startErr         error
 	startCalls       int
 	shutdownCalls    int
+	shutdownCh       chan struct{}
 	lastStartHandler backend.Handler
 }
 
@@ -22,8 +23,13 @@ func (s *serverStub) Start(handler backend.Handler) error {
 	return s.startErr
 }
 
-func (s *serverStub) Shutdown() { s.shutdownCalls++ }
-func (s *serverStub) Stop()     {}
+func (s *serverStub) Shutdown() {
+	s.shutdownCalls++
+	if s.shutdownCh != nil {
+		<-s.shutdownCh
+	}
+}
+func (s *serverStub) Stop() {}
 
 func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
 	server := &serverStub{}
@@ -73,6 +79,23 @@ func TestRedisWorker_StartError(t *testing.T) {
 	if w.started {
 		t.Fatal("worker should remain not started on start error")
 	}
+}
+
+func TestRedisWorker_ShutdownHonorsContext(t *testing.T) {
+	server := &serverStub{shutdownCh: make(chan struct{})}
+	w := newRedisWorker(server, backend.NewServeMux(), nil)
+
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.Shutdown(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+
+	close(server.shutdownCh)
 }
 
 func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {

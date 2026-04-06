@@ -3,6 +3,7 @@ package redisqueue
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/goforj/queue/queueconfig"
 	backend "github.com/hibiken/asynq"
@@ -29,6 +30,9 @@ func TestServerConfig_Defaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.Queues, map[string]int{"default": 1}) {
 		t.Fatalf("expected default queue map, got %#v", cfg.Queues)
+	}
+	if cfg.ShutdownTimeout != 0 {
+		t.Fatalf("expected unset shutdown timeout by default, got %s", cfg.ShutdownTimeout)
 	}
 }
 
@@ -69,6 +73,13 @@ func TestServerConfig_GenericLoggerPassthrough(t *testing.T) {
 	}
 	if cfg.Logger == nil {
 		t.Fatal("expected generic logger passthrough")
+	}
+}
+
+func TestServerConfig_ShutdownTimeoutPassthrough(t *testing.T) {
+	cfg := serverConfig(Config{ShutdownTimeout: 5 * time.Second}, 2)
+	if cfg.ShutdownTimeout != 5*time.Second {
+		t.Fatalf("expected shutdown timeout passthrough, got %s", cfg.ShutdownTimeout)
 	}
 }
 
