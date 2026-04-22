@@ -250,7 +250,7 @@ func (w *sqsWorker) observeRepublishFailure(message sqsMessage, err error) {
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverSQS,
 		Queue:    queuecore.NormalizeQueueName(message.Queue),
-		JobType:  message.Type,
+		JobType:  queue.ResolveObservedJobType(message.Type, message.Payload),
 		Attempt:  message.Attempt,
 		MaxRetry: message.MaxRetry,
 		Err:      err,

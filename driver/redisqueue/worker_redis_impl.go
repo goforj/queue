@@ -44,12 +44,13 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 		maxRetry, _ := backend.GetMaxRetry(ctx)
 		queueName, _ := backend.GetQueueName(ctx)
 		queueName = queuecore.NormalizeQueueName(queueName)
+		observedJobType := queue.ResolveObservedJobType(job.Type(), job.Payload())
 
 		start := time.Now()
 		base := queue.Event{
 			Driver:   queue.DriverRedis,
 			Queue:    queueName,
-			JobType:  job.Type(),
+			JobType:  observedJobType,
 			Attempt:  attempt,
 			MaxRetry: maxRetry,
 			Time:     start,

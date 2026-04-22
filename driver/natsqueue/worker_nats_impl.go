@@ -174,7 +174,7 @@ func (w *natsWorker) observeRepublishFailure(message natsMessage, err error) {
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverNATS,
 		Queue:    queuecore.NormalizeQueueName(message.Queue),
-		JobType:  message.Type,
+		JobType:  queue.ResolveObservedJobType(message.Type, message.Payload),
 		Attempt:  message.Attempt,
 		MaxRetry: message.MaxRetry,
 		Err:      err,

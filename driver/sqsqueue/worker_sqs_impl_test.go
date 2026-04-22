@@ -143,6 +143,35 @@ func TestSQSWorker_RepublishFailureEmitsObserverEvent(t *testing.T) {
 	}
 }
 
+func TestSQSWorker_RepublishFailureUnwrapsBusEnvelopeJobType(t *testing.T) {
+	stub := &sqsWorkerClientStub{sendErr: errors.New("send failed")}
+	var events []queue.Event
+	w := &sqsWorker{
+		handlers: map[string]queue.Handler{},
+		client:   stub,
+		queueURL: "https://example.local/queue/default",
+		observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+	}
+
+	body, err := json.Marshal(sqsMessage{
+		Type:          "bus:job",
+		Queue:         "critical",
+		AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli(),
+		Payload:       []byte(`{"job":{"type":"monitoring:check"}}`),
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	w.process(context.Background(), sqstypes.Message{Body: aws.String(string(body)), ReceiptHandle: aws.String("rh-obs")})
+
+	if len(events) == 0 {
+		t.Fatal("expected republish failure event for sqs")
+	}
+	if events[0].JobType != "monitoring:check" {
+		t.Fatalf("expected unwrapped observed job type, got %q", events[0].JobType)
+	}
+}
+
 func TestSQSWorker_ProcessSuccessInvokesHandlerAndDeletes(t *testing.T) {
 	stub := &sqsWorkerClientStub{}
 	called := 0

@@ -118,6 +118,34 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("republish failure unwraps bus envelope job type", func(t *testing.T) {
+		var events []queue.Event
+		w := newNATSWorkerWithConfig(natsWorkerConfig{
+			URL:      "nats://example:4222",
+			Workers:  1,
+			Observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+		})
+		w.Register("bus:job", func(context.Context, queue.Job) error { return errors.New("boom") })
+		body, err := json.Marshal(natsMessage{
+			Type:          "bus:job",
+			Queue:         "default",
+			Attempt:       0,
+			MaxRetry:      2,
+			BackoffMillis: 5,
+			Payload:       []byte(`{"job":{"type":"monitoring:check"}}`),
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		w.processMessage(&nats.Msg{Data: body})
+		if len(events) == 0 {
+			t.Fatal("expected republish failure event")
+		}
+		if events[0].JobType != "monitoring:check" {
+			t.Fatalf("expected unwrapped observed job type, got %q", events[0].JobType)
+		}
+	})
+
 	t.Run("failed handler at max retries stops", func(t *testing.T) {
 		w := newNATSWorker("nats://example:4222")
 		w.Register("job:terminal", func(context.Context, queue.Job) error { return errors.New("boom") })

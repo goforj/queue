@@ -221,7 +221,7 @@ func (w *rabbitMQWorker) observeRepublishFailure(message rabbitMQMessage, err er
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverRabbitMQ,
 		Queue:    queuecore.NormalizeQueueName(message.Queue),
-		JobType:  message.Type,
+		JobType:  queue.ResolveObservedJobType(message.Type, message.Payload),
 		Attempt:  message.Attempt,
 		MaxRetry: message.MaxRetry,
 		Err:      err,

@@ -145,6 +145,32 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("republish failure unwraps bus envelope job type", func(t *testing.T) {
+		acks := &ackRecorder{}
+		var events []queue.Event
+		w := &rabbitMQWorker{
+			handlers: map[string]queue.Handler{},
+			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
+			observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+		}
+		body, err := json.Marshal(rabbitMQMessage{
+			Type:          "job:future",
+			Queue:         "default",
+			AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli(),
+			Payload:       []byte(`{"job":{"type":"monitoring:check"}}`),
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 44})
+		if len(events) == 0 {
+			t.Fatal("expected republish failure event")
+		}
+		if events[0].JobType != "job:future" {
+			t.Fatalf("expected non-bus job type to pass through, got %q", events[0].JobType)
+		}
+	})
+
 	t.Run("failed handler retries then nacks when republish fails", func(t *testing.T) {
 		acks := &ackRecorder{}
 		w := &rabbitMQWorker{

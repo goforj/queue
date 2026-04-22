@@ -153,6 +153,31 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 	}
 }
 
+func TestRedisWorker_ProcessEventsUnwrapBusEnvelopeJobType(t *testing.T) {
+	server := &serverStub{}
+	var events []queue.Event
+	observer := queue.ObserverFunc(func(event queue.Event) { events = append(events, event) })
+	w := newRedisWorker(server, backend.NewServeMux(), observer)
+
+	w.Register("bus:job", func(context.Context, queue.Job) error { return nil })
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+
+	payload := []byte(`{"job":{"type":"monitoring:check"}}`)
+	if err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("bus:job", payload)); err != nil {
+		t.Fatalf("process task failed: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 process events, got %d", len(events))
+	}
+	for _, event := range events {
+		if event.JobType != "monitoring:check" {
+			t.Fatalf("expected unwrapped observed job type, got %q", event.JobType)
+		}
+	}
+}
+
 func TestRedisWorker_NoObserverFastPath(t *testing.T) {
 	server := &serverStub{}
 	w := newRedisWorker(server, backend.NewServeMux(), nil)
