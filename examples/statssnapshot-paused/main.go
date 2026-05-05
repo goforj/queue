@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"github.com/goforj/queue"
 	"time"
@@ -16,7 +17,7 @@ func main() {
 
 	// Example: paused count getter
 	collector := queue.NewStatsCollector()
-	collector.Observe(queue.Event{
+	collector.Observe(context.Background(), queue.Event{
 		Kind:   queue.EventQueuePaused,
 		Driver: queue.DriverSync,
 		Queue:  "default",

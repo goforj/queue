@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"github.com/goforj/queue"
 	"log/slog"
 	"os"
@@ -16,7 +17,7 @@ func main() {
 
 	// Example: observer func logging hook
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	observer := queue.ObserverFunc(func(event queue.Event) {
+	observer := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
 		logger.Info("queue event",
 			"kind", event.Kind,
 			"driver", event.Driver,
@@ -28,10 +29,10 @@ func main() {
 			"err", event.Err,
 		)
 	})
-	observer.Observe(queue.Event{
-		Kind:     queue.EventProcessSucceeded,
-		Driver:   queue.DriverSync,
-		Queue:    "default",
+	observer.Observe(context.Background(), queue.Event{
+		Kind:    queue.EventProcessSucceeded,
+		Driver:  queue.DriverSync,
+		Queue:   "default",
 		JobType: "emails:send",
 	})
 }

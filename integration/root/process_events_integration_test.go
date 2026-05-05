@@ -20,7 +20,7 @@ type processEventRecorder struct {
 	events []queue.Event
 }
 
-func (r *processEventRecorder) Observe(event queue.Event) {
+func (r *processEventRecorder) Observe(_ context.Context, event queue.Event) {
 	switch event.Kind {
 	case queue.EventProcessStarted, queue.EventProcessSucceeded, queue.EventProcessFailed:
 		r.mu.Lock()

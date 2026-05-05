@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"github.com/goforj/queue"
 	"time"
@@ -16,24 +17,24 @@ func main() {
 
 	// Example: snapshot print
 	collector := queue.NewStatsCollector()
-	collector.Observe(queue.Event{
+	collector.Observe(context.Background(), queue.Event{
 		Kind:   queue.EventEnqueueAccepted,
 		Driver: queue.DriverSync,
 		Queue:  "default",
 		Time:   time.Now(),
 	})
-	collector.Observe(queue.Event{
+	collector.Observe(context.Background(), queue.Event{
 		Kind:   queue.EventProcessStarted,
 		Driver: queue.DriverSync,
 		Queue:  "default",
 		JobKey: "job-1",
 		Time:   time.Now(),
 	})
-	collector.Observe(queue.Event{
+	collector.Observe(context.Background(), queue.Event{
 		Kind:     queue.EventProcessSucceeded,
 		Driver:   queue.DriverSync,
 		Queue:    "default",
-		JobKey:  "job-1",
+		JobKey:   "job-1",
 		Duration: 12 * time.Millisecond,
 		Time:     time.Now(),
 	})

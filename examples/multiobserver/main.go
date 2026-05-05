@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"github.com/goforj/queue"
 )
@@ -17,9 +18,9 @@ func main() {
 	events := make(chan queue.Event, 2)
 	observer := queue.MultiObserver(
 		queue.ChannelObserver{Events: events},
-		queue.ObserverFunc(func(queue.Event) {}),
+		queue.ObserverFunc(func(context.Context, queue.Event) {}),
 	)
-	observer.Observe(queue.Event{Kind: queue.EventEnqueueAccepted})
+	observer.Observe(context.Background(), queue.Event{Kind: queue.EventEnqueueAccepted})
 	fmt.Println(len(events))
 	// Output: 1
 }

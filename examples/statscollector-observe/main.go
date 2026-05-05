@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"github.com/goforj/queue"
 	"time"
 )
@@ -15,7 +16,7 @@ func main() {
 
 	// Example: observe event
 	collector := queue.NewStatsCollector()
-	collector.Observe(queue.Event{
+	collector.Observe(context.Background(), queue.Event{
 		Kind:   queue.EventEnqueueAccepted,
 		Driver: queue.DriverSync,
 		Queue:  "default",

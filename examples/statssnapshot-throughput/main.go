@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"github.com/goforj/queue"
 	"time"
@@ -16,7 +17,7 @@ func main() {
 
 	// Example: throughput getter
 	collector := queue.NewStatsCollector()
-	collector.Observe(queue.Event{
+	collector.Observe(context.Background(), queue.Event{
 		Kind:   queue.EventProcessSucceeded,
 		Driver: queue.DriverSync,
 		Queue:  "default",

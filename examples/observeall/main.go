@@ -22,7 +22,7 @@ func main() {
 	var flakyAttempts atomic.Int32
 	ctx := context.Background()
 
-	runtimeObserver := queue.ObserverFunc(func(event queue.Event) {
+	runtimeObserver := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
 		logger.Info("runtime event",
 			"kind", event.Kind,
 			"driver", event.Driver,
@@ -35,7 +35,7 @@ func main() {
 		)
 	})
 
-	workflowObserver := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
+	workflowObserver := queue.WorkflowObserverFunc(func(ctx context.Context, event queue.WorkflowEvent) {
 		logger.Info("workflow event",
 			"kind", event.Kind,
 			"dispatch_id", event.DispatchID,

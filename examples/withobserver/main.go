@@ -5,13 +5,17 @@
 
 package main
 
-import "github.com/goforj/queue"
+import (
+	"context"
+
+	"github.com/goforj/queue"
+)
 
 func main() {
 	// WithObserver installs a workflow lifecycle observer.
 
 	// Example: workflow observer
-	observer := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
+	observer := queue.WorkflowObserverFunc(func(ctx context.Context, event queue.WorkflowEvent) {
 		_ = event.Kind
 	})
 	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))
