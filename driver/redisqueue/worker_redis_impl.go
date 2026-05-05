@@ -56,7 +56,7 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 			Time:     start,
 		}
 		base.Kind = queue.EventProcessStarted
-		queuecore.SafeObserve(w.obs, base)
+		queuecore.SafeObserve(ctx, w.obs, base)
 
 		err := handler(ctx, queuecore.DriverWithAttempt(
 			queue.NewJob(job.Type()).
@@ -71,21 +71,21 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 		finish.Err = err
 		if err == nil {
 			finish.Kind = queue.EventProcessSucceeded
-			queuecore.SafeObserve(w.obs, finish)
+			queuecore.SafeObserve(ctx, w.obs, finish)
 			return nil
 		}
 		finish.Kind = queue.EventProcessFailed
-		queuecore.SafeObserve(w.obs, finish)
+		queuecore.SafeObserve(ctx, w.obs, finish)
 		if finish.Attempt < finish.MaxRetry {
 			retry := finish
 			retry.Kind = queue.EventProcessRetried
 			retry.Err = nil
-			queuecore.SafeObserve(w.obs, retry)
+			queuecore.SafeObserve(ctx, w.obs, retry)
 		} else {
 			archive := finish
 			archive.Kind = queue.EventProcessArchived
 			archive.Err = nil
-			queuecore.SafeObserve(w.obs, archive)
+			queuecore.SafeObserve(ctx, w.obs, archive)
 		}
 		return err
 	})

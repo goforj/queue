@@ -111,7 +111,7 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 		if remaining > 0 {
 			time.AfterFunc(remaining, func() {
 				if err := w.republish(incoming); err != nil {
-					w.observeRepublishFailure(incoming, err)
+					w.observeRepublishFailure(context.Background(), incoming, err)
 				}
 			})
 			return

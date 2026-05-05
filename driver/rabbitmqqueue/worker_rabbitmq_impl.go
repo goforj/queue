@@ -160,7 +160,7 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
 			if err := w.publish(incoming); err != nil {
-				w.observeRepublishFailure(runCtx, incoming, err)
+				w.observeRepublishFailure(ctx, incoming, err)
 				_ = delivery.Nack(false, true)
 				return
 			}
