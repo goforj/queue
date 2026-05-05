@@ -37,7 +37,7 @@ func (s *storeStub) GetBatch(context.Context, string) (bus.BatchState, error) {
 	return bus.BatchState{}, bus.ErrNotFound
 }
 func (s *storeStub) MarkCallbackInvoked(context.Context, string) (bool, error) { return true, nil }
-func (s *storeStub) Prune(context.Context, time.Time) error                     { return nil }
+func (s *storeStub) Prune(context.Context, time.Time) error                    { return nil }
 
 func TestWithStore_OverrideAndNilGuard(t *testing.T) {
 	storeErr := errors.New("store create batch failure")
@@ -71,7 +71,7 @@ func TestWithClockAndBatchBuilderMetadata(t *testing.T) {
 	b, err := bus.New(
 		q,
 		bus.WithClock(func() time.Time { return fixedNow }),
-		bus.WithObserver(bus.ObserverFunc(func(e bus.Event) { observed = append(observed, e) })),
+		bus.WithObserver(bus.ObserverFunc(func(_ context.Context, e bus.Event) { observed = append(observed, e) })),
 	)
 	if err != nil {
 		t.Fatalf("new bus: %v", err)

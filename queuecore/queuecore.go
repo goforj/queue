@@ -1,6 +1,10 @@
 package queuecore
 
-import "github.com/goforj/queue"
+import (
+	"context"
+
+	"github.com/goforj/queue"
+)
 
 var (
 	// ErrDuplicate is returned when a driver rejects a unique job dispatch because
@@ -25,7 +29,9 @@ func DriverWithAttempt(job queue.Job, attempt int) queue.Job {
 
 // SafeObserve emits an event to an observer and recovers panics from the
 // observer callback.
-func SafeObserve(observer queue.Observer, event queue.Event) { queue.SafeObserve(observer, event) }
+func SafeObserve(ctx context.Context, observer queue.Observer, event queue.Event) {
+	queue.SafeObserve(ctx, observer, event)
+}
 
 // NormalizeQueueName returns "default" when the provided queue name is empty.
 func NormalizeQueueName(name string) string {

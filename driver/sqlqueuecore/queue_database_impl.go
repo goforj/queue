@@ -685,7 +685,7 @@ WHERE state='processing' AND processing_started_at IS NOT NULL AND (
 	if d.observer != nil {
 		if rows, rowsErr := res.RowsAffected(); rowsErr == nil && rows > 0 {
 			for i := int64(0); i < rows; i++ {
-				queuecore.SafeObserve(d.observer, queue.Event{
+				queuecore.SafeObserve(ctx, d.observer, queue.Event{
 					Kind:   queue.EventProcessRecovered,
 					Driver: queue.DriverDatabase,
 					Time:   time.Now(),

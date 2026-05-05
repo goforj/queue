@@ -160,7 +160,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
 			if err := w.republish(ctx, incoming); err != nil {
-				w.observeRepublishFailure(incoming, err)
+				w.observeRepublishFailure(ctx, incoming, err)
 				return
 			}
 			w.delete(ctx, message)
@@ -206,7 +206,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 		incoming.AvailableAtMS = 0
 	}
 	if err := w.republish(ctx, incoming); err != nil {
-		w.observeRepublishFailure(incoming, err)
+		w.observeRepublishFailure(ctx, incoming, err)
 		return
 	}
 	w.delete(ctx, message)
@@ -245,8 +245,8 @@ func (w *sqsWorker) delete(ctx context.Context, message sqstypes.Message) {
 	})
 }
 
-func (w *sqsWorker) observeRepublishFailure(message sqsMessage, err error) {
-	queuecore.SafeObserve(w.observer, queue.Event{
+func (w *sqsWorker) observeRepublishFailure(ctx context.Context, message sqsMessage, err error) {
+	queuecore.SafeObserve(ctx, w.observer, queue.Event{
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverSQS,
 		Queue:    queuecore.NormalizeQueueName(message.Queue),

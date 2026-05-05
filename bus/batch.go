@@ -161,7 +161,7 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 	}
 	b.r.mu.Unlock()
 
-	b.r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, Queue: b.queue, Time: b.r.now()})
+	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, Queue: b.queue, Time: b.r.now()})
 	for _, job := range jobs {
 		if err := b.r.dispatchEnvelope(ctx, internalJobBatchJob, envelope{
 			SchemaVersion: schemaVersion,
@@ -180,8 +180,8 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 				_ = b.r.invokeBatchCatch(ctx, st, err)
 				_ = b.r.invokeBatchFinally(ctx, st)
 			}
-			b.r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: dispatchID, BatchID: batchID, Time: b.r.now(), Err: err})
-			b.r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: dispatchID, BatchID: batchID, Time: b.r.now()})
+			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: dispatchID, BatchID: batchID, Time: b.r.now(), Err: err})
+			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: dispatchID, BatchID: batchID, Time: b.r.now()})
 			return batchID, err
 		}
 	}
@@ -208,9 +208,9 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 		if markErr != nil {
 			return markErr
 		}
-		r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: err})
 		if st.Cancelled {
-			r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, Time: r.now()})
+			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, Time: r.now()})
 		}
 		_ = r.dispatchCallback(ctx, env, "batch_catch", err)
 		r.invokeBatchProgress(ctx, st)
@@ -223,10 +223,10 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 	if markErr != nil {
 		return markErr
 	}
-	r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now()})
 	r.invokeBatchProgress(ctx, st)
 	if done {
-		r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, Time: r.now()})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "batch_then", nil)
 		_ = r.dispatchCallback(ctx, env, "batch_finally", nil)
 	}
@@ -313,7 +313,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		cbErr = errors.New(env.Error)
 	}
 	start := r.now()
-	r.emit(Event{
+	r.emit(ctx, Event{
 		SchemaVersion: schemaVersion,
 		EventID:       newID("evt"),
 		Kind:          EventCallbackStarted,
@@ -385,7 +385,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		err = errors.New("unknown callback kind")
 	}
 	if err != nil {
-		r.emit(Event{
+		r.emit(ctx, Event{
 			SchemaVersion: schemaVersion,
 			EventID:       newID("evt"),
 			Kind:          EventCallbackFailed,
@@ -400,7 +400,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		})
 		return err
 	}
-	r.emit(Event{
+	r.emit(ctx, Event{
 		SchemaVersion: schemaVersion,
 		EventID:       newID("evt"),
 		Kind:          EventCallbackSucceeded,

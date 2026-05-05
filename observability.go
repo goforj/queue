@@ -68,17 +68,17 @@ type Observer interface {
 	// Example: observe runtime event
 	//
 	//	var observer queue.Observer
-	//	observer.Observe(queue.Event{
+	//	observer.Observe(context.Background(), queue.Event{
 	//		Kind:   queue.EventEnqueueAccepted,
 	//		Driver: queue.DriverSync,
 	//		Queue:  "default",
 	//	})
-	Observe(event Event)
+	Observe(ctx context.Context, event Event)
 }
 
 // ObserverFunc adapts a function to an Observer.
 // @group Observability
-type ObserverFunc func(event Event)
+type ObserverFunc func(ctx context.Context, event Event)
 
 // Observe calls the wrapped function.
 // @group Observability
@@ -86,7 +86,7 @@ type ObserverFunc func(event Event)
 // Example: observer func logging hook
 //
 //	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-//	observer := queue.ObserverFunc(func(event queue.Event) {
+//	observer := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
 //		logger.Info("queue event",
 //			"kind", event.Kind,
 //			"driver", event.Driver,
@@ -98,14 +98,14 @@ type ObserverFunc func(event Event)
 //			"err", event.Err,
 //		)
 //	})
-//	observer.Observe(queue.Event{
+//	observer.Observe(context.Background(), queue.Event{
 //		Kind:     queue.EventProcessSucceeded,
 //		Driver:   queue.DriverSync,
 //		Queue:    "default",
 //		JobType: "emails:send",
 //	})
-func (f ObserverFunc) Observe(event Event) {
-	f(event)
+func (f ObserverFunc) Observe(ctx context.Context, event Event) {
+	f(ctx, event)
 }
 
 type multiObserver struct {
@@ -120,9 +120,9 @@ type multiObserver struct {
 //	events := make(chan queue.Event, 2)
 //	observer := queue.MultiObserver(
 //		queue.ChannelObserver{Events: events},
-//		queue.ObserverFunc(func(queue.Event) {}),
+//		queue.ObserverFunc(func(context.Context, queue.Event) {}),
 //	)
-//	observer.Observe(queue.Event{Kind: queue.EventEnqueueAccepted})
+//	observer.Observe(context.Background(), queue.Event{Kind: queue.EventEnqueueAccepted})
 //	fmt.Println(len(events))
 //	// Output: 1
 func MultiObserver(observers ...Observer) Observer {
@@ -135,9 +135,9 @@ func MultiObserver(observers ...Observer) Observer {
 	return &multiObserver{observers: filtered}
 }
 
-func (m *multiObserver) Observe(event Event) {
+func (m *multiObserver) Observe(ctx context.Context, event Event) {
 	for _, observer := range m.observers {
-		safeObserve(observer, event)
+		safeObserve(ctx, observer, event)
 	}
 }
 
@@ -155,10 +155,10 @@ type ChannelObserver struct {
 //
 //	ch := make(chan queue.Event, 1)
 //	observer := queue.ChannelObserver{Events: ch}
-//	observer.Observe(queue.Event{Kind: queue.EventProcessStarted, Queue: "default"})
+//	observer.Observe(context.Background(), queue.Event{Kind: queue.EventProcessStarted, Queue: "default"})
 //	event := <-ch
 //	_ = event
-func (c ChannelObserver) Observe(event Event) {
+func (c ChannelObserver) Observe(_ context.Context, event Event) {
 	if c.Events == nil {
 		return
 	}
@@ -499,13 +499,13 @@ func NewStatsCollector() *StatsCollector {
 // Example: observe event
 //
 //	collector := queue.NewStatsCollector()
-//	collector.Observe(queue.Event{
+//	collector.Observe(context.Background(), queue.Event{
 //		Kind:   queue.EventEnqueueAccepted,
 //		Driver: queue.DriverSync,
 //		Queue:  "default",
 //		Time:   time.Now(),
 //	})
-func (c *StatsCollector) Observe(event Event) {
+func (c *StatsCollector) Observe(_ context.Context, event Event) {
 	queue := event.Queue
 	if queue == "" {
 		queue = "default"
@@ -746,7 +746,7 @@ func (q *observedQueue) Pause(ctx context.Context, queueName string) error {
 	if err := controller.Pause(ctx, queueName); err != nil {
 		return err
 	}
-	safeObserve(q.observer, Event{
+	safeObserve(ctx, q.observer, Event{
 		Kind:   EventQueuePaused,
 		Driver: q.driver,
 		Queue:  normalizeQueueName(queueName),
@@ -763,7 +763,7 @@ func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
 	if err := controller.Resume(ctx, queueName); err != nil {
 		return err
 	}
-	safeObserve(q.observer, Event{
+	safeObserve(ctx, q.observer, Event{
 		Kind:   EventQueueResumed,
 		Driver: q.driver,
 		Queue:  normalizeQueueName(queueName),
@@ -835,19 +835,19 @@ func (q *observedQueue) Dispatch(ctx context.Context, job Job) error {
 	switch {
 	case err == nil:
 		base.Kind = EventEnqueueAccepted
-		safeObserve(q.observer, base)
+		safeObserve(ctx, q.observer, base)
 	case errors.Is(err, ErrDuplicate):
 		base.Kind = EventEnqueueDuplicate
 		base.Err = err
-		safeObserve(q.observer, base)
+		safeObserve(ctx, q.observer, base)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		base.Kind = EventEnqueueCanceled
 		base.Err = err
-		safeObserve(q.observer, base)
+		safeObserve(ctx, q.observer, base)
 	default:
 		base.Kind = EventEnqueueRejected
 		base.Err = err
-		safeObserve(q.observer, base)
+		safeObserve(ctx, q.observer, base)
 	}
 	return err
 }
@@ -889,7 +889,7 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 			Time:      start,
 		}
 		base.Kind = EventProcessStarted
-		safeObserve(observer, base)
+		safeObserve(ctx, observer, base)
 
 		err := handler(ctx, job)
 		finish := base
@@ -898,43 +898,46 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 		finish.Err = err
 		if err == nil {
 			finish.Kind = EventProcessSucceeded
-			safeObserve(observer, finish)
+			safeObserve(ctx, observer, finish)
 			return nil
 		}
 
 		finish.Kind = EventProcessFailed
-		safeObserve(observer, finish)
+		safeObserve(ctx, observer, finish)
 		if finish.Attempt < finish.MaxRetry {
 			retry := finish
 			retry.Kind = EventProcessRetried
 			retry.Err = nil
-			safeObserve(observer, retry)
+			safeObserve(ctx, observer, retry)
 		} else {
 			archive := finish
 			archive.Kind = EventProcessArchived
 			archive.Err = nil
-			safeObserve(observer, archive)
+			safeObserve(ctx, observer, archive)
 		}
 		return err
 	}
 }
 
-func safeObserve(observer Observer, event Event) {
-	SafeObserve(observer, event)
+func safeObserve(ctx context.Context, observer Observer, event Event) {
+	SafeObserve(ctx, observer, event)
 }
 
 // SafeObserve delivers an event to an observer and recovers observer panics.
 //
 // This is an advanced helper intended for driver-module implementations.
 // @group Observability
-func SafeObserve(observer Observer, event Event) {
+func SafeObserve(ctx context.Context, observer Observer, event Event) {
 	if observer == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	defer func() {
 		_ = recover()
 	}()
-	observer.Observe(event)
+	observer.Observe(ctx, event)
 }
 
 func jobQueueName(job Job) string {

@@ -1,6 +1,9 @@
 package bus
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type EventKind string
 
@@ -42,22 +45,22 @@ type Event struct {
 }
 
 type Observer interface {
-	Observe(event Event)
+	Observe(ctx context.Context, event Event)
 }
 
-type ObserverFunc func(event Event)
+type ObserverFunc func(ctx context.Context, event Event)
 
 // Observe calls the wrapped observer function.
 // @group Events
 //
 // Example: observer func
 //
-//	observer := bus.ObserverFunc(func(event bus.Event) {
+//	observer := bus.ObserverFunc(func(ctx context.Context, event bus.Event) {
 //		_ = event.Kind
 //	})
-//	observer.Observe(bus.Event{Kind: bus.EventDispatchStarted})
-func (f ObserverFunc) Observe(event Event) {
-	f(event)
+//	observer.Observe(context.Background(), bus.Event{Kind: bus.EventDispatchStarted})
+func (f ObserverFunc) Observe(ctx context.Context, event Event) {
+	f(ctx, event)
 }
 
 // MultiObserver fans out one event to multiple observers.
@@ -66,10 +69,10 @@ func (f ObserverFunc) Observe(event Event) {
 // Example: fan out observers
 //
 //	observer := bus.MultiObserver(
-//		bus.ObserverFunc(func(event bus.Event) {}),
-//		bus.ObserverFunc(func(event bus.Event) {}),
+//		bus.ObserverFunc(func(context.Context, bus.Event) {}),
+//		bus.ObserverFunc(func(context.Context, bus.Event) {}),
 //	)
-//	observer.Observe(bus.Event{Kind: bus.EventDispatchStarted})
+//	observer.Observe(context.Background(), bus.Event{Kind: bus.EventDispatchStarted})
 func MultiObserver(observers ...Observer) Observer {
 	filtered := make([]Observer, 0, len(observers))
 	for _, observer := range observers {
@@ -82,18 +85,21 @@ func MultiObserver(observers ...Observer) Observer {
 
 type multiObserver []Observer
 
-func (m multiObserver) Observe(event Event) {
+func (m multiObserver) Observe(ctx context.Context, event Event) {
 	for _, observer := range m {
-		safeObserve(observer, event)
+		safeObserve(ctx, observer, event)
 	}
 }
 
-func safeObserve(observer Observer, event Event) {
+func safeObserve(ctx context.Context, observer Observer, event Event) {
 	if observer == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	defer func() {
 		_ = recover()
 	}()
-	observer.Observe(event)
+	observer.Observe(ctx, event)
 }

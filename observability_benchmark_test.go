@@ -14,21 +14,21 @@ func BenchmarkStatsCollectorObserve(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		now := time.Now()
 		jobKey := "bench-job"
-		collector.Observe(Event{
+		collector.Observe(context.Background(), Event{
 			Kind:   EventEnqueueAccepted,
 			Driver: DriverSync,
 			Queue:  "default",
 			JobKey: jobKey,
 			Time:   now,
 		})
-		collector.Observe(Event{
+		collector.Observe(context.Background(), Event{
 			Kind:   EventProcessStarted,
 			Driver: DriverSync,
 			Queue:  "default",
 			JobKey: jobKey,
 			Time:   now.Add(1 * time.Millisecond),
 		})
-		collector.Observe(Event{
+		collector.Observe(context.Background(), Event{
 			Kind:     EventProcessSucceeded,
 			Driver:   DriverSync,
 			Queue:    "default",

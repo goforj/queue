@@ -56,7 +56,7 @@ type observerRecorder struct {
 	events []Event
 }
 
-func (r *observerRecorder) Observe(event Event) {
+func (r *observerRecorder) Observe(_ context.Context, event Event) {
 	r.events = append(r.events, event)
 }
 
@@ -64,19 +64,19 @@ func TestChannelObserver_DropIfFullAndBlockingSend(t *testing.T) {
 	ch := make(chan Event, 1)
 	ch <- Event{Kind: EventEnqueueAccepted}
 
-	ChannelObserver{Events: ch, DropIfFull: true}.Observe(Event{Kind: EventEnqueueRejected})
+	ChannelObserver{Events: ch, DropIfFull: true}.Observe(context.Background(), Event{Kind: EventEnqueueRejected})
 	if len(ch) != 1 {
 		t.Fatalf("expected full channel to remain unchanged, got len=%d", len(ch))
 	}
 
 	blocking := ChannelObserver{Events: ch, DropIfFull: false}
 	<-ch
-	blocking.Observe(Event{Kind: EventProcessStarted})
+	blocking.Observe(context.Background(), Event{Kind: EventProcessStarted})
 	if len(ch) != 1 {
 		t.Fatalf("expected event forwarded to channel, got len=%d", len(ch))
 	}
 
-	ChannelObserver{}.Observe(Event{Kind: EventProcessStarted})
+	ChannelObserver{}.Observe(context.Background(), Event{Kind: EventProcessStarted})
 }
 
 func TestObservedQueue_DispatchClassifiesErrors(t *testing.T) {
@@ -304,7 +304,7 @@ func TestObservabilityHelpers_ResolveAndSnapshotFallbacks(t *testing.T) {
 	}
 
 	collector := NewStatsCollector()
-	collector.Observe(Event{Kind: EventEnqueueAccepted, Driver: DriverNull, Queue: "default", Time: time.Now()})
+	collector.Observe(context.Background(), Event{Kind: EventEnqueueAccepted, Driver: DriverNull, Queue: "default", Time: time.Now()})
 
 	snap, err := Snapshot(context.Background(), &queueBackendStub{statsErr: errors.New("driver stats failed")}, collector)
 	if err != nil {

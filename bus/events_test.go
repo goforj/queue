@@ -31,7 +31,7 @@ func (q *failingDispatchQueue) BusDispatch(context.Context, string, []byte, busr
 func TestDispatchEnqueueFailureEmitsStartedThenFailed(t *testing.T) {
 	q := &failingDispatchQueue{err: errors.New("enqueue failed")}
 	var kinds []EventKind
-	b, err := NewWithStore(q, NewMemoryStore(), WithObserver(ObserverFunc(func(e Event) {
+	b, err := NewWithStore(q, NewMemoryStore(), WithObserver(ObserverFunc(func(_ context.Context, e Event) {
 		kinds = append(kinds, e.Kind)
 	})))
 	if err != nil {
@@ -57,7 +57,7 @@ func TestUnknownCallbackKindEmitsCallbackFailed(t *testing.T) {
 	q := newSyncTestRuntime()
 	var started int
 	var failed int
-	b, err := New(q, WithObserver(ObserverFunc(func(e Event) {
+	b, err := New(q, WithObserver(ObserverFunc(func(_ context.Context, e Event) {
 		if e.Kind == EventCallbackStarted {
 			started++
 		}
@@ -93,7 +93,7 @@ func TestUnknownCallbackKindEmitsCallbackFailed(t *testing.T) {
 func TestCallbackMissingRequiredIDsEmitsCallbackFailed(t *testing.T) {
 	q := newSyncTestRuntime()
 	var failed int
-	b, err := New(q, WithObserver(ObserverFunc(func(e Event) {
+	b, err := New(q, WithObserver(ObserverFunc(func(_ context.Context, e Event) {
 		if e.Kind == EventCallbackFailed {
 			failed++
 		}
@@ -138,10 +138,10 @@ func TestCallbackMissingRequiredIDsEmitsCallbackFailed(t *testing.T) {
 func TestMultiObserverPanicsAreIsolated(t *testing.T) {
 	var called int
 	observer := MultiObserver(
-		ObserverFunc(func(Event) { panic("boom") }),
-		ObserverFunc(func(Event) { called++ }),
+		ObserverFunc(func(context.Context, Event) { panic("boom") }),
+		ObserverFunc(func(context.Context, Event) { called++ }),
 	)
-	observer.Observe(Event{Kind: EventDispatchStarted})
+	observer.Observe(context.Background(), Event{Kind: EventDispatchStarted})
 	if called != 1 {
 		t.Fatalf("expected second observer called once despite panic, got %d", called)
 	}

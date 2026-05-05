@@ -160,7 +160,7 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
 			if err := w.publish(incoming); err != nil {
-				w.observeRepublishFailure(incoming, err)
+				w.observeRepublishFailure(runCtx, incoming, err)
 				_ = delivery.Nack(false, true)
 				return
 			}
@@ -209,15 +209,15 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 		incoming.AvailableAtMS = 0
 	}
 	if err := w.publish(incoming); err != nil {
-		w.observeRepublishFailure(incoming, err)
+		w.observeRepublishFailure(runCtx, incoming, err)
 		_ = delivery.Nack(false, true)
 		return
 	}
 	_ = delivery.Ack(false)
 }
 
-func (w *rabbitMQWorker) observeRepublishFailure(message rabbitMQMessage, err error) {
-	queuecore.SafeObserve(w.observer, queue.Event{
+func (w *rabbitMQWorker) observeRepublishFailure(ctx context.Context, message rabbitMQMessage, err error) {
+	queuecore.SafeObserve(ctx, w.observer, queue.Event{
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverRabbitMQ,
 		Queue:    queuecore.NormalizeQueueName(message.Queue),

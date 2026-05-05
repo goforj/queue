@@ -165,7 +165,7 @@ func TestCallbackJobEmitsCallbackEvents(t *testing.T) {
 
 	var callbackStarted int
 	var callbackSucceeded int
-	observer := bus.ObserverFunc(func(e bus.Event) {
+	observer := bus.ObserverFunc(func(_ context.Context, e bus.Event) {
 		if e.Kind == bus.EventCallbackStarted {
 			callbackStarted++
 		}
@@ -212,7 +212,7 @@ func TestDispatchEmitsStartedAndSucceeded(t *testing.T) {
 
 	var started int
 	var succeeded int
-	observer := bus.ObserverFunc(func(e bus.Event) {
+	observer := bus.ObserverFunc(func(_ context.Context, e bus.Event) {
 		if e.Kind == bus.EventDispatchStarted {
 			started++
 		}
@@ -248,7 +248,7 @@ func TestBatchFailFastEmitsCancelled(t *testing.T) {
 	}
 
 	var cancelled int
-	observer := bus.ObserverFunc(func(e bus.Event) {
+	observer := bus.ObserverFunc(func(_ context.Context, e bus.Event) {
 		if e.Kind == bus.EventBatchCancelled {
 			cancelled++
 		}

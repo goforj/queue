@@ -74,13 +74,13 @@ func TestStatsCollector_CapturesProcessingFailure(t *testing.T) {
 func TestStatsSnapshot_Getters(t *testing.T) {
 	collector := NewStatsCollector()
 	now := time.Now()
-	collector.Observe(Event{
+	collector.Observe(context.Background(), Event{
 		Kind:   EventEnqueueAccepted,
 		Driver: DriverSync,
 		Queue:  "default",
 		Time:   now,
 	})
-	collector.Observe(Event{
+	collector.Observe(context.Background(), Event{
 		Kind:     EventProcessStarted,
 		Driver:   DriverSync,
 		Queue:    "default",
@@ -88,7 +88,7 @@ func TestStatsSnapshot_Getters(t *testing.T) {
 		Time:     now.Add(10 * time.Millisecond),
 		Duration: 5 * time.Millisecond,
 	})
-	collector.Observe(Event{
+	collector.Observe(context.Background(), Event{
 		Kind:     EventProcessSucceeded,
 		Driver:   DriverSync,
 		Queue:    "default",
@@ -121,7 +121,7 @@ func TestStatsSnapshot_Getters(t *testing.T) {
 func TestObserverPanic_DoesNotBreakDispatch(t *testing.T) {
 	q, err := newRuntime(Config{
 		Driver: DriverSync,
-		Observer: ObserverFunc(func(Event) {
+		Observer: ObserverFunc(func(context.Context, Event) {
 			panic("observer panic")
 		}),
 	})
@@ -139,7 +139,7 @@ func TestObserverPanic_DoesNotBreakHandlerExecution(t *testing.T) {
 	var called atomic.Int64
 	q, err := newRuntime(Config{
 		Driver: DriverSync,
-		Observer: ObserverFunc(func(Event) {
+		Observer: ObserverFunc(func(context.Context, Event) {
 			panic("observer panic")
 		}),
 	})
@@ -162,14 +162,14 @@ func TestObserverPanic_DoesNotBreakHandlerExecution(t *testing.T) {
 func TestMultiObserverPanic_DoesNotBlockOtherObservers(t *testing.T) {
 	var received atomic.Int64
 	observer := MultiObserver(
-		ObserverFunc(func(Event) {
+		ObserverFunc(func(context.Context, Event) {
 			panic("observer panic")
 		}),
-		ObserverFunc(func(Event) {
+		ObserverFunc(func(context.Context, Event) {
 			received.Add(1)
 		}),
 	)
-	observer.Observe(Event{Kind: EventEnqueueAccepted, Queue: "default"})
+	observer.Observe(context.Background(), Event{Kind: EventEnqueueAccepted, Queue: "default"})
 	if received.Load() != 1 {
 		t.Fatalf("expected second observer to receive event, got %d", received.Load())
 	}

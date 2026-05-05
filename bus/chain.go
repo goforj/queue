@@ -108,7 +108,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 	}
 	b.r.mu.Unlock()
 
-	b.r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, Queue: b.queue, Time: b.r.now()})
+	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, Queue: b.queue, Time: b.r.now()})
 	first := nodes[0]
 	if err := b.r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
@@ -128,7 +128,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 			_ = b.r.invokeChainCatch(ctx, st, err)
 			_ = b.r.invokeChainFinally(ctx, st)
 		}
-		b.r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, Time: b.r.now(), Err: err})
+		b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, Time: b.r.now(), Err: err})
 		return chainID, err
 	}
 	return chainID, nil
@@ -151,7 +151,7 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 	err := r.executeWireJob(ctx, env)
 	if err != nil {
 		_ = r.store.FailChain(ctx, env.ChainID, err)
-		r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: err})
 		_ = r.dispatchCallback(ctx, env, "chain_catch", err)
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		return err
@@ -161,11 +161,11 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 		return advErr
 	}
 	if done {
-		r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		return nil
 	}
-	r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
 	return r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    env.DispatchID,

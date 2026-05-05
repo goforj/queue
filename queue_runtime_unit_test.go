@@ -55,7 +55,7 @@ func (q *queueBackendRecorder) Shutdown(context.Context) error {
 }
 
 type driverQueueBackendStub struct {
-	driver      Driver
+	driver       Driver
 	dispatched   []Job
 	shutdowns    int
 	pauseErr     error
@@ -89,8 +89,8 @@ func (s *driverQueueBackendStub) Stats(context.Context) (StatsSnapshot, error) {
 type driverRuntimeBackendStub struct {
 	*driverQueueBackendStub
 	registered map[string]Handler
-	startErr    error
-	startCalls  int
+	startErr   error
+	startCalls int
 }
 
 func (s *driverRuntimeBackendStub) Register(jobType string, h Handler) {
@@ -294,7 +294,7 @@ func TestDriverAdapters_PauseResumeStats_Branches(t *testing.T) {
 
 	supported := &driverQueueBackendStub{
 		driver: DriverRedis,
-		stats: StatsSnapshot{ByQueue: map[string]QueueCounters{"default": {Pending: 1}}},
+		stats:  StatsSnapshot{ByQueue: map[string]QueueCounters{"default": {Pending: 1}}},
 	}
 	a2 := driverQueueBackendAdapter{supported}
 	if err := a2.Pause(context.Background(), "default"); err != nil {
@@ -398,7 +398,7 @@ func TestQueueCommonWrapRegisteredHandlerWithoutObserver(t *testing.T) {
 	if got := common.wrapRegisteredHandler("job:x", nil); got != nil {
 		t.Fatal("expected nil passthrough handler")
 	}
-	common.cfg.Observer = ObserverFunc(func(Event) {})
+	common.cfg.Observer = ObserverFunc(func(context.Context, Event) {})
 	if wrapped := common.wrapRegisteredHandler("job:x", h); wrapped == nil {
 		t.Fatal("expected wrapped handler")
 	}

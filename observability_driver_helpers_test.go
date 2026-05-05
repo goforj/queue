@@ -1,13 +1,15 @@
 package queue
 
+import "context"
+
 import "testing"
 
 type panicObserver struct{}
 
-func (panicObserver) Observe(Event) { panic("boom") }
+func (panicObserver) Observe(context.Context, Event) { panic("boom") }
 
 func TestSafeObserve_RecoversObserverPanic(t *testing.T) {
-	SafeObserve(panicObserver{}, Event{Kind: EventEnqueueAccepted})
+	SafeObserve(context.Background(), panicObserver{}, Event{Kind: EventEnqueueAccepted})
 }
 
 func TestNormalizeQueueName_DefaultsEmpty(t *testing.T) {

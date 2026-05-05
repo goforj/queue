@@ -229,12 +229,12 @@ func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error)
 		JobID:         newID("job"),
 		Job:           wj,
 	}
-	r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
 	if err := r.dispatchEnvelope(ctx, internalJob, env); err != nil {
-		r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now(), Err: err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now(), Err: err})
 		return DispatchResult{DispatchID: dispatchID}, err
 	}
-	r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
 	return DispatchResult{DispatchID: dispatchID}, nil
 }
 
@@ -383,7 +383,7 @@ func (r *runtime) handleInternalJob(ctx context.Context, job busruntime.InboundJ
 
 func (r *runtime) executeWireJob(ctx context.Context, env envelope) error {
 	start := r.now()
-	r.emit(Event{
+	r.emit(ctx, Event{
 		SchemaVersion: schemaVersion,
 		EventID:       newID("evt"),
 		Kind:          EventJobStarted,
@@ -399,7 +399,7 @@ func (r *runtime) executeWireJob(ctx context.Context, env envelope) error {
 	handler, ok := r.lookupHandler(env.Job.Type)
 	if !ok {
 		err := fmt.Errorf("bus handler not registered for %q", env.Job.Type)
-		r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobFailed, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now(), Err: err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobFailed, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now(), Err: err})
 		return err
 	}
 	jc := Context{
@@ -416,10 +416,10 @@ func (r *runtime) executeWireJob(ctx context.Context, env envelope) error {
 		return handler(ctx, c)
 	})(ctx, jc)
 	if err != nil {
-		r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobFailed, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now(), Err: err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobFailed, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now(), Err: err})
 		return err
 	}
-	r.emit(Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobSucceeded, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobSucceeded, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now()})
 	return nil
 }
 
@@ -438,8 +438,8 @@ func (r *runtime) lookupHandler(jobType string) (Handler, bool) {
 	return handler, ok
 }
 
-func (r *runtime) emit(event Event) {
-	safeObserve(r.observer, event)
+func (r *runtime) emit(ctx context.Context, event Event) {
+	safeObserve(ctx, r.observer, event)
 }
 
 type wireJob struct {

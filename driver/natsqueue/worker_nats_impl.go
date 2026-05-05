@@ -154,7 +154,7 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 		incoming.AvailableAtMS = 0
 	}
 	if err := w.republish(incoming); err != nil {
-		w.observeRepublishFailure(incoming, err)
+		w.observeRepublishFailure(ctx, incoming, err)
 	}
 }
 
@@ -169,8 +169,8 @@ func (w *natsWorker) republish(message natsMessage) error {
 	return w.conn.Publish(natsSubject(message.Queue), payload)
 }
 
-func (w *natsWorker) observeRepublishFailure(message natsMessage, err error) {
-	queuecore.SafeObserve(w.observer, queue.Event{
+func (w *natsWorker) observeRepublishFailure(ctx context.Context, message natsMessage, err error) {
+	queuecore.SafeObserve(ctx, w.observer, queue.Event{
 		Kind:     queue.EventRepublishFailed,
 		Driver:   queue.DriverNATS,
 		Queue:    queuecore.NormalizeQueueName(message.Queue),
