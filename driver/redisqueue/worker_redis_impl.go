@@ -20,6 +20,7 @@ type redisWorker struct {
 	server server
 	mux    *backend.ServeMux
 	obs    queue.Observer
+	ctxDecorator func(context.Context) context.Context
 
 	mu      sync.Mutex
 	started bool
@@ -29,17 +30,31 @@ func newRedisWorker(server server, mux *backend.ServeMux, observer queue.Observe
 	return &redisWorker{server: server, mux: mux, obs: observer}
 }
 
+func (w *redisWorker) SetHandlerContextDecorator(fn func(context.Context) context.Context) {
+	w.ctxDecorator = fn
+}
+
 func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 	if jobType == "" || handler == nil {
 		return
 	}
 	if w.obs == nil {
 		w.mux.HandleFunc(jobType, func(ctx context.Context, job *backend.Task) error {
+			if w.ctxDecorator != nil {
+				if decorated := w.ctxDecorator(ctx); decorated != nil {
+					ctx = decorated
+				}
+			}
 			return handler(ctx, queue.NewJob(job.Type()).Payload(job.Payload()))
 		})
 		return
 	}
 	w.mux.HandleFunc(jobType, func(ctx context.Context, job *backend.Task) error {
+		if w.ctxDecorator != nil {
+			if decorated := w.ctxDecorator(ctx); decorated != nil {
+				ctx = decorated
+			}
+		}
 		attempt, _ := backend.GetRetryCount(ctx)
 		maxRetry, _ := backend.GetMaxRetry(ctx)
 		queueName, _ := backend.GetQueueName(ctx)

@@ -101,7 +101,7 @@ func TestRedisWorker_ShutdownHonorsContext(t *testing.T) {
 func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 	server := &serverStub{}
 	var events []queue.Event
-	observer := queue.ObserverFunc(func(event queue.Event) { events = append(events, event) })
+	observer := queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) })
 	w := newRedisWorker(server, backend.NewServeMux(), observer)
 
 	w.Register("job:ok", func(context.Context, queue.Job) error { return nil })
@@ -156,7 +156,7 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 func TestRedisWorker_ProcessEventsUnwrapBusEnvelopeJobType(t *testing.T) {
 	server := &serverStub{}
 	var events []queue.Event
-	observer := queue.ObserverFunc(func(event queue.Event) { events = append(events, event) })
+	observer := queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) })
 	w := newRedisWorker(server, backend.NewServeMux(), observer)
 
 	w.Register("bus:job", func(context.Context, queue.Job) error { return nil })
@@ -208,5 +208,50 @@ func TestRedisWorker_NoObserverFastPath(t *testing.T) {
 	}
 	if called != 1 {
 		t.Fatalf("expected handler called once, got %d", called)
+	}
+}
+
+func TestRedisWorker_ObserverSeesDecoratedContext(t *testing.T) {
+	server := &serverStub{}
+	type ctxKey struct{}
+	key := ctxKey{}
+	const want = "jobs"
+
+	var observed []string
+	var handled []string
+	observer := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+		if event.Kind != queue.EventProcessStarted && event.Kind != queue.EventProcessSucceeded {
+			return
+		}
+		value, _ := ctx.Value(key).(string)
+		observed = append(observed, value)
+	})
+	w := newRedisWorker(server, backend.NewServeMux(), observer)
+	w.SetHandlerContextDecorator(func(ctx context.Context) context.Context {
+		return context.WithValue(ctx, key, want)
+	})
+
+	w.Register("job:decorated", func(ctx context.Context, _ queue.Job) error {
+		value, _ := ctx.Value(key).(string)
+		handled = append(handled, value)
+		return nil
+	})
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+	if err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("job:decorated", []byte("ok"))); err != nil {
+		t.Fatalf("process task failed: %v", err)
+	}
+
+	if len(observed) != 2 {
+		t.Fatalf("expected 2 observed events, got %d", len(observed))
+	}
+	for i, got := range observed {
+		if got != want {
+			t.Fatalf("expected observed[%d] = %q, got %q", i, want, got)
+		}
+	}
+	if len(handled) != 1 || handled[0] != want {
+		t.Fatalf("expected handler to see %q, got %#v", want, handled)
 	}
 }

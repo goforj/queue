@@ -26,6 +26,10 @@ type workerBackend interface {
 	Shutdown(ctx context.Context) error
 }
 
+type workerContextDecoratorSetter interface {
+	SetHandlerContextDecorator(func(context.Context) context.Context)
+}
+
 // NewQueueFromDriver builds a high-level *queue.Queue from a driver backend.
 //
 // The helper keeps driver modules off the public low-level constructor path while
@@ -169,6 +173,11 @@ func (a workerBackendAdapter) StartWorkers(ctx context.Context) error {
 	return a.inner.StartWorkers(ctx)
 }
 func (a workerBackendAdapter) Shutdown(ctx context.Context) error { return a.inner.Shutdown(ctx) }
+func (a workerBackendAdapter) SetHandlerContextDecorator(fn func(context.Context) context.Context) {
+	if setter, ok := a.inner.(workerContextDecoratorSetter); ok {
+		setter.SetHandlerContextDecorator(fn)
+	}
+}
 
 func adaptQueueBackend(v any) (any, error) {
 	if v == nil {

@@ -213,6 +213,10 @@ type runtimeWorkerBackend interface {
 	Shutdown(ctx context.Context) error
 }
 
+type runtimeWorkerContextDecoratorSetter interface {
+	SetHandlerContextDecorator(func(context.Context) context.Context)
+}
+
 func (q *queueCommon) Driver() Driver {
 	return q.driver
 }
@@ -400,6 +404,9 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 			return err
 		}
 	}
+	if setter, ok := w.(runtimeWorkerContextDecoratorSetter); ok {
+		setter.SetHandlerContextDecorator(q.common.handlerContextDecorator)
+	}
 	for jobType, handler := range registered {
 		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
 	}
@@ -578,6 +585,12 @@ type driverRuntimeQueueBackendAdapter struct {
 
 type driverWorkerBackendAdapter struct {
 	driverWorkerBackend
+}
+
+func (a driverWorkerBackendAdapter) SetHandlerContextDecorator(fn func(context.Context) context.Context) {
+	if setter, ok := a.driverWorkerBackend.(runtimeWorkerContextDecoratorSetter); ok {
+		setter.SetHandlerContextDecorator(fn)
+	}
 }
 
 func (a driverQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
