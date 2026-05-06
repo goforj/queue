@@ -1137,7 +1137,7 @@ Paused returns paused count for a queue.
 
 ```go
 collector := queue.NewStatsCollector()
-collector.Observe(queue.Event{
+collector.Observe(context.Background(), queue.Event{
 	Kind:   queue.EventQueuePaused,
 	Driver: queue.DriverSync,
 	Queue:  "default",
@@ -1182,7 +1182,7 @@ Queue returns queue counters for a queue name.
 
 ```go
 collector := queue.NewStatsCollector()
-collector.Observe(queue.Event{
+collector.Observe(context.Background(), queue.Event{
 	Kind:   queue.EventEnqueueAccepted,
 	Driver: queue.DriverSync,
 	Queue:  "default",
@@ -1200,7 +1200,7 @@ Queues returns sorted queue names present in the snapshot.
 
 ```go
 collector := queue.NewStatsCollector()
-collector.Observe(queue.Event{
+collector.Observe(context.Background(), queue.Event{
 	Kind:   queue.EventEnqueueAccepted,
 	Driver: queue.DriverSync,
 	Queue:  "critical",
@@ -1287,20 +1287,20 @@ Snapshot returns a copy of collected counters.
 
 ```go
 collector := queue.NewStatsCollector()
-collector.Observe(queue.Event{
+collector.Observe(context.Background(), queue.Event{
 	Kind:   queue.EventEnqueueAccepted,
 	Driver: queue.DriverSync,
 	Queue:  "default",
 	Time:   time.Now(),
 })
-collector.Observe(queue.Event{
+collector.Observe(context.Background(), queue.Event{
 	Kind:   queue.EventProcessStarted,
 	Driver: queue.DriverSync,
 	Queue:  "default",
 	JobKey: "job-1",
 	Time:   time.Now(),
 })
-collector.Observe(queue.Event{
+collector.Observe(context.Background(), queue.Event{
 	Kind:     queue.EventProcessSucceeded,
 	Driver:   queue.DriverSync,
 	Queue:    "default",
@@ -1346,7 +1346,7 @@ Throughput returns rolling throughput windows for a queue name.
 
 ```go
 collector := queue.NewStatsCollector()
-collector.Observe(queue.Event{
+collector.Observe(context.Background(), queue.Event{
 	Kind:   queue.EventProcessSucceeded,
 	Driver: queue.DriverSync,
 	Queue:  "default",
@@ -1653,7 +1653,7 @@ if err != nil {
 WithObserver installs a workflow lifecycle observer.
 
 ```go
-observer := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
+observer := queue.WorkflowObserverFunc(func(_ context.Context, event queue.WorkflowEvent) {
 	_ = event.Kind
 })
 q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))

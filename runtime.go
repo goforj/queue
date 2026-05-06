@@ -117,7 +117,7 @@ func (o *runtimeOptions) apply(opts []Option) {
 //
 // Example: workflow observer
 //
-//	observer := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
+//	observer := queue.WorkflowObserverFunc(func(_ context.Context, event queue.WorkflowEvent) {
 //		_ = event.Kind
 //	})
 //	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))

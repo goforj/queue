@@ -237,7 +237,7 @@ type StatsSnapshot struct {
 // Example: queue counters getter
 //
 //	collector := queue.NewStatsCollector()
-//	collector.Observe(queue.Event{
+//	collector.Observe(context.Background(), queue.Event{
 //		Kind:   queue.EventEnqueueAccepted,
 //		Driver: queue.DriverSync,
 //		Queue:  "default",
@@ -261,7 +261,7 @@ func (s StatsSnapshot) Queue(name string) (QueueCounters, bool) {
 // Example: throughput getter
 //
 //	collector := queue.NewStatsCollector()
-//	collector.Observe(queue.Event{
+//	collector.Observe(context.Background(), queue.Event{
 //		Kind:   queue.EventProcessSucceeded,
 //		Driver: queue.DriverSync,
 //		Queue:  "default",
@@ -285,7 +285,7 @@ func (s StatsSnapshot) Throughput(name string) (QueueThroughput, bool) {
 // Example: list queues
 //
 //	collector := queue.NewStatsCollector()
-//	collector.Observe(queue.Event{
+//	collector.Observe(context.Background(), queue.Event{
 //		Kind:   queue.EventEnqueueAccepted,
 //		Driver: queue.DriverSync,
 //		Queue:  "critical",
@@ -453,7 +453,7 @@ func (s StatsSnapshot) Failed(name string) int64 {
 // Example: paused count getter
 //
 //	collector := queue.NewStatsCollector()
-//	collector.Observe(queue.Event{
+//	collector.Observe(context.Background(), queue.Event{
 //		Kind:   queue.EventQueuePaused,
 //		Driver: queue.DriverSync,
 //		Queue:  "default",
@@ -606,20 +606,20 @@ func (c *StatsCollector) Observe(_ context.Context, event Event) {
 // Example: snapshot print
 //
 //	collector := queue.NewStatsCollector()
-//	collector.Observe(queue.Event{
+//	collector.Observe(context.Background(), queue.Event{
 //		Kind:   queue.EventEnqueueAccepted,
 //		Driver: queue.DriverSync,
 //		Queue:  "default",
 //		Time:   time.Now(),
 //	})
-//	collector.Observe(queue.Event{
+//	collector.Observe(context.Background(), queue.Event{
 //		Kind:   queue.EventProcessStarted,
 //		Driver: queue.DriverSync,
 //		Queue:  "default",
 //		JobKey: "job-1",
 //		Time:   time.Now(),
 //	})
-//	collector.Observe(queue.Event{
+//	collector.Observe(context.Background(), queue.Event{
 //		Kind:     queue.EventProcessSucceeded,
 //		Driver:   queue.DriverSync,
 //		Queue:    "default",
