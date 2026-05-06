@@ -15,6 +15,12 @@ import (
 type EventKind string
 
 const (
+	// EventDispatchStarted indicates workflow dispatch began.
+	EventDispatchStarted EventKind = "dispatch_started"
+	// EventDispatchSucceeded indicates workflow dispatch completed successfully.
+	EventDispatchSucceeded EventKind = "dispatch_succeeded"
+	// EventDispatchFailed indicates workflow dispatch failed before handler execution.
+	EventDispatchFailed EventKind = "dispatch_failed"
 	// EventEnqueueAccepted indicates a job was accepted for enqueue.
 	EventEnqueueAccepted EventKind = "enqueue_accepted"
 	// EventEnqueueRejected indicates enqueue failed.
