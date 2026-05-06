@@ -211,6 +211,19 @@ func WithWorkers(count int) Option {
 // WithHandlerContextDecorator decorates queue handler execution context before
 // process lifecycle events and handler execution run.
 // @group Queue
+//
+// Example: decorate handler context
+//
+//	q, err := queue.New(
+//		queue.Config{Driver: queue.DriverSync},
+//		queue.WithHandlerContextDecorator(func(ctx context.Context) context.Context {
+//			return context.WithValue(ctx, "source", "jobs")
+//		}),
+//	)
+//	if err != nil {
+//		return
+//	}
+//	_ = q
 func WithHandlerContextDecorator(fn func(context.Context) context.Context) Option {
 	return func(o *runtimeOptions) {
 		o.handlerContextDecorator = fn
