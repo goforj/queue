@@ -74,7 +74,7 @@ func (a *Adapter) Register(jobType string, handler bus.Handler) {
 	a.mu.Unlock()
 }
 
-func (a *Adapter) DispatchCtx(ctx context.Context, job bus.Job) (bus.DispatchResult, error) {
+func (a *Adapter) Dispatch(ctx context.Context, job bus.Job) (bus.DispatchResult, error) {
 	if a.cfg.Engine == nil {
 		return bus.DispatchResult{}, ErrEngineRequired
 	}
@@ -269,10 +269,6 @@ func (b *temporalBatchBuilder) Catch(fn func(context.Context, bus.BatchState, er
 }
 func (b *temporalBatchBuilder) Finally(fn func(context.Context, bus.BatchState) error) bus.BatchBuilder {
 	return b
-}
-
-func (a *Adapter) Dispatch(ctx context.Context, job bus.Job) (bus.DispatchResult, error) {
-	return a.DispatchCtx(ctx, job)
 }
 
 func (a *Adapter) StartWorkers(context.Context) error { return nil }

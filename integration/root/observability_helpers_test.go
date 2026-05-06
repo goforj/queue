@@ -57,6 +57,10 @@ func requireScenarioNoErr(t *testing.T, step string, err error) {
 	}
 }
 
+func dispatchErr[T any](result T, err error) error {
+	return err
+}
+
 func requireScenarioTrue(t *testing.T, step string, ok bool, format string, args ...any) {
 	t.Helper()
 	if !ok {

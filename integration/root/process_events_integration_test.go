@@ -188,7 +188,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 
 			requireScenarioNoErr(t, "start_worker", withWorkers(q, fx.workers).StartWorkers(context.Background()))
 
-			requireScenarioNoErr(t, "dispatch_success", q.DispatchCtx(context.Background(),
+			requireScenarioNoErr(t, "dispatch_success", q.Dispatch(
 				queue.NewJob(okType).Payload(scenarioPayload{ID: 1, Name: "events-ok"}).OnQueue(fx.queue).Retry(2),
 			))
 			select {
@@ -197,7 +197,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 				t.Fatal("timed out waiting for success job processing")
 			}
 
-			requireScenarioNoErr(t, "dispatch_fail", q.DispatchCtx(context.Background(),
+			requireScenarioNoErr(t, "dispatch_fail", q.Dispatch(
 				queue.NewJob(failType).Payload(scenarioPayload{ID: 2, Name: "events-fail"}).OnQueue(fx.queue).Retry(0),
 			))
 			waitForObservabilityScenario(t, "failed_job_attempt", 12*time.Second, func() bool {

@@ -11,13 +11,13 @@ import (
 )
 
 func benchmarkDispatchLoop(b *testing.B, ctx context.Context, q QueueRuntime, job queue.Job) {
-	if err := q.DispatchCtx(ctx, job); err != nil {
+	if err := q.WithContext(ctx).Dispatch(job); err != nil {
 		b.Fatalf("warmup dispatch failed: %v", err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := q.DispatchCtx(ctx, job); err != nil {
+		if err := q.WithContext(ctx).Dispatch(job); err != nil {
 			b.Fatalf("dispatch failed: %v", err)
 		}
 	}

@@ -200,7 +200,7 @@ func TestExternalQueueRuntimeRegisterShutdownAndWorkers(t *testing.T) {
 	if err := q.Dispatch(NewJob("job:external").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch wrapper failed: %v", err)
 	}
-	if err := q.DispatchCtx(context.Background(), NewJob("job:external").OnQueue("default")); err != nil {
+	if err := q.Dispatch(NewJob("job:external").OnQueue("default")); err != nil {
 		t.Fatalf("dispatch ctx failed: %v", err)
 	}
 	if err := q.Shutdown(nil); err != nil {
@@ -230,7 +230,7 @@ func TestQueueCommon_PauseResumeStatsUnsupported(t *testing.T) {
 	}
 }
 
-func TestRuntimeBusWrappers_NilRegisterAndDispatchCtx(t *testing.T) {
+func TestRuntimeBusWrappers_NilRegisterAndDispatch(t *testing.T) {
 	inner := &queueBackendRecorder{}
 	nativeBackend := &runtimeBackendStub{}
 	native := &nativeQueueRuntime{

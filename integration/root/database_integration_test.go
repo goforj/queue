@@ -55,7 +55,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg queue.DatabaseCo
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := d.DispatchCtx(context.Background(), queue.NewJob("job:db:basic").Payload([]byte("hello")).OnQueue("default")); err != nil {
+		if err := d.Dispatch(queue.NewJob("job:db:basic").Payload([]byte("hello")).OnQueue("default")); err != nil {
 			t.Fatalf("dispatch failed: %v", err)
 		}
 		select {
@@ -79,7 +79,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg queue.DatabaseCo
 		resetQueueTables(t, cfg)
 		start := time.Now()
 		delay := 300 * time.Millisecond
-		if err := d.DispatchCtx(context.Background(), queue.NewJob("job:db:delay").OnQueue("default").Delay(delay)); err != nil {
+		if err := d.Dispatch(queue.NewJob("job:db:delay").OnQueue("default").Delay(delay)); err != nil {
 			t.Fatalf("dispatch failed: %v", err)
 		}
 		select {
@@ -102,11 +102,11 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg queue.DatabaseCo
 		resetQueueTables(t, cfg)
 		jobType := "job:db:unique"
 		payload := []byte("same")
-		err := d.DispatchCtx(context.Background(), queue.NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
+		err := d.Dispatch(queue.NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond))
 		if err != nil {
 			t.Fatalf("first dispatch failed: %v", err)
 		}
-		err = d.DispatchCtx(context.Background(), queue.NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500*time.Millisecond))
+		err = d.Dispatch(queue.NewJob(jobType).Payload(payload).OnQueue("default").UniqueFor(500 * time.Millisecond))
 		if !errors.Is(err, queue.ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
@@ -127,7 +127,7 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg queue.DatabaseCo
 			t.Fatalf("start failed: %v", err)
 		}
 		resetQueueTables(t, cfg)
-		if err := d.DispatchCtx(context.Background(), queue.NewJob("job:db:retry").OnQueue("default").Retry(2).Backoff(50*time.Millisecond)); err != nil {
+		if err := d.Dispatch(queue.NewJob("job:db:retry").OnQueue("default").Retry(2).Backoff(50 * time.Millisecond)); err != nil {
 			t.Fatalf("dispatch failed: %v", err)
 		}
 		select {

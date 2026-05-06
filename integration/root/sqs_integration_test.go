@@ -102,7 +102,7 @@ func TestSQSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 42}
-	if err := q.DispatchCtx(context.Background(), queue.NewJob("job:sqs:bind").Payload(want).OnQueue(queueName)); err != nil {
+	if err := q.Dispatch(queue.NewJob("job:sqs:bind").Payload(want).OnQueue(queueName)); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -156,7 +156,7 @@ func TestSQSIntegration_OptionBehavior(t *testing.T) {
 		Timeout(timeout).
 		Retry(2).
 		Backoff(backoff)
-	if err := q.DispatchCtx(context.Background(), job); err != nil {
+	if err := q.Dispatch(job); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -196,16 +196,16 @@ func TestSQSIntegration_UniqueDuplicate(t *testing.T) {
 	jobType := "job:sqs:unique"
 	payload := []byte("same")
 	first := queue.NewJob(jobType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
-	if err := q.DispatchCtx(context.Background(), first); err != nil {
+	if err := q.Dispatch(first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
 	second := queue.NewJob(jobType).Payload(payload).OnQueue(queueName).UniqueFor(500 * time.Millisecond)
-	err = q.DispatchCtx(context.Background(), second)
+	err = q.Dispatch(second)
 	if !errors.Is(err, queue.ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
 	time.Sleep(600 * time.Millisecond)
-	if err := q.DispatchCtx(context.Background(), second); err != nil {
+	if err := q.Dispatch(second); err != nil {
 		t.Fatalf("dispatch after ttl failed: %v", err)
 	}
 }

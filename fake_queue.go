@@ -21,10 +21,14 @@ type DispatchRecord struct {
 // FakeQueue is an in-memory queue fake for tests.
 // @group Testing
 type FakeQueue struct {
-	defaultQueue string
+	state *fakeQueueState
+	ctx   context.Context
+}
 
-	mu      sync.RWMutex
-	records []DispatchRecord
+type fakeQueueState struct {
+	defaultQueue string
+	mu           sync.RWMutex
+	records      []DispatchRecord
 }
 
 // NewFake creates a queue fake that records dispatches and provides assertions.
@@ -43,8 +47,10 @@ type FakeQueue struct {
 //	// Output: 1 critical emails:send
 func NewFake() *FakeQueue {
 	return &FakeQueue{
-		defaultQueue: "default",
-		records:      make([]DispatchRecord, 0),
+		state: &fakeQueueState{
+			defaultQueue: "default",
+			records:      make([]DispatchRecord, 0),
+		},
 	}
 }
 
@@ -58,6 +64,17 @@ func NewFake() *FakeQueue {
 //	_ = driver
 func (f *FakeQueue) Driver() Driver { return DriverNull }
 
+// WithContext returns a derived fake queue handle bound to ctx.
+// @group Testing
+func (f *FakeQueue) WithContext(ctx context.Context) queueRuntime {
+	if f == nil {
+		return nil
+	}
+	clone := *f
+	clone.ctx = ctx
+	return &clone
+}
+
 // Dispatch records a typed job payload in-memory using the fake default queue.
 // @group Testing
 //
@@ -67,20 +84,10 @@ func (f *FakeQueue) Driver() Driver { return DriverNull }
 //	err := fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 //	_ = err
 func (f *FakeQueue) Dispatch(job any) error {
-	return f.DispatchCtx(context.Background(), job)
-}
-
-// DispatchCtx submits a typed job payload using the provided context.
-// @group Testing
-//
-// Example: dispatch with context
-//
-//	fake := queue.NewFake()
-//	ctx := context.Background()
-//	err := fake.DispatchCtx(ctx, queue.NewJob("emails:send").OnQueue("default"))
-//	fmt.Println(err == nil)
-//	// Output: true
-func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
+	ctx := context.Background()
+	if f != nil && f.ctx != nil {
+		ctx = f.ctx
+	}
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -92,14 +99,14 @@ func (f *FakeQueue) DispatchCtx(ctx context.Context, job any) error {
 	}
 	queueName := dispatchJob.jobOptions().queueName
 	if queueName == "" {
-		queueName = f.defaultQueue
+		queueName = f.state.defaultQueue
 	}
-	f.mu.Lock()
-	f.records = append(f.records, DispatchRecord{
+	f.state.mu.Lock()
+	f.state.records = append(f.state.records, DispatchRecord{
 		Job:   dispatchJob,
 		Queue: queueName,
 	})
-	f.mu.Unlock()
+	f.state.mu.Unlock()
 	return nil
 }
 
@@ -184,7 +191,7 @@ func (f *FakeQueue) BusDispatch(ctx context.Context, jobType string, payload []b
 	if opts.UniqueFor > 0 {
 		job = job.UniqueFor(opts.UniqueFor)
 	}
-	return f.DispatchCtx(ctx, job)
+	return f.WithContext(ctx).Dispatch(job)
 }
 
 // Reset clears all recorded dispatches.
@@ -201,9 +208,9 @@ func (f *FakeQueue) BusDispatch(ctx context.Context, jobType string, payload []b
 //	// 1
 //	// 0
 func (f *FakeQueue) Reset() {
-	f.mu.Lock()
-	f.records = f.records[:0]
-	f.mu.Unlock()
+	f.state.mu.Lock()
+	f.state.records = f.state.records[:0]
+	f.state.mu.Unlock()
 }
 
 // Records returns a copy of all dispatch records.
@@ -217,10 +224,10 @@ func (f *FakeQueue) Reset() {
 //	fmt.Println(len(records), records[0].Job.Type)
 //	// Output: 1 emails:send
 func (f *FakeQueue) Records() []DispatchRecord {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	out := make([]DispatchRecord, len(f.records))
-	copy(out, f.records)
+	f.state.mu.RLock()
+	defer f.state.mu.RUnlock()
+	out := make([]DispatchRecord, len(f.state.records))
+	copy(out, f.state.records)
 	return out
 }
 
@@ -354,7 +361,7 @@ func (f *FakeQueue) jobFromAny(job any) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("marshal dispatch job: %w", err)
 	}
-	return NewJob(jobType).Payload(payload).OnQueue(f.defaultQueue), nil
+	return NewJob(jobType).Payload(payload).OnQueue(f.state.defaultQueue), nil
 }
 
 func fakeJobTypeFromValue(v any) string {

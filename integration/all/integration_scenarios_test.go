@@ -244,7 +244,7 @@ func TestRedisIntegration_DispatchSmoke(t *testing.T) {
 	queueName := uniqueQueueName("redis-smoke")
 	jobType := "job:smoke"
 	payload := []byte("hello")
-	if err := q.DispatchCtx(context.Background(), NewJob(jobType).Payload(payload).OnQueue(queueName)); err != nil {
+	if err := q.Dispatch(NewJob(jobType).Payload(payload).OnQueue(queueName)); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -273,8 +273,7 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 	maxRetry := 4
 	start := time.Now()
 
-	err = q.DispatchCtx(
-		context.Background(),
+	err = q.Dispatch(
 		NewJob("job:options").
 			Payload([]byte("opts")).
 			OnQueue(queueName).
@@ -312,8 +311,7 @@ func TestRedisIntegration_DefaultTimeoutApplied(t *testing.T) {
 	}
 
 	queueName := uniqueQueueName("redis-default-timeout")
-	err = q.DispatchCtx(
-		context.Background(),
+	err = q.Dispatch(
 		NewJob("job:default-timeout").
 			Payload([]byte("opts")).
 			OnQueue(queueName),
@@ -342,11 +340,11 @@ func TestRedisIntegration_UniqueDuplicateMapsToErrDuplicate(t *testing.T) {
 	jobType := "job:unique"
 	payload := []byte("same")
 	first := NewJob(jobType).Payload(payload).OnQueue(queueName).UniqueFor(5 * time.Second)
-	if err := q.DispatchCtx(context.Background(), first); err != nil {
+	if err := q.Dispatch(first); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
 	second := NewJob(jobType).Payload(payload).OnQueue(queueName).UniqueFor(5 * time.Second)
-	err = q.DispatchCtx(context.Background(), second)
+	err = q.Dispatch(second)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate, got %v", err)
 	}
@@ -362,7 +360,7 @@ func TestRedisIntegration_BackoffUnsupported(t *testing.T) {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
 
-	err = q.DispatchCtx(context.Background(), NewJob("job:backoff-unsupported").Payload([]byte("x")).OnQueue("default").Backoff(1*time.Second))
+	err = q.Dispatch(NewJob("job:backoff-unsupported").Payload([]byte("x")).OnQueue("default").Backoff(1 * time.Second))
 	if !errors.Is(err, ErrBackoffUnsupported) {
 		t.Fatalf("expected ErrBackoffUnsupported, got %v", err)
 	}
@@ -396,7 +394,7 @@ func TestRedisIntegration_BindPayloadThroughWorker(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	want := payload{ID: 99}
-	if err := q.DispatchCtx(context.Background(), NewJob("job:bind").Payload(want).OnQueue("default")); err != nil {
+	if err := q.Dispatch(NewJob("job:bind").Payload(want).OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
@@ -733,7 +731,7 @@ type scenarioFixture struct {
 	supportsRestart                  bool
 	supportsRestartDelayedDurability bool
 	supportsPoisonRetry              bool
-	supportsDispatchCtxCancel        bool
+	supportsContextDispatchCancel    bool
 	supportsDeterministicNoDupes     bool
 	supportsOrderingContract         bool
 	supportsBrokerFault              bool
@@ -765,7 +763,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsRestart:                  true,
 			supportsRestartDelayedDurability: true,
 			supportsPoisonRetry:              false,
-			supportsDispatchCtxCancel:        false,
+			supportsContextDispatchCancel:    false,
 			supportsDeterministicNoDupes:     true,
 			supportsOrderingContract:         true,
 			supportsBrokerFault:              true,
@@ -788,7 +786,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsRestart:                  true,
 			supportsRestartDelayedDurability: true,
 			supportsPoisonRetry:              true,
-			supportsDispatchCtxCancel:        true,
+			supportsContextDispatchCancel:    true,
 			supportsDeterministicNoDupes:     true,
 			supportsOrderingContract:         false,
 			supportsBrokerFault:              false,
@@ -811,7 +809,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsRestart:                  true,
 			supportsRestartDelayedDurability: true,
 			supportsPoisonRetry:              true,
-			supportsDispatchCtxCancel:        true,
+			supportsContextDispatchCancel:    true,
 			supportsDeterministicNoDupes:     true,
 			supportsOrderingContract:         false,
 			supportsBrokerFault:              false,
@@ -836,7 +834,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsRestart:                  false,
 			supportsRestartDelayedDurability: false,
 			supportsPoisonRetry:              true,
-			supportsDispatchCtxCancel:        true,
+			supportsContextDispatchCancel:    true,
 			supportsDeterministicNoDupes:     true,
 			supportsOrderingContract:         false,
 			supportsBrokerFault:              false,
@@ -859,7 +857,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsRestart:                  false,
 			supportsRestartDelayedDurability: false,
 			supportsPoisonRetry:              true,
-			supportsDispatchCtxCancel:        false,
+			supportsContextDispatchCancel:    false,
 			supportsDeterministicNoDupes:     false,
 			supportsOrderingContract:         false,
 			supportsBrokerFault:              false,
@@ -888,7 +886,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsRestart:                  true,
 			supportsRestartDelayedDurability: false,
 			supportsPoisonRetry:              true,
-			supportsDispatchCtxCancel:        true,
+			supportsContextDispatchCancel:    true,
 			supportsDeterministicNoDupes:     true,
 			supportsOrderingContract:         false,
 			supportsBrokerFault:              false,
@@ -911,7 +909,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			supportsRestart:                  true,
 			supportsRestartDelayedDurability: true,
 			supportsPoisonRetry:              true,
-			supportsDispatchCtxCancel:        false,
+			supportsContextDispatchCancel:    false,
 			supportsDeterministicNoDupes:     true,
 			supportsOrderingContract:         false,
 			supportsBrokerFault:              false,
@@ -944,7 +942,7 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 				fx.supportsRestart = true
 				fx.supportsRestartDelayedDurability = true
 				fx.supportsPoisonRetry = true
-				fx.supportsDispatchCtxCancel = true
+				fx.supportsContextDispatchCancel = true
 				fx.supportsDeterministicNoDupes = true
 				fx.supportsOrderingContract = true
 				fx.supportsBrokerFault = false
@@ -1005,7 +1003,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			probe = probe.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "worker_ready_probe_dispatch", q.DispatchCtx(context.Background(), probe))
+		requireScenarioNoErr(t, "worker_ready_probe_dispatch", q.Dispatch(probe))
 
 		waitBudget := 5 * time.Second
 		if fx.name == testenv.BackendNATS {
@@ -1041,7 +1039,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				if fx.supportsBackoff && i%5 == 0 {
 					job = job.Retry(1).Backoff(20 * time.Millisecond)
 				}
-				if err := q.DispatchCtx(context.Background(), job); err != nil {
+				if err := q.Dispatch(job); err != nil {
 					errCh <- fmt.Errorf("dispatch %d failed: %w", i, err)
 					return
 				}
@@ -1114,7 +1112,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.supportsBackoff {
 			poison = poison.Backoff(20 * time.Millisecond)
 		}
-		requireScenarioNoErr(t, "poison_dispatch", q.DispatchCtx(context.Background(), poison))
+		requireScenarioNoErr(t, "poison_dispatch", q.Dispatch(poison))
 
 		poisonWait := 10 * time.Second
 		if fx.name == testenv.BackendMySQL || fx.name == testenv.BackendPostgres || fx.name == testenv.BackendSQLite {
@@ -1145,7 +1143,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		good := NewJob(goodType).
 			Payload(scenarioPayload{ID: 9002, Name: "recovery"}).
 			OnQueue(fx.queueName)
-		requireScenarioNoErr(t, "poison_recovery_dispatch", q.DispatchCtx(context.Background(), good))
+		requireScenarioNoErr(t, "poison_recovery_dispatch", q.Dispatch(good))
 
 		select {
 		case <-recoveryDone:
@@ -1200,7 +1198,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			job = job.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "restart_basic_dispatch_while_worker_down", restartQ.DispatchCtx(context.Background(), job))
+		requireScenarioNoErr(t, "restart_basic_dispatch_while_worker_down", restartQ.Dispatch(job))
 
 		if fx.name == testenv.BackendSQS {
 			restartCfg := withDefaultQueue(
@@ -1264,7 +1262,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.supportsBackoff {
 			job = job.Retry(1).Backoff(250 * time.Millisecond)
 		}
-		requireScenarioNoErr(t, "restart_dispatch", q.DispatchCtx(context.Background(), job))
+		requireScenarioNoErr(t, "restart_dispatch", q.Dispatch(job))
 
 		requireScenarioNoErr(t, "restart_shutdown_first_worker", (w).Shutdown(context.Background()))
 		w = fx.newWorker(t)
@@ -1329,7 +1327,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			badJob = badJob.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "bind_bad_dispatch", q.DispatchCtx(context.Background(), badJob))
+		requireScenarioNoErr(t, "bind_bad_dispatch", q.Dispatch(badJob))
 
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1345,7 +1343,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			emptyJob = emptyJob.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "bind_empty_dispatch", q.DispatchCtx(context.Background(), emptyJob))
+		requireScenarioNoErr(t, "bind_empty_dispatch", q.Dispatch(emptyJob))
 
 		deadline = time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1362,7 +1360,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			goodJob = goodJob.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "bind_good_dispatch", q.DispatchCtx(context.Background(), goodJob))
+		requireScenarioNoErr(t, "bind_good_dispatch", q.Dispatch(goodJob))
 
 		select {
 		case <-goodDone:
@@ -1395,10 +1393,10 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			otherQueue = otherQueue.Timeout(jobTimeout)
 		}
 
-		requireScenarioNoErr(t, "unique_first_dispatch", q.DispatchCtx(context.Background(), first))
-		dupErr := q.DispatchCtx(context.Background(), secondSameQueue)
+		requireScenarioNoErr(t, "unique_first_dispatch", q.Dispatch(first))
+		dupErr := q.Dispatch(secondSameQueue)
 		requireScenarioTrue(t, "unique_duplicate_rejected", errors.Is(dupErr, ErrDuplicate), "expected ErrDuplicate, got %v", dupErr)
-		requireScenarioNoErr(t, "unique_other_queue_dispatch", q.DispatchCtx(context.Background(), otherQueue))
+		requireScenarioNoErr(t, "unique_other_queue_dispatch", q.Dispatch(otherQueue))
 	})
 
 	t.Run("scenario_dispatch_context_cancellation", func(t *testing.T) {
@@ -1429,12 +1427,12 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				job = job.Timeout(jobTimeout)
 			}
-			return q.DispatchCtx(ctx, job)
+			return q.WithContext(ctx).Dispatch(job)
 		}
 
 		requireCancelBehavior := func(t *testing.T, step string, err error) {
 			t.Helper()
-			if !fx.supportsDispatchCtxCancel {
+			if !fx.supportsContextDispatchCancel {
 				return
 			}
 			requireScenarioTrue(
@@ -1469,7 +1467,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				goodJob = goodJob.Timeout(jobTimeout)
 			}
-			requireScenarioNoErr(t, "dispatch_ctx_good_dispatch", q.DispatchCtx(context.Background(), goodJob))
+			requireScenarioNoErr(t, "dispatch_ctx_good_dispatch", q.Dispatch(goodJob))
 			select {
 			case <-goodDone:
 			case <-time.After(10 * time.Second):
@@ -1529,9 +1527,9 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				retryJob = retryJob.Timeout(jobTimeout)
 			}
 		}
-		requireScenarioNoErr(t, "shutdown_delay_dispatch", q.DispatchCtx(context.Background(), delayedJob))
+		requireScenarioNoErr(t, "shutdown_delay_dispatch", q.Dispatch(delayedJob))
 		if retryEnabled {
-			requireScenarioNoErr(t, "shutdown_retry_dispatch", q.DispatchCtx(context.Background(), retryJob))
+			requireScenarioNoErr(t, "shutdown_retry_dispatch", q.Dispatch(retryJob))
 		}
 
 		requireScenarioNoErr(t, "shutdown_during_delay", (w).Shutdown(context.Background()))
@@ -1610,7 +1608,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				job = job.Timeout(jobTimeout)
 			}
-			requireScenarioNoErr(t, "multi_worker_dispatch", q.DispatchCtx(context.Background(), job))
+			requireScenarioNoErr(t, "multi_worker_dispatch", q.Dispatch(job))
 		}
 
 		deadline := time.Now().Add(20 * time.Second)
@@ -1696,8 +1694,8 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			first = first.Timeout(jobTimeout)
 			second = second.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "idempotency_dispatch_first", idempotencyQ.DispatchCtx(context.Background(), first))
-		requireScenarioNoErr(t, "idempotency_dispatch_second", idempotencyQ.DispatchCtx(context.Background(), second))
+		requireScenarioNoErr(t, "idempotency_dispatch_first", idempotencyQ.Dispatch(first))
+		requireScenarioNoErr(t, "idempotency_dispatch_second", idempotencyQ.Dispatch(second))
 
 		select {
 		case <-done:
@@ -1735,7 +1733,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			job = job.Timeout(jobTimeout)
 		}
-		err := qFault.DispatchCtx(badCtx, job)
+		err := qFault.WithContext(badCtx).Dispatch(job)
 		requireScenarioTrue(t, "fault_dispatch_err", err != nil, "expected dispatch error while broker is down")
 
 		requireScenarioNoErr(t, "fault_start_broker", integrationRedis.container.Start(context.Background()))
@@ -1775,7 +1773,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			job = job.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "recover_dispatch", q.DispatchCtx(context.Background(), job))
+		requireScenarioNoErr(t, "recover_dispatch", q.Dispatch(job))
 		select {
 		case <-done:
 		case <-time.After(12 * time.Second):
@@ -1835,7 +1833,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				if fx.forceTimeout {
 					job = job.Timeout(jobTimeout)
 				}
-				requireScenarioNoErr(t, "ordering_fifo_dispatch", q.DispatchCtx(context.Background(), job))
+				requireScenarioNoErr(t, "ordering_fifo_dispatch", q.Dispatch(job))
 			}
 
 			got := collectOrderedIDs(t, orderCh, count, orderingCollectTimeout(15*time.Second))
@@ -1869,7 +1867,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				delayed = delayed.Timeout(jobTimeout)
 			}
-			requireScenarioNoErr(t, "ordering_delaymix_dispatch_delayed", q.DispatchCtx(context.Background(), delayed))
+			requireScenarioNoErr(t, "ordering_delaymix_dispatch_delayed", q.Dispatch(delayed))
 
 			for i := 1; i < count; i++ {
 				job := NewJob(jobType).
@@ -1878,7 +1876,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				if fx.forceTimeout {
 					job = job.Timeout(jobTimeout)
 				}
-				requireScenarioNoErr(t, "ordering_delaymix_dispatch_immediate", q.DispatchCtx(context.Background(), job))
+				requireScenarioNoErr(t, "ordering_delaymix_dispatch_immediate", q.Dispatch(job))
 			}
 
 			got := collectOrderedIDs(t, orderCh, count, orderingCollectTimeout(20*time.Second))
@@ -1929,7 +1927,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				if fx.forceTimeout {
 					job = job.Timeout(jobTimeout)
 				}
-				requireScenarioNoErr(t, "ordering_multi_dispatch", q.DispatchCtx(context.Background(), job))
+				requireScenarioNoErr(t, "ordering_multi_dispatch", q.Dispatch(job))
 			}
 
 			got := collectOrderedIDs(t, orderCh, count, orderingCollectTimeout(20*time.Second))
@@ -1996,7 +1994,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				first = first.Timeout(jobTimeout)
 			}
-			requireScenarioNoErr(t, "ordering_retry_dispatch_first", q.DispatchCtx(context.Background(), first))
+			requireScenarioNoErr(t, "ordering_retry_dispatch_first", q.Dispatch(first))
 
 			for i := 1; i < count; i++ {
 				job := NewJob(jobType).
@@ -2005,7 +2003,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				if fx.forceTimeout {
 					job = job.Timeout(jobTimeout)
 				}
-				requireScenarioNoErr(t, "ordering_retry_dispatch_followup", q.DispatchCtx(context.Background(), job))
+				requireScenarioNoErr(t, "ordering_retry_dispatch_followup", q.Dispatch(job))
 			}
 
 			got := collectOrderedIDs(t, successCh, count, orderingCollectTimeout(25*time.Second))
@@ -2054,7 +2052,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				job = job.Timeout(jobTimeout)
 			}
-			requireScenarioNoErr(t, "timing_delay_dispatch", q.DispatchCtx(context.Background(), job))
+			requireScenarioNoErr(t, "timing_delay_dispatch", q.Dispatch(job))
 
 			var startedAt time.Time
 			select {
@@ -2106,7 +2104,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				job = job.Timeout(jobTimeout)
 			}
-			requireScenarioNoErr(t, "timing_retry_dispatch", q.DispatchCtx(context.Background(), job))
+			requireScenarioNoErr(t, "timing_retry_dispatch", q.Dispatch(job))
 
 			var firstAt, secondAt time.Time
 			select {
@@ -2153,7 +2151,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if fx.forceTimeout {
 				job = job.Timeout(jobTimeout)
 			}
-			requireScenarioNoErr(t, "backpressure_dispatch", q.DispatchCtx(context.Background(), job))
+			requireScenarioNoErr(t, "backpressure_dispatch", q.Dispatch(job))
 		}
 
 		probeType := "job:scenario:backpressure-probe:" + fx.name
@@ -2195,7 +2193,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			probe = probe.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "backpressure_probe_dispatch", q.DispatchCtx(context.Background(), probe))
+		requireScenarioNoErr(t, "backpressure_probe_dispatch", q.Dispatch(probe))
 
 		select {
 		case <-probeDone:
@@ -2238,7 +2236,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		if fx.forceTimeout {
 			job = job.Timeout(jobTimeout)
 		}
-		requireScenarioNoErr(t, "payload_large_dispatch", q.DispatchCtx(context.Background(), job))
+		requireScenarioNoErr(t, "payload_large_dispatch", q.Dispatch(job))
 		select {
 		case <-done:
 		case <-time.After(15 * time.Second):
@@ -2289,7 +2287,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			if r.Intn(4) == 0 {
 				job = job.UniqueFor(time.Duration(1+r.Intn(2)) * time.Second)
 			}
-			if err := q.DispatchCtx(context.Background(), job); err != nil {
+			if err := q.Dispatch(job); err != nil {
 				t.Fatalf("[fuzz _dispatch_case_%d] dispatch failed: %v", i, err)
 			}
 			expected++
@@ -2359,7 +2357,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 					if id%10 == 0 {
 						job = job.UniqueFor(1 * time.Second)
 					}
-					if err := q.DispatchCtx(context.Background(), job); err != nil {
+					if err := q.Dispatch(job); err != nil {
 						errCh <- err
 						return
 					}

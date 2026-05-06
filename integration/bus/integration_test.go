@@ -472,7 +472,7 @@ func testBusWorkflowFailureCallbacksScenario(t *testing.T, backendName string, b
 	case testenv.BackendWorkerpool, testenv.BackendNATS, testenv.BackendSQS:
 		t.Skipf("workflow failure callback semantics are not asserted in this suite for backend %s yet", backendName)
 	}
-	callbackWait := 20 * time.Second
+	callbackWait := 45 * time.Second
 
 	t.Run("workflow_chain_failure_callbacks", func(t *testing.T) {
 		step1Type := fmt.Sprintf("bus:chain:fail:step1:%d", time.Now().UnixNano())

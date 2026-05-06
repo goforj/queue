@@ -14,7 +14,7 @@ import (
 
 func TestReadmeManualSnippetsCompile(t *testing.T) {
 	// Compile-check only. The helpers mirror curated manual README snippets that
-	// have drifted before (Dispatch/DispatchCtx and handler signatures).
+	// have drifted before (Dispatch/WithContext(ctx).Dispatch and handler signatures).
 	_ = []any{
 		compileQuickStartQueueSnippet,
 		compileQuickStartWorkflowSnippet,

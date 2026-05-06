@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestQueueErrorContract_DispatchCtxCancellation(t *testing.T) {
+func TestQueueErrorContract_DispatchCancellation(t *testing.T) {
 	newSaturatedQueue := func(t *testing.T) (*Queue, chan struct{}) {
 		t.Helper()
 		backend := newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{
@@ -58,7 +58,7 @@ func TestQueueErrorContract_DispatchCtxCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, err := q.DispatchCtx(ctx, NewJob("job:error-contract:block").OnQueue("default"))
+		_, err := q.WithContext(ctx).Dispatch(NewJob("job:error-contract:block").OnQueue("default"))
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -70,7 +70,7 @@ func TestQueueErrorContract_DispatchCtxCancellation(t *testing.T) {
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-1*time.Second))
 		defer cancel()
 
-		_, err := q.DispatchCtx(ctx, NewJob("job:error-contract:block").OnQueue("default"))
+		_, err := q.WithContext(ctx).Dispatch(NewJob("job:error-contract:block").OnQueue("default"))
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 		}
@@ -163,7 +163,7 @@ func TestQueueErrorContract_RuntimeDispatchInputValidation(t *testing.T) {
 	}
 
 	t.Run("nil_job", func(t *testing.T) {
-		err := r.DispatchCtx(context.Background(), nil)
+		err := r.Dispatch(nil)
 		if err == nil {
 			t.Fatal("expected nil job error")
 		}

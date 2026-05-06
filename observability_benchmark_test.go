@@ -54,7 +54,7 @@ func BenchmarkEnqueueSync_NoObserver(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := q.DispatchCtx(context.Background(), job); err != nil {
+		if err := q.Dispatch(job); err != nil {
 			b.Fatalf("dispatch failed: %v", err)
 		}
 	}
@@ -79,7 +79,7 @@ func BenchmarkEnqueueSync_WithObserver(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := q.DispatchCtx(context.Background(), job); err != nil {
+		if err := q.Dispatch(job); err != nil {
 			b.Fatalf("dispatch failed: %v", err)
 		}
 	}

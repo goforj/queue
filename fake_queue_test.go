@@ -35,7 +35,7 @@ func TestFakeQueue_DispatchStructInfersJobType(t *testing.T) {
 	}
 
 	fake := NewFake()
-	if err := fake.DispatchCtx(context.Background(), EmailPayload{ID: 7}); err != nil {
+	if err := fake.Dispatch(EmailPayload{ID: 7}); err != nil {
 		t.Fatalf("dispatch struct failed: %v", err)
 	}
 
@@ -56,7 +56,7 @@ func TestFakeQueue_ContextCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := fake.DispatchCtx(ctx, NewJob("emails:send").Payload([]byte("{}")).OnQueue("default")); err == nil {
+	if err := fake.WithContext(ctx).Dispatch(NewJob("emails:send").Payload([]byte("{}")).OnQueue("default")); err == nil {
 		t.Fatal("expected canceled context error")
 	}
 	fake.AssertNothingDispatched(t)

@@ -84,27 +84,26 @@ func main() {
 	_ = q.StartWorkers(ctx)
 	defer q.Shutdown(ctx)
 
-	_, _ = q.DispatchCtx(
-		ctx,
+	_, _ = q.WithContext(ctx).Dispatch(
 		queue.NewJob("emails:send").
 			Payload(map[string]any{"to": "user@example.com"}).
 			OnQueue("default").
-			Timeout(2*time.Second),
+			Timeout(2 * time.Second),
 	)
 
 	dup := queue.NewJob("emails:send").
 		Payload(map[string]any{"to": "dupe@example.com"}).
 		OnQueue("default").
 		UniqueFor(5 * time.Second)
-	_, _ = q.DispatchCtx(ctx, dup)
-	_, _ = q.DispatchCtx(ctx, dup)
+	_, _ = q.WithContext(ctx).Dispatch(dup)
+	_, _ = q.WithContext(ctx).Dispatch(dup)
 
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	_, _ = q.DispatchCtx(cancelCtx, queue.NewJob("emails:send").OnQueue("default"))
+	_, _ = q.WithContext(cancelCtx).Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 
-	_, _ = q.DispatchCtx(ctx, queue.NewJob("emails:flaky").OnQueue("default").Retry(1))
-	_, _ = q.DispatchCtx(ctx, queue.NewJob("emails:fail").OnQueue("default").Retry(0))
+	_, _ = q.WithContext(ctx).Dispatch(queue.NewJob("emails:flaky").OnQueue("default").Retry(1))
+	_, _ = q.WithContext(ctx).Dispatch(queue.NewJob("emails:fail").OnQueue("default").Retry(0))
 
 	_, _ = q.Chain(
 		queue.NewJob("emails:send").Payload(map[string]any{"to": "chain1@example.com"}).OnQueue("default"),

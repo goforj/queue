@@ -86,7 +86,7 @@ func TestQueueAdminIntegration_AllBackends(t *testing.T) {
 				}
 			}
 
-			if _, err := q.DispatchCtx(context.Background(), queue.NewJob(jobType).Payload([]byte(`"admin"`)).OnQueue(queueName)); err != nil {
+			if _, err := q.Dispatch(queue.NewJob(jobType).Payload([]byte(`"admin"`)).OnQueue(queueName)); err != nil {
 				t.Fatalf("dispatch admin test job failed: %v", err)
 			}
 

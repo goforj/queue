@@ -46,8 +46,8 @@ func NewQueueRuntime(cfg any) (Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, ok := raw.(Runtime)
-	if !ok {
+	r := wrapRuntime(raw)
+	if r == nil {
 		return nil, fmt.Errorf("unsupported runtime type %T", raw)
 	}
 	return r, nil

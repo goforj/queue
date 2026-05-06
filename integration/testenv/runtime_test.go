@@ -9,24 +9,24 @@ import (
 
 type runtimeNoWorkersStub struct{}
 
-func (runtimeNoWorkersStub) Driver() queue.Driver                   { return queue.DriverSync }
-func (runtimeNoWorkersStub) Dispatch(any) error                     { return nil }
-func (runtimeNoWorkersStub) DispatchCtx(context.Context, any) error { return nil }
-func (runtimeNoWorkersStub) Register(string, queue.Handler)         {}
-func (runtimeNoWorkersStub) StartWorkers(context.Context) error     { return nil }
-func (runtimeNoWorkersStub) Shutdown(context.Context) error         { return nil }
+func (runtimeNoWorkersStub) Driver() queue.Driver                { return queue.DriverSync }
+func (runtimeNoWorkersStub) Dispatch(any) error                  { return nil }
+func (runtimeNoWorkersStub) WithContext(context.Context) Runtime { return runtimeNoWorkersStub{} }
+func (runtimeNoWorkersStub) Register(string, queue.Handler)      {}
+func (runtimeNoWorkersStub) StartWorkers(context.Context) error  { return nil }
+func (runtimeNoWorkersStub) Shutdown(context.Context) error      { return nil }
 
 type runtimeWorkersStub struct {
 	next  Runtime
 	calls []int
 }
 
-func (r *runtimeWorkersStub) Driver() queue.Driver                   { return queue.DriverSync }
-func (r *runtimeWorkersStub) Dispatch(any) error                     { return nil }
-func (r *runtimeWorkersStub) DispatchCtx(context.Context, any) error { return nil }
-func (r *runtimeWorkersStub) Register(string, queue.Handler)         {}
-func (r *runtimeWorkersStub) StartWorkers(context.Context) error     { return nil }
-func (r *runtimeWorkersStub) Shutdown(context.Context) error         { return nil }
+func (r *runtimeWorkersStub) Driver() queue.Driver                { return queue.DriverSync }
+func (r *runtimeWorkersStub) Dispatch(any) error                  { return nil }
+func (r *runtimeWorkersStub) WithContext(context.Context) Runtime { return r }
+func (r *runtimeWorkersStub) Register(string, queue.Handler)      {}
+func (r *runtimeWorkersStub) StartWorkers(context.Context) error  { return nil }
+func (r *runtimeWorkersStub) Shutdown(context.Context) error      { return nil }
 func (r *runtimeWorkersStub) Workers(n int) Runtime {
 	r.calls = append(r.calls, n)
 	if r.next != nil {

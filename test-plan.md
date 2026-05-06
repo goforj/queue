@@ -216,12 +216,12 @@ Per driver, explicitly state one of:
 - Start/shutdown race stress (rapid worker joins/leaves)
 - Repeated startup/shutdown cycles on same queue under light load (resource leak smoke)
 
-## E. Dispatch Semantics (`Dispatch` / `DispatchCtx`)
+## E. Dispatch Semantics (`Dispatch` / `WithContext(ctx).Dispatch`)
 
 ### V1 guarantees to document and enforce
 
 - `Dispatch(job)` uses default background context behavior
-- `DispatchCtx(ctx, job)` obeys cancellation/deadline for enqueue operation
+- `WithContext(ctx).Dispatch(job)` obeys cancellation/deadline for enqueue operation
 - Context cancellation should not enqueue the job if cancellation occurs before acceptance (within documented backend tolerance)
 
 ### Covered today (good)
@@ -530,11 +530,11 @@ Track flake rates by backend/scenario.
 - Acceptance:
   - invalid config errors are asserted (not just non-nil)
   - unsupported capability operations have stable/documented error behavior
-  - `DispatchCtx` cancellation/deadline errors are asserted by class/message contract
+  - context-bound dispatch cancellation/deadline errors are asserted by class/message contract
   - workflow not-found / invalid-state errors are covered
 - Notes:
   - avoid overfitting exact wrapped error strings unless intentionally part of API
-  - Implemented across root + integration suites: root-level `error_contract_test.go` covers high-level `Queue.DispatchCtx` cancellation/deadline classes (deterministic saturation), unsupported capability errors for `Queue.Pause`, `Queue.Resume`, `Queue.Stats`, `ErrWorkflowNotFound` wrappers for `FindChain`/`FindBatch`, constructor guidance errors (unsupported/moved drivers), runtime dispatch input validation (`nil` job / uninferable job type), high-level dispatch validation (`nil` receiver / invalid job), and workflow builder invalid-state errors; shared integration scenarios validate backend `DispatchCtx` cancellation classes (`scenario_dispatch_context_cancellation`), and root/integration-root contract suites assert stable error-shape semantics for missing job type / missing handler and unsupported `Snapshot(...)` fallback behavior
+  - Implemented across root + integration suites: root-level `error_contract_test.go` covers high-level `Queue.WithContext(ctx).Dispatch(...)` cancellation/deadline classes (deterministic saturation), unsupported capability errors for `Queue.Pause`, `Queue.Resume`, `Queue.Stats`, `ErrWorkflowNotFound` wrappers for `FindChain`/`FindBatch`, constructor guidance errors (unsupported/moved drivers), runtime dispatch input validation (`nil` job / uninferable job type), high-level dispatch validation (`nil` receiver / invalid job), and workflow builder invalid-state errors; shared integration scenarios validate backend context-bound dispatch cancellation classes (`scenario_dispatch_context_cancellation`), and root/integration-root contract suites assert stable error-shape semantics for missing job type / missing handler and unsupported `Snapshot(...)` fallback behavior
 
 Add assertions for user-visible errors:
 

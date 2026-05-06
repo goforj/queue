@@ -42,7 +42,7 @@ Primary objectives:
 
 - `StartWorkers(ctx context.Context) error`
 - `Dispatch(job any) error`
-- `DispatchCtx(ctx context.Context, job any) error`
+- `WithContext(ctx).Dispatch(job)` for context-aware dispatch
 - `Register(jobType string, handler Handler)`
 - `Shutdown(ctx context.Context) error`
 
@@ -71,7 +71,7 @@ Worker execution settings are configured from `Queue` via `Workers(n).StartWorke
 
 ## Job API (fluent value object)
 
-`Job` is immutable-ish via value receivers and explicit execution boundary (`Queue.DispatchCtx`):
+`Job` is immutable-ish via value receivers and explicit execution boundary (`Queue.WithContext(ctx).Dispatch(...)`):
 
 - `NewJob(jobType string) Job`
 - `Payload(any) Job`

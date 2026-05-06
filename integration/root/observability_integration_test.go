@@ -163,7 +163,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				okJob := queue.NewJob(okType).
 					Payload(scenarioPayload{ID: 1, Name: "obs-ok"}).
 					OnQueue(fx.queue)
-				requireScenarioNoErr(t, "dispatch_success", q.DispatchCtx(context.Background(), okJob))
+				requireScenarioNoErr(t, "dispatch_success", q.Dispatch(okJob))
 				select {
 				case <-okDone:
 				case <-time.After(12 * time.Second):
@@ -176,7 +176,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 					Payload(scenarioPayload{ID: 2, Name: "obs-fail"}).
 					OnQueue(fx.queue).
 					Retry(0)
-				requireScenarioNoErr(t, "dispatch_retry_archive", q.DispatchCtx(context.Background(), failJob))
+				requireScenarioNoErr(t, "dispatch_retry_archive", q.Dispatch(failJob))
 				waitForObservabilityScenario(t, "retry_archive_attempts", 12*time.Second, func() bool {
 					return failedCalls.Load() >= 1
 				})
@@ -189,7 +189,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 						OnQueue(fx.queue).
 						Retry(1).
 						Backoff(20 * time.Millisecond)
-					requireScenarioNoErr(t, "dispatch_retried_job", q.DispatchCtx(context.Background(), retryJob))
+					requireScenarioNoErr(t, "dispatch_retried_job", q.Dispatch(retryJob))
 					waitForObservabilityScenario(t, "retried_job_attempts", 12*time.Second, func() bool {
 						return failedCalls.Load() >= 3
 					})
@@ -226,7 +226,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 
 					// Redis native stats are authoritative for queue depth; allow this
 					// fallback when observer-driven pending lags under CI load.
-					nativeSnapshot, err := queue.Snapshot(context.Background(), q, collector)
+					nativeSnapshot, err := testenv.Snapshot(context.Background(), q, collector)
 					if err != nil {
 						return false
 					}
@@ -249,7 +249,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			})
 
 			t.Run("scenario_assert_snapshotqueue", func(t *testing.T) {
-				snapFromQueue, err := queue.Snapshot(context.Background(), q, collector)
+				snapFromQueue, err := testenv.Snapshot(context.Background(), q, collector)
 				requireScenarioNoErr(t, "snapshot_queue", err)
 				nativeCounters, queueOK := snapFromQueue.Queue(fx.queue)
 				requireScenarioTrue(t, "snapshot_queue_present", queueOK, "queue=%q not found in snapshot", fx.queue)
@@ -260,7 +260,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 						requireScenarioTrue(t, "snapshot_native_redis_failed", nativeCounters.Failed >= 1, "failed=%d expected>=1", nativeCounters.Failed)
 					case testenv.BackendMySQL, testenv.BackendPostgres, testenv.BackendSQLite:
 						waitForObservabilityScenario(t, "snapshot_native_db_drained", 8*time.Second, func() bool {
-							latest, latestErr := queue.Snapshot(context.Background(), q, collector)
+							latest, latestErr := testenv.Snapshot(context.Background(), q, collector)
 							if latestErr != nil {
 								return false
 							}
@@ -291,10 +291,10 @@ func TestObservabilityIntegration_RedisPauseResume(t *testing.T) {
 	defer q.Shutdown(context.Background())
 
 	queueName := uniqueQueueName("obs-pause")
-	if err := queue.Pause(context.Background(), q, queueName); err != nil {
+	if err := testenv.Pause(context.Background(), q, queueName); err != nil {
 		t.Fatalf("pause queue failed: %v", err)
 	}
-	if err := queue.Resume(context.Background(), q, queueName); err != nil {
+	if err := testenv.Resume(context.Background(), q, queueName); err != nil {
 		t.Fatalf("resume queue failed: %v", err)
 	}
 
@@ -309,7 +309,7 @@ func TestObservabilityIntegration_RedisPauseResume(t *testing.T) {
 }
 
 func TestSnapshot_NoProviderNoCollector(t *testing.T) {
-	_, snapshotErr := queue.Snapshot(context.Background(), noStatsQueue{}, nil)
+	_, snapshotErr := testenv.Snapshot(context.Background(), noStatsQueue{}, nil)
 	if snapshotErr == nil {
 		t.Fatal("expected snapshot error when provider and collector are unavailable")
 	}
@@ -423,8 +423,8 @@ func TestObservabilityIntegration_PauseResumeSupport_AllBackends(t *testing.T) {
 			defer q.Shutdown(context.Background())
 
 			queueName := uniqueQueueName("obs-pause-" + fx.name)
-			pauseErr := queue.Pause(context.Background(), q, queueName)
-			resumeErr := queue.Resume(context.Background(), q, queueName)
+			pauseErr := testenv.Pause(context.Background(), q, queueName)
+			resumeErr := testenv.Resume(context.Background(), q, queueName)
 
 			if fx.supports {
 				requireScenarioNoErr(t, "pause_supported", pauseErr)
@@ -456,12 +456,10 @@ func waitForObservabilityScenario(t *testing.T, scenario string, timeout time.Du
 
 type noStatsQueue struct{}
 
-func (noStatsQueue) Driver() queue.Driver               { return queue.DriverSync }
-func (noStatsQueue) StartWorkers(context.Context) error { return nil }
-func (noStatsQueue) Workers(int) QueueRuntime           { return noStatsQueue{} }
-func (noStatsQueue) Shutdown(context.Context) error     { return nil }
-func (noStatsQueue) Register(string, queue.Handler)     {}
-func (noStatsQueue) Dispatch(any) error                 { return nil }
-func (noStatsQueue) DispatchCtx(context.Context, any) error {
-	return nil
-}
+func (noStatsQueue) Driver() queue.Driver                     { return queue.DriverSync }
+func (noStatsQueue) StartWorkers(context.Context) error       { return nil }
+func (noStatsQueue) Workers(int) QueueRuntime                 { return noStatsQueue{} }
+func (noStatsQueue) Shutdown(context.Context) error           { return nil }
+func (noStatsQueue) Register(string, queue.Handler)           {}
+func (noStatsQueue) Dispatch(any) error                       { return nil }
+func (noStatsQueue) WithContext(context.Context) QueueRuntime { return noStatsQueue{} }

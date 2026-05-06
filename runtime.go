@@ -211,8 +211,9 @@ func WithWorkers(count int) Option {
 // It composes the queue runtime with the internal orchestration engine.
 // @group Queue
 type Queue struct {
-	q queueRuntime
-	b bus.Bus
+	q   queueRuntime
+	b   bus.Bus
+	ctx context.Context
 }
 
 func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
@@ -341,7 +342,18 @@ func (r *Queue) WithWorkers(count int) *Queue {
 	return r
 }
 
-// Dispatch enqueues a high-level job using context.Background.
+// WithContext returns a derived queue handle bound to ctx.
+// @group Queue
+func (r *Queue) WithContext(ctx context.Context) *Queue {
+	if r == nil {
+		return nil
+	}
+	clone := *r
+	clone.ctx = ctx
+	return &clone
+}
+
+// Dispatch enqueues a high-level job using the queue's bound context.
 // @group Queue
 //
 // Example: dispatch
@@ -354,18 +366,16 @@ func (r *Queue) WithWorkers(count int) *Queue {
 //	job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
 //	_, _ = q.Dispatch(job)
 func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
-	return r.DispatchCtx(context.Background(), job)
-}
-
-// DispatchCtx enqueues a high-level job using the provided context.
-// @group Queue
-func (r *Queue) DispatchCtx(ctx context.Context, job Job) (DispatchResult, error) {
 	if r == nil {
 		return DispatchResult{}, fmt.Errorf("runtime is nil")
 	}
 	bj, err := toBusJob(job)
 	if err != nil {
 		return DispatchResult{}, err
+	}
+	ctx := r.ctx
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	return r.b.Dispatch(ctx, bj)
 }

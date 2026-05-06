@@ -30,9 +30,9 @@ func main() {
 		)
 	})
 	observer.Observe(context.Background(), queue.Event{
-		Kind:    queue.EventProcessSucceeded,
-		Driver:  queue.DriverSync,
-		Queue:   "default",
+		Kind:     queue.EventProcessSucceeded,
+		Driver:   queue.DriverSync,
+		Queue:    "default",
 		JobType: "emails:send",
 	})
 }

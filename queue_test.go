@@ -128,7 +128,7 @@ func TestQueueRuntime_StartWorkersSharesInProcessRuntime(t *testing.T) {
 	if err := q.Workers(1).StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers failed: %v", err)
 	}
-	if err := q.DispatchCtx(context.Background(), NewJob("job:shared").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
+	if err := q.Dispatch(NewJob("job:shared").Payload([]byte(`{}`)).OnQueue("default")); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 	if !handled {

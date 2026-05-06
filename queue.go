@@ -16,13 +16,13 @@ type queueRuntime interface {
 	// @group Driver Integration
 	Driver() Driver
 
+	// WithContext returns a derived queue runtime handle bound to ctx.
+	// @group Driver Integration
+	WithContext(ctx context.Context) queueRuntime
+
 	// Dispatch submits a typed job payload using the default queue.
 	// @group Driver Integration
 	Dispatch(job any) error
-
-	// DispatchCtx submits a typed job payload using the provided context.
-	// @group Driver Integration
-	DispatchCtx(ctx context.Context, job any) error
 
 	// Register associates a handler with a job type.
 	// @group Driver Integration
@@ -179,6 +179,7 @@ type queueCommon struct {
 	inner  queueBackend
 	cfg    Config
 	driver Driver
+	ctx    context.Context
 }
 
 type nativeQueueRuntime struct {
@@ -212,28 +213,50 @@ func (q *queueCommon) Driver() Driver {
 	return q.driver
 }
 
-func (q *queueCommon) Dispatch(job any) error {
-	return q.DispatchCtx(context.Background(), job)
+func (q *queueCommon) context() context.Context {
+	if q == nil || q.ctx == nil {
+		return context.Background()
+	}
+	return q.ctx
 }
 
-func (q *queueCommon) DispatchCtx(ctx context.Context, job any) error {
+func (q *queueCommon) WithContext(ctx context.Context) *queueCommon {
+	if q == nil {
+		return nil
+	}
+	clone := *q
+	clone.ctx = ctx
+	return &clone
+}
+
+func (q *queueCommon) Dispatch(job any) error {
 	dispatchJob, err := q.jobFromAny(job)
 	if err != nil {
 		return err
 	}
-	return q.inner.Dispatch(ctx, dispatchJob)
+	return q.inner.Dispatch(q.context(), dispatchJob)
 }
 
 func (q *nativeQueueRuntime) Driver() Driver         { return q.common.Driver() }
 func (q *nativeQueueRuntime) Dispatch(job any) error { return q.common.Dispatch(job) }
-func (q *nativeQueueRuntime) DispatchCtx(ctx context.Context, job any) error {
-	return q.common.DispatchCtx(ctx, job)
+func (q *nativeQueueRuntime) WithContext(ctx context.Context) queueRuntime {
+	if q == nil {
+		return nil
+	}
+	clone := *q
+	clone.common = q.common.WithContext(ctx)
+	return &clone
 }
 
 func (q *externalQueueRuntime) Driver() Driver         { return q.common.Driver() }
 func (q *externalQueueRuntime) Dispatch(job any) error { return q.common.Dispatch(job) }
-func (q *externalQueueRuntime) DispatchCtx(ctx context.Context, job any) error {
-	return q.common.DispatchCtx(ctx, job)
+func (q *externalQueueRuntime) WithContext(ctx context.Context) queueRuntime {
+	if q == nil {
+		return nil
+	}
+	clone := *q
+	clone.common = q.common.WithContext(ctx)
+	return &clone
 }
 
 func (q *nativeQueueRuntime) BusRegister(jobType string, handler busruntime.Handler) {
