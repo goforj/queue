@@ -869,15 +869,20 @@ func (q *observedQueue) Register(jobType string, handler Handler) {
 		runtime.Register(jobType, handler)
 		return
 	}
-	runtime.Register(jobType, wrapObservedHandler(q.observer, q.driver, "", jobType, handler))
+	runtime.Register(jobType, wrapObservedHandler(q.observer, q.driver, "", jobType, nil, handler))
 }
 
 func (q *observedQueue) Driver() Driver {
 	return q.driver
 }
 
-func wrapObservedHandler(observer Observer, driver Driver, queueName string, jobType string, handler Handler) Handler {
+func wrapObservedHandler(observer Observer, driver Driver, queueName string, jobType string, ctxDecorator func(context.Context) context.Context, handler Handler) Handler {
 	return func(ctx context.Context, job Job) error {
+		if ctxDecorator != nil {
+			if decorated := ctxDecorator(ctx); decorated != nil {
+				ctx = decorated
+			}
+		}
 		opts := job.jobOptions()
 		effectiveQueue := queueName
 		if effectiveQueue == "" {

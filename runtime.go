@@ -101,6 +101,7 @@ type Option func(*runtimeOptions)
 type runtimeOptions struct {
 	busOpts []bus.Option
 	workers int
+	handlerContextDecorator func(context.Context) context.Context
 }
 
 func (o *runtimeOptions) apply(opts []Option) {
@@ -207,6 +208,15 @@ func WithWorkers(count int) Option {
 	}
 }
 
+// WithHandlerContextDecorator decorates queue handler execution context before
+// process lifecycle events and handler execution run.
+// @group Queue
+func WithHandlerContextDecorator(fn func(context.Context) context.Context) Option {
+	return func(o *runtimeOptions) {
+		o.handlerContextDecorator = fn
+	}
+}
+
 // Queue is the high-level user-facing queue API.
 // It composes the queue runtime with the internal orchestration engine.
 // @group Queue
@@ -229,6 +239,9 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	ro.apply(opts)
 	if ro.workers > 0 && q != nil {
 		q = q.Workers(ro.workers)
+	}
+	if ro.handlerContextDecorator != nil && q != nil {
+		q.setHandlerContextDecorator(ro.handlerContextDecorator)
 	}
 	b, err := bus.New(q, ro.busOpts...)
 	if err != nil {

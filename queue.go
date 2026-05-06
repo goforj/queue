@@ -43,6 +43,9 @@ type queueRuntime interface {
 	// Ready checks backend readiness for dispatch/worker operation.
 	// @group Driver Integration
 	Ready(ctx context.Context) error
+
+	// setHandlerContextDecorator decorates handler execution context at registration time.
+	setHandlerContextDecorator(func(context.Context) context.Context)
 }
 
 // WorkerpoolConfig configures the in-memory workerpool q.
@@ -180,6 +183,7 @@ type queueCommon struct {
 	cfg    Config
 	driver Driver
 	ctx    context.Context
+	handlerContextDecorator func(context.Context) context.Context
 }
 
 type nativeQueueRuntime struct {
@@ -229,6 +233,13 @@ func (q *queueCommon) WithContext(ctx context.Context) *queueCommon {
 	return &clone
 }
 
+func (q *queueCommon) setHandlerContextDecorator(fn func(context.Context) context.Context) {
+	if q == nil {
+		return
+	}
+	q.handlerContextDecorator = fn
+}
+
 func (q *queueCommon) Dispatch(job any) error {
 	dispatchJob, err := q.jobFromAny(job)
 	if err != nil {
@@ -257,6 +268,20 @@ func (q *externalQueueRuntime) WithContext(ctx context.Context) queueRuntime {
 	clone := *q
 	clone.common = q.common.WithContext(ctx)
 	return &clone
+}
+
+func (q *nativeQueueRuntime) setHandlerContextDecorator(fn func(context.Context) context.Context) {
+	if q == nil {
+		return
+	}
+	q.common.setHandlerContextDecorator(fn)
+}
+
+func (q *externalQueueRuntime) setHandlerContextDecorator(fn func(context.Context) context.Context) {
+	if q == nil {
+		return
+	}
+	q.common.setHandlerContextDecorator(fn)
 }
 
 func (q *nativeQueueRuntime) BusRegister(jobType string, handler busruntime.Handler) {
@@ -510,7 +535,7 @@ func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Han
 	if q.cfg.Driver == DriverRedis {
 		return handler
 	}
-	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, handler)
+	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, q.handlerContextDecorator, handler)
 }
 
 func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {

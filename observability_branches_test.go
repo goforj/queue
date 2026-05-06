@@ -60,6 +60,15 @@ func (r *observerRecorder) Observe(_ context.Context, event Event) {
 	r.events = append(r.events, event)
 }
 
+type observerContextRecorder struct {
+	values []string
+}
+
+func (r *observerContextRecorder) Observe(ctx context.Context, _ Event) {
+	value, _ := ctx.Value("decorated").(string)
+	r.values = append(r.values, value)
+}
+
 func TestChannelObserver_DropIfFullAndBlockingSend(t *testing.T) {
 	ch := make(chan Event, 1)
 	ch <- Event{Kind: EventEnqueueAccepted}
@@ -116,7 +125,7 @@ func TestObservedQueue_DispatchClassifiesErrors(t *testing.T) {
 func TestWrapObservedHandler_EmitsRetriedAndArchived(t *testing.T) {
 	t.Run("retry path", func(t *testing.T) {
 		recorder := &observerRecorder{}
-		h := wrapObservedHandler(recorder, DriverSync, "", "job:retry", func(context.Context, Job) error {
+		h := wrapObservedHandler(recorder, DriverSync, "", "job:retry", nil, func(context.Context, Job) error {
 			return errors.New("boom")
 		})
 
@@ -134,7 +143,7 @@ func TestWrapObservedHandler_EmitsRetriedAndArchived(t *testing.T) {
 
 	t.Run("archive path", func(t *testing.T) {
 		recorder := &observerRecorder{}
-		h := wrapObservedHandler(recorder, DriverSync, "", "job:archive", func(context.Context, Job) error {
+		h := wrapObservedHandler(recorder, DriverSync, "", "job:archive", nil, func(context.Context, Job) error {
 			return errors.New("boom")
 		})
 
@@ -149,6 +158,30 @@ func TestWrapObservedHandler_EmitsRetriedAndArchived(t *testing.T) {
 			t.Fatalf("expected archived event, got %q", recorder.events[2].Kind)
 		}
 	})
+}
+
+func TestWrapObservedHandler_DecoratesObserverContext(t *testing.T) {
+	recorder := &observerContextRecorder{}
+	h := wrapObservedHandler(recorder, DriverSync, "", "job:decorated", func(ctx context.Context) context.Context {
+		return context.WithValue(ctx, "decorated", "jobs")
+	}, func(ctx context.Context, _ Job) error {
+		if got, _ := ctx.Value("decorated").(string); got != "jobs" {
+			t.Fatalf("handler ctx value = %q, want jobs", got)
+		}
+		return nil
+	})
+
+	if err := h(context.Background(), NewJob("job:decorated").OnQueue("default")); err != nil {
+		t.Fatalf("wrapped handler returned error: %v", err)
+	}
+	if len(recorder.values) != 2 {
+		t.Fatalf("expected 2 observed events, got %d", len(recorder.values))
+	}
+	for i, got := range recorder.values {
+		if got != "jobs" {
+			t.Fatalf("observer ctx value at index %d = %q, want jobs", i, got)
+		}
+	}
 }
 
 func TestObservedQueue_WrapperMethods(t *testing.T) {

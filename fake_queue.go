@@ -75,6 +75,8 @@ func (f *FakeQueue) WithContext(ctx context.Context) queueRuntime {
 	return &clone
 }
 
+func (f *FakeQueue) setHandlerContextDecorator(func(context.Context) context.Context) {}
+
 // Dispatch records a typed job payload in-memory using the fake default queue.
 // @group Testing
 //
