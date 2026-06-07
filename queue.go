@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,10 +180,10 @@ func (cfg Config) normalize() Config {
 }
 
 type queueCommon struct {
-	inner  queueBackend
-	cfg    Config
-	driver Driver
-	ctx    context.Context
+	inner                   queueBackend
+	cfg                     Config
+	driver                  Driver
+	ctx                     context.Context
 	handlerContextDecorator func(context.Context) context.Context
 }
 
@@ -249,7 +250,73 @@ func (q *queueCommon) Dispatch(job any) error {
 	if err != nil {
 		return err
 	}
+	dispatchJob = q.physicalJob(dispatchJob)
 	return q.inner.Dispatch(q.context(), dispatchJob)
+}
+
+func (q *queueCommon) physicalJob(job Job) Job {
+	if job.options.queueName == "" {
+		return job
+	}
+	job.options.queueName = q.physicalQueueName(job.options.queueName)
+	return job
+}
+
+func (q *queueCommon) physicalQueueName(queueName string) string {
+	if q == nil {
+		return PhysicalQueueName("", queueName)
+	}
+	return PhysicalQueueName(q.cfg.DefaultQueue, queueName)
+}
+
+func (q *queueCommon) physicalQueueNameOrDefault(queueName string) string {
+	queueName = strings.TrimSpace(queueName)
+	if queueName == "" && q != nil {
+		queueName = q.cfg.DefaultQueue
+	}
+	return q.physicalQueueName(queueName)
+}
+
+// PhysicalQueueName maps a logical queue name into the physical name used by the backing queue driver.
+func PhysicalQueueName(defaultQueue string, queueName string) string {
+	defaultQueue = strings.TrimSpace(defaultQueue)
+	queueName = strings.TrimSpace(queueName)
+	if queueName == "" {
+		return defaultQueue
+	}
+	prefix := queueNamePrefix(defaultQueue)
+	if prefix == "" {
+		return queueName
+	}
+	if strings.HasPrefix(queueName, prefix) {
+		return queueName
+	}
+	return prefix + queueName
+}
+
+// PhysicalQueueWeights maps logical weighted queue names into their physical backend names.
+func PhysicalQueueWeights(defaultQueue string, weights map[string]int) map[string]int {
+	if len(weights) == 0 {
+		return weights
+	}
+	out := make(map[string]int, len(weights))
+	for queueName, weight := range weights {
+		out[PhysicalQueueName(defaultQueue, queueName)] = weight
+	}
+	return out
+}
+
+func queueNamePrefix(defaultQueue string) string {
+	defaultQueue = strings.TrimSpace(defaultQueue)
+	const suffix = "_default"
+	if !strings.HasSuffix(defaultQueue, suffix) {
+		return ""
+	}
+	prefix := strings.TrimSuffix(defaultQueue, suffix)
+	if prefix == "" {
+		return ""
+	}
+	return prefix + "_"
 }
 
 func (q *nativeQueueRuntime) Driver() Driver         { return q.common.Driver() }
@@ -479,7 +546,7 @@ func (q *queueCommon) Pause(ctx context.Context, queueName string) error {
 	if !ok {
 		return ErrPauseUnsupported
 	}
-	return controller.Pause(ctx, queueName)
+	return controller.Pause(ctx, q.physicalQueueNameOrDefault(queueName))
 }
 
 func (q *queueCommon) Resume(ctx context.Context, queueName string) error {
@@ -487,7 +554,7 @@ func (q *queueCommon) Resume(ctx context.Context, queueName string) error {
 	if !ok {
 		return ErrPauseUnsupported
 	}
-	return controller.Resume(ctx, queueName)
+	return controller.Resume(ctx, q.physicalQueueNameOrDefault(queueName))
 }
 
 func (q *queueCommon) Stats(ctx context.Context) (StatsSnapshot, error) {
@@ -496,6 +563,55 @@ func (q *queueCommon) Stats(ctx context.Context) (StatsSnapshot, error) {
 		return StatsSnapshot{}, fmt.Errorf("stats provider is not available for driver %q", q.Driver())
 	}
 	return provider.Stats(ctx)
+}
+
+func (q *queueCommon) ListJobs(ctx context.Context, opts ListJobsOptions) (ListJobsResult, error) {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ListJobsResult{}, ErrQueueAdminUnsupported
+	}
+	opts.Queue = q.physicalQueueNameOrDefault(opts.Queue)
+	return admin.ListJobs(ctx, opts)
+}
+
+func (q *queueCommon) RetryJob(ctx context.Context, queueName, jobID string) error {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.RetryJob(ctx, q.physicalQueueNameOrDefault(queueName), jobID)
+}
+
+func (q *queueCommon) CancelJob(ctx context.Context, jobID string) error {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.CancelJob(ctx, jobID)
+}
+
+func (q *queueCommon) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.DeleteJob(ctx, q.physicalQueueNameOrDefault(queueName), jobID)
+}
+
+func (q *queueCommon) ClearQueue(ctx context.Context, queueName string) error {
+	admin, ok := q.inner.(QueueAdmin)
+	if !ok {
+		return ErrQueueAdminUnsupported
+	}
+	return admin.ClearQueue(ctx, q.physicalQueueNameOrDefault(queueName))
+}
+
+func (q *queueCommon) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	history, ok := q.inner.(QueueHistoryProvider)
+	if !ok {
+		return nil, ErrQueueAdminUnsupported
+	}
+	return history.History(ctx, q.physicalQueueNameOrDefault(queueName), window)
 }
 
 func (q *queueCommon) Ready(ctx context.Context) error {
@@ -565,7 +681,7 @@ func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payloa
 	if opts.UniqueFor > 0 {
 		job = job.UniqueFor(opts.UniqueFor)
 	}
-	return q.inner.Dispatch(ctx, job)
+	return q.inner.Dispatch(ctx, q.physicalJob(job))
 }
 
 func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error) {

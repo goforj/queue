@@ -256,22 +256,23 @@ func resolveQueueAdmin(v any) QueueAdmin {
 	if raw == nil {
 		return nil
 	}
-	if admin, ok := raw.(QueueAdmin); ok {
-		return admin
-	}
 	switch rt := raw.(type) {
 	case *nativeQueueRuntime:
 		if rt == nil || rt.common == nil {
 			return nil
 		}
 		if admin, ok := rt.common.inner.(QueueAdmin); ok {
-			return admin
+			return queueAdminWithNamespace{admin: admin, common: rt.common}
 		}
 	case *externalQueueRuntime:
 		if rt == nil || rt.common == nil {
 			return nil
 		}
 		if admin, ok := rt.common.inner.(QueueAdmin); ok {
+			return queueAdminWithNamespace{admin: admin, common: rt.common}
+		}
+	default:
+		if admin, ok := raw.(QueueAdmin); ok {
 			return admin
 		}
 	}
@@ -283,26 +284,66 @@ func resolveQueueHistory(v any) QueueHistoryProvider {
 	if raw == nil {
 		return nil
 	}
-	if history, ok := raw.(QueueHistoryProvider); ok {
-		return history
-	}
 	switch rt := raw.(type) {
 	case *nativeQueueRuntime:
 		if rt == nil || rt.common == nil {
 			return nil
 		}
 		if history, ok := rt.common.inner.(QueueHistoryProvider); ok {
-			return history
+			return queueHistoryWithNamespace{history: history, common: rt.common}
 		}
 	case *externalQueueRuntime:
 		if rt == nil || rt.common == nil {
 			return nil
 		}
 		if history, ok := rt.common.inner.(QueueHistoryProvider); ok {
+			return queueHistoryWithNamespace{history: history, common: rt.common}
+		}
+	default:
+		if history, ok := raw.(QueueHistoryProvider); ok {
 			return history
 		}
 	}
 	return nil
+}
+
+type queueAdminWithNamespace struct {
+	admin  QueueAdmin
+	common *queueCommon
+}
+
+func (a queueAdminWithNamespace) ListJobs(ctx context.Context, opts ListJobsOptions) (ListJobsResult, error) {
+	opts.Queue = a.common.physicalQueueNameOrDefault(opts.Queue)
+	return a.admin.ListJobs(ctx, opts)
+}
+
+func (a queueAdminWithNamespace) RetryJob(ctx context.Context, queueName, jobID string) error {
+	return a.admin.RetryJob(ctx, a.common.physicalQueueNameOrDefault(queueName), jobID)
+}
+
+func (a queueAdminWithNamespace) CancelJob(ctx context.Context, jobID string) error {
+	return a.admin.CancelJob(ctx, jobID)
+}
+
+func (a queueAdminWithNamespace) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	return a.admin.DeleteJob(ctx, a.common.physicalQueueNameOrDefault(queueName), jobID)
+}
+
+func (a queueAdminWithNamespace) ClearQueue(ctx context.Context, queueName string) error {
+	return a.admin.ClearQueue(ctx, a.common.physicalQueueNameOrDefault(queueName))
+}
+
+func (a queueAdminWithNamespace) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	return a.admin.History(ctx, a.common.physicalQueueNameOrDefault(queueName), window)
+}
+
+type queueHistoryWithNamespace struct {
+	history QueueHistoryProvider
+	common  *queueCommon
+}
+
+func (h queueHistoryWithNamespace) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	return h.history.History(ctx, h.common.physicalQueueNameOrDefault(queueName), window)
 }
 
 // ListJobs lists jobs via queue admin capability when supported.

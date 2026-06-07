@@ -94,6 +94,12 @@ func TestNormalizeQueues(t *testing.T) {
 	if !reflect.DeepEqual(fallback, map[string]int{"low": 1}) {
 		t.Fatalf("fallback queues mismatch: got=%#v", fallback)
 	}
+
+	targetQueues := normalizeQueues(map[string]int{"reports": 2, "billing_critical": 1}, "billing_default")
+	wantTargetQueues := map[string]int{"billing_reports": 2, "billing_critical": 1}
+	if !reflect.DeepEqual(targetQueues, wantTargetQueues) {
+		t.Fatalf("target queues mismatch: got=%#v want=%#v", targetQueues, wantTargetQueues)
+	}
 }
 
 func TestServerLogLevel(t *testing.T) {

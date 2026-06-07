@@ -12,8 +12,9 @@ import (
 )
 
 type natsWorker struct {
-	url     string
-	workers int
+	url          string
+	defaultQueue string
+	workers      int
 
 	mu       sync.RWMutex
 	handlers map[string]queue.Handler
@@ -27,9 +28,10 @@ type natsWorker struct {
 }
 
 type natsWorkerConfig struct {
-	URL      string
-	Workers  int
-	Observer queue.Observer
+	URL          string
+	DefaultQueue string
+	Workers      int
+	Observer     queue.Observer
 }
 
 func newNATSWorker(url string) *natsWorker {
@@ -37,12 +39,16 @@ func newNATSWorker(url string) *natsWorker {
 }
 
 func newNATSWorkerWithConfig(cfg natsWorkerConfig) *natsWorker {
+	if cfg.DefaultQueue == "" {
+		cfg.DefaultQueue = "default"
+	}
 	cfg.Workers = defaultWorkerCount(cfg.Workers)
 	return &natsWorker{
-		url:      cfg.URL,
-		workers:  cfg.Workers,
-		handlers: make(map[string]queue.Handler),
-		observer: cfg.Observer,
+		url:          cfg.URL,
+		defaultQueue: cfg.DefaultQueue,
+		workers:      cfg.Workers,
+		handlers:     make(map[string]queue.Handler),
+		observer:     cfg.Observer,
 	}
 }
 
@@ -67,7 +73,7 @@ func (w *natsWorker) StartWorkers(ctx context.Context) error {
 			return
 		}
 		w.sem = make(chan struct{}, w.workers)
-		sub, err := nc.Subscribe("queue.*", func(message *nats.Msg) {
+		sub, err := nc.Subscribe(natsSubject(w.defaultQueue), func(message *nats.Msg) {
 			w.sem <- struct{}{}
 			w.running.Add(1)
 			go func() {

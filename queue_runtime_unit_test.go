@@ -168,6 +168,53 @@ func TestQueueCommonDispatchAndNativeRuntimeWrappers(t *testing.T) {
 	}
 }
 
+func TestPhysicalQueueNameInfersTargetPrefixFromDefaultQueue(t *testing.T) {
+	tests := []struct {
+		defaultQueue string
+		queueName    string
+		want         string
+	}{
+		{defaultQueue: "default", queueName: "default", want: "default"},
+		{defaultQueue: "default", queueName: "reports", want: "reports"},
+		{defaultQueue: "billing_default", queueName: "default", want: "billing_default"},
+		{defaultQueue: "billing_default", queueName: "reports", want: "billing_reports"},
+		{defaultQueue: "billing_default", queueName: "billing_reports", want: "billing_reports"},
+		{defaultQueue: "critical", queueName: "reports", want: "reports"},
+		{defaultQueue: "billing_default", queueName: "", want: "billing_default"},
+	}
+	for _, tc := range tests {
+		if got := PhysicalQueueName(tc.defaultQueue, tc.queueName); got != tc.want {
+			t.Fatalf("PhysicalQueueName(%q, %q) = %q, want %q", tc.defaultQueue, tc.queueName, got, tc.want)
+		}
+	}
+}
+
+func TestQueueCommonDispatchPhysicalizesTargetQueues(t *testing.T) {
+	inner := &queueBackendRecorder{}
+	q := &nativeQueueRuntime{
+		common:  &queueCommon{inner: inner, cfg: Config{DefaultQueue: "billing_default"}, driver: DriverSync},
+		runtime: &runtimeBackendStub{},
+	}
+
+	if err := q.Dispatch(NewJob("job:explicit").OnQueue("reports")); err != nil {
+		t.Fatalf("dispatch explicit queue: %v", err)
+	}
+	type inferredJob struct{ ID int }
+	if err := q.Dispatch(inferredJob{ID: 7}); err != nil {
+		t.Fatalf("dispatch inferred job: %v", err)
+	}
+
+	if len(inner.dispatched) != 2 {
+		t.Fatalf("expected 2 dispatched jobs, got %d", len(inner.dispatched))
+	}
+	if got := inner.dispatched[0].jobOptions().queueName; got != "billing_reports" {
+		t.Fatalf("expected explicit queue billing_reports, got %q", got)
+	}
+	if got := inner.dispatched[1].jobOptions().queueName; got != "billing_default" {
+		t.Fatalf("expected default queue billing_default, got %q", got)
+	}
+}
+
 func TestExternalQueueRuntimeRegisterShutdownAndWorkers(t *testing.T) {
 	inner := &queueBackendRecorder{}
 	worker := &runtimeBackendStub{}
@@ -277,6 +324,25 @@ func TestRuntimeBusWrappers_NilRegisterAndDispatch(t *testing.T) {
 		if jopts.queueName != "critical" || jopts.timeout == nil || jopts.maxRetry == nil || jopts.backoff == nil {
 			t.Fatalf("expected mapped bus job options, got %+v", jopts)
 		}
+	}
+}
+
+func TestRuntimeBusDispatchPhysicalizesTargetQueue(t *testing.T) {
+	inner := &queueBackendRecorder{}
+	native := &nativeQueueRuntime{
+		common:     &queueCommon{inner: inner, cfg: Config{DefaultQueue: "billing_default"}, driver: DriverSync},
+		runtime:    &runtimeBackendStub{},
+		registered: map[string]Handler{},
+	}
+
+	if err := native.BusDispatch(context.Background(), "job:native", []byte(`{"n":1}`), busruntime.JobOptions{Queue: "reports"}); err != nil {
+		t.Fatalf("BusDispatch failed: %v", err)
+	}
+	if len(inner.dispatched) != 1 {
+		t.Fatalf("expected one dispatched job, got %d", len(inner.dispatched))
+	}
+	if got := inner.dispatched[0].jobOptions().queueName; got != "billing_reports" {
+		t.Fatalf("expected bus queue billing_reports, got %q", got)
 	}
 }
 

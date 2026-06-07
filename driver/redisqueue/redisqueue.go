@@ -130,18 +130,18 @@ func serverConfig(cfg Config, workers int) backend.Config {
 
 func normalizeQueues(raw map[string]int, fallbackDefault string) map[string]int {
 	if len(raw) == 0 {
-		return map[string]int{queuecore.NormalizeQueueName(fallbackDefault): 1}
+		return map[string]int{queuecore.NormalizeQueueName(queue.PhysicalQueueName(fallbackDefault, fallbackDefault)): 1}
 	}
 	out := make(map[string]int, len(raw))
 	for name, weight := range raw {
-		normalized := queuecore.NormalizeQueueName(strings.TrimSpace(name))
+		normalized := queuecore.NormalizeQueueName(queue.PhysicalQueueName(fallbackDefault, strings.TrimSpace(name)))
 		if weight <= 0 {
 			continue
 		}
 		out[normalized] = weight
 	}
 	if len(out) == 0 {
-		return map[string]int{queuecore.NormalizeQueueName(fallbackDefault): 1}
+		return map[string]int{queuecore.NormalizeQueueName(queue.PhysicalQueueName(fallbackDefault, fallbackDefault)): 1}
 	}
 	return out
 }

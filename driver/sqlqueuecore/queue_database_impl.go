@@ -699,14 +699,14 @@ WHERE state='processing' AND processing_started_at IS NOT NULL AND (
 func (d *databaseQueue) selectPendingJob(ctx context.Context, tx *sql.Tx, now int64) (*dbJob, error) {
 	query := `SELECT id, queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt
 FROM queue_jobs
-WHERE state='pending' AND available_at <= ?
+WHERE queue_name=? AND state='pending' AND available_at <= ?
 ORDER BY id ASC
 LIMIT 1`
 	if !d.usesOptimisticClaimLoop() {
 		query += ` FOR UPDATE SKIP LOCKED`
 	}
 	query = d.rebind(query)
-	row := tx.QueryRowContext(ctx, query, now)
+	row := tx.QueryRowContext(ctx, query, d.cfg.DefaultQueue, now)
 	job := &dbJob{}
 	if err := row.Scan(
 		&job.id,

@@ -65,3 +65,78 @@ func TestListJobsOptionsNormalize(t *testing.T) {
 		t.Fatalf("unexpected normalized options: %+v", got)
 	}
 }
+
+type adminBackendRecorder struct {
+	lastListQueue    string
+	lastRetryQueue   string
+	lastDeleteQueue  string
+	lastClearQueue   string
+	lastHistoryQueue string
+}
+
+func (b *adminBackendRecorder) Driver() Driver { return DriverRedis }
+func (b *adminBackendRecorder) Dispatch(context.Context, Job) error {
+	return nil
+}
+func (b *adminBackendRecorder) Shutdown(context.Context) error {
+	return nil
+}
+func (b *adminBackendRecorder) ListJobs(_ context.Context, opts ListJobsOptions) (ListJobsResult, error) {
+	b.lastListQueue = opts.Queue
+	return ListJobsResult{}, nil
+}
+func (b *adminBackendRecorder) RetryJob(_ context.Context, queueName, _ string) error {
+	b.lastRetryQueue = queueName
+	return nil
+}
+func (b *adminBackendRecorder) CancelJob(context.Context, string) error {
+	return nil
+}
+func (b *adminBackendRecorder) DeleteJob(_ context.Context, queueName, _ string) error {
+	b.lastDeleteQueue = queueName
+	return nil
+}
+func (b *adminBackendRecorder) ClearQueue(_ context.Context, queueName string) error {
+	b.lastClearQueue = queueName
+	return nil
+}
+func (b *adminBackendRecorder) History(_ context.Context, queueName string, _ QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	b.lastHistoryQueue = queueName
+	return nil, nil
+}
+
+func TestQueueAdminHelpersPhysicalizeTargetQueues(t *testing.T) {
+	inner := &adminBackendRecorder{}
+	q := &Queue{
+		q: &externalQueueRuntime{
+			common: &queueCommon{
+				inner:  inner,
+				cfg:    Config{DefaultQueue: "billing_default"},
+				driver: DriverRedis,
+			},
+		},
+	}
+
+	if _, err := ListJobs(context.Background(), q, ListJobsOptions{Queue: "reports"}); err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if err := RetryJob(context.Background(), q, "reports", "job-1"); err != nil {
+		t.Fatalf("RetryJob: %v", err)
+	}
+	if err := DeleteJob(context.Background(), q, "reports", "job-1"); err != nil {
+		t.Fatalf("DeleteJob: %v", err)
+	}
+	if err := ClearQueue(context.Background(), q, "reports"); err != nil {
+		t.Fatalf("ClearQueue: %v", err)
+	}
+	if _, err := QueueHistory(context.Background(), q, "reports", QueueHistoryHour); err != nil {
+		t.Fatalf("QueueHistory: %v", err)
+	}
+
+	if inner.lastListQueue != "billing_reports" || inner.lastRetryQueue != "billing_reports" ||
+		inner.lastDeleteQueue != "billing_reports" || inner.lastClearQueue != "billing_reports" ||
+		inner.lastHistoryQueue != "billing_reports" {
+		t.Fatalf("expected admin queues to physicalize, got list=%q retry=%q delete=%q clear=%q history=%q",
+			inner.lastListQueue, inner.lastRetryQueue, inner.lastDeleteQueue, inner.lastClearQueue, inner.lastHistoryQueue)
+	}
+}

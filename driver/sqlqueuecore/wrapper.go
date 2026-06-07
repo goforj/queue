@@ -26,7 +26,7 @@ func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue
 		DB:                       cfg.DB,
 		DriverName:               driverName,
 		DSN:                      cfg.DSN,
-		DefaultQueue:             cfg.DefaultQueue,
+		DefaultQueue:             queue.PhysicalQueueName(cfg.DefaultQueue, cfg.DefaultQueue),
 		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
 		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
 		Observer:                 cfg.Observer,

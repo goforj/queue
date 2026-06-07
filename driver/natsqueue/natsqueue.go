@@ -61,9 +61,10 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	}
 	return driverbridge.NewQueueFromDriver(rootCfg, newNATSQueue(cfg.URL), func(workers int) (any, error) {
 		return newNATSWorkerWithConfig(natsWorkerConfig{
-			URL:      cfg.URL,
-			Workers:  workers,
-			Observer: cfg.Observer,
+			URL:          cfg.URL,
+			DefaultQueue: queue.PhysicalQueueName(cfg.DefaultQueue, cfg.DefaultQueue),
+			Workers:      workers,
+			Observer:     cfg.Observer,
 		}), nil
 	}, opts...)
 }

@@ -144,7 +144,7 @@ func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	if err != nil {
 		return err
 	}
-	queueURL, err := q.ensureQueue(ctx, q.physicalQueueName())
+	queueURL, err := q.ensureQueue(ctx, parsed.QueueName)
 	if err != nil {
 		return err
 	}

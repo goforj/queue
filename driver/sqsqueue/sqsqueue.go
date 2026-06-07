@@ -61,9 +61,10 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 		DefaultQueue: cfg.DefaultQueue,
 		Observer:     cfg.Observer,
 	}
+	defaultQueue := queue.PhysicalQueueName(cfg.DefaultQueue, cfg.DefaultQueue)
 	return driverbridge.NewQueueFromDriver(rootCfg, newSQSQueue(cfg), func(workers int) (any, error) {
 		return newSQSWorker(sqsWorkerConfig{
-			DefaultQueue: cfg.DefaultQueue,
+			DefaultQueue: defaultQueue,
 			SQSRegion:    cfg.Region,
 			SQSEndpoint:  cfg.Endpoint,
 			SQSAccessKey: cfg.AccessKey,
