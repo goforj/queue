@@ -69,44 +69,48 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			name:     testenv.BackendMySQL,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)))
+				queueName := uniqueQueueName("queue-mysql")
+				q, err := newQueue(withDefaultQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)), queueName))
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
-				return q, uniqueQueueName("queue-mysql")
+				return q, queueName
 			},
 		},
 		{
 			name:     testenv.BackendPostgres,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(postgresCfg(postgresDSN(integrationPostgres.addr)))
+				queueName := uniqueQueueName("queue-postgres")
+				q, err := newQueue(withDefaultQueue(postgresCfg(postgresDSN(integrationPostgres.addr)), queueName))
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
-				return q, uniqueQueueName("queue-postgres")
+				return q, queueName
 			},
 		},
 		{
 			name:     testenv.BackendSQLite,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(sqliteCfg(fmt.Sprintf("%s/queue-integration-%d.db", t.TempDir(), time.Now().UnixNano())))
+				queueName := uniqueQueueName("queue-sqlite")
+				q, err := newQueue(withDefaultQueue(sqliteCfg(fmt.Sprintf("%s/queue-integration-%d.db", t.TempDir(), time.Now().UnixNano())), queueName))
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
 				}
-				return q, uniqueQueueName("queue-sqlite")
+				return q, queueName
 			},
 		},
 		{
 			name:     testenv.BackendNATS,
 			executes: true,
 			newQ: func(t *testing.T) (*Queue, string) {
-				q, err := newQueue(natsCfg(integrationNATS.url))
+				queueName := uniqueQueueName("queue-nats")
+				q, err := newQueue(withDefaultQueue(natsCfg(integrationNATS.url), queueName))
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}
-				return q, uniqueQueueName("queue-nats")
+				return q, queueName
 			},
 		},
 		{

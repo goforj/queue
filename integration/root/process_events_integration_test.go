@@ -78,7 +78,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
 				ensureMySQLDB(t)
-				q, err := newQueueRuntime(withObserver(mysqlCfg(mysqlDSN(integrationMySQL.addr)), observer))
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)), "obs_events_mysql"), observer))
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
@@ -91,7 +91,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
 				ensurePostgresDB(t)
-				q, err := newQueueRuntime(withObserver(postgresCfg(postgresDSN(integrationPostgres.addr)), observer))
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(postgresCfg(postgresDSN(integrationPostgres.addr)), "obs_events_postgres"), observer))
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
@@ -104,7 +104,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
 				dsn := fmt.Sprintf("%s/obs-events-%d.db", t.TempDir(), time.Now().UnixNano())
-				q, err := newQueueRuntime(withObserver(sqliteCfg(dsn), observer))
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(sqliteCfg(dsn), "obs_events_sqlite"), observer))
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
 				}
@@ -117,7 +117,7 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
 				ensureNATS(t)
-				q, err := newQueueRuntime(withObserver(natsCfg(integrationNATS.url), observer))
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(natsCfg(integrationNATS.url), "obs_events_nats"), observer))
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}

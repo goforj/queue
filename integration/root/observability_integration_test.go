@@ -43,7 +43,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensureMySQLDB(t)
-				q, err := newQueueRuntime(withObserver(mysqlCfg(mysqlDSN(integrationMySQL.addr)), collector))
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)), "obs_mysql"), collector))
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
@@ -57,7 +57,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensurePostgresDB(t)
-				q, err := newQueueRuntime(withObserver(postgresCfg(postgresDSN(integrationPostgres.addr)), collector))
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(postgresCfg(postgresDSN(integrationPostgres.addr)), "obs_postgres"), collector))
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
@@ -71,7 +71,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				dsn := fmt.Sprintf("%s/obs-%d.db", t.TempDir(), time.Now().UnixNano())
-				q, err := newQueueRuntime(withObserver(sqliteCfg(dsn), collector))
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(sqliteCfg(dsn), "obs_sqlite"), collector))
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
 				}
@@ -84,7 +84,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensureNATS(t)
-				q, err := newQueueRuntime(withObserver(natsCfg(integrationNATS.url), collector))
+				q, err := newQueueRuntime(withObserver(withDefaultQueue(natsCfg(integrationNATS.url), "obs_nats"), collector))
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}

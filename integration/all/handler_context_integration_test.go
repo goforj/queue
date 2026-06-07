@@ -23,12 +23,12 @@ import (
 )
 
 type handlerContextRecorder struct {
-	mu            sync.Mutex
-	queueName      string
-	key           any
-	want          string
-	total         map[EventKind]int
-	decorated     map[EventKind]int
+	mu        sync.Mutex
+	queueName string
+	key       any
+	want      string
+	total     map[EventKind]int
+	decorated map[EventKind]int
 }
 
 func (r *handlerContextRecorder) setQueueName(queueName string) {
@@ -39,11 +39,11 @@ func (r *handlerContextRecorder) setQueueName(queueName string) {
 
 func newHandlerContextRecorder(queueName string, key any, want string) *handlerContextRecorder {
 	return &handlerContextRecorder{
-		queueName:      queueName,
-		key:           key,
-		want:          want,
-		total:         make(map[EventKind]int),
-		decorated:     make(map[EventKind]int),
+		queueName: queueName,
+		key:       key,
+		want:      want,
+		total:     make(map[EventKind]int),
+		decorated: make(map[EventKind]int),
 	}
 }
 
@@ -124,8 +124,8 @@ func TestIntegrationQueue_HandlerContextDecorator_AllBackends(t *testing.T) {
 	const want = "jobs"
 
 	fixtures := []struct {
-		name   string
-		newQ   func(t *testing.T, observer Observer) (*Queue, string)
+		name string
+		newQ func(t *testing.T, observer Observer) (*Queue, string)
 	}{
 		{
 			name: testenv.BackendSync,
@@ -170,8 +170,9 @@ func TestIntegrationQueue_HandlerContextDecorator_AllBackends(t *testing.T) {
 		{
 			name: testenv.BackendMySQL,
 			newQ: func(t *testing.T, observer Observer) (*Queue, string) {
+				physical := uniqueQueueName("handler-context-mysql")
 				q, err := newQueue(
-					withObserverAll(mysqlCfg(mysqlDSN(integrationMySQL.addr)), observer),
+					withObserverAll(withDefaultQueueAll(mysqlCfg(mysqlDSN(integrationMySQL.addr)), physical), observer),
 					WithHandlerContextDecorator(func(ctx context.Context) context.Context {
 						return context.WithValue(ctx, key, want)
 					}),
@@ -179,14 +180,15 @@ func TestIntegrationQueue_HandlerContextDecorator_AllBackends(t *testing.T) {
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
-				return q, uniqueQueueName("handler-context-mysql")
+				return q, physical
 			},
 		},
 		{
 			name: testenv.BackendPostgres,
 			newQ: func(t *testing.T, observer Observer) (*Queue, string) {
+				physical := uniqueQueueName("handler-context-postgres")
 				q, err := newQueue(
-					withObserverAll(postgresCfg(postgresDSN(integrationPostgres.addr)), observer),
+					withObserverAll(withDefaultQueueAll(postgresCfg(postgresDSN(integrationPostgres.addr)), physical), observer),
 					WithHandlerContextDecorator(func(ctx context.Context) context.Context {
 						return context.WithValue(ctx, key, want)
 					}),
@@ -194,14 +196,15 @@ func TestIntegrationQueue_HandlerContextDecorator_AllBackends(t *testing.T) {
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
-				return q, uniqueQueueName("handler-context-postgres")
+				return q, physical
 			},
 		},
 		{
 			name: testenv.BackendSQLite,
 			newQ: func(t *testing.T, observer Observer) (*Queue, string) {
+				physical := uniqueQueueName("handler-context-sqlite")
 				q, err := newQueue(
-					withObserverAll(sqliteCfg(fmt.Sprintf("%s/handler-context-%d.db", t.TempDir(), time.Now().UnixNano())), observer),
+					withObserverAll(withDefaultQueueAll(sqliteCfg(fmt.Sprintf("%s/handler-context-%d.db", t.TempDir(), time.Now().UnixNano())), physical), observer),
 					WithHandlerContextDecorator(func(ctx context.Context) context.Context {
 						return context.WithValue(ctx, key, want)
 					}),
@@ -209,14 +212,15 @@ func TestIntegrationQueue_HandlerContextDecorator_AllBackends(t *testing.T) {
 				if err != nil {
 					t.Fatalf("new sqlite queue failed: %v", err)
 				}
-				return q, uniqueQueueName("handler-context-sqlite")
+				return q, physical
 			},
 		},
 		{
 			name: testenv.BackendNATS,
 			newQ: func(t *testing.T, observer Observer) (*Queue, string) {
+				physical := uniqueQueueName("handler-context-nats")
 				q, err := newQueue(
-					withObserverAll(natsCfg(integrationNATS.url), observer),
+					withObserverAll(withDefaultQueueAll(natsCfg(integrationNATS.url), physical), observer),
 					WithHandlerContextDecorator(func(ctx context.Context) context.Context {
 						return context.WithValue(ctx, key, want)
 					}),
@@ -224,7 +228,7 @@ func TestIntegrationQueue_HandlerContextDecorator_AllBackends(t *testing.T) {
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}
-				return q, uniqueQueueName("handler-context-nats")
+				return q, physical
 			},
 		},
 		{

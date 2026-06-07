@@ -773,14 +773,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      testenv.BackendMySQL,
 			queueName: "scenario_mysql",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(mysqlCfg(mysqlDSN(integrationMySQL.addr)))
+				q, err := newQueueRuntime(withDefaultQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)), "scenario_mysql"))
 				if err != nil {
 					t.Fatalf("new mysql queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, mysqlCfg(mysqlDSN(integrationMySQL.addr)), 4)
+				return newQueueBackedWorker(t, withDefaultQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)), "scenario_mysql"), 4)
 			},
 			supportsBackoff:                  true,
 			supportsRestart:                  true,
@@ -796,14 +796,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      testenv.BackendPostgres,
 			queueName: "scenario_postgres",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(postgresCfg(postgresDSN(integrationPostgres.addr)))
+				q, err := newQueueRuntime(withDefaultQueue(postgresCfg(postgresDSN(integrationPostgres.addr)), "scenario_postgres"))
 				if err != nil {
 					t.Fatalf("new postgres queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, postgresCfg(postgresDSN(integrationPostgres.addr)), 4)
+				return newQueueBackedWorker(t, withDefaultQueue(postgresCfg(postgresDSN(integrationPostgres.addr)), "scenario_postgres"), 4)
 			},
 			supportsBackoff:                  true,
 			supportsRestart:                  true,
@@ -844,14 +844,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			name:      testenv.BackendNATS,
 			queueName: "scenario_nats",
 			newQueue: func(t *testing.T) QueueRuntime {
-				q, err := newQueueRuntime(natsCfg(integrationNATS.url))
+				q, err := newQueueRuntime(withDefaultQueue(natsCfg(integrationNATS.url), "scenario_nats"))
 				if err != nil {
 					t.Fatalf("new nats queue failed: %v", err)
 				}
 				return q
 			},
 			newWorker: func(t *testing.T) runtimeWorkerBackend {
-				return newQueueBackedWorker(t, natsCfg(integrationNATS.url), 4)
+				return newQueueBackedWorker(t, withDefaultQueue(natsCfg(integrationNATS.url), "scenario_nats"), 4)
 			},
 			supportsBackoff:                  true,
 			supportsRestart:                  false,
@@ -929,14 +929,14 @@ func TestIntegrationScenarios_AllBackends(t *testing.T) {
 			if fx.name == testenv.BackendSQLite {
 				dsn := fmt.Sprintf("%s/scenario-%d.db", t.TempDir(), time.Now().UnixNano())
 				fx.newQueue = func(t *testing.T) QueueRuntime {
-					q, err := newQueueRuntime(sqliteCfg(dsn))
+					q, err := newQueueRuntime(withDefaultQueue(sqliteCfg(dsn), "scenario_sqlite"))
 					if err != nil {
 						t.Fatalf("new sqlite queue failed: %v", err)
 					}
 					return q
 				}
 				fx.newWorker = func(t *testing.T) runtimeWorkerBackend {
-					return newQueueBackedWorker(t, sqliteCfg(dsn), 4)
+					return newQueueBackedWorker(t, withDefaultQueue(sqliteCfg(dsn), "scenario_sqlite"), 4)
 				}
 				fx.supportsBackoff = true
 				fx.supportsRestart = true
@@ -2467,9 +2467,9 @@ func newOrderingWorker(t *testing.T, fx scenarioFixture) runtimeWorkerBackend {
 	case testenv.BackendRedis:
 		return newQueueBackedWorker(t, redisCfg(integrationRedis.addr), 1)
 	case testenv.BackendMySQL:
-		return newQueueBackedWorker(t, mysqlCfg(mysqlDSN(integrationMySQL.addr)), 1)
+		return newQueueBackedWorker(t, withDefaultQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)), fx.queueName), 1)
 	case testenv.BackendPostgres:
-		return newQueueBackedWorker(t, postgresCfg(postgresDSN(integrationPostgres.addr)), 1)
+		return newQueueBackedWorker(t, withDefaultQueue(postgresCfg(postgresDSN(integrationPostgres.addr)), fx.queueName), 1)
 	default:
 		return fx.newWorker(t)
 	}
