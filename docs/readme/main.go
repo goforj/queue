@@ -580,7 +580,7 @@ func renderAPI(funcs []*FuncDoc) string {
 			for _, fn := range groupFns {
 				links = append(links, fmt.Sprintf("[%s](#%s)", indexLabel(fn), anchorFor(fn)))
 			}
-			buf.WriteString(fmt.Sprintf("| **%s** | %s |\n", group, strings.Join(links, " ")))
+			buf.WriteString(fmt.Sprintf("| **%s** | %s |\n", group, strings.Join(links, " · ")))
 		}
 	}
 
@@ -615,11 +615,11 @@ func renderAPI(funcs []*FuncDoc) string {
 				pkgLinks = append(pkgLinks, fmt.Sprintf("[%s.NewWithConfig](#%s)", pkg, strings.ToLower(pkg+"-newwithconfig")))
 			}
 			if len(pkgLinks) > 0 {
-				links = append(links, strings.Join(pkgLinks, " "))
+				links = append(links, strings.Join(pkgLinks, " · "))
 			}
 		}
 		if len(links) > 0 {
-			buf.WriteString(fmt.Sprintf("| **Driver Constructors** | %s |\n", strings.Join(links, " ")))
+			buf.WriteString(fmt.Sprintf("| **Driver Constructors** | %s |\n", strings.Join(links, " · ")))
 		}
 	}
 
@@ -646,7 +646,7 @@ func renderAPI(funcs []*FuncDoc) string {
 			links = append(links, "[Testing API](#testing-api)")
 		}
 		if len(links) > 0 {
-			buf.WriteString(fmt.Sprintf("| **Testing** | %s |\n", strings.Join(links, " ")))
+			buf.WriteString(fmt.Sprintf("| **Testing** | %s |\n", strings.Join(links, " · ")))
 		}
 	}
 
