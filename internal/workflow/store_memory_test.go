@@ -7,6 +7,63 @@ import (
 	"time"
 )
 
+// TestMemoryStoreDiscardIsExactAndIdempotent pins the recording-only cleanup
+// capability without making it part of the durable Store contract.
+func TestMemoryStoreDiscardIsExactAndIdempotent(t *testing.T) {
+	store := NewMemoryStore()
+	discarder, ok := store.(interface {
+		DiscardChain(string)
+		DiscardBatch(string)
+	})
+	if !ok {
+		t.Fatal("memory store does not expose exact discard capability")
+	}
+	ctx := context.Background()
+	for _, chainID := range []string{"chain-discard", "chain-keep"} {
+		if err := store.CreateChain(ctx, ChainRecord{
+			ChainID: chainID,
+			Nodes:   []ChainNode{{NodeID: chainID + "-node", Job: StoredJob{Type: "chain:job"}}},
+		}); err != nil {
+			t.Fatalf("create chain %q: %v", chainID, err)
+		}
+	}
+	for _, batchID := range []string{"batch-discard", "batch-keep"} {
+		if err := store.CreateBatch(ctx, BatchRecord{
+			BatchID: batchID,
+			Jobs:    []BatchJob{{JobID: batchID + "-job", Job: StoredJob{Type: "batch:job"}}},
+		}); err != nil {
+			t.Fatalf("create batch %q: %v", batchID, err)
+		}
+	}
+	for _, chainID := range []string{"chain-discard", "chain-keep"} {
+		if err := store.FailChain(ctx, chainID, errors.New("rejected")); err != nil {
+			t.Fatalf("fail chain %q: %v", chainID, err)
+		}
+	}
+	for _, batchID := range []string{"batch-discard", "batch-keep"} {
+		if err := store.CancelBatch(ctx, batchID); err != nil {
+			t.Fatalf("cancel batch %q: %v", batchID, err)
+		}
+	}
+
+	discarder.DiscardChain("chain-discard")
+	discarder.DiscardChain("chain-discard")
+	discarder.DiscardBatch("batch-discard")
+	discarder.DiscardBatch("batch-discard")
+	if _, err := store.GetChain(ctx, "chain-discard"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("discarded chain error = %v, want ErrNotFound", err)
+	}
+	if _, err := store.GetBatch(ctx, "batch-discard"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("discarded batch error = %v, want ErrNotFound", err)
+	}
+	if _, err := store.GetChain(ctx, "chain-keep"); err != nil {
+		t.Fatalf("unrelated chain was discarded: %v", err)
+	}
+	if _, err := store.GetBatch(ctx, "batch-keep"); err != nil {
+		t.Fatalf("unrelated batch was discarded: %v", err)
+	}
+}
+
 func TestMemoryStorePruneRemovesTerminalRecordsOnly(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()

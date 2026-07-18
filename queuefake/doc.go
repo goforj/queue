@@ -1,7 +1,5 @@
-// Package queuefake provides a queue-first test harness for queue and workflow assertions.
+// Package queuefake preserves the historical queue-first testing harness.
 //
-// It wraps queue.NewFake() for dispatch assertions and bus.NewFake() for workflow
-// orchestration assertions so tests can stay aligned with the flattened queue API
-// surface.
+// Its queue and bus compatibility views now share one concurrency-safe
+// queue.FakeQueue. New code should use queue.NewFake directly.
 package queuefake
-

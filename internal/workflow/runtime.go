@@ -57,6 +57,14 @@ type Engine interface {
 // Option configures one workflow runtime before its internal handlers are registered.
 type Option func(*runtime)
 
+// WithoutEphemeralCallbacks disables process-local callback retention for
+// recording runtimes that never execute workflow deliveries.
+func WithoutEphemeralCallbacks() Option {
+	return func(r *runtime) {
+		r.ephemeralCallbacksDisabled = true
+	}
+}
+
 // WithObserver installs an event observer for workflow lifecycle facts.
 func WithObserver(observer Observer) Option {
 	return func(r *runtime) {
@@ -149,11 +157,12 @@ type runtime struct {
 
 	observer Observer
 
-	mu             sync.RWMutex
-	handlers       map[string]Handler
-	chainCallbacks map[string]chainCallbacks
-	batchCallbacks map[string]batchCallbacks
-	middlewares    []Middleware
+	mu                         sync.RWMutex
+	handlers                   map[string]Handler
+	chainCallbacks             map[string]chainCallbacks
+	batchCallbacks             map[string]batchCallbacks
+	middlewares                []Middleware
+	ephemeralCallbacksDisabled bool
 }
 
 var _ Engine = (*runtime)(nil)

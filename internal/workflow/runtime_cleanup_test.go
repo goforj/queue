@@ -80,6 +80,37 @@ func TestRuntimeCleansBatchCallbacksAfterFinally(t *testing.T) {
 	}
 }
 
+// TestRuntimeWithoutEphemeralCallbacksDoesNotRetainClosures verifies recording
+// runtimes can accept fluent callback APIs without owning process closures forever.
+func TestRuntimeWithoutEphemeralCallbacksDoesNotRetainClosures(t *testing.T) {
+	engine, err := New(&failingDispatchQueue{}, WithoutEphemeralCallbacks())
+	if err != nil {
+		t.Fatalf("new recording runtime: %v", err)
+	}
+	runtime := engine.(*runtime)
+	if _, err := runtime.Chain(NewJob("chain:record", nil)).
+		Catch(func(context.Context, ChainState, error) error { return nil }).
+		Finally(func(context.Context, ChainState) error { return nil }).
+		Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch recording chain: %v", err)
+	}
+	if _, err := runtime.Batch(NewJob("batch:record", nil)).
+		Progress(func(context.Context, BatchState) error { return nil }).
+		Then(func(context.Context, BatchState) error { return nil }).
+		Catch(func(context.Context, BatchState, error) error { return nil }).
+		Finally(func(context.Context, BatchState) error { return nil }).
+		Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch recording batch: %v", err)
+	}
+	runtime.mu.RLock()
+	chainCallbacks := len(runtime.chainCallbacks)
+	batchCallbacks := len(runtime.batchCallbacks)
+	runtime.mu.RUnlock()
+	if chainCallbacks != 0 || batchCallbacks != 0 {
+		t.Fatalf("recording runtime retained callbacks: chains=%d batches=%d", chainCallbacks, batchCallbacks)
+	}
+}
+
 // TestChainFinallyPreservesPendingCatch verifies independently delivered terminal callbacks do not delete one another.
 func TestChainFinallyPreservesPendingCatch(t *testing.T) {
 	const chainID = "chain_out_of_order_callbacks"

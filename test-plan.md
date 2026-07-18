@@ -316,6 +316,24 @@ This is a trust-critical area. Users will assume high-level workflow helpers enc
 - Fuzz/property tests for payload decoding and queue-name normalization
 - Config defaults invariants (documented defaults should be test-locked)
 
+## J. Public Fake Semantics
+
+### Guarantees enforced today
+
+- `queue.NewFake` is the only fake state owner; deprecated `bus.Fake` and `queuefake.Fake` are compatibility views over it.
+- Direct dispatch uses the same typed-value conversion and `Job` validation as production runtimes.
+- Chain and batch builders use the production workflow engine, record only from `Dispatch`, retain queue/name/failure policy, and expose isolated canonical records plus lookup state.
+- Closure callbacks remain fluent compatibility inputs but are not retained in fake runtime state or executed by the recording fake.
+- Invalid, abandoned, and canceled builders cannot satisfy workflow assertions.
+- Direct, chain, batch, lookup, assertion, Prune, and Reset access is safe across concurrent handles and covered under the race detector.
+- Reset clears direct records, workflow records, and workflow-store state for every shared view.
+
+### Compatibility coverage
+
+- `queue.NewFake() *queue.FakeQueue`, `queuefake.Fake.Queue() *queue.FakeQueue`, `queuefake.Fake.Workflow() *bus.Fake`, and `bus.NewFake() *bus.Fake` retain their established signatures.
+- `bus.Fake` and the one-field `bus.BatchSpec` retain their physical package identity and keyed/unkeyed source forms.
+- Legacy bus builders retain shallow job snapshots and Dispatch-time payload JSON encoding before entering the canonical fake.
+
 ## Test Types We Should Add or Expand (Prioritized)
 
 ## P0 (Before v1 tag)

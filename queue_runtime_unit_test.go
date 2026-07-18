@@ -214,6 +214,9 @@ func TestQueueCommon_JobFromAnyAndHelpers(t *testing.T) {
 	if _, err := common.jobFromAny(NewJob("")); err == nil {
 		t.Fatal("expected empty job type error")
 	}
+	if _, err := common.jobFromAny(NewJob("deferred:validation").Retry(-1)); err != nil {
+		t.Fatalf("jobFromAny changed backend validation timing: %v", err)
+	}
 	if _, err := common.jobFromAny(struct{ F func() }{}); err == nil {
 		t.Fatal("expected marshal error for func field")
 	}

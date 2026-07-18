@@ -1462,7 +1462,15 @@ func optionalDriverMovedError(driver Driver) error {
 	}
 }
 
+// jobFromAny applies this runtime's default queue while sharing the canonical
+// value-to-job conversion with the public fake.
 func (q *queueCommon) jobFromAny(job any) (Job, error) {
+	return normalizeDispatchJob(job, q.cfg.DefaultQueue)
+}
+
+// normalizeDispatchJob keeps typed-value inference and default queue selection
+// identical without changing when production backends validate acceptance.
+func normalizeDispatchJob(job any, defaultQueue string) (Job, error) {
 	if job, ok := job.(Job); ok {
 		if job.Type == "" {
 			return Job{}, fmt.Errorf("dispatch job type is required")
@@ -1485,9 +1493,11 @@ func (q *queueCommon) jobFromAny(job any) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("marshal dispatch job: %w", err)
 	}
-	return NewJob(jobType).Payload(payload).OnQueue(q.cfg.DefaultQueue), nil
+	return NewJob(jobType).Payload(payload).OnQueue(defaultQueue), nil
 }
 
+// jobTypeFromValue limits implicit names to declared Go types so anonymous
+// payload shapes cannot accidentally become unstable queue contracts.
 func jobTypeFromValue(v any) string {
 	t := reflect.TypeOf(v)
 	if t == nil {

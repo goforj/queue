@@ -118,6 +118,14 @@ func (m *memoryStore) GetChain(_ context.Context, chainID string) (ChainState, e
 	return ch.state, nil
 }
 
+// DiscardChain removes exactly one transient recording state. It intentionally
+// remains outside Store because production retention continues to use Prune.
+func (m *memoryStore) DiscardChain(chainID string) {
+	m.mu.Lock()
+	delete(m.chains, chainID)
+	m.mu.Unlock()
+}
+
 // CreateBatch installs aggregate and per-job state together so readers cannot observe a partial batch.
 func (m *memoryStore) CreateBatch(_ context.Context, rec BatchRecord) error {
 	m.mu.Lock()
@@ -239,6 +247,14 @@ func (m *memoryStore) GetBatch(_ context.Context, batchID string) (BatchState, e
 		return BatchState{}, ErrNotFound
 	}
 	return b.state, nil
+}
+
+// DiscardBatch removes exactly one transient recording state. It intentionally
+// remains outside Store because production retention continues to use Prune.
+func (m *memoryStore) DiscardBatch(batchID string) {
+	m.mu.Lock()
+	delete(m.batch, batchID)
+	m.mu.Unlock()
 }
 
 // MarkCallbackInvoked atomically reserves a callback key so retries cannot invoke it twice.

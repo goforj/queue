@@ -128,12 +128,14 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 	}); err != nil {
 		return "", err
 	}
-	b.r.mu.Lock()
-	b.r.chainCallbacks[chainID] = chainCallbacks{
-		catch:   b.catch,
-		finally: b.done,
+	if !b.r.ephemeralCallbacksDisabled && (b.catch != nil || b.done != nil) {
+		b.r.mu.Lock()
+		b.r.chainCallbacks[chainID] = chainCallbacks{
+			catch:   b.catch,
+			finally: b.done,
+		}
+		b.r.mu.Unlock()
 	}
-	b.r.mu.Unlock()
 
 	first := nodes[0]
 	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})

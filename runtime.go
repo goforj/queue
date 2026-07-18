@@ -511,13 +511,9 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 	if r == nil {
 		return &chainBuilderAdapter{}
 	}
-	workflowJobs := make([]workflow.Job, 0, len(jobs))
-	for _, job := range jobs {
-		bj, err := toWorkflowJob(job)
-		if err != nil {
-			return &chainBuilderAdapter{err: err}
-		}
-		workflowJobs = append(workflowJobs, bj)
+	workflowJobs, err := toWorkflowJobs(jobs)
+	if err != nil {
+		return &chainBuilderAdapter{err: err}
 	}
 	return &chainBuilderAdapter{inner: r.b.Chain(workflowJobs...)}
 }
@@ -544,13 +540,9 @@ func (r *Queue) Batch(jobs ...Job) BatchBuilder {
 	if r == nil {
 		return &batchBuilderAdapter{}
 	}
-	workflowJobs := make([]workflow.Job, 0, len(jobs))
-	for _, job := range jobs {
-		bj, err := toWorkflowJob(job)
-		if err != nil {
-			return &batchBuilderAdapter{err: err}
-		}
-		workflowJobs = append(workflowJobs, bj)
+	workflowJobs, err := toWorkflowJobs(jobs)
+	if err != nil {
+		return &batchBuilderAdapter{err: err}
 	}
 	return &batchBuilderAdapter{inner: r.b.Batch(workflowJobs...)}
 }
@@ -792,8 +784,12 @@ type ChainBuilder interface {
 }
 
 type chainBuilderAdapter struct {
-	inner workflow.ChainBuilder
-	err   error
+	inner           workflow.ChainBuilder
+	err             error
+	dispatchGuard   func() func()
+	dispatchContext func(context.Context) context.Context
+	onAccepted      func(string)
+	onRejected      func(string)
 }
 
 // OnQueue forwards fluent queue selection while preserving any earlier conversion failure.
@@ -828,7 +824,20 @@ func (b *chainBuilderAdapter) Dispatch(ctx context.Context) (string, error) {
 	if b.inner == nil {
 		return "", fmt.Errorf("chain builder is nil")
 	}
-	return b.inner.Dispatch(ctx)
+	if b.dispatchGuard != nil {
+		release := b.dispatchGuard()
+		defer release()
+	}
+	if b.dispatchContext != nil {
+		ctx = b.dispatchContext(ctx)
+	}
+	chainID, err := b.inner.Dispatch(ctx)
+	if err == nil && b.onAccepted != nil {
+		b.onAccepted(chainID)
+	} else if err != nil && chainID != "" && b.onRejected != nil {
+		b.onRejected(chainID)
+	}
+	return chainID, err
 }
 
 // BatchBuilder is the high-level batch workflow builder.
@@ -853,8 +862,12 @@ type BatchBuilder interface {
 }
 
 type batchBuilderAdapter struct {
-	inner workflow.BatchBuilder
-	err   error
+	inner           workflow.BatchBuilder
+	err             error
+	dispatchGuard   func() func()
+	dispatchContext func(context.Context) context.Context
+	onAccepted      func(string)
+	onRejected      func(string)
 }
 
 // Name forwards the application-facing batch label while preserving any earlier conversion failure.
@@ -921,7 +934,34 @@ func (b *batchBuilderAdapter) Dispatch(ctx context.Context) (string, error) {
 	if b.inner == nil {
 		return "", fmt.Errorf("batch builder is nil")
 	}
-	return b.inner.Dispatch(ctx)
+	if b.dispatchGuard != nil {
+		release := b.dispatchGuard()
+		defer release()
+	}
+	if b.dispatchContext != nil {
+		ctx = b.dispatchContext(ctx)
+	}
+	batchID, err := b.inner.Dispatch(ctx)
+	if err == nil && b.onAccepted != nil {
+		b.onAccepted(batchID)
+	} else if err != nil && batchID != "" && b.onRejected != nil {
+		b.onRejected(batchID)
+	}
+	return batchID, err
+}
+
+// toWorkflowJobs converts a canonical job slice once so production and fake
+// workflow builders share validation and payload ownership rules.
+func toWorkflowJobs(jobs []Job) ([]workflow.Job, error) {
+	converted := make([]workflow.Job, 0, len(jobs))
+	for _, job := range jobs {
+		workflowJob, err := toWorkflowJob(job)
+		if err != nil {
+			return nil, err
+		}
+		converted = append(converted, workflowJob)
+	}
+	return converted, nil
 }
 
 // toWorkflowJob converts the canonical root job into the engine's private compatibility model without changing payload bytes.

@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	// Register associates a handler with a job type.
+	// Register is a compatibility no-op because the recording fake never executes handlers.
 
 	// Example: register no-op on fake
 	fake := queue.NewFake()

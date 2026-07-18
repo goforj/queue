@@ -484,8 +484,17 @@ func (a *queueAdapter) Prune(ctx context.Context, before time.Time) error {
 	return a.queue.Prune(ctx, before)
 }
 
+// queueWorkflowTarget is the canonical root builder surface shared by the
+// production facade and its recording fake.
+type queueWorkflowTarget interface {
+	// Chain creates a canonical sequential workflow builder.
+	Chain(jobs ...queue.Job) queue.ChainBuilder
+	// Batch creates a canonical aggregate workflow builder.
+	Batch(jobs ...queue.Job) queue.BatchBuilder
+}
+
 type queueChainBuilder struct {
-	queue     *queue.Queue
+	queue     queueWorkflowTarget
 	jobs      []Job
 	queueName string
 	catch     func(context.Context, ChainState, error) error
@@ -524,7 +533,7 @@ func (b *queueChainBuilder) Dispatch(ctx context.Context) (string, error) {
 }
 
 type queueBatchBuilder struct {
-	queue         *queue.Queue
+	queue         queueWorkflowTarget
 	jobs          []Job
 	name          string
 	queueName     string

@@ -111,14 +111,16 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	b.r.mu.Lock()
-	b.r.batchCallbacks[batchID] = batchCallbacks{
-		progress: b.progress,
-		then:     b.then,
-		catch:    b.catch,
-		finally:  b.finally,
+	if !b.r.ephemeralCallbacksDisabled && (b.progress != nil || b.then != nil || b.catch != nil || b.finally != nil) {
+		b.r.mu.Lock()
+		b.r.batchCallbacks[batchID] = batchCallbacks{
+			progress: b.progress,
+			then:     b.then,
+			catch:    b.catch,
+			finally:  b.finally,
+		}
+		b.r.mu.Unlock()
 	}
-	b.r.mu.Unlock()
 
 	first := jobs[0]
 	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})

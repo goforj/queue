@@ -17,5 +17,5 @@ func main() {
 	// Example: fake ready
 	fake := queue.NewFake()
 	fmt.Println(fake.Ready(context.Background()) == nil)
-	// true
+	// Output: true
 }

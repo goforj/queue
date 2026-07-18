@@ -2,9 +2,6 @@ package queue
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"reflect"
 	"sync"
 	"testing"
 
@@ -18,20 +15,26 @@ type DispatchRecord struct {
 	Queue string
 }
 
-// FakeQueue is an in-memory queue fake for tests.
+// FakeQueue is the concurrency-safe queue and workflow fake for tests.
 // @group Testing
 type FakeQueue struct {
 	state *fakeQueueState
 	ctx   context.Context
 }
 
+// fakeQueueState owns every mutable projection shared by context-bound and
+// compatibility fake handles.
 type fakeQueueState struct {
 	defaultQueue string
-	mu           sync.RWMutex
-	records      []DispatchRecord
+	// workflowOps prevents Reset or Prune from splitting one engine dispatch
+	// across state generations or intermediate terminal transitions.
+	workflowOps sync.RWMutex
+	mu          sync.RWMutex
+	records     []DispatchRecord
+	workflow    *fakeWorkflowRecorder
 }
 
-// NewFake creates a queue fake that records dispatches and provides assertions.
+// NewFake creates the canonical fake used directly and by deprecated testing adapters.
 // @group Testing
 //
 // Example: fake queue assertions
@@ -46,12 +49,14 @@ type fakeQueueState struct {
 //	fmt.Println(len(records), records[0].Queue, records[0].Job.Type)
 //	// Output: 1 critical emails:send
 func NewFake() *FakeQueue {
-	return &FakeQueue{
+	fake := &FakeQueue{
 		state: &fakeQueueState{
 			defaultQueue: "default",
 			records:      make([]DispatchRecord, 0),
 		},
 	}
+	fake.state.workflow = newFakeWorkflowRecorder(fake)
+	return fake
 }
 
 // Driver returns the active queue driver.
@@ -75,6 +80,8 @@ func (f *FakeQueue) WithContext(ctx context.Context) queueRuntime {
 	return &clone
 }
 
+// setHandlerContextDecorator remains inert because the fake records intent and
+// never invokes registered handlers.
 func (f *FakeQueue) setHandlerContextDecorator(func(context.Context) context.Context) {}
 
 // Dispatch records a typed job payload in-memory using the fake default queue.
@@ -90,13 +97,23 @@ func (f *FakeQueue) Dispatch(job any) error {
 	if f != nil && f.ctx != nil {
 		ctx = f.ctx
 	}
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-	dispatchJob, err := f.jobFromAny(job)
+	return f.dispatch(ctx, job)
+}
+
+// dispatch validates and freezes one accepted job before publishing it to all
+// fake views that share this state.
+func (f *FakeQueue) dispatch(ctx context.Context, job any) error {
+	dispatchJob, err := normalizeDispatchJob(job, f.state.defaultQueue)
 	if err != nil {
+		return err
+	}
+	if err := dispatchJob.validate(); err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	queueName := dispatchJob.jobOptions().queueName
@@ -105,14 +122,14 @@ func (f *FakeQueue) Dispatch(job any) error {
 	}
 	f.state.mu.Lock()
 	f.state.records = append(f.state.records, DispatchRecord{
-		Job:   dispatchJob,
+		Job:   cloneFakeJob(dispatchJob),
 		Queue: queueName,
 	})
 	f.state.mu.Unlock()
 	return nil
 }
 
-// Register associates a handler with a job type.
+// Register is a compatibility no-op because the recording fake never executes handlers.
 // @group Testing
 //
 // Example: register no-op on fake
@@ -121,7 +138,7 @@ func (f *FakeQueue) Dispatch(job any) error {
 //	fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 func (f *FakeQueue) Register(string, Handler) {}
 
-// StartWorkers starts worker execution.
+// StartWorkers is a compatibility no-op because the recording fake owns no workers.
 // @group Testing
 //
 // Example: start fake workers
@@ -131,7 +148,7 @@ func (f *FakeQueue) Register(string, Handler) {}
 //	_ = err
 func (f *FakeQueue) StartWorkers(context.Context) error { return nil }
 
-// Workers sets desired worker concurrency before StartWorkers.
+// Workers preserves fluent lifecycle compatibility without creating workers.
 // @group Testing
 //
 // Example: set worker count
@@ -142,7 +159,7 @@ func (f *FakeQueue) StartWorkers(context.Context) error { return nil }
 //	// Output: true
 func (f *FakeQueue) Workers(int) queueRuntime { return f }
 
-// Shutdown drains running work and releases resources.
+// Shutdown is a compatibility no-op because the recording fake owns no worker resources.
 // @group Testing
 //
 // Example: shutdown fake queue
@@ -159,7 +176,7 @@ func (f *FakeQueue) Shutdown(context.Context) error { return nil }
 //
 //	fake := queue.NewFake()
 //	fmt.Println(fake.Ready(context.Background()) == nil)
-//	// true
+//	// Output: true
 func (f *FakeQueue) Ready(ctx context.Context) error {
 	if ctx == nil {
 		return nil
@@ -174,6 +191,30 @@ func (f *FakeQueue) BusRegister(string, busruntime.Handler) {}
 // BusDispatch satisfies the internal orchestration runtime adapter.
 // @group Testing
 func (f *FakeQueue) BusDispatch(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	job := fakeBusJob(jobType, payload, opts, true)
+	if fakeWorkflowDeliverySuppressed(ctx, jobType) {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return job.validate()
+	}
+	return f.dispatch(ctx, job)
+}
+
+// BusDispatchDirect records the application job and its correlation metadata
+// without introducing the legacy workflow envelope.
+// @group Testing
+func (f *FakeQueue) BusDispatchDirect(ctx context.Context, jobType string, payload []byte, metadata busruntime.DeliveryMetadata, opts busruntime.JobOptions) error {
+	job := DriverWithMetadata(fakeBusJob(jobType, payload, opts, false), metadata)
+	return f.dispatch(ctx, job)
+}
+
+// fakeBusJob mirrors the production runtime adapter so explicit retry zero and
+// workflow identity retain their delivery meaning in tests.
+func fakeBusJob(jobType string, payload []byte, opts busruntime.JobOptions, legacyIdentity bool) Job {
 	job := NewJob(jobType).Payload(payload)
 	if opts.Queue != "" {
 		job = job.OnQueue(opts.Queue)
@@ -184,19 +225,21 @@ func (f *FakeQueue) BusDispatch(ctx context.Context, jobType string, payload []b
 	if opts.Timeout > 0 {
 		job = job.Timeout(opts.Timeout)
 	}
-	if opts.Retry > 0 {
-		job = job.Retry(opts.Retry)
-	}
+	job = job.Retry(opts.Retry)
 	if opts.Backoff > 0 {
 		job = job.Backoff(opts.Backoff)
 	}
 	if opts.UniqueFor > 0 {
 		job = job.UniqueFor(opts.UniqueFor)
+		if legacyIdentity {
+			logical := resolveLogicalJob(jobType, payload)
+			job = job.withLogicalIdentity(logical.jobType, logical.payload)
+		}
 	}
-	return f.WithContext(ctx).Dispatch(job)
+	return job
 }
 
-// Reset clears all recorded dispatches.
+// Reset clears direct dispatches and all workflow records through every fake view.
 // @group Testing
 //
 // Example: reset records
@@ -210,12 +253,16 @@ func (f *FakeQueue) BusDispatch(ctx context.Context, jobType string, payload []b
 //	// 1
 //	// 0
 func (f *FakeQueue) Reset() {
+	f.state.workflowOps.Lock()
+	defer f.state.workflowOps.Unlock()
 	f.state.mu.Lock()
-	f.state.records = f.state.records[:0]
+	f.state.records = nil
+	f.state.workflow.resetLocked()
 	f.state.mu.Unlock()
 }
 
-// Records returns a copy of all dispatch records.
+// Records returns isolated records for accepted direct dispatches.
+// Chain and batch creation is available through ChainRecords and BatchRecords.
 // @group Testing
 //
 // Example: read records
@@ -229,11 +276,16 @@ func (f *FakeQueue) Records() []DispatchRecord {
 	f.state.mu.RLock()
 	defer f.state.mu.RUnlock()
 	out := make([]DispatchRecord, len(f.state.records))
-	copy(out, f.state.records)
+	for i, record := range f.state.records {
+		out[i] = DispatchRecord{
+			Job:   cloneFakeJob(record.Job),
+			Queue: record.Queue,
+		}
+	}
 	return out
 }
 
-// AssertNothingDispatched fails when any dispatch was recorded.
+// AssertNothingDispatched fails when any direct dispatch was recorded.
 // @group Testing
 //
 // Example: assert nothing dispatched
@@ -247,7 +299,7 @@ func (f *FakeQueue) AssertNothingDispatched(t testing.TB) {
 	}
 }
 
-// AssertCount fails when dispatch count is not expected.
+// AssertCount fails when the direct dispatch count is not expected.
 // @group Testing
 //
 // Example: assert dispatch count
@@ -340,42 +392,22 @@ func (f *FakeQueue) AssertNotDispatched(t testing.TB, jobType string) {
 	}
 }
 
-func (f *FakeQueue) jobFromAny(job any) (Job, error) {
-	if job, ok := job.(Job); ok {
-		if job.Type == "" {
-			return Job{}, fmt.Errorf("dispatch job type is required")
-		}
-		return job, nil
+// cloneFakeJob isolates the mutable payload and option pointers exposed by
+// driver helpers so inspection cannot rewrite previously accepted evidence.
+func cloneFakeJob(job Job) Job {
+	job.payload = cloneWorkflowPayload(job.payload)
+	job.options.logicalPayload = cloneWorkflowPayload(job.options.logicalPayload)
+	if job.options.timeout != nil {
+		value := *job.options.timeout
+		job.options.timeout = &value
 	}
-	if job == nil {
-		return Job{}, fmt.Errorf("dispatch job is nil")
+	if job.options.maxRetry != nil {
+		value := *job.options.maxRetry
+		job.options.maxRetry = &value
 	}
-	jobType := fakeJobTypeFromValue(job)
-	if jobType == "" {
-		return Job{}, fmt.Errorf("dispatch job type could not be inferred")
+	if job.options.backoff != nil {
+		value := *job.options.backoff
+		job.options.backoff = &value
 	}
-	if typed, ok := job.(interface{ JobType() string }); ok {
-		if t := typed.JobType(); t != "" {
-			jobType = t
-		}
-	}
-	payload, err := json.Marshal(job)
-	if err != nil {
-		return Job{}, fmt.Errorf("marshal dispatch job: %w", err)
-	}
-	return NewJob(jobType).Payload(payload).OnQueue(f.state.defaultQueue), nil
-}
-
-func fakeJobTypeFromValue(v any) string {
-	t := reflect.TypeOf(v)
-	if t == nil {
-		return ""
-	}
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Name() == "" {
-		return ""
-	}
-	return t.Name()
+	return job
 }

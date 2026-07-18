@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	// Shutdown drains running work and releases resources.
+	// Shutdown is a compatibility no-op because the recording fake owns no worker resources.
 
 	// Example: shutdown fake queue
 	fake := queue.NewFake()

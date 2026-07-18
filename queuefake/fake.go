@@ -7,15 +7,19 @@ import (
 	"github.com/goforj/queue/bus"
 )
 
-// Fake exposes a queue test harness with assertion helpers for dispatched jobs.
-// It wraps queue.NewFake() so tests can inject a queue fake without external services.
+// Fake preserves the historical queuefake harness as two typed views over one
+// canonical queue.FakeQueue state.
+//
+// Deprecated: use queue.NewFake directly.
 // @group Testing
 type Fake struct {
 	q *queue.FakeQueue
 	b *bus.Fake
 }
 
-// New creates a fake queue harness backed by queue.NewFake().
+// New creates compatibility views backed by one canonical root fake.
+//
+// Deprecated: use queue.NewFake directly.
 // @group Testing
 //
 // Example: queuefake harness
@@ -26,9 +30,10 @@ type Fake struct {
 //	f.AssertDispatched(t, "emails:send")
 //	f.AssertCount(t, 1)
 func New() *Fake {
+	workflow := bus.NewFake()
 	return &Fake{
-		q: queue.NewFake(),
-		b: bus.NewFake(),
+		q: workflow.Queue(),
+		b: workflow,
 	}
 }
 
@@ -42,7 +47,9 @@ func New() *Fake {
 //	_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 func (f *Fake) Queue() *queue.FakeQueue { return f.q }
 
-// Workflow returns the workflow/orchestration fake for chain/batch assertions.
+// Workflow returns the deprecated bus view over the same state as Queue.
+//
+// Deprecated: call Queue().Chain or Queue().Batch.
 // @group Testing
 //
 // Example: workflow fake
@@ -56,7 +63,8 @@ func (f *Fake) Queue() *queue.FakeQueue { return f.q }
 //	f.AssertChained(t, []string{"a", "b"})
 func (f *Fake) Workflow() *bus.Fake { return f.b }
 
-// Reset clears recorded dispatches.
+// Reset clears direct, chain, batch, and workflow-store state atomically from
+// every compatibility view.
 // @group Testing
 //
 // Example: reset recorded dispatches
@@ -130,7 +138,8 @@ func (f *Fake) CountOn(queueName, jobType string) int {
 	return count
 }
 
-// Workflow assertion wrappers (forwarded to bus.Fake) keep tests queuefake-first.
+// Workflow assertion wrappers retain source compatibility while reading the
+// same direct records as the root queue assertions.
 
 // AssertNothingWorkflowDispatched fails when any workflow dispatch was recorded.
 // @group Testing
@@ -139,7 +148,10 @@ func (f *Fake) CountOn(queueName, jobType string) int {
 //
 //	f := queuefake.New()
 //	f.AssertNothingWorkflowDispatched(t)
-func (f *Fake) AssertNothingWorkflowDispatched(t testing.TB) { f.b.AssertNothingDispatched(t) }
+func (f *Fake) AssertNothingWorkflowDispatched(t testing.TB) {
+	t.Helper()
+	f.b.AssertNothingDispatched(t)
+}
 
 // AssertWorkflowDispatched fails when jobType was not workflow-dispatched.
 // @group Testing
@@ -147,9 +159,12 @@ func (f *Fake) AssertNothingWorkflowDispatched(t testing.TB) { f.b.AssertNothing
 // Example: assert workflow dispatch by type
 //
 //	f := queuefake.New()
-//	_, _ = f.Workflow().Chain(bus.NewJob("a", nil)).Dispatch(nil)
+//	_, _ = f.Workflow().Dispatch(nil, bus.NewJob("a", nil))
 //	f.AssertWorkflowDispatched(t, "a")
-func (f *Fake) AssertWorkflowDispatched(t testing.TB, jobType string) { f.b.AssertDispatched(t, jobType) }
+func (f *Fake) AssertWorkflowDispatched(t testing.TB, jobType string) {
+	t.Helper()
+	f.b.AssertDispatched(t, jobType)
+}
 
 // AssertWorkflowDispatchedOn fails when jobType was not workflow-dispatched on queueName.
 // @group Testing
@@ -157,9 +172,10 @@ func (f *Fake) AssertWorkflowDispatched(t testing.TB, jobType string) { f.b.Asse
 // Example: assert workflow dispatch on queue
 //
 //	f := queuefake.New()
-//	_, _ = f.Workflow().Chain(bus.NewJob("a", nil)).OnQueue("critical").Dispatch(nil)
+//	_, _ = f.Workflow().Dispatch(nil, bus.NewJob("a", nil).OnQueue("critical"))
 //	f.AssertWorkflowDispatchedOn(t, "critical", "a")
 func (f *Fake) AssertWorkflowDispatchedOn(t testing.TB, queueName, jobType string) {
+	t.Helper()
 	f.b.AssertDispatchedOn(t, queueName, jobType)
 }
 
@@ -170,10 +186,11 @@ func (f *Fake) AssertWorkflowDispatchedOn(t testing.TB, queueName, jobType strin
 //
 //	f := queuefake.New()
 //	wf := f.Workflow()
-//	_, _ = wf.Chain(bus.NewJob("a", nil)).Dispatch(nil)
-//	_, _ = wf.Chain(bus.NewJob("a", nil)).Dispatch(nil)
+//	_, _ = wf.Dispatch(nil, bus.NewJob("a", nil))
+//	_, _ = wf.Dispatch(nil, bus.NewJob("a", nil))
 //	f.AssertWorkflowDispatchedTimes(t, "a", 2)
 func (f *Fake) AssertWorkflowDispatchedTimes(t testing.TB, jobType string, expected int) {
+	t.Helper()
 	f.b.AssertDispatchedTimes(t, jobType, expected)
 }
 
@@ -184,7 +201,10 @@ func (f *Fake) AssertWorkflowDispatchedTimes(t testing.TB, jobType string, expec
 //
 //	f := queuefake.New()
 //	f.AssertWorkflowNotDispatched(t, "emails:send")
-func (f *Fake) AssertWorkflowNotDispatched(t testing.TB, jobType string) { f.b.AssertNotDispatched(t, jobType) }
+func (f *Fake) AssertWorkflowNotDispatched(t testing.TB, jobType string) {
+	t.Helper()
+	f.b.AssertNotDispatched(t, jobType)
+}
 
 // AssertChained fails if no recorded workflow chain matches expected job type order.
 // @group Testing
@@ -194,7 +214,10 @@ func (f *Fake) AssertWorkflowNotDispatched(t testing.TB, jobType string) { f.b.A
 //	f := queuefake.New()
 //	_, _ = f.Workflow().Chain(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(nil)
 //	f.AssertChained(t, []string{"a", "b"})
-func (f *Fake) AssertChained(t testing.TB, expected []string) { f.b.AssertChained(t, expected) }
+func (f *Fake) AssertChained(t testing.TB, expected []string) {
+	t.Helper()
+	f.b.AssertChained(t, expected)
+}
 
 // AssertBatchCount fails if total recorded workflow batch count does not match n.
 // @group Testing
@@ -204,7 +227,10 @@ func (f *Fake) AssertChained(t testing.TB, expected []string) { f.b.AssertChaine
 //	f := queuefake.New()
 //	_, _ = f.Workflow().Batch(bus.NewJob("a", nil)).Dispatch(nil)
 //	f.AssertBatchCount(t, 1)
-func (f *Fake) AssertBatchCount(t testing.TB, n int) { f.b.AssertBatchCount(t, n) }
+func (f *Fake) AssertBatchCount(t testing.TB, n int) {
+	t.Helper()
+	f.b.AssertBatchCount(t, n)
+}
 
 // AssertNothingBatched fails if any workflow batch was recorded.
 // @group Testing
@@ -213,7 +239,10 @@ func (f *Fake) AssertBatchCount(t testing.TB, n int) { f.b.AssertBatchCount(t, n
 //
 //	f := queuefake.New()
 //	f.AssertNothingBatched(t)
-func (f *Fake) AssertNothingBatched(t testing.TB) { f.b.AssertNothingBatched(t) }
+func (f *Fake) AssertNothingBatched(t testing.TB) {
+	t.Helper()
+	f.b.AssertNothingBatched(t)
+}
 
 // AssertBatched fails unless at least one recorded workflow batch matches predicate.
 // @group Testing
@@ -224,6 +253,7 @@ func (f *Fake) AssertNothingBatched(t testing.TB) { f.b.AssertNothingBatched(t) 
 //	_, _ = f.Workflow().Batch(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(nil)
 //	f.AssertBatched(t, func(spec bus.BatchSpec) bool { return len(spec.JobTypes) == 2 })
 func (f *Fake) AssertBatched(t testing.TB, predicate func(spec bus.BatchSpec) bool) {
+	t.Helper()
 	f.b.AssertBatched(t, predicate)
 }
 
@@ -234,7 +264,10 @@ func (f *Fake) AssertBatched(t testing.TB, predicate func(spec bus.BatchSpec) bo
 //
 //	f := queuefake.New()
 //	f.AssertNothingDispatched(t)
-func (f *Fake) AssertNothingDispatched(t testing.TB) { f.q.AssertNothingDispatched(t) }
+func (f *Fake) AssertNothingDispatched(t testing.TB) {
+	t.Helper()
+	f.q.AssertNothingDispatched(t)
+}
 
 // AssertCount fails when total dispatch count is not expected.
 // @group Testing
@@ -246,7 +279,10 @@ func (f *Fake) AssertNothingDispatched(t testing.TB) { f.q.AssertNothingDispatch
 //	_ = q.Dispatch(queue.NewJob("a"))
 //	_ = q.Dispatch(queue.NewJob("b"))
 //	f.AssertCount(t, 2)
-func (f *Fake) AssertCount(t testing.TB, expected int) { f.q.AssertCount(t, expected) }
+func (f *Fake) AssertCount(t testing.TB, expected int) {
+	t.Helper()
+	f.q.AssertCount(t, expected)
+}
 
 // AssertDispatched fails when jobType was not dispatched.
 // @group Testing
@@ -256,7 +292,10 @@ func (f *Fake) AssertCount(t testing.TB, expected int) { f.q.AssertCount(t, expe
 //	f := queuefake.New()
 //	_ = f.Queue().Dispatch(queue.NewJob("emails:send"))
 //	f.AssertDispatched(t, "emails:send")
-func (f *Fake) AssertDispatched(t testing.TB, jobType string) { f.q.AssertDispatched(t, jobType) }
+func (f *Fake) AssertDispatched(t testing.TB, jobType string) {
+	t.Helper()
+	f.q.AssertDispatched(t, jobType)
+}
 
 // AssertDispatchedOn fails when jobType was not dispatched on queueName.
 // @group Testing
@@ -267,6 +306,7 @@ func (f *Fake) AssertDispatched(t testing.TB, jobType string) { f.q.AssertDispat
 //	_ = f.Queue().Dispatch(queue.NewJob("emails:send").OnQueue("critical"))
 //	f.AssertDispatchedOn(t, "critical", "emails:send")
 func (f *Fake) AssertDispatchedOn(t testing.TB, queueName, jobType string) {
+	t.Helper()
 	f.q.AssertDispatchedOn(t, queueName, jobType)
 }
 
@@ -281,6 +321,7 @@ func (f *Fake) AssertDispatchedOn(t testing.TB, queueName, jobType string) {
 //	_ = q.Dispatch(queue.NewJob("emails:send"))
 //	f.AssertDispatchedTimes(t, "emails:send", 2)
 func (f *Fake) AssertDispatchedTimes(t testing.TB, jobType string, expected int) {
+	t.Helper()
 	f.q.AssertDispatchedTimes(t, jobType, expected)
 }
 
@@ -291,4 +332,7 @@ func (f *Fake) AssertDispatchedTimes(t testing.TB, jobType string, expected int)
 //
 //	f := queuefake.New()
 //	f.AssertNotDispatched(t, "emails:send")
-func (f *Fake) AssertNotDispatched(t testing.TB, jobType string) { f.q.AssertNotDispatched(t, jobType) }
+func (f *Fake) AssertNotDispatched(t testing.TB, jobType string) {
+	t.Helper()
+	f.q.AssertNotDispatched(t, jobType)
+}
