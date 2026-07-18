@@ -1,10 +1,13 @@
 package redisqueue
 
 import (
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queueconfig"
 	backend "github.com/hibiken/asynq"
 )
@@ -80,6 +83,30 @@ func TestServerConfig_ShutdownTimeoutPassthrough(t *testing.T) {
 	cfg := serverConfig(Config{ShutdownTimeout: 5 * time.Second}, 2)
 	if cfg.ShutdownTimeout != 5*time.Second {
 		t.Fatalf("expected shutdown timeout passthrough, got %s", cfg.ShutdownTimeout)
+	}
+}
+
+// TestServerConfig_UncommittedErrorsDoNotCountAsFailures verifies the configured predicate preserves retry count while Asynq still has transport capacity.
+func TestServerConfig_UncommittedErrorsDoNotCountAsFailures(t *testing.T) {
+	isFailure := serverConfig(Config{}, 1).IsFailure
+	if isFailure == nil {
+		t.Fatal("expected failure classifier")
+	}
+	cause := errors.New("outcome store unavailable")
+	if isFailure(nil) {
+		t.Fatal("nil result must not count as a failure")
+	}
+	if !isFailure(cause) {
+		t.Fatal("application error must count as a failure")
+	}
+	if isFailure(busruntime.Uncommitted(cause)) {
+		t.Fatal("uncommitted error must not count as a failure")
+	}
+	if isFailure(fmt.Errorf("commit callback: %w", busruntime.Uncommitted(cause))) {
+		t.Fatal("wrapped uncommitted error must not count as a failure")
+	}
+	if !isFailure(busruntime.Permanent(cause)) {
+		t.Fatal("permanent application error must count as a failure")
 	}
 }
 

@@ -216,3 +216,38 @@ func TestNewQueueFromDriver_NativeBackendOptionalCapabilities(t *testing.T) {
 		t.Fatal("expected native backend shutdown path to be used")
 	}
 }
+
+// TestNewQueueFromDriverSharesObserverSink verifies late root options reach the same sink retained by driver workers.
+func TestNewQueueFromDriverSharesObserverSink(t *testing.T) {
+	var configEvents []queue.Event
+	var optionEvents []queue.Event
+	sink := NewObserverSink(queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+		configEvents = append(configEvents, event)
+	}))
+
+	q, err := NewQueueFromDriver(
+		queue.Config{Driver: queue.DriverNATS, DefaultQueue: "default", Observer: sink},
+		&externalBackendStub{driver: queue.DriverNATS},
+		nil,
+		queue.WithObserver(queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+			optionEvents = append(optionEvents, event)
+		})),
+	)
+	if err != nil {
+		t.Fatalf("new queue from driver failed: %v", err)
+	}
+	if q.Driver() != queue.DriverNATS {
+		t.Fatalf("driver = %q, want nats", q.Driver())
+	}
+
+	queue.SafeObserve(context.Background(), sink, queue.Event{Kind: queue.EventRepublishFailed})
+	if len(configEvents) != 1 || len(optionEvents) != 1 {
+		t.Fatalf("captured sink counts = config:%d option:%d, want 1/1", len(configEvents), len(optionEvents))
+	}
+	if configEvents[0].EventID == "" || configEvents[0].EventID != optionEvents[0].EventID {
+		t.Fatalf("captured sink event identity differs: config=%+v option=%+v", configEvents[0], optionEvents[0])
+	}
+	if configEvents[0].Layer != queue.EventLayerWorker {
+		t.Fatalf("republish_failed layer = %q, want worker", configEvents[0].Layer)
+	}
+}

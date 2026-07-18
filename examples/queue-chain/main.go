@@ -20,6 +20,10 @@ func main() {
 	}
 	q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
 	q.Register("second", func(ctx context.Context, m queue.Message) error { return nil })
+	if err := q.StartWorkers(context.Background()); err != nil {
+		return
+	}
+	defer q.Shutdown(context.Background())
 	_, _ = q.Chain(
 		queue.NewJob("first"),
 		queue.NewJob("second"),

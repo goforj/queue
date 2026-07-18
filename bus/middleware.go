@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/goforj/queue/busruntime"
 )
 
 type Next func(ctx context.Context, jc Context) error
@@ -108,17 +110,10 @@ func (f FailOnError) Handle(ctx context.Context, jc Context, next Next) error {
 		return nil
 	}
 	if f.When == nil || f.When(err) {
-		return fatalError{cause: err}
+		return busruntime.Permanent(fmt.Errorf("fatal bus error: %w", err))
 	}
 	return err
 }
-
-type fatalError struct {
-	cause error
-}
-
-func (f fatalError) Error() string { return fmt.Sprintf("fatal bus error: %v", f.cause) }
-func (f fatalError) Unwrap() error { return f.cause }
 
 type RateLimiter interface {
 	Allow(ctx context.Context, key string) (allowed bool, retryAfter time.Duration, err error)

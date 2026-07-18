@@ -19,6 +19,10 @@ func main() {
 		return
 	}
 	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+	if err := q.StartWorkers(context.Background()); err != nil {
+		return
+	}
+	defer q.Shutdown(context.Background())
 	job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
 	_, _ = q.Dispatch(job)
 }

@@ -132,7 +132,13 @@ func TestQueueCommonDispatchAndNativeRuntimeWrappers(t *testing.T) {
 	inner := &queueBackendRecorder{}
 	worker := &runtimeBackendStub{}
 	common := &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSync}
-	q := &nativeQueueRuntime{common: common, runtime: worker, registered: map[string]Handler{}}
+	q := &nativeQueueRuntime{
+		common:  common,
+		runtime: worker,
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
+	}
 
 	if q.Driver() != DriverSync {
 		t.Fatalf("expected driver sync, got %q", q.Driver())
@@ -168,6 +174,45 @@ func TestQueueCommonDispatchAndNativeRuntimeWrappers(t *testing.T) {
 	}
 }
 
+func TestRuntimeWithContextSharesLifecycleState(t *testing.T) {
+	native := &nativeQueueRuntime{
+		common:  &queueCommon{cfg: Config{DefaultQueue: "default"}},
+		runtime: &runtimeBackendStub{},
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
+	}
+	nativeDerived, ok := native.WithContext(context.Background()).(*nativeQueueRuntime)
+	if !ok {
+		t.Fatal("expected a derived native runtime")
+	}
+	if nativeDerived.nativeQueueRuntimeState != native.nativeQueueRuntimeState {
+		t.Fatal("derived native runtime does not share lifecycle state")
+	}
+	nativeDerived.Workers(3)
+	if native.workers != 3 {
+		t.Fatalf("native worker count = %d, want shared value 3", native.workers)
+	}
+
+	external := &externalQueueRuntime{
+		common: &queueCommon{cfg: Config{DefaultQueue: "default"}},
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
+	}
+	externalDerived, ok := external.WithContext(context.Background()).(*externalQueueRuntime)
+	if !ok {
+		t.Fatal("expected a derived external runtime")
+	}
+	if externalDerived.externalQueueRuntimeState != external.externalQueueRuntimeState {
+		t.Fatal("derived external runtime does not share lifecycle state")
+	}
+	externalDerived.Workers(5)
+	if external.workers != 5 {
+		t.Fatalf("external worker count = %d, want shared value 5", external.workers)
+	}
+}
+
 func TestPhysicalQueueNameInfersTargetPrefixFromDefaultQueue(t *testing.T) {
 	tests := []struct {
 		defaultQueue string
@@ -194,6 +239,9 @@ func TestQueueCommonDispatchPhysicalizesTargetQueues(t *testing.T) {
 	q := &nativeQueueRuntime{
 		common:  &queueCommon{inner: inner, cfg: Config{DefaultQueue: "billing_default"}, driver: DriverSync},
 		runtime: &runtimeBackendStub{},
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
 	}
 
 	if err := q.Dispatch(NewJob("job:explicit").OnQueue("reports")); err != nil {
@@ -220,10 +268,12 @@ func TestExternalQueueRuntimeRegisterShutdownAndWorkers(t *testing.T) {
 	worker := &runtimeBackendStub{}
 	common := &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverNATS}
 	q := &externalQueueRuntime{
-		common:     common,
-		registered: map[string]Handler{},
-		worker:     worker,
-		started:    true,
+		common: common,
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: map[string]Handler{},
+			worker:     worker,
+			started:    true,
+		},
 	}
 
 	q.Workers(3)
@@ -281,16 +331,20 @@ func TestRuntimeBusWrappers_NilRegisterAndDispatch(t *testing.T) {
 	inner := &queueBackendRecorder{}
 	nativeBackend := &runtimeBackendStub{}
 	native := &nativeQueueRuntime{
-		common:     &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
-		runtime:    nativeBackend,
-		registered: map[string]Handler{},
+		common:  &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+		runtime: nativeBackend,
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
 	}
 	externalWorker := &runtimeBackendStub{}
 	external := &externalQueueRuntime{
-		common:     &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverNATS},
-		registered: map[string]Handler{},
-		worker:     externalWorker,
-		started:    true,
+		common: &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverNATS},
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: map[string]Handler{},
+			worker:     externalWorker,
+			started:    true,
+		},
 	}
 
 	native.BusRegister("job:nil:native", nil)
@@ -327,12 +381,73 @@ func TestRuntimeBusWrappers_NilRegisterAndDispatch(t *testing.T) {
 	}
 }
 
+// TestRuntimeBusRegisterPropagatesDeliveryAttempt verifies native and external adapters expose physical retry metadata to orchestration.
+func TestRuntimeBusRegisterPropagatesDeliveryAttempt(t *testing.T) {
+	tests := []struct {
+		name     string
+		register func(string, busruntime.Handler) Handler
+	}{
+		{
+			name: "native",
+			register: func(jobType string, handler busruntime.Handler) Handler {
+				native := &nativeQueueRuntime{
+					common:  &queueCommon{driver: DriverSync},
+					runtime: &runtimeBackendStub{},
+					nativeQueueRuntimeState: &nativeQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+				native.BusRegister(jobType, handler)
+				return native.registered[jobType]
+			},
+		},
+		{
+			name: "external",
+			register: func(jobType string, handler busruntime.Handler) Handler {
+				external := &externalQueueRuntime{
+					common: &queueCommon{driver: DriverNATS},
+					externalQueueRuntimeState: &externalQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+				external.BusRegister(jobType, handler)
+				return external.registered[jobType]
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const jobType = "job:attempt"
+			var got busruntime.DeliveryAttempt
+			var ok bool
+			handler := test.register(jobType, func(ctx context.Context, _ busruntime.InboundJob) error {
+				got, ok = busruntime.DeliveryAttemptFromContext(ctx)
+				return nil
+			})
+			if handler == nil {
+				t.Fatal("bus handler was not registered")
+			}
+			job := DriverWithAttempt(NewJob(jobType).Retry(4), 2)
+			if err := handler(context.Background(), job); err != nil {
+				t.Fatalf("invoke bus handler: %v", err)
+			}
+			want := busruntime.DeliveryAttempt{Number: 2, MaxRetry: 4}
+			if !ok || got != want {
+				t.Fatalf("delivery attempt = %+v, %t; want %+v, true", got, ok, want)
+			}
+		})
+	}
+}
+
 func TestRuntimeBusDispatchPhysicalizesTargetQueue(t *testing.T) {
 	inner := &queueBackendRecorder{}
 	native := &nativeQueueRuntime{
-		common:     &queueCommon{inner: inner, cfg: Config{DefaultQueue: "billing_default"}, driver: DriverSync},
-		runtime:    &runtimeBackendStub{},
-		registered: map[string]Handler{},
+		common:  &queueCommon{inner: inner, cfg: Config{DefaultQueue: "billing_default"}, driver: DriverSync},
+		runtime: &runtimeBackendStub{},
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
 	}
 
 	if err := native.BusDispatch(context.Background(), "job:native", []byte(`{"n":1}`), busruntime.JobOptions{Queue: "reports"}); err != nil {
@@ -401,7 +516,12 @@ func TestExternalQueueRuntimePauseResumeStatsWrappers(t *testing.T) {
 		},
 	}
 	common := &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverNull}
-	q := &externalQueueRuntime{common: common, registered: map[string]Handler{}}
+	q := &externalQueueRuntime{
+		common: common,
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
+	}
 
 	if err := q.Pause(context.Background(), "default"); err != nil {
 		t.Fatalf("pause failed: %v", err)
@@ -443,9 +563,11 @@ func TestNativeRuntimeStartWorkersErrorPath(t *testing.T) {
 	inner := &queueBackendRecorder{}
 	worker := &runtimeBackendStub{startErr: errors.New("start failed")}
 	q := &nativeQueueRuntime{
-		common:     &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
-		runtime:    worker,
-		registered: map[string]Handler{"job:one": func(context.Context, Job) error { return nil }},
+		common:  &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+		runtime: worker,
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{"job:one": func(context.Context, Job) error { return nil }},
+		},
 	}
 	if err := q.StartWorkers(context.Background()); err == nil {
 		t.Fatal("expected start workers error")
@@ -471,7 +593,13 @@ func TestQueueCommonWrapRegisteredHandlerWithoutObserver(t *testing.T) {
 }
 
 func TestWorkersSetOnlyBeforeStartNative(t *testing.T) {
-	q := &nativeQueueRuntime{common: &queueCommon{cfg: Config{}}, runtime: &runtimeBackendStub{}}
+	q := &nativeQueueRuntime{
+		common:  &queueCommon{cfg: Config{}},
+		runtime: &runtimeBackendStub{},
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
+	}
 	q.Workers(0)
 	if q.workers != 0 {
 		t.Fatalf("expected workers unchanged for non-positive, got %d", q.workers)
@@ -503,8 +631,10 @@ func TestQueueCommonPauseResumeStatsUnsupported(t *testing.T) {
 func TestExternalQueueRuntimeStartWorkersErrorBranches(t *testing.T) {
 	t.Run("factory error for unsupported driver", func(t *testing.T) {
 		q := &externalQueueRuntime{
-			common:     &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{Driver: Driver("unknown")}, driver: Driver("unknown")},
-			registered: map[string]Handler{},
+			common: &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{Driver: Driver("unknown")}, driver: Driver("unknown")},
+			externalQueueRuntimeState: &externalQueueRuntimeState{
+				registered: map[string]Handler{},
+			},
 		}
 		if err := q.StartWorkers(context.Background()); err == nil {
 			t.Fatal("expected start workers error for unsupported driver")
@@ -521,11 +651,13 @@ func TestExternalQueueRuntimeStartWorkersErrorBranches(t *testing.T) {
 				cfg:    Config{Driver: DriverNATS},
 				driver: DriverNATS,
 			},
-			registered: map[string]Handler{
-				"job:nats": func(context.Context, Job) error { return nil },
-			},
 			newWorker: func(int) (driverWorkerBackend, error) {
 				return nil, errors.New("dial failed")
+			},
+			externalQueueRuntimeState: &externalQueueRuntimeState{
+				registered: map[string]Handler{
+					"job:nats": func(context.Context, Job) error { return nil },
+				},
 			},
 		}
 		if err := q.StartWorkers(context.Background()); err == nil {

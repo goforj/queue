@@ -8,13 +8,15 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queuecore"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type ackRecorder struct {
-	acks  int
-	nacks int
+	acks        int
+	nacks       int
+	nackRequeue bool
 }
 
 func (a *ackRecorder) Ack(_ uint64, _ bool) error {
@@ -22,8 +24,10 @@ func (a *ackRecorder) Ack(_ uint64, _ bool) error {
 	return nil
 }
 
-func (a *ackRecorder) Nack(_ uint64, _ bool, _ bool) error {
+// Nack records whether the worker requested broker redelivery.
+func (a *ackRecorder) Nack(_ uint64, _ bool, requeue bool) error {
 	a.nacks++
+	a.nackRequeue = requeue
 	return nil
 }
 
@@ -130,7 +134,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w := &rabbitMQWorker{
 			handlers: map[string]queue.Handler{},
 			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
-			observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+			observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 		}
 		body, err := json.Marshal(rabbitMQMessage{Type: "job:future", Queue: "default", AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli()})
 		if err != nil {
@@ -143,6 +147,9 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		if len(events) == 0 || events[0].Kind != queue.EventRepublishFailed || events[0].Driver != queue.DriverRabbitMQ {
 			t.Fatalf("expected republish_failed rabbitmq event, got %+v", events)
 		}
+		if events[0].Layer != queue.EventLayerWorker {
+			t.Fatalf("republish_failed layer = %q, want worker", events[0].Layer)
+		}
 	})
 
 	t.Run("republish failure unwraps bus envelope job type", func(t *testing.T) {
@@ -151,13 +158,13 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w := &rabbitMQWorker{
 			handlers: map[string]queue.Handler{},
 			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
-			observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+			observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 		}
 		body, err := json.Marshal(rabbitMQMessage{
-			Type:          "job:future",
+			Type:          "bus:job",
 			Queue:         "default",
 			AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli(),
-			Payload:       []byte(`{"job":{"type":"monitoring:check"}}`),
+			Payload:       []byte(`{"schema_version":1,"dispatch_id":"dsp_rabbit","job_id":"job_rabbit","batch_id":"bat_rabbit","job":{"type":"monitoring:check"}}`),
 		})
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -166,8 +173,11 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		if len(events) == 0 {
 			t.Fatal("expected republish failure event")
 		}
-		if events[0].JobType != "job:future" {
-			t.Fatalf("expected non-bus job type to pass through, got %q", events[0].JobType)
+		if events[0].JobType != "monitoring:check" {
+			t.Fatalf("expected unwrapped observed job type, got %q", events[0].JobType)
+		}
+		if events[0].DispatchID != "dsp_rabbit" || events[0].JobID != "job_rabbit" || events[0].BatchID != "bat_rabbit" {
+			t.Fatalf("expected correlated rabbitmq event, got %+v", events[0])
 		}
 	})
 
@@ -204,6 +214,77 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 6})
 		if acks.acks != 1 {
 			t.Fatalf("expected ack once, got %d", acks.acks)
+		}
+	})
+}
+
+// TestRabbitMQWorker_AttemptDecisionSettlement verifies terminal and uncommitted outcomes choose acknowledgement behavior without consuming retries.
+func TestRabbitMQWorker_AttemptDecisionSettlement(t *testing.T) {
+	t.Run("permanent failure acks without republishing", func(t *testing.T) {
+		acks := &ackRecorder{}
+		var events []queue.Event
+		w := &rabbitMQWorker{
+			handlers: map[string]queue.Handler{
+				"job:permanent": func(ctx context.Context, _ queue.Job) error {
+					attempt, ok := busruntime.DeliveryAttemptFromContext(ctx)
+					if !ok || attempt.Number != 0 || attempt.MaxRetry != 3 {
+						t.Fatalf("unexpected delivery attempt: %+v, present=%t", attempt, ok)
+					}
+					return busruntime.Permanent(errors.New("invalid job"))
+				},
+			},
+			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
+			observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+		}
+		body, err := json.Marshal(rabbitMQMessage{Type: "job:permanent", Queue: "default", MaxRetry: 3})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 7})
+
+		if acks.acks != 1 || acks.nacks != 0 {
+			t.Fatalf("permanent failure must ack once, got ack=%d nack=%d", acks.acks, acks.nacks)
+		}
+		if len(events) != 0 {
+			t.Fatalf("permanent failure must not reach the republish path, got %+v", events)
+		}
+	})
+
+	t.Run("uncommitted failure nacks with requeue", func(t *testing.T) {
+		acks := &ackRecorder{}
+		var events []queue.Event
+		w := &rabbitMQWorker{
+			handlers: map[string]queue.Handler{
+				"job:uncommitted": func(ctx context.Context, _ queue.Job) error {
+					attempt, ok := busruntime.DeliveryAttemptFromContext(ctx)
+					if !ok || attempt.Number != 1 || attempt.MaxRetry != 4 {
+						t.Fatalf("unexpected delivery attempt: %+v, present=%t", attempt, ok)
+					}
+					return busruntime.Uncommitted(errors.New("store unavailable"))
+				},
+			},
+			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
+			observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+		}
+		body, err := json.Marshal(rabbitMQMessage{
+			Type:          "job:uncommitted",
+			Queue:         "default",
+			Attempt:       1,
+			MaxRetry:      4,
+			BackoffMillis: 1_000,
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 8})
+
+		if acks.acks != 0 || acks.nacks != 1 || !acks.nackRequeue {
+			t.Fatalf("uncommitted failure must nack with requeue, got ack=%d nack=%d requeue=%t", acks.acks, acks.nacks, acks.nackRequeue)
+		}
+		if len(events) != 0 {
+			t.Fatalf("uncommitted failure must not publish a replacement, got %+v", events)
 		}
 	})
 }

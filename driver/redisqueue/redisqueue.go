@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/internal/driverbridge"
 	"github.com/goforj/queue/queueconfig"
 	"github.com/goforj/queue/queuecore"
@@ -85,10 +86,11 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	if cfg.Addr == "" {
 		return nil, fmt.Errorf("redis addr is required")
 	}
+	observer := driverbridge.NewObserverSink(cfg.Observer)
 	rootCfg := queue.Config{
 		Driver:       queue.DriverRedis,
 		DefaultQueue: cfg.DefaultQueue,
-		Observer:     cfg.Observer,
+		Observer:     observer,
 		Logger:       cfg.Logger,
 	}
 	driverBackend := newRedisQueue(newRedisClient(cfg), newRedisInspector(cfg), newRedisTimelineStore(cfg), true)
@@ -100,7 +102,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 				DB:       cfg.DB,
 			}, serverConfig(cfg, workers)),
 			backend.NewServeMux(),
-			cfg.Observer,
+			observer,
 		), nil
 	}, opts...)
 	if err != nil {
@@ -110,7 +112,10 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 }
 
 func serverConfig(cfg Config, workers int) backend.Config {
-	serverCfg := backend.Config{Concurrency: workers}
+	serverCfg := backend.Config{
+		Concurrency: workers,
+		IsFailure:   redisAttemptIsFailure,
+	}
 	if queues := normalizeQueues(cfg.Queues, cfg.DefaultQueue); len(queues) > 0 {
 		serverCfg.Queues = queues
 	}
@@ -126,6 +131,11 @@ func serverConfig(cfg Config, workers int) backend.Config {
 		serverCfg.ShutdownTimeout = cfg.ShutdownTimeout
 	}
 	return serverCfg
+}
+
+// redisAttemptIsFailure keeps infrastructure redelivery from consuming Asynq's counter while retry capacity remains; Asynq evaluates final exhaustion before this predicate.
+func redisAttemptIsFailure(err error) bool {
+	return err != nil && !busruntime.IsUncommitted(err)
 }
 
 func normalizeQueues(raw map[string]int, fallbackDefault string) map[string]int {

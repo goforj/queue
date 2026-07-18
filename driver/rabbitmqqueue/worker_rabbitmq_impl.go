@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queuecore"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -178,7 +179,8 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 		return
 	}
 
-	runCtx := context.Background()
+	attempt := busruntime.DeliveryAttempt{Number: incoming.Attempt, MaxRetry: incoming.MaxRetry}
+	runCtx := busruntime.WithDeliveryAttempt(context.Background(), attempt)
 	if incoming.TimeoutMillis > 0 {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(runCtx, time.Duration(incoming.TimeoutMillis)*time.Millisecond)
@@ -194,13 +196,14 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 			incoming.Attempt,
 		),
 	)
-	if err == nil {
+	switch busruntime.ClassifyAttempt(attempt, err) {
+	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
 		_ = delivery.Ack(false)
 		return
-	}
-	if incoming.Attempt >= incoming.MaxRetry {
-		_ = delivery.Ack(false)
+	case busruntime.AttemptRedeliver:
+		_ = delivery.Nack(false, true)
 		return
+	case busruntime.AttemptRetry:
 	}
 	incoming.Attempt++
 	if incoming.BackoffMillis > 0 {
@@ -217,15 +220,21 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 }
 
 func (w *rabbitMQWorker) observeRepublishFailure(ctx context.Context, message rabbitMQMessage, err error) {
+	metadata := queue.ResolveObservedJobMetadata(message.Type, message.Payload)
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
-		Kind:     queue.EventRepublishFailed,
-		Driver:   queue.DriverRabbitMQ,
-		Queue:    queuecore.NormalizeQueueName(message.Queue),
-		JobType:  queue.ResolveObservedJobType(message.Type, message.Payload),
-		Attempt:  message.Attempt,
-		MaxRetry: message.MaxRetry,
-		Err:      err,
-		Time:     time.Now(),
+		Kind:       queue.EventRepublishFailed,
+		Driver:     queue.DriverRabbitMQ,
+		Queue:      queuecore.NormalizeQueueName(message.Queue),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		Attempt:    message.Attempt,
+		MaxRetry:   message.MaxRetry,
+		Err:        err,
+		Time:       time.Now(),
 	})
 }
 

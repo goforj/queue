@@ -22,8 +22,10 @@ func TestQueueErrorContract_DispatchCancellation(t *testing.T) {
 				cfg:    cfg,
 				driver: cfg.Driver,
 			},
-			runtime:    backend,
-			registered: make(map[string]Handler),
+			runtime: backend,
+			nativeQueueRuntimeState: &nativeQueueRuntimeState{
+				registered: make(map[string]Handler),
+			},
 		}
 		q, err := newQueueFromRuntime(rt)
 		if err != nil {

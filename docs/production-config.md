@@ -6,7 +6,7 @@ Treat these values as starting points. Tune them using workload measurements, in
 
 ## General Principles
 
-- Handlers should be idempotent (at-least-once delivery semantics).
+- Handlers should be idempotent. Durable backends may redeliver around settlement failures; Core NATS is currently ephemeral and does not provide an at-least-once queue guarantee.
 - Start with conservative concurrency, then increase while watching:
   - processing latency
   - retry/failure rate
@@ -163,8 +163,9 @@ Run dedicated workers (or worker pools) per queue class when needed.
 
 At minimum, wire:
 
-- runtime observer (`queue.Config.Observer`)
-- workflow observer (`queue.WithObserver(...)`) when using chains/batches/callbacks
+- one observer with `queue.WithObserver(...)` for queue, worker, and workflow events
+
+`queue.Config.Observer` remains a compatibility path and feeds the same event stream, but new applications should prefer the constructor option consistently across drivers.
 
 Track and alert on:
 

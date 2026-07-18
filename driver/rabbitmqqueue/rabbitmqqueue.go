@@ -54,10 +54,11 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("rabbitmq url is required")
 	}
+	observer := driverbridge.NewObserverSink(cfg.Observer)
 	rootCfg := queue.Config{
 		Driver:       queue.DriverRabbitMQ,
 		DefaultQueue: cfg.DefaultQueue,
-		Observer:     cfg.Observer,
+		Observer:     observer,
 	}
 	defaultQueue := queue.PhysicalQueueName(cfg.DefaultQueue, cfg.DefaultQueue)
 	return driverbridge.NewQueueFromDriver(rootCfg, newRabbitMQQueue(cfg.URL, defaultQueue), func(workers int) (any, error) {
@@ -65,7 +66,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 			DefaultQueue: defaultQueue,
 			RabbitMQURL:  cfg.URL,
 			Workers:      workers,
-			Observer:     cfg.Observer,
+			Observer:     observer,
 		}), nil
 	}, opts...)
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue/bus"
+	"github.com/goforj/queue/busruntime"
 )
 
 // Message is the handler message passed to the high-level queue runtime.
@@ -27,20 +28,28 @@ type ChainState = bus.ChainState
 type BatchState = bus.BatchState
 
 // WorkflowEventKind identifies high-level workflow runtime lifecycle events.
+//
+// Deprecated: use EventKind. Delivery and workflow facts now share one event model.
 // @group Queue
-type WorkflowEventKind = bus.EventKind
+type WorkflowEventKind = EventKind
 
 // WorkflowEvent is emitted by the high-level workflow runtime observer hooks.
+//
+// Deprecated: use Event. Delivery and workflow facts now share one event model.
 // @group Queue
-type WorkflowEvent = bus.Event
+type WorkflowEvent = Event
 
 // WorkflowObserver receives high-level workflow runtime events.
+//
+// Deprecated: use Observer. A single observer now receives every event layer.
 // @group Queue
-type WorkflowObserver = bus.Observer
+type WorkflowObserver = Observer
 
 // WorkflowObserverFunc adapts a function to a workflow observer.
+//
+// Deprecated: use ObserverFunc. A single observer now receives every event layer.
 // @group Queue
-type WorkflowObserverFunc = bus.ObserverFunc
+type WorkflowObserverFunc = ObserverFunc
 
 // Next invokes the next middleware/handler in the queue middleware chain.
 // @group Queue
@@ -65,6 +74,18 @@ type SkipWhen = bus.SkipWhen
 // FailOnError converts matched errors into fatal (non-retryable) failures.
 // @group Queue
 type FailOnError = bus.FailOnError
+
+// Permanent marks an error as terminal so workers do not spend the remaining application retry budget on it.
+// @group Queue
+func Permanent(err error) error {
+	return busruntime.Permanent(err)
+}
+
+// IsPermanent reports whether an error requests terminal application settlement.
+// @group Queue
+func IsPermanent(err error) bool {
+	return busruntime.IsPermanent(err)
+}
 
 // RateLimiter is used by RateLimit middleware.
 // @group Queue
@@ -99,8 +120,9 @@ var ErrWorkflowNotFound = bus.ErrNotFound
 type Option func(*runtimeOptions)
 
 type runtimeOptions struct {
-	busOpts []bus.Option
-	workers int
+	busOpts                 []bus.Option
+	workers                 int
+	observer                Observer
 	handlerContextDecorator func(context.Context) context.Context
 }
 
@@ -112,12 +134,12 @@ func (o *runtimeOptions) apply(opts []Option) {
 	}
 }
 
-// WithObserver installs a workflow lifecycle observer.
+// WithObserver installs one observer for queue, worker, and workflow lifecycle events.
 // @group Queue
 //
-// Example: workflow observer
+// Example: observe all queue activity
 //
-//	observer := queue.WorkflowObserverFunc(func(_ context.Context, event queue.WorkflowEvent) {
+//	observer := queue.ObserverFunc(func(_ context.Context, event queue.Event) {
 //		_ = event.Kind
 //	})
 //	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))
@@ -125,9 +147,16 @@ func (o *runtimeOptions) apply(opts []Option) {
 //		return
 //	}
 //	_ = q
-func WithObserver(observer WorkflowObserver) Option {
+func WithObserver(observer Observer) Option {
 	return func(o *runtimeOptions) {
-		o.busOpts = append(o.busOpts, bus.WithObserver(observer))
+		if observer == nil {
+			return
+		}
+		if o.observer == nil {
+			o.observer = observer
+			return
+		}
+		o.observer = MultiObserver(o.observer, observer)
 	}
 }
 
@@ -250,17 +279,68 @@ func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
+	observer := attachRuntimeObserver(q, ro.observer)
 	if ro.workers > 0 && q != nil {
 		q = q.Workers(ro.workers)
 	}
 	if ro.handlerContextDecorator != nil && q != nil {
 		q.setHandlerContextDecorator(ro.handlerContextDecorator)
 	}
+	if observer != nil {
+		driver := Driver("")
+		if q != nil {
+			driver = q.Driver()
+		}
+		ro.busOpts = append(ro.busOpts, bus.WithObserver(workflowObserverAdapter{
+			driver:   driver,
+			observer: observer,
+		}))
+	}
 	b, err := bus.New(q, ro.busOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return &Queue{q: q, b: b}, nil
+}
+
+// attachRuntimeObserver composes constructor and option observers before the workflow runtime is built so every layer shares one sink.
+func attachRuntimeObserver(q queueRuntime, observer Observer) Observer {
+	switch runtime := q.(type) {
+	case *nativeQueueRuntime:
+		runtime.common.addObserver(observer)
+		return runtime.common.observer()
+	case *externalQueueRuntime:
+		runtime.common.addObserver(observer)
+		return runtime.common.observer()
+	default:
+		return observer
+	}
+}
+
+type workflowObserverAdapter struct {
+	driver   Driver
+	observer Observer
+}
+
+// Observe converts workflow facts into the canonical event envelope without exposing the internal bus model to applications.
+func (a workflowObserverAdapter) Observe(ctx context.Context, event bus.Event) {
+	safeObserve(ctx, a.observer, Event{
+		SchemaVersion: event.SchemaVersion,
+		EventID:       event.EventID,
+		Layer:         eventLayerForKind(EventKind(event.Kind)),
+		Kind:          EventKind(event.Kind),
+		Driver:        a.driver,
+		Queue:         event.Queue,
+		JobType:       event.JobType,
+		DispatchID:    event.DispatchID,
+		JobID:         event.JobID,
+		ChainID:       event.ChainID,
+		BatchID:       event.BatchID,
+		Attempt:       event.Attempt,
+		Duration:      event.Duration,
+		Err:           event.Err,
+		Time:          event.Time,
+	})
 }
 
 // NewNull creates a Queue on the null backend.
@@ -389,6 +469,10 @@ func (r *Queue) WithContext(ctx context.Context) *Queue {
 //		return
 //	}
 //	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+//	if err := q.StartWorkers(context.Background()); err != nil {
+//		return
+//	}
+//	defer q.Shutdown(context.Background())
 //	job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
 //	_, _ = q.Dispatch(job)
 func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
@@ -417,6 +501,10 @@ func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
 //	}
 //	q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
 //	q.Register("second", func(ctx context.Context, m queue.Message) error { return nil })
+//	if err := q.StartWorkers(context.Background()); err != nil {
+//		return
+//	}
+//	defer q.Shutdown(context.Background())
 //	_, _ = q.Chain(
 //		queue.NewJob("first"),
 //		queue.NewJob("second"),
@@ -446,6 +534,10 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 //		return
 //	}
 //	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+//	if err := q.StartWorkers(context.Background()); err != nil {
+//		return
+//	}
+//	defer q.Shutdown(context.Background())
 //	_, _ = q.Batch(
 //		queue.NewJob("emails:send").Payload(map[string]any{"id": 1}),
 //		queue.NewJob("emails:send").Payload(map[string]any{"id": 2}),

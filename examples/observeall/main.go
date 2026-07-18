@@ -22,11 +22,16 @@ func main() {
 	var flakyAttempts atomic.Int32
 	ctx := context.Background()
 
-	runtimeObserver := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
-		logger.Info("runtime event",
+	observer := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+		logger.Info("queue event",
+			"layer", event.Layer,
 			"kind", event.Kind,
 			"driver", event.Driver,
 			"queue", event.Queue,
+			"dispatch_id", event.DispatchID,
+			"job_id", event.JobID,
+			"chain_id", event.ChainID,
+			"batch_id", event.BatchID,
 			"job_type", event.JobType,
 			"attempt", event.Attempt,
 			"max_retry", event.MaxRetry,
@@ -35,27 +40,9 @@ func main() {
 		)
 	})
 
-	workflowObserver := queue.WorkflowObserverFunc(func(ctx context.Context, event queue.WorkflowEvent) {
-		logger.Info("workflow event",
-			"kind", event.Kind,
-			"dispatch_id", event.DispatchID,
-			"job_id", event.JobID,
-			"chain_id", event.ChainID,
-			"batch_id", event.BatchID,
-			"job_type", event.JobType,
-			"queue", event.Queue,
-			"attempt", event.Attempt,
-			"duration", event.Duration,
-			"err", event.Err,
-		)
-	})
-
 	q, err := queue.New(
-		queue.Config{
-			Driver:   queue.DriverWorkerpool,
-			Observer: runtimeObserver,
-		},
-		queue.WithObserver(workflowObserver),
+		queue.Config{Driver: queue.DriverWorkerpool},
+		queue.WithObserver(observer),
 	)
 	if err != nil {
 		panic(err)

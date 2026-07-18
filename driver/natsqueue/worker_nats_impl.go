@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queuecore"
 	"github.com/nats-io/nats.go"
 )
@@ -131,7 +132,8 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 		return
 	}
 
-	ctx := context.Background()
+	attempt := busruntime.DeliveryAttempt{Number: incoming.Attempt, MaxRetry: incoming.MaxRetry}
+	ctx := busruntime.WithDeliveryAttempt(context.Background(), attempt)
 	if incoming.TimeoutMillis > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(incoming.TimeoutMillis)*time.Millisecond)
@@ -147,11 +149,17 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 			incoming.Attempt,
 		),
 	)
-	if err == nil {
+	switch busruntime.ClassifyAttempt(attempt, err) {
+	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
 		return
-	}
-	if incoming.Attempt >= incoming.MaxRetry {
+	case busruntime.AttemptRedeliver:
+		// Core NATS has no broker-managed negative acknowledgement, so uncommitted work must be republished explicitly.
+		incoming.AvailableAtMS = 0
+		if err := w.republish(incoming); err != nil {
+			w.observeRepublishFailure(ctx, incoming, err)
+		}
 		return
+	case busruntime.AttemptRetry:
 	}
 	incoming.Attempt++
 	if incoming.BackoffMillis > 0 {
@@ -176,15 +184,21 @@ func (w *natsWorker) republish(message natsMessage) error {
 }
 
 func (w *natsWorker) observeRepublishFailure(ctx context.Context, message natsMessage, err error) {
+	metadata := queue.ResolveObservedJobMetadata(message.Type, message.Payload)
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
-		Kind:     queue.EventRepublishFailed,
-		Driver:   queue.DriverNATS,
-		Queue:    queuecore.NormalizeQueueName(message.Queue),
-		JobType:  queue.ResolveObservedJobType(message.Type, message.Payload),
-		Attempt:  message.Attempt,
-		MaxRetry: message.MaxRetry,
-		Err:      err,
-		Time:     time.Now(),
+		Kind:       queue.EventRepublishFailed,
+		Driver:     queue.DriverNATS,
+		Queue:      queuecore.NormalizeQueueName(message.Queue),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		Attempt:    message.Attempt,
+		MaxRetry:   message.MaxRetry,
+		Err:        err,
+		Time:       time.Now(),
 	})
 }
 

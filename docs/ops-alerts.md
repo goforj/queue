@@ -31,7 +31,7 @@ Why:
 - Jobs started/sec
 - Jobs succeeded/sec
 - Jobs failed/sec
-- Retries scheduled/sec
+- Retry-attempt deliveries/sec (`process_retried`; infrastructure redelivery may repeat a numbered attempt)
 
 Why:
 

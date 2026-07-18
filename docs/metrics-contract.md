@@ -2,10 +2,7 @@
 
 This document defines the baseline observability contract for `queue` before GA.
 
-It covers two event streams:
-
-- Queue runtime events (`queue.Event`) via `queue.Observer`
-- Workflow/runtime orchestration events (`queue.WorkflowEvent`) via `queue.WithObserver(...)`
+For the normal root facade, it covers one event stream: `queue.Event` values delivered to the `queue.Observer` installed with `queue.WithObserver(...)`. `Event.Layer` identifies whether a fact came from queueing, worker execution, or workflow orchestration. Direct users of the public `bus` compatibility package still have its legacy event model until M2-07 in `plan.md` turns that package into a forwarding facade.
 
 This is a baseline contract. Before GA, pin a version and treat field/label changes as compatibility-impacting.
 
@@ -16,15 +13,19 @@ This is a baseline contract. Before GA, pin a version and treat field/label chan
 - Explicit handling of recovery/failure internals (`republish_failed`, `process_recovered`)
 - Stable labels for dashboards and alerts
 
-## Event Streams
+## Unified Event Stream
 
-### 1. Queue Runtime Events (`queue.Event`)
+### Queue and Worker Layers
 
 Source:
 
 - `queue.Observer`
 - `queue.ObserverFunc`
-- `queue.Config.Observer`
+- `queue.WithObserver(...)`
+
+`queue.Config.Observer` is a deprecated compatibility path into the same stream.
+
+Queue, worker, and workflow events carry the same applicable dispatch/job/chain/batch correlation IDs. Internal envelope IDs are excluded from `Event.JobKey`, so telemetry grouping follows the logical application job rather than a one-off wrapper delivery. Driver-enforced `UniqueFor` identity is a separate delivery contract and is not derived from this observability field.
 
 Event kind type:
 
@@ -55,7 +56,10 @@ Recommended required fields (when available):
 | Field | Type | Notes |
 | --- | --- | --- |
 | `kind` | string | `queue.EventKind` value |
+| `layer` | string | `queue`, `worker`, or `workflow` |
 | `time` | timestamp | event timestamp |
+| `schema_version` | integer | event envelope schema version |
+| `event_id` | string | unique event identifier |
 | `driver` | string | backend/runtime (`redis`, `sqs`, etc.) |
 | `queue` | string | logical/physical queue name in runtime context |
 | `job_type` | string | job type identifier |
@@ -66,17 +70,18 @@ Recommended required fields (when available):
 | `duration_ms` | number | processing duration for completion/failure events |
 | `error` | string | normalized error string/class for failures |
 
-### 2. Workflow Events (`queue.WorkflowEvent`)
+### Workflow Layer
 
 Source:
 
 - `queue.WithObserver(...)`
-- `queue.WorkflowObserver`
-- `queue.WorkflowObserverFunc`
+- events where `event.Layer == queue.EventLayerWorkflow`
 
 Event kind type:
 
-- `queue.WorkflowEventKind`
+- `queue.EventKind`
+
+The deprecated `WorkflowEvent`, `WorkflowEventKind`, `WorkflowObserver`, and `WorkflowObserverFunc` names are aliases of the canonical root model rather than a second stream.
 
 Current workflow event kinds (via internal orchestration engine) include:
 
@@ -108,7 +113,8 @@ Recommended required fields (when available):
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `kind` | string | `queue.WorkflowEventKind` value |
+| `kind` | string | `queue.EventKind` value |
+| `layer` | string | `workflow` |
 | `time` | timestamp | event timestamp |
 | `schema_version` | integer | workflow event schema version |
 | `event_id` | string | unique workflow event identifier |
@@ -148,7 +154,7 @@ For metrics dimensions, keep cardinality bounded:
 
 These may be implemented via logs, counters, histograms, or OTel metrics.
 
-### Queue Runtime Metrics
+### Queue and Worker Metrics
 
 - `queue_events_total{kind,driver,queue}`
 - `queue_process_duration_ms` histogram `{driver,queue,job_type}`
@@ -178,8 +184,7 @@ After GA (target):
 
 ## Cross-References
 
-- `observability.go` (queue runtime event kinds and `queue.Event`)
-- `runtime.go` (workflow aliases: `queue.WorkflowEvent`, `queue.WorkflowEventKind`)
-- `bus/events.go` (underlying workflow event schema)
+- `observability.go` (canonical `queue.Event`, event layers, kinds, and observer helpers)
+- `runtime.go` (one `queue.WithObserver(...)` attachment path and deprecated workflow aliases)
 - `docs/ops-alerts.md` (dashboard/alert baseline)
 - `docs/runbooks/` (incident response)

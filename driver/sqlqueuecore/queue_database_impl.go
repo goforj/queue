@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queuecore"
 )
 
@@ -90,6 +91,12 @@ type dbJob struct {
 	maxRetry       int
 	backoffMillis  int64
 	attempt        int
+}
+
+type databaseFailureSettlement struct {
+	state       string
+	attempt     int
+	availableAt int64
 }
 
 func New(cfg queue.DatabaseConfig) (*databaseQueue, error) {
@@ -579,19 +586,24 @@ func (d *databaseQueue) processJob(job *dbJob) {
 	}
 	err := handler(
 		ctx,
-		queuecore.DriverWithAttempt(
-			queue.NewJob(job.jobType).
-				Payload(job.payload).
-				OnQueue(job.queueName).
-				Retry(job.maxRetry),
-			job.attempt,
-		),
+		databaseDeliveryJob(job),
 	)
 	if err == nil {
 		d.markDoneWithRetry(job)
 		return
 	}
 	d.markFailedWithRetry(job, err)
+}
+
+// databaseDeliveryJob restores persisted physical attempt metadata before the root orchestration adapter runs.
+func databaseDeliveryJob(job *dbJob) queue.Job {
+	return queuecore.DriverWithAttempt(
+		queue.NewJob(job.jobType).
+			Payload(job.payload).
+			OnQueue(job.queueName).
+			Retry(job.maxRetry),
+		job.attempt,
+	)
 }
 
 func (d *databaseQueue) markDoneWithRetry(job *dbJob) {
@@ -737,22 +749,53 @@ func (d *databaseQueue) markDone(ctx context.Context, job *dbJob) error {
 }
 
 func (d *databaseQueue) markFailed(ctx context.Context, job *dbJob, runErr error) error {
-	nextAttempt := job.attempt + 1
 	now := time.Now().UnixMilli()
-	if nextAttempt > job.maxRetry {
-		query := d.rebind(`UPDATE queue_jobs SET state='dead', attempt=?, last_error=?, updated_at=? WHERE id=?`)
-		_, err := d.db.ExecContext(ctx, query, nextAttempt, runErr.Error(), now, job.id)
+	settlement, err := classifyDatabaseFailure(job, runErr, now)
+	if err != nil {
 		return err
 	}
-	nextAt := now
-	if job.backoffMillis > 0 {
-		nextAt += job.backoffMillis
+	if settlement.state == "dead" {
+		query := d.rebind(`UPDATE queue_jobs SET state='dead', attempt=?, processing_started_at=NULL, last_error=?, updated_at=? WHERE id=?`)
+		_, err := d.db.ExecContext(ctx, query, settlement.attempt, runErr.Error(), now, job.id)
+		return err
 	}
 	query := d.rebind(`UPDATE queue_jobs
 SET state='pending', attempt=?, available_at=?, last_error=?, processing_started_at=NULL, updated_at=?
 WHERE id=?`)
-	_, err := d.db.ExecContext(ctx, query, nextAttempt, nextAt, runErr.Error(), now, job.id)
+	_, err = d.db.ExecContext(ctx, query, settlement.attempt, settlement.availableAt, runErr.Error(), now, job.id)
 	return err
+}
+
+// classifyDatabaseFailure derives the durable state transition from the physical attempt and handler result.
+func classifyDatabaseFailure(job *dbJob, runErr error, now int64) (databaseFailureSettlement, error) {
+	decision := busruntime.ClassifyAttempt(busruntime.DeliveryAttempt{
+		Number:   job.attempt,
+		MaxRetry: job.maxRetry,
+	}, runErr)
+
+	switch decision {
+	case busruntime.AttemptRetry:
+		return databasePendingSettlement(job, job.attempt+1, now), nil
+	case busruntime.AttemptFailed:
+		return databaseFailureSettlement{state: "dead", attempt: job.attempt + 1}, nil
+	case busruntime.AttemptRedeliver:
+		return databasePendingSettlement(job, job.attempt, now), nil
+	default:
+		return databaseFailureSettlement{}, fmt.Errorf("cannot persist a successful attempt as failed")
+	}
+}
+
+// databasePendingSettlement applies configured backoff without deciding whether the application retry counter advances.
+func databasePendingSettlement(job *dbJob, attempt int, now int64) databaseFailureSettlement {
+	availableAt := now
+	if job.backoffMillis > 0 {
+		availableAt += job.backoffMillis
+	}
+	return databaseFailureSettlement{
+		state:       "pending",
+		attempt:     attempt,
+		availableAt: availableAt,
+	}
 }
 
 func (d *databaseQueue) acquireUnique(ctx context.Context, job queue.Job, queueName string, expiresAt time.Time) (bool, error) {

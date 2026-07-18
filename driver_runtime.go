@@ -30,6 +30,7 @@ func newQueueFromDriver(cfg Config, backend driverQueueBackend, workerFactory dr
 		return nil, fmt.Errorf("driver backend is nil")
 	}
 	cfg = cfg.normalize()
+	cfg.Observer = ensureObserverSink(cfg.Observer)
 
 	var q queueBackend
 	var runtime runtimeQueueBackend
@@ -47,14 +48,18 @@ func newQueueFromDriver(cfg Config, backend driverQueueBackend, workerFactory dr
 	}
 	if runtime != nil {
 		return &nativeQueueRuntime{
-			common:     common,
-			runtime:    runtime,
-			registered: make(map[string]Handler),
+			common:  common,
+			runtime: runtime,
+			nativeQueueRuntimeState: &nativeQueueRuntimeState{
+				registered: make(map[string]Handler),
+			},
 		}, nil
 	}
 	return &externalQueueRuntime{
-		common:     common,
-		registered: make(map[string]Handler),
-		newWorker:  workerFactory,
+		common:    common,
+		newWorker: workerFactory,
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: make(map[string]Handler),
+		},
 	}, nil
 }

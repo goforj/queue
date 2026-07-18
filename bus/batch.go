@@ -195,34 +195,42 @@ type batchCallbacks struct {
 	finally  func(ctx context.Context, st BatchState) error
 }
 
+// handleInternalBatchJob records each batch mutation before publishing its corresponding workflow fact.
 func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
-	_ = r.store.MarkBatchJobStarted(ctx, env.BatchID, env.JobID)
+	if markErr := r.store.MarkBatchJobStarted(ctx, env.BatchID, env.JobID); markErr != nil {
+		return uncommittedMutationError("mark batch job started", markErr)
+	}
 
-	err := r.executeWireJob(ctx, env)
-	if err != nil {
-		st, done, markErr := r.store.MarkBatchJobFailed(ctx, env.BatchID, env.JobID, err)
+	outcome := r.executeWireJobAttempt(ctx, env)
+	switch busruntime.ClassifyAttempt(outcome.attempt, outcome.err) {
+	case busruntime.AttemptRetry, busruntime.AttemptRedeliver:
+		return outcome.err
+	case busruntime.AttemptFailed:
+		st, done, markErr := r.store.MarkBatchJobFailed(ctx, env.BatchID, env.JobID, outcome.err)
 		if markErr != nil {
-			return markErr
+			return uncommittedMutationError("mark batch job failed", markErr)
 		}
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: err})
+		r.emitWireJobOutcome(ctx, outcome)
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
 		if st.Cancelled {
 			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, Time: r.now()})
 		}
-		_ = r.dispatchCallback(ctx, env, "batch_catch", err)
+		_ = r.dispatchCallback(ctx, env, "batch_catch", outcome.err)
 		r.invokeBatchProgress(ctx, st)
 		if done {
 			_ = r.dispatchCallback(ctx, env, "batch_finally", nil)
 		}
-		return err
+		return outcome.err
 	}
 	st, done, markErr := r.store.MarkBatchJobSucceeded(ctx, env.BatchID, env.JobID)
 	if markErr != nil {
-		return markErr
+		return uncommittedMutationError("mark batch job succeeded", markErr)
 	}
+	r.emitWireJobOutcome(ctx, outcome)
 	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now()})
 	r.invokeBatchProgress(ctx, st)
 	if done {
@@ -299,10 +307,16 @@ func (r *runtime) invokeBatchFinally(ctx context.Context, st BatchState) error {
 	return nil
 }
 
+// callbackOnce persists callback idempotency before invoking application code.
 func (r *runtime) callbackOnce(ctx context.Context, key string) (bool, error) {
-	return r.store.MarkCallbackInvoked(ctx, key)
+	marked, err := r.store.MarkCallbackInvoked(ctx, key)
+	if err != nil {
+		return false, uncommittedMutationError("mark callback invoked", err)
+	}
+	return marked, nil
 }
 
+// handleInternalCallback separates application callback failures from uncommitted store access.
 func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
@@ -333,7 +347,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		}
 		st, stErr := r.store.GetChain(ctx, env.ChainID)
 		if stErr != nil {
-			err = stErr
+			err = uncommittedMutationError("read chain callback state", stErr)
 			break
 		}
 		err = r.invokeChainCatch(ctx, st, cbErr)
@@ -344,7 +358,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		}
 		st, stErr := r.store.GetChain(ctx, env.ChainID)
 		if stErr != nil {
-			err = stErr
+			err = uncommittedMutationError("read chain callback state", stErr)
 			break
 		}
 		err = r.invokeChainFinally(ctx, st)
@@ -355,7 +369,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		}
 		st, stErr := r.store.GetBatch(ctx, env.BatchID)
 		if stErr != nil {
-			err = stErr
+			err = uncommittedMutationError("read batch callback state", stErr)
 			break
 		}
 		err = r.invokeBatchCatch(ctx, st, cbErr)
@@ -366,7 +380,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		}
 		st, stErr := r.store.GetBatch(ctx, env.BatchID)
 		if stErr != nil {
-			err = stErr
+			err = uncommittedMutationError("read batch callback state", stErr)
 			break
 		}
 		err = r.invokeBatchThen(ctx, st)
@@ -377,7 +391,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		}
 		st, stErr := r.store.GetBatch(ctx, env.BatchID)
 		if stErr != nil {
-			err = stErr
+			err = uncommittedMutationError("read batch callback state", stErr)
 			break
 		}
 		err = r.invokeBatchFinally(ctx, st)
@@ -385,6 +399,9 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		err = errors.New("unknown callback kind")
 	}
 	if err != nil {
+		if busruntime.IsUncommitted(err) {
+			return err
+		}
 		r.emit(ctx, Event{
 			SchemaVersion: schemaVersion,
 			EventID:       newID("evt"),

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -16,11 +17,13 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
-	testCountStart = "<!-- test-count:embed:start -->"
-	testCountEnd   = "<!-- test-count:embed:end -->"
+	testCountStart          = "<!-- test-count:embed:start -->"
+	testCountEnd            = "<!-- test-count:embed:end -->"
+	integrationCountTimeout = 30 * time.Second
 )
 
 type Counts struct {
@@ -144,7 +147,9 @@ func countIntegrationRunEvents(integrationRoot string, integrationPrefixes map[s
 	}
 
 	args := []string{"test", "-tags=integration", "./...", "-run", runPattern, "-count=1", "-json"}
-	cmd := exec.Command("go", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationCountTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = integrationRoot
 
 	var out bytes.Buffer
@@ -152,6 +157,9 @@ func countIntegrationRunEvents(integrationRoot string, integrationPrefixes map[s
 	cmd.Stderr = &out
 
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return 0, fmt.Errorf("go %s (in %s): %w", strings.Join(args, " "), integrationRoot, ctx.Err())
+		}
 		return 0, fmt.Errorf("go %s (in %s): %w\n%s", strings.Join(args, " "), integrationRoot, err, out.String())
 	}
 

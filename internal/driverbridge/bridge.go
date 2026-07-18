@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/observation"
 	"github.com/goforj/queue/internal/runtimehook"
 )
 
@@ -30,6 +31,26 @@ type workerContextDecoratorSetter interface {
 	SetHandlerContextDecorator(func(context.Context) context.Context)
 }
 
+// NewObserverSink creates the shared observer instance that a driver must pass to its producer, worker, and root configuration.
+func NewObserverSink(observers ...queue.Observer) queue.Observer {
+	if len(observers) == 1 {
+		if sink, ok := observers[0].(interface {
+			queue.Observer
+			Add(func(context.Context, queue.Event))
+			HasObservers() bool
+		}); ok {
+			return sink
+		}
+	}
+	callbacks := make([]func(context.Context, queue.Event), 0, len(observers))
+	for _, observer := range observers {
+		if observer != nil {
+			callbacks = append(callbacks, observer.Observe)
+		}
+	}
+	return observation.NewSink(callbacks...)
+}
+
 // NewQueueFromDriver builds a high-level *queue.Queue from a driver backend.
 //
 // The helper keeps driver modules off the public low-level constructor path while
@@ -40,6 +61,7 @@ func NewQueueFromDriver(
 	workerFactory func(workers int) (any, error),
 	opts ...queue.Option,
 ) (*queue.Queue, error) {
+	cfg.Observer = NewObserverSink(cfg.Observer)
 	driverBackend, err := adaptQueueBackend(backend)
 	if err != nil {
 		return nil, err

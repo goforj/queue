@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/goforj/queue/busruntime"
 )
@@ -57,6 +58,57 @@ type chainBuilder struct {
 	done  func(ctx context.Context, st ChainState) error
 }
 
+type synchronousChainResultContextKey struct{}
+
+type synchronousChainResult struct {
+	mu  sync.Mutex
+	err error
+}
+
+// withSynchronousChainResult lets inline continuation deliveries report their
+// execution error without turning it into the predecessor's delivery outcome.
+func withSynchronousChainResult(ctx context.Context) (context.Context, *synchronousChainResult) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := &synchronousChainResult{}
+	return context.WithValue(ctx, synchronousChainResultContextKey{}, result), result
+}
+
+// record stores the first downstream error because it is the causal terminal
+// outcome observed by the caller that started this inline chain execution.
+func (r *synchronousChainResult) record(err error) {
+	if r == nil || err == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err == nil {
+		r.err = err
+	}
+}
+
+// executionError returns the exact downstream error so errors.Is and errors.As
+// retain the application's original error chain.
+func (r *synchronousChainResult) executionError() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
+}
+
+// recordSynchronousChainError propagates an inline continuation failure to the
+// chain dispatch boundary when the caller is still waiting for execution.
+func recordSynchronousChainError(ctx context.Context, err error) {
+	if ctx == nil {
+		return
+	}
+	result, _ := ctx.Value(synchronousChainResultContextKey{}).(*synchronousChainResult)
+	result.record(err)
+}
+
 func (b *chainBuilder) OnQueue(queue string) ChainBuilder {
 	b.queue = queue
 	return b
@@ -76,6 +128,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 	if len(b.jobs) == 0 {
 		return "", errors.New("chain requires at least one job")
 	}
+	ctx, synchronousResult := withSynchronousChainResult(ctx)
 	chainID := newID("chn")
 	dispatchID := newID("dsp")
 	nodes := make([]ChainNode, 0, len(b.jobs))
@@ -131,6 +184,9 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 		b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, Time: b.r.now(), Err: err})
 		return chainID, err
 	}
+	if executionErr := synchronousResult.executionError(); executionErr != nil {
+		return chainID, executionErr
+	}
 	return chainID, nil
 }
 
@@ -143,30 +199,38 @@ func nodeID(chainID string, idx int) string {
 	return chainID + "_" + newID("n")
 }
 
+// handleInternalChainNode advances or fails a chain only after its application attempt reaches a committable outcome.
 func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
-	err := r.executeWireJob(ctx, env)
-	if err != nil {
-		_ = r.store.FailChain(ctx, env.ChainID, err)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: err})
-		_ = r.dispatchCallback(ctx, env, "chain_catch", err)
+	outcome := r.executeWireJobAttempt(ctx, env)
+	switch busruntime.ClassifyAttempt(outcome.attempt, outcome.err) {
+	case busruntime.AttemptRetry, busruntime.AttemptRedeliver:
+		return outcome.err
+	case busruntime.AttemptFailed:
+		if markErr := r.store.FailChain(ctx, env.ChainID, outcome.err); markErr != nil {
+			return uncommittedMutationError("fail chain", markErr)
+		}
+		r.emitWireJobOutcome(ctx, outcome)
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+		_ = r.dispatchCallback(ctx, env, "chain_catch", outcome.err)
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
-		return err
+		return outcome.err
 	}
 	next, done, advErr := r.store.AdvanceChain(ctx, env.ChainID, env.NodeID)
 	if advErr != nil {
-		return advErr
+		return uncommittedMutationError("advance chain", advErr)
 	}
+	r.emitWireJobOutcome(ctx, outcome)
 	if done {
 		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		return nil
 	}
 	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
-	return r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
+	dispatchErr := r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    env.DispatchID,
 		Kind:          "chain_node",
@@ -175,6 +239,11 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 		JobID:         newID("job"),
 		Job:           next.Job,
 	})
+	if executionErr, ok := acceptedDispatchExecutionError(dispatchErr); ok {
+		recordSynchronousChainError(ctx, executionErr)
+		return nil
+	}
+	return dispatchErr
 }
 
 func (r *runtime) invokeChainCatch(ctx context.Context, st ChainState, err error) error {

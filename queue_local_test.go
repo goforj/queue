@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/goforj/queue/busruntime"
 )
 
 func TestLocalQueue_Driver(t *testing.T) {
@@ -273,6 +275,77 @@ func TestLocalQueue_SyncRetriesWithBackoff(t *testing.T) {
 	case <-done:
 	default:
 		t.Fatal("expected handler success on retry")
+	}
+}
+
+// TestLocalQueue_PermanentErrorStopsRetries verifies terminal application failures do not consume the remaining retry budget.
+func TestLocalQueue_PermanentErrorStopsRetries(t *testing.T) {
+	d := newLocalQueue(DriverSync)
+	cause := errors.New("invalid recipient")
+	var calls atomic.Int64
+	d.Register("job:permanent", func(_ context.Context, _ Job) error {
+		calls.Add(1)
+		return busruntime.Permanent(cause)
+	})
+
+	err := d.Dispatch(context.Background(), NewJob("job:permanent").Retry(5))
+	if !busruntime.IsPermanent(err) || !errors.Is(err, cause) {
+		t.Fatalf("dispatch error = %v, want permanent cause", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("handler calls = %d, want 1", calls.Load())
+	}
+}
+
+// TestLocalQueue_UncommittedErrorRedeliversSameAttempt verifies infrastructure failures do not consume application retries.
+func TestLocalQueue_UncommittedErrorRedeliversSameAttempt(t *testing.T) {
+	d := newLocalQueue(DriverSync)
+	infrastructureErr := errors.New("workflow store unavailable")
+	transientErr := errors.New("application failed")
+	attempts := make([]int, 0, 3)
+	d.Register("job:redeliver", func(_ context.Context, job Job) error {
+		attempts = append(attempts, job.jobOptions().attempt)
+		switch len(attempts) {
+		case 1:
+			return busruntime.Uncommitted(infrastructureErr)
+		case 2:
+			return transientErr
+		default:
+			return nil
+		}
+	})
+
+	if err := d.Dispatch(context.Background(), NewJob("job:redeliver").Retry(1)); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	want := []int{0, 0, 1}
+	if len(attempts) != len(want) {
+		t.Fatalf("attempts = %v, want %v", attempts, want)
+	}
+	for index := range want {
+		if attempts[index] != want[index] {
+			t.Fatalf("attempts = %v, want %v", attempts, want)
+		}
+	}
+}
+
+// TestLocalQueue_UncommittedRedeliveryHonorsCancellation verifies local infrastructure redelivery cannot spin after its caller stops waiting.
+func TestLocalQueue_UncommittedRedeliveryHonorsCancellation(t *testing.T) {
+	d := newLocalQueue(DriverSync)
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls atomic.Int64
+	d.Register("job:redeliver:cancel", func(_ context.Context, _ Job) error {
+		calls.Add(1)
+		cancel()
+		return busruntime.Uncommitted(errors.New("workflow store unavailable"))
+	})
+
+	err := d.Dispatch(ctx, NewJob("job:redeliver:cancel").Retry(3))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("dispatch error = %v, want context canceled", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("handler calls = %d, want 1", calls.Load())
 	}
 }
 

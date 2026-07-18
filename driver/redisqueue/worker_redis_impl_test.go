@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	backend "github.com/hibiken/asynq"
 )
 
@@ -119,17 +120,14 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 	if err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("job:fail", []byte("fail"))); err == nil {
 		t.Fatal("expected failing task error")
 	}
-	if len(events) != 5 {
-		t.Fatalf("expected 5 process events, got %d", len(events))
+	if len(events) != 4 {
+		t.Fatalf("expected 4 process events, got %d", len(events))
 	}
 	if events[0].Kind != queue.EventProcessStarted || events[1].Kind != queue.EventProcessSucceeded {
 		t.Fatalf("unexpected first pair kinds: %s, %s", events[0].Kind, events[1].Kind)
 	}
 	if events[2].Kind != queue.EventProcessStarted || events[3].Kind != queue.EventProcessFailed {
 		t.Fatalf("unexpected second pair kinds: %s, %s", events[2].Kind, events[3].Kind)
-	}
-	if events[4].Kind != queue.EventProcessArchived {
-		t.Fatalf("unexpected terminal event kind: %s", events[4].Kind)
 	}
 	for _, event := range events {
 		if event.Driver != queue.DriverRedis {
@@ -148,8 +146,77 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 	if events[1].Time.IsZero() || events[3].Time.IsZero() {
 		t.Fatal("expected event timestamps to be set")
 	}
-	if events[4].Err != nil {
-		t.Fatal("expected archived event error to be nil")
+}
+
+// TestObserveRedisAttemptStartEmitsRetryDelivery verifies Redis reports a numbered retry when Asynq delivers that attempt.
+func TestObserveRedisAttemptStartEmitsRetryDelivery(t *testing.T) {
+	var events []queue.Event
+	observer := queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+		events = append(events, event)
+	})
+	observeRedisAttemptStart(context.Background(), observer, queue.Event{
+		Driver:   queue.DriverRedis,
+		JobType:  "job:retry",
+		Attempt:  1,
+		MaxRetry: 3,
+	})
+	if len(events) != 2 || events[0].Kind != queue.EventProcessRetried || events[1].Kind != queue.EventProcessStarted {
+		t.Fatalf("attempt start events = %+v, want retried then started", events)
+	}
+	if events[0].Attempt != 1 || events[1].Attempt != 1 {
+		t.Fatalf("attempt metadata changed: %+v", events)
+	}
+}
+
+// TestRedisWorker_PermanentFailureIncludesSkipRetryWithoutObserver verifies terminal settlement does not depend on observability being enabled.
+func TestRedisWorker_PermanentFailureIncludesSkipRetryWithoutObserver(t *testing.T) {
+	server := &serverStub{}
+	w := newRedisWorker(server, backend.NewServeMux(), nil)
+	cause := errors.New("invalid application payload")
+	w.Register("job:permanent", func(context.Context, queue.Job) error {
+		return busruntime.Permanent(cause)
+	})
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers failed: %v", err)
+	}
+
+	err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("job:permanent", nil))
+	if !errors.Is(err, cause) {
+		t.Fatalf("expected returned error to preserve cause, got %v", err)
+	}
+	if !errors.Is(err, backend.SkipRetry) {
+		t.Fatalf("expected permanent error to include asynq SkipRetry, got %v", err)
+	}
+}
+
+// TestRedisSettlementErrorDecisions verifies only permanent errors request Asynq's immediate terminal settlement.
+func TestRedisSettlementErrorDecisions(t *testing.T) {
+	cause := errors.New("handler failed")
+
+	retryErr := redisSettlementError(busruntime.DeliveryAttempt{Number: 0, MaxRetry: 2}, cause)
+	if !errors.Is(retryErr, cause) || errors.Is(retryErr, backend.SkipRetry) {
+		t.Fatalf("retry settlement = %v", retryErr)
+	}
+
+	exhaustedErr := redisSettlementError(busruntime.DeliveryAttempt{Number: 2, MaxRetry: 2}, cause)
+	if !errors.Is(exhaustedErr, cause) || errors.Is(exhaustedErr, backend.SkipRetry) {
+		t.Fatalf("exhausted settlement = %v", exhaustedErr)
+	}
+
+	permanentErr := redisSettlementError(
+		busruntime.DeliveryAttempt{Number: 0, MaxRetry: 2},
+		busruntime.Permanent(cause),
+	)
+	if !errors.Is(permanentErr, cause) || !errors.Is(permanentErr, backend.SkipRetry) {
+		t.Fatalf("permanent settlement = %v", permanentErr)
+	}
+
+	uncommittedErr := redisSettlementError(
+		busruntime.DeliveryAttempt{Number: 2, MaxRetry: 2},
+		busruntime.Uncommitted(cause),
+	)
+	if !errors.Is(uncommittedErr, cause) || errors.Is(uncommittedErr, backend.SkipRetry) {
+		t.Fatalf("uncommitted settlement = %v", uncommittedErr)
 	}
 }
 
@@ -164,7 +231,7 @@ func TestRedisWorker_ProcessEventsUnwrapBusEnvelopeJobType(t *testing.T) {
 		t.Fatalf("start workers failed: %v", err)
 	}
 
-	payload := []byte(`{"job":{"type":"monitoring:check"}}`)
+	payload := []byte(`{"schema_version":1,"dispatch_id":"dsp_redis","job_id":"job_redis","chain_id":"chn_redis","job":{"type":"monitoring:check"}}`)
 	if err := server.lastStartHandler.ProcessTask(context.Background(), backend.NewTask("bus:job", payload)); err != nil {
 		t.Fatalf("process task failed: %v", err)
 	}
@@ -174,6 +241,9 @@ func TestRedisWorker_ProcessEventsUnwrapBusEnvelopeJobType(t *testing.T) {
 	for _, event := range events {
 		if event.JobType != "monitoring:check" {
 			t.Fatalf("expected unwrapped observed job type, got %q", event.JobType)
+		}
+		if event.DispatchID != "dsp_redis" || event.JobID != "job_redis" || event.ChainID != "chn_redis" {
+			t.Fatalf("expected correlated redis event, got %+v", event)
 		}
 	}
 }
@@ -189,14 +259,14 @@ func TestRedisWorker_NoObserverFastPath(t *testing.T) {
 			t.Fatalf("expected job type job:plain, got %q", job.Type)
 		}
 		opts := queue.DriverOptions(job)
-		if opts.QueueName != "" {
-			t.Fatalf("expected empty queue name in no-observer path, got %q", opts.QueueName)
+		if opts.QueueName != "default" {
+			t.Fatalf("expected normalized queue name in no-observer path, got %q", opts.QueueName)
 		}
 		if opts.Attempt != 0 {
 			t.Fatalf("expected zero attempt in no-observer path, got %d", opts.Attempt)
 		}
-		if opts.MaxRetry != nil {
-			t.Fatalf("expected nil max retry in no-observer path, got %v", *opts.MaxRetry)
+		if opts.MaxRetry == nil || *opts.MaxRetry != 0 {
+			t.Fatalf("expected zero max retry in no-observer path, got %v", opts.MaxRetry)
 		}
 		return nil
 	})

@@ -231,11 +231,30 @@ func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error)
 	}
 	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
 	if err := r.dispatchEnvelope(ctx, internalJob, env); err != nil {
+		if executionErr, ok := acceptedDispatchExecutionError(err); ok {
+			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
+			return DispatchResult{DispatchID: dispatchID}, executionErr
+		}
 		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now(), Err: err})
 		return DispatchResult{DispatchID: dispatchID}, err
 	}
 	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
 	return DispatchResult{DispatchID: dispatchID}, nil
+}
+
+type acceptedDispatchError interface {
+	error
+	DispatchAccepted() bool
+	Unwrap() error
+}
+
+// acceptedDispatchExecutionError separates synchronous execution failure from enqueue rejection without coupling bus to root types.
+func acceptedDispatchExecutionError(err error) (error, bool) {
+	var accepted acceptedDispatchError
+	if !errors.As(err, &accepted) || !accepted.DispatchAccepted() {
+		return nil, false
+	}
+	return accepted.Unwrap(), true
 }
 
 // Chain creates a sequential workflow where each job runs only after the prior job succeeds.
@@ -381,8 +400,26 @@ func (r *runtime) handleInternalJob(ctx context.Context, job busruntime.InboundJ
 	return r.executeWireJob(ctx, env)
 }
 
+// wireJobOutcome carries an attempt result until its owning workflow mutation commits.
+type wireJobOutcome struct {
+	env      envelope
+	attempt  busruntime.DeliveryAttempt
+	started  time.Time
+	finished time.Time
+	err      error
+}
+
+// executeWireJob preserves direct-job behavior while allowing workflows to defer terminal facts until their state commits.
 func (r *runtime) executeWireJob(ctx context.Context, env envelope) error {
-	start := r.now()
+	outcome := r.executeWireJobAttempt(ctx, env)
+	r.emitWireJobOutcome(ctx, outcome)
+	return outcome.err
+}
+
+// executeWireJobAttempt runs one logical handler attempt without claiming its terminal workflow state committed.
+func (r *runtime) executeWireJobAttempt(ctx context.Context, env envelope) wireJobOutcome {
+	attempt := applyDeliveryAttempt(ctx, &env)
+	started := r.now()
 	r.emit(ctx, Event{
 		SchemaVersion: schemaVersion,
 		EventID:       newID("evt"),
@@ -394,13 +431,12 @@ func (r *runtime) executeWireJob(ctx context.Context, env envelope) error {
 		Attempt:       env.Attempt,
 		JobType:       env.Job.Type,
 		Queue:         env.Job.Options.Queue,
-		Time:          start,
+		Time:          started,
 	})
 	handler, ok := r.lookupHandler(env.Job.Type)
 	if !ok {
 		err := fmt.Errorf("bus handler not registered for %q", env.Job.Type)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobFailed, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now(), Err: err})
-		return err
+		return wireJobOutcome{env: env, attempt: attempt, started: started, finished: r.now(), err: err}
 	}
 	jc := Context{
 		SchemaVersion: schemaVersion,
@@ -415,12 +451,50 @@ func (r *runtime) executeWireJob(ctx context.Context, env envelope) error {
 	err := chainMiddleware(r.middlewareSnapshot(), func(ctx context.Context, c Context) error {
 		return handler(ctx, c)
 	})(ctx, jc)
-	if err != nil {
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobFailed, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now(), Err: err})
-		return err
+	return wireJobOutcome{env: env, attempt: attempt, started: started, finished: r.now(), err: err}
+}
+
+// emitWireJobOutcome publishes only terminal logical facts selected by the shared attempt classifier.
+func (r *runtime) emitWireJobOutcome(ctx context.Context, outcome wireJobOutcome) {
+	kind := EventJobSucceeded
+	if outcome.err != nil {
+		if busruntime.ClassifyAttempt(outcome.attempt, outcome.err) != busruntime.AttemptFailed {
+			return
+		}
+		kind = EventJobFailed
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventJobSucceeded, DispatchID: env.DispatchID, JobID: env.JobID, ChainID: env.ChainID, BatchID: env.BatchID, Attempt: env.Attempt, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Duration: r.now().Sub(start), Time: r.now()})
-	return nil
+	r.emit(ctx, Event{
+		SchemaVersion: schemaVersion,
+		EventID:       newID("evt"),
+		Kind:          kind,
+		DispatchID:    outcome.env.DispatchID,
+		JobID:         outcome.env.JobID,
+		ChainID:       outcome.env.ChainID,
+		BatchID:       outcome.env.BatchID,
+		Attempt:       outcome.env.Attempt,
+		JobType:       outcome.env.Job.Type,
+		Queue:         outcome.env.Job.Options.Queue,
+		Duration:      outcome.finished.Sub(outcome.started),
+		Time:          outcome.finished,
+		Err:           outcome.err,
+	})
+}
+
+// uncommittedMutationError marks state persistence failures for same-attempt infrastructure redelivery.
+func uncommittedMutationError(operation string, err error) error {
+	return busruntime.Uncommitted(fmt.Errorf("%s: %w", operation, err))
+}
+
+// applyDeliveryAttempt replaces the stale envelope attempt with metadata supplied by the physical worker.
+func applyDeliveryAttempt(ctx context.Context, env *envelope) busruntime.DeliveryAttempt {
+	if attempt, ok := busruntime.DeliveryAttemptFromContext(ctx); ok {
+		env.Attempt = attempt.Number
+		return attempt
+	}
+	return busruntime.DeliveryAttempt{
+		Number:   env.Attempt,
+		MaxRetry: env.Job.Options.Retry,
+	}
 }
 
 func (r *runtime) middlewareSnapshot() []Middleware {

@@ -68,7 +68,9 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 // Config configures queue creation for New (and advanced driver/runtime interop).
 // @group Config
 type Config struct {
-	Driver   Driver
+	Driver Driver
+	// Observer is a compatibility attachment path for queue lifecycle events.
+	// Deprecated: use WithObserver so all event layers share one constructor option.
 	Observer Observer
 	Logger   Logger
 
@@ -124,6 +126,7 @@ func New(cfg Config, opts ...Option) (*Queue, error) {
 
 func newRuntime(cfg Config) (queueRuntime, error) {
 	cfg = cfg.normalize()
+	cfg.Observer = ensureObserverSink(cfg.Observer)
 
 	var q queueBackend
 	var err error
@@ -161,14 +164,18 @@ func newRuntime(cfg Config) (queueRuntime, error) {
 	}
 	if runtime != nil {
 		return &nativeQueueRuntime{
-			common:     common,
-			runtime:    runtime,
-			registered: make(map[string]Handler),
+			common:  common,
+			runtime: runtime,
+			nativeQueueRuntimeState: &nativeQueueRuntimeState{
+				registered: make(map[string]Handler),
+			},
 		}, nil
 	}
 	return &externalQueueRuntime{
-		common:     common,
-		registered: make(map[string]Handler),
+		common: common,
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: make(map[string]Handler),
+		},
 	}, nil
 }
 
@@ -190,7 +197,11 @@ type queueCommon struct {
 type nativeQueueRuntime struct {
 	common  *queueCommon
 	runtime runtimeQueueBackend
+	*nativeQueueRuntimeState
+}
 
+// nativeQueueRuntimeState stays shared by context-bound handles because worker registration and lifecycle belong to the runtime, not an individual dispatch context.
+type nativeQueueRuntimeState struct {
 	mu         sync.Mutex
 	registered map[string]Handler
 	started    bool
@@ -198,14 +209,18 @@ type nativeQueueRuntime struct {
 }
 
 type externalQueueRuntime struct {
-	common *queueCommon
+	common    *queueCommon
+	newWorker driverWorkerFactory
+	*externalQueueRuntimeState
+}
 
+// externalQueueRuntimeState keeps the constructed worker and lifecycle state synchronized across derived queue handles.
+type externalQueueRuntimeState struct {
 	mu         sync.Mutex
 	registered map[string]Handler
 	worker     runtimeWorkerBackend
 	started    bool
 	workers    int
-	newWorker  driverWorkerFactory
 }
 
 type runtimeWorkerBackend interface {
@@ -227,6 +242,27 @@ func (q *queueCommon) context() context.Context {
 		return context.Background()
 	}
 	return q.ctx
+}
+
+// addObserver composes observers at construction time so queue and workflow layers publish to the same application sink.
+func (q *queueCommon) addObserver(observer Observer) {
+	if q == nil || observer == nil {
+		return
+	}
+	q.cfg.Observer = addObserverToSink(q.cfg.Observer, observer)
+	if observed, ok := q.inner.(*observedQueue); ok {
+		observed.observer = q.cfg.Observer
+		return
+	}
+	q.inner = newObservedQueue(q.inner, q.driver, q.cfg.Observer)
+}
+
+// observer returns the composed application observer shared by execution and workflow adapters.
+func (q *queueCommon) observer() Observer {
+	if q == nil || !observerHasRecipients(q.cfg.Observer) {
+		return nil
+	}
+	return q.cfg.Observer
 }
 
 func (q *queueCommon) WithContext(ctx context.Context) *queueCommon {
@@ -251,7 +287,8 @@ func (q *queueCommon) Dispatch(job any) error {
 		return err
 	}
 	dispatchJob = q.physicalJob(dispatchJob)
-	return q.inner.Dispatch(q.context(), dispatchJob)
+	ctx, _ := newDispatchAcceptance(q.context())
+	return q.inner.Dispatch(ctx, dispatchJob)
 }
 
 func (q *queueCommon) physicalJob(job Job) Job {
@@ -361,7 +398,7 @@ func (q *nativeQueueRuntime) BusRegister(jobType string, handler busruntime.Hand
 		return
 	}
 	q.Register(jobType, func(ctx context.Context, job Job) error {
-		return handler(ctx, job)
+		return handler(withBusDeliveryAttempt(ctx, job), job)
 	})
 }
 
@@ -371,7 +408,16 @@ func (q *externalQueueRuntime) BusRegister(jobType string, handler busruntime.Ha
 		return
 	}
 	q.Register(jobType, func(ctx context.Context, job Job) error {
-		return handler(ctx, job)
+		return handler(withBusDeliveryAttempt(ctx, job), job)
+	})
+}
+
+// withBusDeliveryAttempt keeps physical retry metadata out of the serialized workflow envelope while making it available to orchestration.
+func withBusDeliveryAttempt(ctx context.Context, job Job) context.Context {
+	opts := job.jobOptions()
+	return busruntime.WithDeliveryAttempt(ctx, busruntime.DeliveryAttempt{
+		Number:   opts.attempt,
+		MaxRetry: optionInt(opts.maxRetry),
 	})
 }
 
@@ -650,7 +696,7 @@ func (q *externalQueueRuntime) Ready(ctx context.Context) error {
 }
 
 func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Handler {
-	if handler == nil || q.cfg.Observer == nil {
+	if handler == nil || !observerHasRecipients(q.cfg.Observer) {
 		return handler
 	}
 	// Redis worker emits process lifecycle events natively.
@@ -662,6 +708,7 @@ func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Han
 }
 
 func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	ctx, acceptance := newDispatchAcceptance(ctx)
 	job := NewJob(jobType).Payload(payload)
 	if opts.Queue != "" {
 		job = job.OnQueue(opts.Queue)
@@ -681,7 +728,15 @@ func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payloa
 	if opts.UniqueFor > 0 {
 		job = job.UniqueFor(opts.UniqueFor)
 	}
-	return q.inner.Dispatch(ctx, q.physicalJob(job))
+	err := q.inner.Dispatch(ctx, q.physicalJob(job))
+	if err == nil {
+		acceptance.markAccepted()
+		return nil
+	}
+	if acceptance.isAccepted() {
+		return acceptedExecutionError{cause: err}
+	}
+	return err
 }
 
 func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error) {

@@ -2,12 +2,30 @@ package queue
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/goforj/queue/internal/observation"
+)
+
+const eventSchemaVersion = 1
+
+// EventLayer identifies the subsystem that committed an observed fact.
+// @group Observability
+type EventLayer string
+
+const (
+	// EventLayerQueue identifies dispatch, enqueue, and queue-control facts.
+	EventLayerQueue EventLayer = "queue"
+	// EventLayerWorker identifies physical delivery and handler-attempt facts.
+	EventLayerWorker EventLayer = "worker"
+	// EventLayerWorkflow identifies chain, batch, and continuation facts.
+	EventLayerWorkflow EventLayer = "workflow"
 )
 
 // EventKind identifies a queue runtime event.
@@ -15,11 +33,11 @@ import (
 type EventKind string
 
 const (
-	// EventDispatchStarted indicates workflow dispatch began.
+	// EventDispatchStarted indicates public dispatch began.
 	EventDispatchStarted EventKind = "dispatch_started"
-	// EventDispatchSucceeded indicates workflow dispatch completed successfully.
+	// EventDispatchSucceeded indicates the backend accepted the public dispatch; synchronous execution may still return an application error.
 	EventDispatchSucceeded EventKind = "dispatch_succeeded"
-	// EventDispatchFailed indicates workflow dispatch failed before handler execution.
+	// EventDispatchFailed indicates public dispatch failed before backend acceptance.
 	EventDispatchFailed EventKind = "dispatch_failed"
 	// EventEnqueueAccepted indicates a job was accepted for enqueue.
 	EventEnqueueAccepted EventKind = "enqueue_accepted"
@@ -35,9 +53,9 @@ const (
 	EventProcessSucceeded EventKind = "process_succeeded"
 	// EventProcessFailed indicates a handler returned an error.
 	EventProcessFailed EventKind = "process_failed"
-	// EventProcessRetried indicates a failed attempt was requeued for retry.
+	// EventProcessRetried indicates processing began for a numbered application retry attempt; redelivery may repeat the fact.
 	EventProcessRetried EventKind = "process_retried"
-	// EventProcessArchived indicates a failed attempt reached terminal state.
+	// EventProcessArchived indicates a driver confirmed terminal settlement for a failed attempt.
 	EventProcessArchived EventKind = "process_archived"
 	// EventQueuePaused indicates queue consumption was paused.
 	EventQueuePaused EventKind = "queue_paused"
@@ -47,25 +65,63 @@ const (
 	EventProcessRecovered EventKind = "process_recovered"
 	// EventRepublishFailed indicates an internal delay/retry republish attempt failed.
 	EventRepublishFailed EventKind = "republish_failed"
+	// EventJobStarted indicates logical job execution began.
+	EventJobStarted EventKind = "job_started"
+	// EventJobSucceeded indicates logical job execution succeeded.
+	EventJobSucceeded EventKind = "job_succeeded"
+	// EventJobFailed indicates logical job execution reached a failed outcome.
+	EventJobFailed EventKind = "job_failed"
+	// EventChainStarted indicates a chain was created and started.
+	EventChainStarted EventKind = "chain_started"
+	// EventChainAdvanced indicates a chain advanced to its next job.
+	EventChainAdvanced EventKind = "chain_advanced"
+	// EventChainCompleted indicates a chain completed successfully.
+	EventChainCompleted EventKind = "chain_completed"
+	// EventChainFailed indicates a chain reached a failed outcome.
+	EventChainFailed EventKind = "chain_failed"
+	// EventBatchStarted indicates a batch was created and started.
+	EventBatchStarted EventKind = "batch_started"
+	// EventBatchProgressed indicates a batch job reached a terminal outcome.
+	EventBatchProgressed EventKind = "batch_progressed"
+	// EventBatchCompleted indicates a batch completed successfully.
+	EventBatchCompleted EventKind = "batch_completed"
+	// EventBatchFailed indicates a batch reached a failed outcome.
+	EventBatchFailed EventKind = "batch_failed"
+	// EventBatchCancelled indicates remaining batch work was cancelled.
+	EventBatchCancelled EventKind = "batch_cancelled"
+	// EventCallbackStarted indicates an ephemeral workflow callback began.
+	EventCallbackStarted EventKind = "callback_started"
+	// EventCallbackSucceeded indicates an ephemeral workflow callback succeeded.
+	EventCallbackSucceeded EventKind = "callback_succeeded"
+	// EventCallbackFailed indicates an ephemeral workflow callback failed.
+	EventCallbackFailed EventKind = "callback_failed"
 )
 
-// Event is emitted through Observer hooks for queue/worker activity.
+// Event is emitted through Observer hooks for queue, worker, and workflow activity.
 // @group Driver Integration
 type Event struct {
-	Kind      EventKind
-	Driver    Driver
-	Queue     string
-	JobType   string
-	JobKey    string
-	Attempt   int
-	MaxRetry  int
-	Scheduled bool
-	Duration  time.Duration
-	Err       error
-	Time      time.Time
+	SchemaVersion int
+	EventID       string
+	Layer         EventLayer
+	Kind          EventKind
+	Driver        Driver
+	Queue         string
+	JobType       string
+	JobKey        string
+	DispatchID    string
+	JobID         string
+	ChainID       string
+	BatchID       string
+	Attempt       int
+	MaxRetry      int
+	Scheduled     bool
+	Duration      time.Duration
+	Err           error
+	Time          time.Time
 }
 
-// Observer receives queue runtime events.
+// Observer receives queue, worker, and workflow events.
+// Implementations must be safe for concurrent calls from dispatchers and workers.
 // @group Observability
 type Observer interface {
 	// Observe handles a queue runtime event.
@@ -114,6 +170,45 @@ func (f ObserverFunc) Observe(ctx context.Context, event Event) {
 	f(ctx, event)
 }
 
+// observerSink is the construction-time extension point shared with optional driver modules.
+type observerSink interface {
+	Observer
+	Add(func(context.Context, Event))
+	HasObservers() bool
+}
+
+// ensureObserverSink provides one mutable fan-out point that drivers can retain before root options are applied.
+func ensureObserverSink(observer Observer) Observer {
+	if sink, ok := observer.(observerSink); ok {
+		return sink
+	}
+	if observer == nil {
+		return observation.NewSink[Event]()
+	}
+	return observation.NewSink[Event](observer.Observe)
+}
+
+// addObserverToSink extends the shared sink without nesting queue wrappers or creating a second event identity.
+func addObserverToSink(current Observer, observer Observer) Observer {
+	current = ensureObserverSink(current)
+	if observer == nil {
+		return current
+	}
+	current.(observerSink).Add(observer.Observe)
+	return current
+}
+
+// observerHasRecipients preserves the no-observer fast path even when drivers retain an initially empty sink.
+func observerHasRecipients(observer Observer) bool {
+	if observer == nil {
+		return false
+	}
+	if sink, ok := observer.(interface{ HasObservers() bool }); ok {
+		return sink.HasObservers()
+	}
+	return true
+}
+
 type multiObserver struct {
 	observers []Observer
 }
@@ -142,6 +237,7 @@ func MultiObserver(observers ...Observer) Observer {
 }
 
 func (m *multiObserver) Observe(ctx context.Context, event Event) {
+	event = normalizeObservedEvent(event)
 	for _, observer := range m.observers {
 		safeObserve(ctx, observer, event)
 	}
@@ -168,6 +264,7 @@ func (c ChannelObserver) Observe(_ context.Context, event Event) {
 	if c.Events == nil {
 		return
 	}
+	event = normalizeObservedEvent(event)
 	if c.DropIfFull {
 		select {
 		case c.Events <- event:
@@ -700,7 +797,7 @@ type observedQueue struct {
 }
 
 func newObservedQueue(inner queueBackend, driver Driver, observer Observer) queueBackend {
-	if observer == nil {
+	if !observerHasRecipients(observer) {
 		return inner
 	}
 	return &observedQueue{
@@ -753,6 +850,7 @@ func (q *observedQueue) Pause(ctx context.Context, queueName string) error {
 		return err
 	}
 	safeObserve(ctx, q.observer, Event{
+		Layer:  EventLayerQueue,
 		Kind:   EventQueuePaused,
 		Driver: q.driver,
 		Queue:  normalizeQueueName(queueName),
@@ -770,6 +868,7 @@ func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
 		return err
 	}
 	safeObserve(ctx, q.observer, Event{
+		Layer:  EventLayerQueue,
 		Kind:   EventQueueResumed,
 		Driver: q.driver,
 		Queue:  normalizeQueueName(queueName),
@@ -827,21 +926,38 @@ func (q *observedQueue) History(ctx context.Context, queueName string, window Qu
 }
 
 func (q *observedQueue) Dispatch(ctx context.Context, job Job) error {
-	err := q.inner.Dispatch(ctx, job)
+	ctx, acceptance := ensureDispatchAcceptance(ctx)
 	opts := job.jobOptions()
+	metadata := ResolveObservedJobMetadata(job.Type, job.PayloadBytes())
 	base := Event{
-		Driver:    q.driver,
-		Queue:     jobQueueName(job),
-		JobType:   job.Type,
-		JobKey:    jobEventKey(job),
-		MaxRetry:  optionInt(opts.maxRetry),
-		Scheduled: opts.delay > 0,
-		Time:      time.Now(),
+		Layer:      EventLayerQueue,
+		Driver:     q.driver,
+		Queue:      jobQueueName(job),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		MaxRetry:   optionInt(opts.maxRetry),
+		Scheduled:  opts.delay > 0,
 	}
+	acceptance.onAccepted(func() {
+		accepted := base
+		accepted.Kind = EventEnqueueAccepted
+		accepted.Time = time.Now()
+		safeObserve(ctx, q.observer, accepted)
+	})
+
+	err := q.inner.Dispatch(ctx, job)
+	if err == nil {
+		acceptance.markAccepted()
+	}
+	if acceptance.isAccepted() {
+		return err
+	}
+	base.Time = time.Now()
 	switch {
-	case err == nil:
-		base.Kind = EventEnqueueAccepted
-		safeObserve(ctx, q.observer, base)
 	case errors.Is(err, ErrDuplicate):
 		base.Kind = EventEnqueueDuplicate
 		base.Err = err
@@ -884,22 +1000,33 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 			}
 		}
 		opts := job.jobOptions()
+		metadata := ResolveObservedJobMetadata(jobType, job.PayloadBytes())
 		effectiveQueue := queueName
 		if effectiveQueue == "" {
 			effectiveQueue = jobQueueName(job)
 		}
 		start := time.Now()
 		base := Event{
-			Driver:    driver,
-			Queue:     effectiveQueue,
-			JobType:   jobType,
-			JobKey:    jobEventKey(job),
-			Attempt:   opts.attempt,
-			MaxRetry:  optionInt(opts.maxRetry),
-			Scheduled: opts.delay > 0,
-			Time:      start,
+			Layer:      EventLayerWorker,
+			Driver:     driver,
+			Queue:      effectiveQueue,
+			JobType:    metadata.JobType,
+			JobKey:     metadata.JobKey,
+			DispatchID: metadata.DispatchID,
+			JobID:      metadata.JobID,
+			ChainID:    metadata.ChainID,
+			BatchID:    metadata.BatchID,
+			Attempt:    opts.attempt,
+			MaxRetry:   optionInt(opts.maxRetry),
+			Scheduled:  opts.delay > 0,
+			Time:       start,
 		}
 		base.Kind = EventProcessStarted
+		if base.Attempt > 0 {
+			retry := base
+			retry.Kind = EventProcessRetried
+			safeObserve(ctx, observer, retry)
+		}
 		safeObserve(ctx, observer, base)
 
 		err := handler(ctx, job)
@@ -915,21 +1042,11 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 
 		finish.Kind = EventProcessFailed
 		safeObserve(ctx, observer, finish)
-		if finish.Attempt < finish.MaxRetry {
-			retry := finish
-			retry.Kind = EventProcessRetried
-			retry.Err = nil
-			safeObserve(ctx, observer, retry)
-		} else {
-			archive := finish
-			archive.Kind = EventProcessArchived
-			archive.Err = nil
-			safeObserve(ctx, observer, archive)
-		}
 		return err
 	}
 }
 
+// safeObserve keeps internal and driver event delivery on the same panic-isolated path.
 func safeObserve(ctx context.Context, observer Observer, event Event) {
 	SafeObserve(ctx, observer, event)
 }
@@ -939,16 +1056,75 @@ func safeObserve(ctx context.Context, observer Observer, event Event) {
 // This is an advanced helper intended for driver-module implementations.
 // @group Observability
 func SafeObserve(ctx context.Context, observer Observer, event Event) {
-	if observer == nil {
+	if !observerHasRecipients(observer) {
 		return
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	event = normalizeObservedEvent(event)
 	defer func() {
 		_ = recover()
 	}()
 	observer.Observe(ctx, event)
+}
+
+// normalizeObservedEvent fills portable metadata at the observation boundary so drivers and workflows cannot diverge on envelope construction.
+func normalizeObservedEvent(event Event) Event {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = eventSchemaVersion
+	}
+	if event.EventID == "" {
+		event.EventID = newEventID()
+	}
+	if event.Layer == "" {
+		event.Layer = eventLayerForKind(event.Kind)
+	}
+	if event.Time.IsZero() {
+		event.Time = time.Now()
+	}
+	return event
+}
+
+// eventLayerForKind preserves meaningful delivery and workflow boundaries inside the single public event model.
+func eventLayerForKind(kind EventKind) EventLayer {
+	switch kind {
+	case EventProcessStarted,
+		EventProcessSucceeded,
+		EventProcessFailed,
+		EventProcessRetried,
+		EventProcessArchived,
+		EventProcessRecovered,
+		EventRepublishFailed:
+		return EventLayerWorker
+	case EventJobStarted,
+		EventJobSucceeded,
+		EventJobFailed,
+		EventChainStarted,
+		EventChainAdvanced,
+		EventChainCompleted,
+		EventChainFailed,
+		EventBatchStarted,
+		EventBatchProgressed,
+		EventBatchCompleted,
+		EventBatchFailed,
+		EventBatchCancelled,
+		EventCallbackStarted,
+		EventCallbackSucceeded,
+		EventCallbackFailed:
+		return EventLayerWorkflow
+	default:
+		return EventLayerQueue
+	}
+}
+
+// newEventID gives each observed fact a process-independent identifier without imposing an observer cost when no observer is installed.
+func newEventID() string {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err == nil {
+		return "evt_" + hex.EncodeToString(value[:])
+	}
+	return fmt.Sprintf("evt_%d", time.Now().UnixNano())
 }
 
 func jobQueueName(job Job) string {
@@ -967,8 +1143,7 @@ func optionInt(v *int) int {
 }
 
 func jobEventKey(job Job) string {
-	hash := sha1.Sum(append([]byte(job.Type+":"), job.PayloadBytes()...))
-	return fmt.Sprintf("%x", hash[:])
+	return observedJobKey(job.Type, job.PayloadBytes())
 }
 
 func normalizeQueueName(name string) string {

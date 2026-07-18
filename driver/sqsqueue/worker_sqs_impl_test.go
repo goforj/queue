@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queuecore"
 )
 
@@ -125,7 +126,7 @@ func TestSQSWorker_RepublishFailureEmitsObserverEvent(t *testing.T) {
 		handlers: map[string]queue.Handler{},
 		client:   stub,
 		queueURL: "https://example.local/queue/default",
-		observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+		observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 	}
 
 	body, err := json.Marshal(sqsMessage{
@@ -141,6 +142,9 @@ func TestSQSWorker_RepublishFailureEmitsObserverEvent(t *testing.T) {
 	if len(events) == 0 || events[0].Kind != queue.EventRepublishFailed || events[0].Driver != queue.DriverSQS || events[0].Queue != "critical" {
 		t.Fatalf("expected republish_failed event for sqs, got %+v", events)
 	}
+	if events[0].Layer != queue.EventLayerWorker {
+		t.Fatalf("republish_failed layer = %q, want worker", events[0].Layer)
+	}
 }
 
 func TestSQSWorker_RepublishFailureUnwrapsBusEnvelopeJobType(t *testing.T) {
@@ -150,14 +154,14 @@ func TestSQSWorker_RepublishFailureUnwrapsBusEnvelopeJobType(t *testing.T) {
 		handlers: map[string]queue.Handler{},
 		client:   stub,
 		queueURL: "https://example.local/queue/default",
-		observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+		observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 	}
 
 	body, err := json.Marshal(sqsMessage{
 		Type:          "bus:job",
 		Queue:         "critical",
 		AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli(),
-		Payload:       []byte(`{"job":{"type":"monitoring:check"}}`),
+		Payload:       []byte(`{"schema_version":1,"dispatch_id":"dsp_sqs","job_id":"job_sqs","batch_id":"bat_sqs","job":{"type":"monitoring:check"}}`),
 	})
 	if err != nil {
 		t.Fatalf("marshal body: %v", err)
@@ -169,6 +173,9 @@ func TestSQSWorker_RepublishFailureUnwrapsBusEnvelopeJobType(t *testing.T) {
 	}
 	if events[0].JobType != "monitoring:check" {
 		t.Fatalf("expected unwrapped observed job type, got %q", events[0].JobType)
+	}
+	if events[0].DispatchID != "dsp_sqs" || events[0].JobID != "job_sqs" || events[0].BatchID != "bat_sqs" {
+		t.Fatalf("expected correlated sqs event, got %+v", events[0])
 	}
 }
 
@@ -317,6 +324,72 @@ func TestSQSWorker_ProcessFailureRetryAndTerminal(t *testing.T) {
 		}
 		if len(stub.deleteInputs) != 1 {
 			t.Fatalf("expected one delete on terminal retry, got %d", len(stub.deleteInputs))
+		}
+	})
+}
+
+// TestSQSWorker_AttemptDecisionSettlement verifies terminal work is deleted while uncommitted work remains available for redelivery.
+func TestSQSWorker_AttemptDecisionSettlement(t *testing.T) {
+	t.Run("permanent failure deletes without republishing", func(t *testing.T) {
+		stub := &sqsWorkerClientStub{}
+		w := &sqsWorker{
+			handlers: map[string]queue.Handler{
+				"job:permanent": func(ctx context.Context, _ queue.Job) error {
+					attempt, ok := busruntime.DeliveryAttemptFromContext(ctx)
+					if !ok || attempt.Number != 0 || attempt.MaxRetry != 3 {
+						t.Fatalf("unexpected delivery attempt: %+v, present=%t", attempt, ok)
+					}
+					return busruntime.Permanent(errors.New("invalid job"))
+				},
+			},
+			client:   stub,
+			queueURL: "https://example.local/queue/default",
+		}
+		body, err := json.Marshal(sqsMessage{Type: "job:permanent", Queue: "default", MaxRetry: 3})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		w.process(context.Background(), sqstypes.Message{Body: aws.String(string(body)), ReceiptHandle: aws.String("rh-permanent")})
+
+		if len(stub.sendInputs) != 0 {
+			t.Fatalf("permanent failure must not republish, got %d sends", len(stub.sendInputs))
+		}
+		if len(stub.deleteInputs) != 1 {
+			t.Fatalf("permanent failure must delete its receipt, got %d deletes", len(stub.deleteInputs))
+		}
+	})
+
+	t.Run("uncommitted failure leaves the original receipt", func(t *testing.T) {
+		stub := &sqsWorkerClientStub{}
+		w := &sqsWorker{
+			handlers: map[string]queue.Handler{
+				"job:uncommitted": func(ctx context.Context, _ queue.Job) error {
+					attempt, ok := busruntime.DeliveryAttemptFromContext(ctx)
+					if !ok || attempt.Number != 1 || attempt.MaxRetry != 4 {
+						t.Fatalf("unexpected delivery attempt: %+v, present=%t", attempt, ok)
+					}
+					return busruntime.Uncommitted(errors.New("store unavailable"))
+				},
+			},
+			client:   stub,
+			queueURL: "https://example.local/queue/default",
+		}
+		body, err := json.Marshal(sqsMessage{
+			Type:          "job:uncommitted",
+			Queue:         "default",
+			Attempt:       1,
+			MaxRetry:      4,
+			BackoffMillis: 1_000,
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		w.process(context.Background(), sqstypes.Message{Body: aws.String(string(body)), ReceiptHandle: aws.String("rh-uncommitted")})
+
+		if len(stub.sendInputs) != 0 || len(stub.deleteInputs) != 0 {
+			t.Fatalf("uncommitted failure must await SQS redelivery, got sends=%d deletes=%d", len(stub.sendInputs), len(stub.deleteInputs))
 		}
 	})
 }

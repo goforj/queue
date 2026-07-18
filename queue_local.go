@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/goforj/queue/busruntime"
 )
 
 // localQueue is an in-memory queue implementation supporting sync and workerpool drivers.
@@ -35,10 +37,13 @@ type workerContextKey string
 
 const workerEnqueueKey workerContextKey = "queue.worker.enqueue.allowed"
 
+const localRedeliveryBackoff = time.Millisecond
+
 type queuedJob struct {
-	ctx  context.Context
-	job  Job
-	opts jobOptions
+	ctx   context.Context
+	job   Job
+	opts  jobOptions
+	ready <-chan struct{}
 }
 
 type localQueueMetrics struct {
@@ -207,6 +212,9 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	}
 	parsed := job.jobOptions()
 	queueName := normalizeQueueName(parsed.queueName)
+	if err := d.validateEnqueue(job, queueName); err != nil {
+		return err
+	}
 	if parsed.uniqueTTL > 0 {
 		if !d.claimUnique(job, queueName, parsed.uniqueTTL) {
 			return ErrDuplicate
@@ -220,6 +228,9 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
 		metrics.Delayed++
 	})
+	if acceptance := dispatchAcceptanceFromContext(ctx); acceptance != nil {
+		acceptance.markAccepted()
+	}
 	go func() {
 		defer d.delayedWG.Done()
 		defer d.delayed.Add(-1)
@@ -242,14 +253,14 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 
 func (d *localQueue) enqueueNow(ctx context.Context, job Job, parsed jobOptions) error {
 	queueName := normalizeQueueName(parsed.queueName)
-	if d.isPaused(queueName) {
-		return ErrQueuePaused
-	}
-	if _, ok := d.lookup(job.Type); !ok {
-		return fmt.Errorf("no handler registered for job type %q", job.Type)
+	if err := d.validateEnqueue(job, queueName); err != nil {
+		return err
 	}
 	if d.driver == DriverWorkerpool {
 		return d.enqueueAsync(ctx, job, parsed)
+	}
+	if acceptance := dispatchAcceptanceFromContext(ctx); acceptance != nil {
+		acceptance.markAccepted()
 	}
 	d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
 		metrics.Active++
@@ -279,12 +290,23 @@ func (d *localQueue) enqueueAsync(ctx context.Context, job Job, parsed jobOption
 	if err != nil {
 		return err
 	}
+	var ready chan struct{}
+	if dispatchAcceptanceFromContext(ctx) != nil {
+		ready = make(chan struct{})
+	}
 	select {
-	case workQueue <- queuedJob{ctx: ctx, job: job, opts: parsed}:
+	case workQueue <- queuedJob{ctx: ctx, job: job, opts: parsed, ready: ready}:
 		d.enqueued.Add(1)
 		d.updateQueueMetrics(normalizeQueueName(parsed.queueName), func(metrics *localQueueMetrics) {
 			metrics.Pending++
 		})
+		if ready != nil {
+			acceptance := dispatchAcceptanceFromContext(ctx)
+			func() {
+				defer close(ready)
+				acceptance.markAccepted()
+			}()
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -341,6 +363,9 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	jobTimeout := d.cfg.DefaultJobTimeout
 	for job := range workQueue {
 		func() {
+			if job.ready != nil {
+				<-job.ready
+			}
 			d.started.Add(1)
 			defer d.finished.Add(1)
 			queueName := normalizeQueueName(job.opts.queueName)
@@ -379,6 +404,17 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	}
 }
 
+// validateEnqueue rejects work before uniqueness is claimed or an acceptance fact is committed.
+func (d *localQueue) validateEnqueue(job Job, queueName string) error {
+	if d.isPaused(queueName) {
+		return ErrQueuePaused
+	}
+	if _, ok := d.lookup(job.Type); !ok {
+		return fmt.Errorf("no handler registered for job type %q", job.Type)
+	}
+	return nil
+}
+
 func (d *localQueue) run(ctx context.Context, job Job) error {
 	handler, ok := d.lookup(job.Type)
 	if !ok {
@@ -396,11 +432,10 @@ func (d *localQueue) runWithRetry(ctx context.Context, job Job, parsed jobOption
 		ctx, cancel = context.WithTimeout(ctx, *parsed.timeout)
 		defer cancel()
 	}
-	attempts := 1
+	maxRetry := 0
 	if parsed.maxRetry != nil && *parsed.maxRetry > 0 {
-		attempts += *parsed.maxRetry
+		maxRetry = *parsed.maxRetry
 	}
-	var lastErr error
 	jobForRun := job
 	if parsed.maxRetry != nil {
 		jobForRun = jobForRun.Retry(*parsed.maxRetry)
@@ -408,26 +443,50 @@ func (d *localQueue) runWithRetry(ctx context.Context, job Job, parsed jobOption
 	if parsed.queueName != "" {
 		jobForRun = jobForRun.OnQueue(parsed.queueName)
 	}
-	for attempt := 1; attempt <= attempts; attempt++ {
-		lastErr = d.run(ctx, jobForRun.withAttempt(attempt-1))
-		if lastErr == nil {
+	for attempt := 0; ; {
+		delivery := busruntime.DeliveryAttempt{Number: attempt, MaxRetry: maxRetry}
+		attemptCtx := busruntime.WithDeliveryAttempt(ctx, delivery)
+		err := d.run(attemptCtx, jobForRun.withAttempt(attempt))
+		switch busruntime.ClassifyAttempt(delivery, err) {
+		case busruntime.AttemptSucceeded:
 			return nil
-		}
-		if attempt == attempts {
-			break
-		}
-		if parsed.backoff == nil || *parsed.backoff <= 0 {
-			continue
-		}
-		timer := time.NewTimer(*parsed.backoff)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
+		case busruntime.AttemptFailed:
+			return err
+		case busruntime.AttemptRetry:
+			attempt++
+			delay := time.Duration(0)
+			if parsed.backoff != nil {
+				delay = *parsed.backoff
+			}
+			if waitErr := waitForLocalRetry(ctx, delay); waitErr != nil {
+				return waitErr
+			}
+		case busruntime.AttemptRedeliver:
+			if waitErr := waitForLocalRetry(ctx, localRedeliveryBackoff); waitErr != nil {
+				return waitErr
+			}
 		}
 	}
-	return lastErr
+}
+
+// waitForLocalRetry keeps retry and redelivery waits cancellable while avoiding timers for immediate application retries.
+func waitForLocalRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (d *localQueue) lookup(jobType string) (Handler, bool) {

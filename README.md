@@ -10,12 +10,12 @@
     <a href="https://pkg.go.dev/github.com/goforj/queue"><img src="https://pkg.go.dev/badge/github.com/goforj/queue.svg" alt="Go Reference"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
     <a href="https://github.com/goforj/queue/actions"><img src="https://github.com/goforj/queue/actions/workflows/test.yml/badge.svg" alt="Go Test"></a>
-    <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.23+-blue?logo=go" alt="Go version"></a>
+    <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.24.4+-blue?logo=go" alt="Go version"></a>
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/unit_tests-274-brightgreen" alt="Unit tests (executed count)">
-    <img src="https://img.shields.io/badge/integration_tests-552-blue" alt="Integration tests (executed count)">
+    <img src="https://img.shields.io/badge/unit_tests-343-brightgreen" alt="Unit tests (executed count)">
+    <img src="https://img.shields.io/badge/integration_tests-570-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
 
@@ -65,17 +65,19 @@ func main() {
 | Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout | Native Stats | Queue Admin |
 | ---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched jobs; useful for disabled queue modes and smoke tests. | - | - | - | - | - | - | - | - |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | ✓ | - | ✓ | - | - |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL durable queue | MySQL driver module (`driver/mysqlqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="Postgres"> | SQL durable queue | Postgres driver module (`driver/postgresqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL durable queue | SQLite driver module (`driver/sqlitequeue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend (Asynq semantics). | ✓ | ✓ | ✓ | ✓ | - | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/nats-%23007ACC?style=flat" alt="NATS"> | Broker target | NATS transport with queue-subject routing. | - | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/sqs-%23FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | ⚠ | - | ✓ | - | - |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | ⚠ | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL durable queue | MySQL driver module (`driver/mysqlqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ⚠ | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="Postgres"> | SQL durable queue | Postgres driver module (`driver/postgresqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ⚠ | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL durable queue | SQLite driver module (`driver/sqlitequeue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ⚠ | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend (Asynq semantics). | ✓ | ✓ | ✓ | ⚠ | - | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/nats-%23007ACC?style=flat" alt="NATS"> | Broker target | NATS transport with queue-subject routing. | - | ✓ | ✓ | ⚠ | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/sqs-%23FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ⚠ | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | ⚠ | ✓ | ✓ | - | - |
 
 > SQL-backed queues (`sqlite`, `mysql`, `postgres`) are durable and convenient, but they trade throughput for operational simplicity. They default to `1` worker, and increasing concurrency may require DB tuning (indexes, connection pool, lock contention). Prefer broker-backed drivers for higher-throughput workloads.
+>
+> **Unique status:** ⚠ means the backend has a uniqueness primitive, but the high-level workflow facade currently includes volatile envelope IDs in its physical key. Do not rely on public `Job.UniqueFor` duplicate suppression until M1-05 through M1-07 in `plan.md` are complete.
 >
 > **Queue Admin status:** the cross-driver admin contract is defined in core (`ListJobs`, `RetryJob`, `CancelJob`, `DeleteJob`, `ClearQueue`, `QueueHistory`), but **full queue admin operations are currently implemented only for Redis**. Other drivers return `ErrQueueAdminUnsupported` for unsupported admin actions.
 
@@ -218,7 +220,9 @@ _, _ = q.Chain(
 _, _ = q.Batch(
 	queue.NewJob("emails:send"),
 	queue.NewJob("sms:send"),
-).Then(queue.NewJob("notifications:done")).Dispatch(context.Background())
+).Then(func(context.Context, queue.BatchState) error {
+	return nil
+}).Dispatch(context.Background())
 ```
 
 **Middleware**: Cross-cutting execution policy.
@@ -428,89 +432,58 @@ q, _ := queue.New(queue.Config{
 _ = q
 ```
 
-### Kitchen sink event logging (runtime + workflow)
+### Kitchen sink event logging
 
 Runnable example: `examples/observeall/main.go`
 
 ```go
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-runtimeObserver := queue.ObserverFunc(func(event queue.Event) {
-	attemptInfo := fmt.Sprintf("attempt=%d/%d", event.Attempt, event.MaxRetry+1)
-	jobInfo := fmt.Sprintf("job=%s key=%s queue=%s driver=%s", event.JobType, event.JobKey, event.Queue, event.Driver)
-
-	switch event.Kind {
-	case queue.EventEnqueueAccepted:
-		logger.Info("Accepted dispatch", "msg", fmt.Sprintf("Accepted %s", jobInfo), "scheduled", event.Scheduled, "at", event.Time.Format(time.RFC3339Nano))
-	case queue.EventEnqueueRejected:
-		logger.Error("Dispatch failed", "msg", fmt.Sprintf("Rejected %s", jobInfo), "error", event.Err)
-	case queue.EventEnqueueDuplicate:
-		logger.Warn("Skipped duplicate job", "msg", fmt.Sprintf("Duplicate %s", jobInfo))
-	case queue.EventEnqueueCanceled:
-		logger.Warn("Canceled dispatch", "msg", fmt.Sprintf("Canceled %s", jobInfo), "error", event.Err)
-	case queue.EventProcessStarted:
-		logger.Info("Started processing job", "msg", fmt.Sprintf("Started %s (%s)", jobInfo, attemptInfo), "at", event.Time.Format(time.RFC3339Nano))
-	case queue.EventProcessSucceeded:
-		logger.Info("Processed job", "msg", fmt.Sprintf("Processed %s in %s (%s)", jobInfo, event.Duration, attemptInfo))
-	case queue.EventProcessFailed:
-		logger.Error("Processing failed", "msg", fmt.Sprintf("Failed %s after %s (%s)", jobInfo, event.Duration, attemptInfo), "error", event.Err)
-	case queue.EventProcessRetried:
-		logger.Warn("Retrying job", "msg", fmt.Sprintf("Retry scheduled for %s (%s)", jobInfo, attemptInfo), "error", event.Err)
-	case queue.EventProcessArchived:
-		logger.Error("Archived failed job", "msg", fmt.Sprintf("Archived %s after final failure (%s)", jobInfo, attemptInfo), "error", event.Err)
-	case queue.EventQueuePaused:
-		logger.Info("Paused queue", "msg", fmt.Sprintf("Paused queue=%s driver=%s", event.Queue, event.Driver))
-	case queue.EventQueueResumed:
-		logger.Info("Resumed queue", "msg", fmt.Sprintf("Resumed queue=%s driver=%s", event.Queue, event.Driver))
-	default:
-		logger.Info("Queue event", "msg", fmt.Sprintf("kind=%s %s", event.Kind, jobInfo))
-	}
-})
-workflowObserver := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
-	logger.Info("workflow event",
+observer := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+	logger.InfoContext(ctx, "queue event",
+		"layer", event.Layer,
 		"kind", event.Kind,
+		"driver", event.Driver,
+		"queue", event.Queue,
 		"dispatch_id", event.DispatchID,
 		"job_id", event.JobID,
 		"chain_id", event.ChainID,
 		"batch_id", event.BatchID,
 		"job_type", event.JobType,
-		"queue", event.Queue,
 		"attempt", event.Attempt,
+		"max_retry", event.MaxRetry,
 		"duration", event.Duration,
 		"err", event.Err,
 	)
 })
 
 q, _ := queue.New(
-	queue.Config{
-		Driver:   queue.DriverSync,
-		Observer: runtimeObserver,
-	},
-	queue.WithObserver(workflowObserver),
+	queue.Config{Driver: queue.DriverSync},
+	queue.WithObserver(observer),
 )
 _ = q
 ```
 
 ### Events reference
 
-| Type | EventKind | Meaning |
+| Layer | EventKind | Meaning |
 | ---: | --- | --- |
+| **queue** | dispatch_started | Public dispatch began. |
+| **queue** | dispatch_succeeded | Backend acceptance completed; synchronous execution may still return an application error. |
+| **queue** | dispatch_failed | Public dispatch failed before backend acceptance. |
 | **queue** | enqueue_accepted | Job accepted by driver for enqueue. |
 | **queue** | enqueue_rejected | Job enqueue failed. |
 | **queue** | enqueue_duplicate | Duplicate job rejected due to uniqueness key. |
 | **queue** | enqueue_canceled | Context cancellation prevented enqueue. |
-| **queue** | process_started | Worker began processing job. |
-| **queue** | process_succeeded | Handler returned success. |
-| **queue** | process_failed | Handler returned error. |
-| **queue** | process_retried | Driver scheduled retry attempt. |
-| **queue** | process_archived | Job moved to terminal failure state. |
+| **worker** | process_started | Worker began processing job. |
+| **worker** | process_succeeded | Handler returned success. |
+| **worker** | process_failed | Handler returned error. |
+| **worker** | process_retried | A numbered application retry attempt began; infrastructure redelivery may repeat the fact. |
+| **worker** | process_archived | Driver confirmed terminal settlement; unsupported paths omit this fact. |
 | **queue** | queue_paused | Queue was paused (driver supports pause). |
 | **queue** | queue_resumed | Queue was resumed. |
-| **workflow** | dispatch_started | Workflow runtime accepted a dispatch request and created a dispatch record. |
-| **workflow** | dispatch_succeeded | Dispatch was successfully enqueued to the underlying queue runtime. |
-| **workflow** | dispatch_failed | Dispatch failed before job execution could start. |
 | **workflow** | job_started | A workflow job handler started execution. |
 | **workflow** | job_succeeded | A workflow job handler completed successfully. |
-| **workflow** | job_failed | A workflow job handler returned an error. |
+| **workflow** | job_failed | A logical job reached permanent or exhausted failure. |
 | **workflow** | chain_started | A chain workflow was created and started. |
 | **workflow** | chain_advanced | Chain progressed from one node to the next node. |
 | **workflow** | chain_completed | Chain reached terminal success. |
@@ -550,7 +523,7 @@ The API section below is autogenerated; do not edit between the markers.
 | **Job** | [Backoff](#queue-job-backoff) · [Bind](#queue-job-bind) · [Delay](#queue-job-delay) · [NewJob](#queue-newjob) · [OnQueue](#queue-job-onqueue) · [Payload](#queue-job-payload) · [PayloadBytes](#queue-job-payloadbytes) · [PayloadJSON](#queue-job-payloadjson) · [Retry](#queue-job-retry) · [Timeout](#queue-job-timeout) · [UniqueFor](#queue-job-uniquefor) |
 | **Observability** | [Active](#queue-statssnapshot-active) · [Archived](#queue-statssnapshot-archived) · [Failed](#queue-statssnapshot-failed) · [MultiObserver](#queue-multiobserver) · [ChannelObserver.Observe](#queue-channelobserver-observe) · [Observer.Observe](#queue-observer-observe) · [ObserverFunc.Observe](#queue-observerfunc-observe) · [StatsCollector.Observe](#queue-statscollector-observe) · [Pause](#queue-pause) · [Paused](#queue-statssnapshot-paused) · [Pending](#queue-statssnapshot-pending) · [Processed](#queue-statssnapshot-processed) · [Queue](#queue-statssnapshot-queue) · [Queues](#queue-statssnapshot-queues) · [Ready](#queue-ready) · [Resume](#queue-resume) · [RetryCount](#queue-statssnapshot-retrycount) · [SafeObserve](#queue-safeobserve) · [Scheduled](#queue-statssnapshot-scheduled) · [Snapshot](#queue-snapshot) · [StatsCollector.Snapshot](#queue-statscollector-snapshot) · [SupportsNativeStats](#queue-supportsnativestats) · [SupportsPause](#queue-supportspause) · [Throughput](#queue-statssnapshot-throughput) |
 | **Other** | [PhysicalQueueName](#queue-physicalqueuename) · [PhysicalQueueWeights](#queue-physicalqueueweights) · [ResolveObservedJobType](#queue-resolveobservedjobtype) |
-| **Queue** | [Batch](#queue-queue-batch) · [Chain](#queue-queue-chain) · [Dispatch](#queue-queue-dispatch) · [Driver](#queue-queue-driver) · [FindBatch](#queue-queue-findbatch) · [FindChain](#queue-queue-findchain) · [Pause](#queue-queue-pause) · [Prune](#queue-queue-prune) · [Ready](#queue-queue-ready) · [Register](#queue-queue-register) · [Resume](#queue-queue-resume) · [Run](#queue-queue-run) · [Shutdown](#queue-queue-shutdown) · [StartWorkers](#queue-queue-startworkers) · [Stats](#queue-queue-stats) · [WithClock](#queue-withclock) · [WithContext](#queue-queue-withcontext) · [WithHandlerContextDecorator](#queue-withhandlercontextdecorator) · [WithMiddleware](#queue-withmiddleware) · [WithObserver](#queue-withobserver) · [WithStore](#queue-withstore) · [WithWorkers](#queue-withworkers) · [Queue.WithWorkers](#queue-queue-withworkers) |
+| **Queue** | [Batch](#queue-queue-batch) · [Chain](#queue-queue-chain) · [Dispatch](#queue-queue-dispatch) · [Driver](#queue-queue-driver) · [FindBatch](#queue-queue-findbatch) · [FindChain](#queue-queue-findchain) · [IsPermanent](#queue-ispermanent) · [Pause](#queue-queue-pause) · [Permanent](#queue-permanent) · [Prune](#queue-queue-prune) · [Ready](#queue-queue-ready) · [Register](#queue-queue-register) · [Resume](#queue-queue-resume) · [Run](#queue-queue-run) · [Shutdown](#queue-queue-shutdown) · [StartWorkers](#queue-queue-startworkers) · [Stats](#queue-queue-stats) · [WithClock](#queue-withclock) · [WithContext](#queue-queue-withcontext) · [WithHandlerContextDecorator](#queue-withhandlercontextdecorator) · [WithMiddleware](#queue-withmiddleware) · [WithObserver](#queue-withobserver) · [WithStore](#queue-withstore) · [WithWorkers](#queue-withworkers) · [Queue.WithWorkers](#queue-queue-withworkers) |
 | **Driver Constructors** | [mysqlqueue.New](#mysqlqueue-new) · [mysqlqueue.NewWithConfig](#mysqlqueue-newwithconfig) · [natsqueue.New](#natsqueue-new) · [natsqueue.NewWithConfig](#natsqueue-newwithconfig) · [postgresqueue.New](#postgresqueue-new) · [postgresqueue.NewWithConfig](#postgresqueue-newwithconfig) · [rabbitmqqueue.New](#rabbitmqqueue-new) · [rabbitmqqueue.NewWithConfig](#rabbitmqqueue-newwithconfig) · [redisqueue.New](#redisqueue-new) · [redisqueue.NewWithConfig](#redisqueue-newwithconfig) · [sqlitequeue.New](#sqlitequeue-new) · [sqlitequeue.NewWithConfig](#sqlitequeue-newwithconfig) · [sqsqueue.New](#sqsqueue-new) · [sqsqueue.NewWithConfig](#sqsqueue-newwithconfig) |
 | **Testing** | [AssertBatchCount](#queuefake-fake-assertbatchcount) · [AssertBatched](#queuefake-fake-assertbatched) · [AssertChained](#queuefake-fake-assertchained) · [AssertCount](#queuefake-fake-assertcount) · [AssertDispatched](#queuefake-fake-assertdispatched) · [AssertDispatchedOn](#queuefake-fake-assertdispatchedon) · [AssertDispatchedTimes](#queuefake-fake-assertdispatchedtimes) · [AssertNotDispatched](#queuefake-fake-assertnotdispatched) · [AssertNothingBatched](#queuefake-fake-assertnothingbatched) · [AssertNothingDispatched](#queuefake-fake-assertnothingdispatched) · [AssertNothingWorkflowDispatched](#queuefake-fake-assertnothingworkflowdispatched) · [AssertWorkflowDispatched](#queuefake-fake-assertworkflowdispatched) · [AssertWorkflowDispatchedOn](#queuefake-fake-assertworkflowdispatchedon) · [AssertWorkflowDispatchedTimes](#queuefake-fake-assertworkflowdispatchedtimes) · [AssertWorkflowNotDispatched](#queuefake-fake-assertworkflownotdispatched) · [Count](#queuefake-fake-count) · [CountJob](#queuefake-fake-countjob) · [CountOn](#queuefake-fake-counton) · [New](#queuefake-new) · [Queue](#queuefake-fake-queue) · [Records](#queuefake-fake-records) · [Reset](#queuefake-fake-reset) · [Workflow](#queuefake-fake-workflow) |
 
@@ -1387,6 +1360,10 @@ if err != nil {
 	return
 }
 q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+if err := q.StartWorkers(context.Background()); err != nil {
+	return
+}
+defer q.Shutdown(context.Background())
 _, _ = q.Batch(
 	queue.NewJob("emails:send").Payload(map[string]any{"id": 1}),
 	queue.NewJob("emails:send").Payload(map[string]any{"id": 2}),
@@ -1404,6 +1381,10 @@ if err != nil {
 }
 q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
 q.Register("second", func(ctx context.Context, m queue.Message) error { return nil })
+if err := q.StartWorkers(context.Background()); err != nil {
+	return
+}
+defer q.Shutdown(context.Background())
 _, _ = q.Chain(
 	queue.NewJob("first"),
 	queue.NewJob("second"),
@@ -1420,6 +1401,10 @@ if err != nil {
 	return
 }
 q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+if err := q.StartWorkers(context.Background()); err != nil {
+	return
+}
+defer q.Shutdown(context.Background())
 job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
 _, _ = q.Dispatch(job)
 ```
@@ -1471,6 +1456,10 @@ if err != nil {
 _, _ = q.FindChain(context.Background(), chainID)
 ```
 
+#### <a id="queue-ispermanent"></a>IsPermanent
+
+IsPermanent reports whether an error requests terminal application settlement.
+
 #### <a id="queue-queue-pause"></a>Queue.Pause
 
 Pause pauses consumption for a queue when supported by the underlying driver.
@@ -1486,6 +1475,10 @@ if queue.SupportsPause(q) {
 	_ = q.Pause(context.Background(), "default")
 }
 ```
+
+#### <a id="queue-permanent"></a>Permanent
+
+Permanent marks an error as terminal so workers do not spend the remaining application retry budget on it.
 
 #### <a id="queue-queue-prune"></a>Prune
 
@@ -1657,10 +1650,10 @@ if err != nil {
 
 #### <a id="queue-withobserver"></a>WithObserver
 
-WithObserver installs a workflow lifecycle observer.
+WithObserver installs one observer for queue, worker, and workflow lifecycle events.
 
 ```go
-observer := queue.WorkflowObserverFunc(func(_ context.Context, event queue.WorkflowEvent) {
+observer := queue.ObserverFunc(func(_ context.Context, event queue.Event) {
 	_ = event.Kind
 })
 q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))
