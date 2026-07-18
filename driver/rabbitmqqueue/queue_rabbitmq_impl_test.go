@@ -44,20 +44,53 @@ func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 	}
 
 	job := queue.NewJob("job:dup").Payload([]byte(`{"k":"v"}`)).OnQueue("default").UniqueFor(10 * time.Second)
-	_ = q.claimUnique(job, "default", 10*time.Second)
+	_, _, _ = q.claimUnique(job, "default", 10*time.Second)
 	if err := q.Dispatch(context.Background(), job); !errors.Is(err, queue.ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate before dial path, got %v", err)
 	}
 }
 
+// TestRabbitMQQueueCanceledDispatchStopsBeforeClaim verifies cancellation cannot publish or consume uniqueness state.
+func TestRabbitMQQueueCanceledDispatchStopsBeforeClaim(t *testing.T) {
+	q := newRabbitMQQueue("://bad-url", "default")
+	job := queue.NewJob("job:canceled").OnQueue("default").UniqueFor(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := q.Dispatch(ctx, job); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled dispatch error = %v, want context.Canceled", err)
+	}
+	key, token, acquired := q.claimUnique(job, "default", time.Minute)
+	if !acquired {
+		t.Fatal("canceled dispatch consumed the uniqueness claim")
+	}
+	q.unique.Release(key, token)
+}
+
 func TestRabbitMQQueue_ClaimUniquePrunesExpired(t *testing.T) {
 	q := newRabbitMQQueue("amqp://example", "default")
 	job := queue.NewJob("job:unique").Payload([]byte(`{"id":1}`)).OnQueue("default")
-	key := "default:" + job.Type + ":" + string(job.PayloadBytes())
-	q.unique[key] = time.Now().Add(-time.Second)
-
-	if ok := q.claimUnique(job, "default", 5*time.Second); !ok {
+	if _, _, ok := q.claimUnique(job, "default", time.Millisecond); !ok {
+		t.Fatal("expected initial claim to succeed")
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, _, ok := q.claimUnique(job, "default", 5*time.Second); !ok {
 		t.Fatal("expected expired key to be pruned and claim to succeed")
+	}
+}
+
+// TestRabbitMQQueueRejectedDispatchReleasesUniqueClaim verifies connection rejection cannot retain a false acceptance.
+func TestRabbitMQQueueRejectedDispatchReleasesUniqueClaim(t *testing.T) {
+	q := newRabbitMQQueue("://bad-url", "default")
+	q.dialTimeout = 5 * time.Millisecond
+	job := queue.NewJob("job:unique:rejected").OnQueue("default").UniqueFor(time.Minute)
+	first := q.Dispatch(context.Background(), job)
+	if first == nil || errors.Is(first, queue.ErrDuplicate) {
+		t.Fatalf("first dispatch error = %v, want connection rejection", first)
+	}
+	second := q.Dispatch(context.Background(), job)
+	if second == nil || errors.Is(second, queue.ErrDuplicate) {
+		t.Fatalf("second dispatch error = %v, uniqueness claim was not compensated", second)
 	}
 }
 

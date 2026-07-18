@@ -2,7 +2,7 @@ package sqlqueuecore
 
 import (
 	"context"
-	"crypto/sha256"
+	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -24,6 +24,9 @@ const (
 	defaultProcessingLeaseNoTimeout = 5 * time.Minute
 	databaseFinalizeRetryCount      = 3
 	databaseFinalizeRetryDelay      = 25 * time.Millisecond
+	databaseFinalizeTimeout         = 5 * time.Second
+	databaseUniquePruneInterval     = 256
+	databaseProcessingTokenBytes    = 16
 )
 
 // DatabaseConfig configures the SQL-backed database q.
@@ -38,6 +41,7 @@ type localDatabaseConfig struct {
 	PollInterval             time.Duration
 	DefaultQueue             string
 	AutoMigrate              bool
+	DisableAutoMigrate       bool
 	ProcessingRecoveryGrace  time.Duration
 	ProcessingLeaseNoTimeout time.Duration
 	Observer                 queue.Observer
@@ -51,7 +55,9 @@ func (c localDatabaseConfig) normalize() localDatabaseConfig {
 	if c.DefaultQueue == "" {
 		c.DefaultQueue = "default"
 	}
-	if !c.AutoMigrate {
+	if c.DisableAutoMigrate {
+		c.AutoMigrate = false
+	} else if !c.AutoMigrate {
 		c.AutoMigrate = true
 	}
 	if c.ProcessingRecoveryGrace <= 0 {
@@ -72,25 +78,36 @@ type databaseQueue struct {
 	mu       sync.RWMutex
 	handlers map[string]queue.Handler
 
-	startOnce    sync.Once
+	startMu      sync.Mutex
 	shutdownOnce sync.Once
 	workerWG     sync.WaitGroup
 	shutdownCh   chan struct{}
 
 	started      atomic.Bool
 	shuttingDown atomic.Bool
+	uniqueClaims atomic.Uint64
+	continuation *busruntime.ContinuationScope
 	observer     queue.Observer
 }
 
+type databaseRowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type databaseExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 type dbJob struct {
-	id             int64
-	queueName      string
-	jobType        string
-	payload        []byte
-	timeoutSeconds sql.NullInt64
-	maxRetry       int
-	backoffMillis  int64
-	attempt        int
+	id              int64
+	processingToken string
+	queueName       string
+	jobType         string
+	payload         []byte
+	timeoutSeconds  sql.NullInt64
+	maxRetry        int
+	backoffMillis   int64
+	attempt         int
 }
 
 type databaseFailureSettlement struct {
@@ -99,7 +116,9 @@ type databaseFailureSettlement struct {
 	availableAt int64
 }
 
+// New constructs a SQL queue while retaining caller ownership of any supplied database handle.
 func New(cfg queue.DatabaseConfig) (*databaseQueue, error) {
+	ownsDB := cfg.DB == nil
 	local := localDatabaseConfig{
 		DB:                       cfg.DB,
 		DriverName:               cfg.DriverName,
@@ -108,6 +127,7 @@ func New(cfg queue.DatabaseConfig) (*databaseQueue, error) {
 		PollInterval:             cfg.PollInterval,
 		DefaultQueue:             cfg.DefaultQueue,
 		AutoMigrate:              cfg.AutoMigrate,
+		DisableAutoMigrate:       cfg.DisableAutoMigrate,
 		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
 		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
 		Observer:                 cfg.Observer,
@@ -120,6 +140,7 @@ func New(cfg queue.DatabaseConfig) (*databaseQueue, error) {
 		PollInterval:             local.PollInterval,
 		DefaultQueue:             local.DefaultQueue,
 		AutoMigrate:              local.AutoMigrate,
+		DisableAutoMigrate:       local.DisableAutoMigrate,
 		ProcessingRecoveryGrace:  local.ProcessingRecoveryGrace,
 		ProcessingLeaseNoTimeout: local.ProcessingLeaseNoTimeout,
 		Observer:                 local.Observer,
@@ -139,12 +160,13 @@ func New(cfg queue.DatabaseConfig) (*databaseQueue, error) {
 	}
 
 	d := &databaseQueue{
-		cfg:        local,
-		db:         cfg.DB,
-		handlers:   make(map[string]queue.Handler),
-		shutdownCh: make(chan struct{}),
-		ownsDB:     cfg.DB != nil && cfg.DriverName != "" && cfg.DSN != "",
-		observer:   cfg.Observer,
+		cfg:          local,
+		db:           cfg.DB,
+		handlers:     make(map[string]queue.Handler),
+		shutdownCh:   make(chan struct{}),
+		ownsDB:       ownsDB,
+		continuation: busruntime.NewContinuationScope(),
+		observer:     cfg.Observer,
 	}
 	if cfg.DriverName == "sqlite" {
 		d.db.SetMaxOpenConns(1)
@@ -182,48 +204,56 @@ func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	d.startMu.Lock()
+	defer d.startMu.Unlock()
+	if d.shuttingDown.Load() {
+		return queue.ErrQueuerShuttingDown
+	}
 	if d.started.Load() {
 		return nil
 	}
-	var startErr error
-	d.startOnce.Do(func() {
-		if d.cfg.AutoMigrate {
-			if err := d.ensureSchema(ctx); err != nil {
-				startErr = err
-				return
-			}
+	if d.cfg.AutoMigrate {
+		if err := d.ensureSchema(ctx); err != nil {
+			return err
 		}
-		for i := 0; i < d.cfg.Workers; i++ {
-			d.workerWG.Add(1)
-			go d.workerLoop()
-		}
-		d.started.Store(true)
-	})
-	return startErr
+	}
+	for i := 0; i < d.cfg.Workers; i++ {
+		d.workerWG.Add(1)
+		go d.workerLoop()
+	}
+	d.started.Store(true)
+	return nil
 }
 
+// Shutdown drains workers and closes only database handles opened by this queue.
 func (d *databaseQueue) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	d.startMu.Lock()
 	d.shutdownOnce.Do(func() {
 		d.shuttingDown.Store(true)
 		close(d.shutdownCh)
 	})
+	d.startMu.Unlock()
 	if err := waitGroupWithContext(ctx, &d.workerWG); err != nil {
 		return err
 	}
 	if d.ownsDB {
-		_ = d.db.Close()
+		return d.db.Close()
 	}
 	return nil
 }
 
+// Dispatch commits a uniqueness claim and its queue row in one transaction when deduplication is requested.
 func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if d.shuttingDown.Load() {
+	if d.shuttingDown.Load() && !d.continuation.Owns(ctx) {
 		return queue.ErrQueuerShuttingDown
 	}
 	if err := queuecore.ValidateDriverJob(job); err != nil {
@@ -250,16 +280,6 @@ func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
 		availableAt = availableAt.Add(parsed.Delay)
 	}
 
-	if parsed.UniqueTTL > 0 {
-		ok, err := d.acquireUnique(ctx, job, queueName, now.Add(parsed.UniqueTTL))
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return queuecore.ErrDuplicate
-		}
-	}
-
 	maxRetry := 0
 	if parsed.MaxRetry != nil {
 		maxRetry = *parsed.MaxRetry
@@ -283,9 +303,7 @@ func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
         (queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt, available_at, state, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?)`,
 	)
-	_, err := d.db.ExecContext(
-		ctx,
-		query,
+	args := []any{
 		queueName,
 		job.Type,
 		payloadBytes,
@@ -295,8 +313,28 @@ func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
 		availableAt.UnixMilli(),
 		now.UnixMilli(),
 		now.UnixMilli(),
-	)
-	return err
+	}
+	if parsed.UniqueTTL <= 0 {
+		_, err := d.db.ExecContext(ctx, query, args...)
+		return err
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	ok, err := d.acquireUnique(ctx, tx, job, queueName, parsed.UniqueTTL)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return queuecore.ErrDuplicate
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (d *databaseQueue) Stats(ctx context.Context) (queue.StatsSnapshot, error) {
@@ -428,8 +466,8 @@ func (d *databaseQueue) RetryJob(ctx context.Context, queueName, jobID string) e
 	}
 	now := time.Now().UnixMilli()
 	query := d.rebind(`UPDATE queue_jobs
-SET state='pending', available_at=?, processing_started_at=NULL, last_error=NULL, updated_at=?
-WHERE id=? AND queue_name=?`)
+	SET state='pending', available_at=?, processing_started_at=NULL, processing_token=NULL, last_error=NULL, updated_at=?
+	WHERE id=? AND queue_name=?`)
 	_, execErr := d.db.ExecContext(ctx, query, now, now, id, queuecore.NormalizeQueueName(queueName))
 	return execErr
 }
@@ -447,8 +485,8 @@ func (d *databaseQueue) CancelJob(ctx context.Context, jobID string) error {
 	}
 	now := time.Now().UnixMilli()
 	query := d.rebind(`UPDATE queue_jobs
-SET state='dead', processing_started_at=NULL, last_error=?, updated_at=?
-WHERE id=?`)
+	SET state='dead', processing_started_at=NULL, processing_token=NULL, last_error=?, updated_at=?
+	WHERE id=?`)
 	_, execErr := d.db.ExecContext(ctx, query, "canceled from queue admin", now, id)
 	return execErr
 }
@@ -572,27 +610,45 @@ func (d *databaseQueue) workerLoop() {
 	}
 }
 
+// processJob commits deferred success facts only after the durable row reaches its final state.
 func (d *databaseQueue) processJob(job *dbJob) {
 	handler, ok := d.lookup(job.jobType)
 	if !ok {
-		d.markFailedWithRetry(job, fmt.Errorf("no handler registered for job type %q", job.jobType))
+		if err := d.markFailedWithRetry(job, fmt.Errorf("no handler registered for job type %q", job.jobType)); err != nil {
+			d.observeSettlementFailure(context.Background(), job, err)
+		}
 		return
 	}
 	ctx := context.Background()
+	ctx, settlement := busruntime.WithDeliverySettlement(ctx)
 	if job.timeoutSeconds.Valid && job.timeoutSeconds.Int64 > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(job.timeoutSeconds.Int64)*time.Second)
 		defer cancel()
 	}
-	err := handler(
+	err := d.runHandlerWithContinuationPermit(
 		ctx,
+		handler,
 		databaseDeliveryJob(job),
 	)
+	var settlementErr error
 	if err == nil {
-		d.markDoneWithRetry(job)
+		settlementErr = d.markDoneWithRetry(job)
+	} else {
+		settlementErr = d.markFailedWithRetry(job, err)
+	}
+	if settlementErr != nil {
+		d.observeSettlementFailure(context.Background(), job, settlementErr)
 		return
 	}
-	d.markFailedWithRetry(job, err)
+	settlement.Commit()
+}
+
+// runHandlerWithContinuationPermit limits shutdown-time descendant dispatch permission to this queue's active handler call.
+func (d *databaseQueue) runHandlerWithContinuationPermit(ctx context.Context, handler queue.Handler, job queue.Job) error {
+	handlerCtx, release := d.continuation.Permit(ctx)
+	defer release()
+	return handler(handlerCtx, job)
 }
 
 // databaseDeliveryJob restores persisted physical attempt metadata before the root orchestration adapter runs.
@@ -606,24 +662,42 @@ func databaseDeliveryJob(job *dbJob) queue.Job {
 	)
 }
 
-func (d *databaseQueue) markDoneWithRetry(job *dbJob) {
+// markDoneWithRetry bounds each finalization attempt and returns the last error for settlement telemetry.
+func (d *databaseQueue) markDoneWithRetry(job *dbJob) error {
+	var lastErr error
 	for i := 0; i < databaseFinalizeRetryCount; i++ {
-		if err := d.markDone(context.Background(), job); err == nil {
-			return
+		ctx, cancel := context.WithTimeout(context.Background(), databaseFinalizeTimeout)
+		err := d.markDone(ctx, job)
+		cancel()
+		if err == nil {
+			return nil
 		} else if i < databaseFinalizeRetryCount-1 {
+			lastErr = err
 			time.Sleep(databaseFinalizeRetryDelay)
+		} else {
+			lastErr = err
 		}
 	}
+	return fmt.Errorf("finalize successful database job: %w", lastErr)
 }
 
-func (d *databaseQueue) markFailedWithRetry(job *dbJob, runErr error) {
+// markFailedWithRetry persists retry or terminal state without hiding exhausted finalization attempts.
+func (d *databaseQueue) markFailedWithRetry(job *dbJob, runErr error) error {
+	var lastErr error
 	for i := 0; i < databaseFinalizeRetryCount; i++ {
-		if err := d.markFailed(context.Background(), job, runErr); err == nil {
-			return
+		ctx, cancel := context.WithTimeout(context.Background(), databaseFinalizeTimeout)
+		err := d.markFailed(ctx, job, runErr)
+		cancel()
+		if err == nil {
+			return nil
 		} else if i < databaseFinalizeRetryCount-1 {
+			lastErr = err
 			time.Sleep(databaseFinalizeRetryDelay)
+		} else {
+			lastErr = err
 		}
 	}
+	return fmt.Errorf("finalize failed database job: %w", lastErr)
 }
 
 func (d *databaseQueue) claimOne(ctx context.Context) (*dbJob, error) {
@@ -649,20 +723,36 @@ func (d *databaseQueue) claimOne(ctx context.Context) (*dbJob, error) {
 			_ = tx.Rollback()
 			return nil, nil
 		}
-		update := d.rebind(`UPDATE queue_jobs SET state='processing', processing_started_at=?, updated_at=? WHERE id=? AND state='pending'`)
-		res, err := tx.ExecContext(ctx, update, now, now, job.id)
+		processingToken, err := newDatabaseProcessingToken()
 		if err != nil {
 			_ = tx.Rollback()
 			return nil, err
 		}
-		rows, _ := res.RowsAffected()
+		update := d.rebind(`UPDATE queue_jobs
+		SET state='processing', processing_started_at=?, processing_token=?, updated_at=?
+		WHERE id=? AND state='pending'`)
+		res, err := tx.ExecContext(ctx, update, now, processingToken, now, job.id)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("read database claim rows: %w", err)
+		}
 		if rows == 0 {
 			_ = tx.Rollback()
 			continue
 		}
+		if rows != 1 {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("database claim affected %d rows, want 1", rows)
+		}
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
+		job.processingToken = processingToken
 		return job, nil
 	}
 	return nil, nil
@@ -675,7 +765,7 @@ func (d *databaseQueue) recoverStaleProcessing(ctx context.Context, nowMillis in
 		noTimeoutCutoff = 0
 	}
 	query := d.rebind(`UPDATE queue_jobs
-SET state='pending', available_at=?, processing_started_at=NULL, updated_at=?, last_error=?
+	SET state='pending', available_at=?, processing_started_at=NULL, processing_token=NULL, updated_at=?, last_error=?
 WHERE state='processing' AND processing_started_at IS NOT NULL AND (
     (timeout_seconds IS NOT NULL AND timeout_seconds > 0 AND (processing_started_at + (timeout_seconds * 1000) + ?) <= ?)
     OR
@@ -742,28 +832,110 @@ func (d *databaseQueue) usesOptimisticClaimLoop() bool {
 	return d.cfg.DriverName == "sqlite"
 }
 
+// markDone deletes exactly the processing row owned by one successful delivery.
 func (d *databaseQueue) markDone(ctx context.Context, job *dbJob) error {
-	query := d.rebind(`DELETE FROM queue_jobs WHERE id=?`)
-	_, err := d.db.ExecContext(ctx, query, job.id)
-	return err
+	id, processingToken, err := databaseProcessingClaim(job)
+	if err != nil {
+		return err
+	}
+	query := d.rebind(`DELETE FROM queue_jobs WHERE id=? AND state='processing' AND processing_token=?`)
+	result, err := d.db.ExecContext(ctx, query, id, processingToken)
+	if err != nil {
+		return err
+	}
+	return requireDatabaseSettlementRow(result)
 }
 
+// markFailed writes exactly one retryable or terminal delivery transition.
 func (d *databaseQueue) markFailed(ctx context.Context, job *dbJob, runErr error) error {
+	id, processingToken, err := databaseProcessingClaim(job)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UnixMilli()
 	settlement, err := classifyDatabaseFailure(job, runErr, now)
 	if err != nil {
 		return err
 	}
 	if settlement.state == "dead" {
-		query := d.rebind(`UPDATE queue_jobs SET state='dead', attempt=?, processing_started_at=NULL, last_error=?, updated_at=? WHERE id=?`)
-		_, err := d.db.ExecContext(ctx, query, settlement.attempt, runErr.Error(), now, job.id)
-		return err
+		query := d.rebind(`UPDATE queue_jobs
+		SET state='dead', attempt=?, processing_started_at=NULL, processing_token=NULL, last_error=?, updated_at=?
+		WHERE id=? AND state='processing' AND processing_token=?`)
+		result, err := d.db.ExecContext(ctx, query, settlement.attempt, runErr.Error(), now, id, processingToken)
+		if err != nil {
+			return err
+		}
+		return requireDatabaseSettlementRow(result)
 	}
 	query := d.rebind(`UPDATE queue_jobs
-SET state='pending', attempt=?, available_at=?, last_error=?, processing_started_at=NULL, updated_at=?
-WHERE id=?`)
-	_, err = d.db.ExecContext(ctx, query, settlement.attempt, settlement.availableAt, runErr.Error(), now, job.id)
-	return err
+	SET state='pending', attempt=?, available_at=?, last_error=?, processing_started_at=NULL, processing_token=NULL, updated_at=?
+	WHERE id=? AND state='processing' AND processing_token=?`)
+	result, err := d.db.ExecContext(ctx, query, settlement.attempt, settlement.availableAt, runErr.Error(), now, id, processingToken)
+	if err != nil {
+		return err
+	}
+	return requireDatabaseSettlementRow(result)
+}
+
+// databaseProcessingClaim returns the fenced identity required to settle one exact processing generation.
+func databaseProcessingClaim(job *dbJob) (int64, string, error) {
+	if job == nil {
+		return 0, "", fmt.Errorf("database settlement job is nil")
+	}
+	if job.id <= 0 {
+		return 0, "", fmt.Errorf("database settlement job id must be positive")
+	}
+	if job.processingToken == "" {
+		return 0, "", fmt.Errorf("database settlement processing token is empty")
+	}
+	return job.id, job.processingToken, nil
+}
+
+// newDatabaseProcessingToken creates a claim generation that stale recovery can invalidate without coordinating with the old handler.
+func newDatabaseProcessingToken() (string, error) {
+	var token [databaseProcessingTokenBytes]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		return "", fmt.Errorf("create database processing token: %w", err)
+	}
+	return hex.EncodeToString(token[:]), nil
+}
+
+// requireDatabaseSettlementRow rejects stale or lost finalization updates that cannot prove ownership of one delivery.
+func requireDatabaseSettlementRow(result sql.Result) error {
+	if result == nil {
+		return fmt.Errorf("database settlement returned no result")
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read database settlement rows: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("database settlement affected %d rows, want 1", rows)
+	}
+	return nil
+}
+
+// observeSettlementFailure emits the physical delivery identity whose durable row could not be finalized.
+func (d *databaseQueue) observeSettlementFailure(ctx context.Context, job *dbJob, err error) {
+	if job == nil {
+		return
+	}
+	metadata := queue.ResolveObservedJobMetadata(job.jobType, job.payload)
+	queuecore.SafeObserve(ctx, d.observer, queue.Event{
+		Kind:       queue.EventSettlementFailed,
+		Driver:     queue.DriverDatabase,
+		Queue:      queuecore.NormalizeQueueName(job.queueName),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		Attempt:    job.attempt,
+		MaxRetry:   job.maxRetry,
+		Err:        err,
+		Time:       time.Now(),
+	})
 }
 
 // classifyDatabaseFailure derives the durable state transition from the physical attempt and handler result.
@@ -798,41 +970,74 @@ func databasePendingSettlement(job *dbJob, attempt int, now int64) databaseFailu
 	}
 }
 
-func (d *databaseQueue) acquireUnique(ctx context.Context, job queue.Job, queueName string, expiresAt time.Time) (bool, error) {
-	now := time.Now().UnixMilli()
-	expiresAtMillis := expiresAt.UnixMilli()
-	key := uniqueJobKey(job, queueName)
-	insert := d.rebind(`INSERT INTO queue_unique_locks(lock_key, expires_at) VALUES(?, ?)`)
-	_, err := d.db.ExecContext(ctx, insert, key, expiresAtMillis)
-	if err == nil {
-		return true, nil
-	}
-	if !isUniqueConstraintErr(err) {
-		return false, err
-	}
-
-	update := d.rebind(`UPDATE queue_unique_locks SET expires_at=? WHERE lock_key=? AND expires_at <= ?`)
-	res, err := d.db.ExecContext(ctx, update, expiresAtMillis, key, now)
+// acquireUnique claims the canonical key inside the queue-row transaction using the database clock shared by every producer.
+func (d *databaseQueue) acquireUnique(ctx context.Context, tx *sql.Tx, job queue.Job, queueName string, ttl time.Duration) (bool, error) {
+	now, err := d.databaseNowMillis(ctx, tx)
 	if err != nil {
 		return false, err
 	}
-	rows, _ := res.RowsAffected()
-	return rows == 1, nil
-}
-
-func uniqueJobKey(job queue.Job, queueName string) string {
-	hash := sha256.Sum256(append([]byte(queueName+":"+job.Type+":"), job.PayloadBytes()...))
-	return hex.EncodeToString(hash[:])
-}
-
-func isUniqueConstraintErr(err error) bool {
-	if err == nil {
-		return false
+	if d.uniqueClaims.Add(1)%databaseUniquePruneInterval == 0 {
+		if err := d.pruneExpiredUniqueLocks(ctx, tx, now); err != nil {
+			return false, err
+		}
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "duplicate") ||
-		strings.Contains(msg, "unique constraint") ||
-		strings.Contains(msg, "unique violation")
+	ttlMillis := ttl.Milliseconds()
+	if ttlMillis < 1 {
+		ttlMillis = 1
+	}
+	return d.acquireUniqueKey(ctx, tx, uniqueJobKey(job, queueName), now, now+ttlMillis)
+}
+
+// uniqueJobKey preserves the shared versioned identity verbatim for diagnosable SQL state.
+func uniqueJobKey(job queue.Job, queueName string) string {
+	return queuecore.UniqueKey(job, queueName)
+}
+
+// acquireUniqueKey couples one lock claim to the surrounding queue-row transaction.
+func (d *databaseQueue) acquireUniqueKey(ctx context.Context, tx *sql.Tx, key string, now, expiresAt int64) (bool, error) {
+	insert := `INSERT INTO queue_unique_locks(lock_key, expires_at) VALUES(?, ?) ON CONFLICT(lock_key) DO NOTHING`
+	if d.cfg.DriverName != "pgx" && d.cfg.DriverName != "postgres" && d.cfg.DriverName != "sqlite" {
+		insert = `INSERT IGNORE INTO queue_unique_locks(lock_key, expires_at) VALUES(?, ?)`
+	}
+	res, err := tx.ExecContext(ctx, d.rebind(insert), key, expiresAt)
+	if err != nil {
+		return false, err
+	}
+	if rows, rowsErr := res.RowsAffected(); rowsErr == nil && rows == 1 {
+		return true, nil
+	}
+	update := d.rebind(`UPDATE queue_unique_locks SET expires_at=? WHERE lock_key=? AND expires_at <= ?`)
+	res, err = tx.ExecContext(ctx, update, expiresAt, key, now)
+	if err != nil {
+		return false, err
+	}
+	rows, err := res.RowsAffected()
+	return rows == 1, err
+}
+
+// databaseNowMillis reads the backend clock so producer clock skew cannot shorten or extend distributed claims.
+func (d *databaseQueue) databaseNowMillis(ctx context.Context, queryer databaseRowQueryer) (int64, error) {
+	query := `SELECT CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000 AS SIGNED)`
+	switch d.cfg.DriverName {
+	case "pgx", "postgres":
+		query = `SELECT CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT)`
+	case "sqlite":
+		query = `SELECT CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`
+	}
+	var now int64
+	if err := queryer.QueryRowContext(ctx, query).Scan(&now); err != nil {
+		return 0, fmt.Errorf("read database time for uniqueness: %w", err)
+	}
+	return now, nil
+}
+
+// pruneExpiredUniqueLocks bounds persistent identity state without touching live claims.
+func (d *databaseQueue) pruneExpiredUniqueLocks(ctx context.Context, execer databaseExecer, now int64) error {
+	query := d.rebind(`DELETE FROM queue_unique_locks WHERE expires_at <= ?`)
+	if _, err := execer.ExecContext(ctx, query, now); err != nil {
+		return fmt.Errorf("prune expired uniqueness claims: %w", err)
+	}
+	return nil
 }
 
 func (d *databaseQueue) ensureSchema(ctx context.Context) error {
@@ -842,7 +1047,121 @@ func (d *databaseQueue) ensureSchema(ctx context.Context) error {
 			return fmt.Errorf("ensure queue schema failed: %w", err)
 		}
 	}
+	if err := d.ensureProcessingTokenColumn(ctx); err != nil {
+		return err
+	}
+	if d.cfg.DriverName == "mysql" {
+		if err := d.ensureMySQLUniqueExpiryIndex(ctx); err != nil {
+			return err
+		}
+	}
+	now, err := d.databaseNowMillis(ctx, d.db)
+	if err != nil {
+		return err
+	}
+	return d.pruneExpiredUniqueLocks(ctx, d.db, now)
+}
+
+// ensureProcessingTokenColumn upgrades existing queue tables additively while nullable storage keeps older binaries and rows readable.
+func (d *databaseQueue) ensureProcessingTokenColumn(ctx context.Context) error {
+	exists, err := d.processingTokenColumnExists(ctx)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	statement := `ALTER TABLE queue_jobs ADD COLUMN processing_token VARCHAR(64) NULL`
+	switch d.cfg.DriverName {
+	case "pgx", "postgres", "sqlite":
+		statement = `ALTER TABLE queue_jobs ADD COLUMN processing_token TEXT NULL`
+	}
+	if _, err := d.db.ExecContext(ctx, statement); err != nil {
+		// Concurrent startup may observe an already-completed additive migration after its own ALTER loses the race.
+		exists, checkErr := d.processingTokenColumnExists(ctx)
+		if checkErr == nil && exists {
+			return nil
+		}
+		return fmt.Errorf("ensure database processing token column: %w", err)
+	}
 	return nil
+}
+
+// processingTokenColumnExists inspects the active dialect without relying on non-portable ALTER TABLE guards.
+func (d *databaseQueue) processingTokenColumnExists(ctx context.Context) (bool, error) {
+	if d.cfg.DriverName == "sqlite" {
+		rows, err := d.db.QueryContext(ctx, `PRAGMA table_info(queue_jobs)`)
+		if err != nil {
+			return false, fmt.Errorf("inspect sqlite processing token column: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				columnID     int
+				name         string
+				columnType   string
+				notNull      int
+				defaultValue sql.NullString
+				primaryKey   int
+			)
+			if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+				return false, fmt.Errorf("scan sqlite queue column: %w", err)
+			}
+			if name == "processing_token" {
+				return true, nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("inspect sqlite queue columns: %w", err)
+		}
+		return false, nil
+	}
+
+	query := `SELECT COUNT(*)
+	FROM information_schema.columns
+	WHERE table_schema = DATABASE() AND table_name = 'queue_jobs' AND column_name = 'processing_token'`
+	if d.cfg.DriverName == "pgx" || d.cfg.DriverName == "postgres" {
+		query = `SELECT COUNT(*)
+			FROM pg_attribute
+			WHERE attrelid = to_regclass('queue_jobs') AND attname = 'processing_token' AND NOT attisdropped`
+	}
+	var count int
+	if err := d.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
+		return false, fmt.Errorf("inspect database processing token column: %w", err)
+	}
+	return count > 0, nil
+}
+
+// ensureMySQLUniqueExpiryIndex migrates existing lock tables whose original CREATE TABLE predates expiry pruning.
+func (d *databaseQueue) ensureMySQLUniqueExpiryIndex(ctx context.Context) error {
+	exists, err := d.mysqlIndexExists(ctx, "idx_queue_unique_locks_expires")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := d.db.ExecContext(ctx, `ALTER TABLE queue_unique_locks ADD INDEX idx_queue_unique_locks_expires (expires_at)`); err != nil {
+		// Multiple producers may migrate concurrently, so a successful peer wins even if this ALTER observed the race.
+		exists, checkErr := d.mysqlIndexExists(ctx, "idx_queue_unique_locks_expires")
+		if checkErr == nil && exists {
+			return nil
+		}
+		return fmt.Errorf("ensure mysql uniqueness expiry index: %w", err)
+	}
+	return nil
+}
+
+// mysqlIndexExists checks the active schema instead of relying on version-specific CREATE INDEX syntax.
+func (d *databaseQueue) mysqlIndexExists(ctx context.Context, indexName string) (bool, error) {
+	const query = `SELECT COUNT(*)
+FROM information_schema.statistics
+WHERE table_schema = DATABASE() AND table_name = 'queue_unique_locks' AND index_name = ?`
+	var count int
+	if err := d.db.QueryRowContext(ctx, query, indexName).Scan(&count); err != nil {
+		return false, fmt.Errorf("inspect mysql uniqueness expiry index: %w", err)
+	}
+	return count > 0, nil
 }
 
 func (d *databaseQueue) schemaStatements() []string {
@@ -858,9 +1177,10 @@ func (d *databaseQueue) schemaStatements() []string {
                 max_retry INTEGER NOT NULL DEFAULT 0,
                 backoff_millis BIGINT NOT NULL DEFAULT 0,
                 attempt INTEGER NOT NULL DEFAULT 0,
-                available_at BIGINT NOT NULL,
-                processing_started_at BIGINT NULL,
-                last_error TEXT NULL,
+				available_at BIGINT NOT NULL,
+				processing_started_at BIGINT NULL,
+				processing_token TEXT NULL,
+				last_error TEXT NULL,
                 state TEXT NOT NULL,
                 created_at BIGINT NOT NULL,
                 updated_at BIGINT NOT NULL
@@ -870,6 +1190,7 @@ func (d *databaseQueue) schemaStatements() []string {
                 lock_key TEXT PRIMARY KEY,
                 expires_at BIGINT NOT NULL
             )`,
+			`CREATE INDEX IF NOT EXISTS idx_queue_unique_locks_expires ON queue_unique_locks(expires_at)`,
 		}
 	case "sqlite":
 		return []string{
@@ -882,9 +1203,10 @@ func (d *databaseQueue) schemaStatements() []string {
                 max_retry INTEGER NOT NULL DEFAULT 0,
                 backoff_millis INTEGER NOT NULL DEFAULT 0,
                 attempt INTEGER NOT NULL DEFAULT 0,
-                available_at INTEGER NOT NULL,
-                processing_started_at INTEGER NULL,
-                last_error TEXT NULL,
+				available_at INTEGER NOT NULL,
+				processing_started_at INTEGER NULL,
+				processing_token TEXT NULL,
+				last_error TEXT NULL,
                 state TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
@@ -894,6 +1216,7 @@ func (d *databaseQueue) schemaStatements() []string {
                 lock_key TEXT PRIMARY KEY,
                 expires_at INTEGER NOT NULL
             )`,
+			`CREATE INDEX IF NOT EXISTS idx_queue_unique_locks_expires ON queue_unique_locks(expires_at)`,
 		}
 	default:
 		return []string{
@@ -906,18 +1229,19 @@ func (d *databaseQueue) schemaStatements() []string {
                 max_retry INT NOT NULL DEFAULT 0,
                 backoff_millis BIGINT NOT NULL DEFAULT 0,
                 attempt INT NOT NULL DEFAULT 0,
-                available_at BIGINT NOT NULL,
-                processing_started_at BIGINT NULL,
-                last_error TEXT NULL,
+				available_at BIGINT NOT NULL,
+				processing_started_at BIGINT NULL,
+				processing_token VARCHAR(64) NULL,
+				last_error TEXT NULL,
                 state VARCHAR(16) NOT NULL,
                 created_at BIGINT NOT NULL,
                 updated_at BIGINT NOT NULL,
                 KEY idx_queue_jobs_ready (state, available_at, id)
             )`,
 			`CREATE TABLE IF NOT EXISTS queue_unique_locks (
-                lock_key VARCHAR(255) NOT NULL PRIMARY KEY,
-                expires_at BIGINT NOT NULL
-            )`,
+				lock_key VARCHAR(255) NOT NULL PRIMARY KEY,
+				expires_at BIGINT NOT NULL
+			)`,
 		}
 	}
 }

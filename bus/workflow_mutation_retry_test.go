@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -15,6 +16,7 @@ type workflowMutationFaultStore struct {
 	markBatchStartedErr   error
 	markBatchSucceededErr error
 	markBatchFailedErr    error
+	cancelBatchErr        error
 	getChainErr           error
 	getBatchErr           error
 	markCallbackErr       error
@@ -58,6 +60,14 @@ func (s *workflowMutationFaultStore) MarkBatchJobFailed(ctx context.Context, bat
 		return BatchState{}, false, s.markBatchFailedErr
 	}
 	return s.Store.MarkBatchJobFailed(ctx, batchID, jobID, cause)
+}
+
+// CancelBatch injects an initial batch cancellation persistence failure when configured.
+func (s *workflowMutationFaultStore) CancelBatch(ctx context.Context, batchID string) error {
+	if s.cancelBatchErr != nil {
+		return s.cancelBatchErr
+	}
+	return s.Store.CancelBatch(ctx, batchID)
 }
 
 // GetChain injects a callback chain-state read failure when configured.
@@ -135,6 +145,264 @@ func assertNoCommittedEvents(t *testing.T, events []Event, forbidden ...EventKin
 			}
 		}
 	}
+}
+
+// TestInitialDispatchRejectionRequiresTerminalStoreMutation verifies enqueue failure cannot fabricate chain or batch terminal facts.
+func TestInitialDispatchRejectionRequiresTerminalStoreMutation(t *testing.T) {
+	enqueueErr := errors.New("queue rejected initial workflow job")
+	storeErr := errors.New("workflow terminal state unavailable")
+	tests := []struct {
+		name      string
+		configure func(*workflowMutationFaultStore)
+		dispatch  func(Bus) (string, error)
+		forbidden []EventKind
+	}{
+		{
+			name: "chain",
+			configure: func(store *workflowMutationFaultStore) {
+				store.failChainErr = storeErr
+			},
+			dispatch: func(workflow Bus) (string, error) {
+				return workflow.Chain(NewJob("initial:chain", nil)).Dispatch(context.Background())
+			},
+			forbidden: []EventKind{EventChainFailed, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed},
+		},
+		{
+			name: "batch",
+			configure: func(store *workflowMutationFaultStore) {
+				store.cancelBatchErr = storeErr
+			},
+			dispatch: func(workflow Bus) (string, error) {
+				return workflow.Batch(NewJob("initial:batch", nil)).Dispatch(context.Background())
+			},
+			forbidden: []EventKind{EventBatchFailed, EventBatchCancelled, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseStore := NewMemoryStore()
+			store := &workflowMutationFaultStore{Store: baseStore}
+			test.configure(store)
+			queueRuntime := newSyncTestRuntime()
+			queueRuntime.dispatchErr = enqueueErr
+			recorder := &workflowMutationEventRecorder{}
+			workflow, err := NewWithStore(queueRuntime, store, WithObserver(recorder))
+			if err != nil {
+				t.Fatalf("new workflow: %v", err)
+			}
+			_, dispatchErr := test.dispatch(workflow)
+			if !busruntime.IsUncommitted(dispatchErr) || !errors.Is(dispatchErr, enqueueErr) || !errors.Is(dispatchErr, storeErr) {
+				t.Fatalf("dispatch error = %v, want uncommitted enqueue and store causes", dispatchErr)
+			}
+			assertNoCommittedEvents(t, recorder.events, test.forbidden...)
+		})
+	}
+}
+
+// TestInitialDispatchRejectionUsesObservedCallbackLifecycle verifies inline compatibility callbacks match queue-delivered observability.
+func TestInitialDispatchRejectionUsesObservedCallbackLifecycle(t *testing.T) {
+	enqueueErr := errors.New("queue rejected initial workflow job")
+	tests := []struct {
+		name      string
+		dispatch  func(Bus, *int) (string, error)
+		failed    EventKind
+		cancelled bool
+	}{
+		{
+			name: "chain",
+			dispatch: func(workflow Bus, calls *int) (string, error) {
+				return workflow.Chain(NewJob("initial:chain:callbacks", nil)).
+					Catch(func(context.Context, ChainState, error) error { *calls++; return nil }).
+					Finally(func(context.Context, ChainState) error { *calls++; return nil }).
+					Dispatch(context.Background())
+			},
+			failed: EventChainFailed,
+		},
+		{
+			name: "batch",
+			dispatch: func(workflow Bus, calls *int) (string, error) {
+				return workflow.Batch(NewJob("initial:batch:callbacks", nil)).
+					Catch(func(context.Context, BatchState, error) error { *calls++; return nil }).
+					Finally(func(context.Context, BatchState) error { *calls++; return nil }).
+					Dispatch(context.Background())
+			},
+			failed:    EventBatchFailed,
+			cancelled: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			queueRuntime := newSyncTestRuntime()
+			queueRuntime.dispatchErr = enqueueErr
+			recorder := &workflowMutationEventRecorder{}
+			workflow, err := NewWithStore(queueRuntime, NewMemoryStore(), WithObserver(recorder))
+			if err != nil {
+				t.Fatalf("new workflow: %v", err)
+			}
+			var calls int
+			_, dispatchErr := test.dispatch(workflow, &calls)
+			if !errors.Is(dispatchErr, enqueueErr) {
+				t.Fatalf("dispatch error = %v, want %v", dispatchErr, enqueueErr)
+			}
+			if calls != 2 {
+				t.Fatalf("callback calls = %d, want 2", calls)
+			}
+			var failed, cancelled, started, succeeded, callbackFailed int
+			for _, event := range recorder.events {
+				switch event.Kind {
+				case test.failed:
+					failed++
+				case EventBatchCancelled:
+					cancelled++
+				case EventCallbackStarted:
+					started++
+				case EventCallbackSucceeded:
+					succeeded++
+				case EventCallbackFailed:
+					callbackFailed++
+				}
+			}
+			if failed != 1 || started != 2 || succeeded != 2 || callbackFailed != 0 {
+				t.Fatalf("failed/started/succeeded/callback-failed = %d/%d/%d/%d, want 1/2/2/0", failed, started, succeeded, callbackFailed)
+			}
+			if test.cancelled != (cancelled == 1) {
+				t.Fatalf("cancelled events = %d, expected=%t", cancelled, test.cancelled)
+			}
+		})
+	}
+}
+
+// TestChainNextDispatchRejectionRemainsUncommitted verifies an advanced chain cannot settle until its next node is accepted.
+func TestChainNextDispatchRejectionRemainsUncommitted(t *testing.T) {
+	store := NewMemoryStore()
+	const chainID = "chain_next_dispatch_rejected"
+	first := wireJob{Type: "chain:first"}
+	second := wireJob{Type: "chain:second"}
+	if err := store.CreateChain(context.Background(), ChainRecord{
+		ChainID:    chainID,
+		DispatchID: "dispatch_next_rejected",
+		Nodes: []ChainNode{
+			{NodeID: "node_first", Job: first},
+			{NodeID: "node_second", Job: second},
+		},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	queueRuntime := newSyncTestRuntime()
+	workflow, err := NewWithStore(queueRuntime, store)
+	if err != nil {
+		t.Fatalf("new workflow: %v", err)
+	}
+	runtime := workflow.(*runtime)
+	var firstCalls, secondCalls int
+	runtime.Register(first.Type, func(context.Context, Context) error {
+		firstCalls++
+		return nil
+	})
+	runtime.Register(second.Type, func(context.Context, Context) error {
+		secondCalls++
+		return nil
+	})
+	payload, err := json.Marshal(envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch_next_rejected",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        "node_first",
+		JobID:         "job_first",
+		Job:           first,
+	})
+	if err != nil {
+		t.Fatalf("marshal first node: %v", err)
+	}
+	rejection := errors.New("next node enqueue rejected")
+	queueRuntime.dispatchErr = rejection
+	firstErr := runtime.handleInternalChainNode(context.Background(), testInboundJob{payload: payload})
+	if !busruntime.IsUncommitted(firstErr) || !errors.Is(firstErr, rejection) {
+		t.Fatalf("first delivery error = %v, want uncommitted rejection", firstErr)
+	}
+	state, err := store.GetChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("get advanced chain: %v", err)
+	}
+	if state.NextIndex != 1 || state.Completed || state.Failed {
+		t.Fatalf("state after rejected continuation = %+v", state)
+	}
+
+	queueRuntime.dispatchErr = nil
+	if err := runtime.handleInternalChainNode(context.Background(), testInboundJob{payload: payload}); err != nil {
+		t.Fatalf("redeliver first node: %v", err)
+	}
+	state, err = store.GetChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("get completed chain: %v", err)
+	}
+	if !state.Completed || state.Failed || state.NextIndex != 2 {
+		t.Fatalf("completed chain state = %+v", state)
+	}
+	if firstCalls != 2 || secondCalls != 1 {
+		t.Fatalf("handler calls = first:%d second:%d, want 2/1", firstCalls, secondCalls)
+	}
+}
+
+// TestAllowFailuresBatchStopsOnUncommittedMutation verifies infrastructure failure cannot be mistaken for an allowed application failure.
+func TestAllowFailuresBatchStopsOnUncommittedMutation(t *testing.T) {
+	storeErr := errors.New("batch store unavailable")
+	baseStore := NewMemoryStore()
+	faultStore := &workflowMutationFaultStore{Store: baseStore, markBatchStartedErr: storeErr}
+	runtime, _, _ := newWorkflowMutationRuntime(t, faultStore)
+	var handlerCalls int
+	runtime.Register("workflow:batch:first", func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+	runtime.Register("workflow:batch:second", func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+
+	batchID, err := runtime.Batch(
+		NewJob("workflow:batch:first", nil),
+		NewJob("workflow:batch:second", nil),
+	).AllowFailures().Dispatch(context.Background())
+	assertUncommittedMutation(t, err, storeErr)
+	if handlerCalls != 0 {
+		t.Fatalf("handler calls = %d, want 0", handlerCalls)
+	}
+	state, stateErr := baseStore.GetBatch(context.Background(), batchID)
+	if stateErr != nil {
+		t.Fatalf("get batch: %v", stateErr)
+	}
+	if state.Processed != 0 || state.Pending != 2 || state.Completed || state.Cancelled {
+		t.Fatalf("batch advanced after uncommitted mutation: %+v", state)
+	}
+}
+
+// TestChainDispatchDoesNotTerminalizeAcceptedMutationFailure verifies post-acceptance store errors remain redeliverable.
+func TestChainDispatchDoesNotTerminalizeAcceptedMutationFailure(t *testing.T) {
+	storeErr := errors.New("chain store unavailable")
+	baseStore := NewMemoryStore()
+	faultStore := &workflowMutationFaultStore{Store: baseStore, advanceChainErr: storeErr}
+	runtime, _, recorder := newWorkflowMutationRuntime(t, faultStore)
+	var handlerCalls int
+	runtime.Register("workflow:chain:first", func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+
+	chainID, err := runtime.Chain(NewJob("workflow:chain:first", nil)).Dispatch(context.Background())
+	assertUncommittedMutation(t, err, storeErr)
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls = %d, want 1", handlerCalls)
+	}
+	state, stateErr := baseStore.GetChain(context.Background(), chainID)
+	if stateErr != nil {
+		t.Fatalf("get chain: %v", stateErr)
+	}
+	if state.Failed || state.Completed || state.NextIndex != 0 {
+		t.Fatalf("chain terminalized after uncommitted mutation: %+v", state)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted, EventChainFailed)
 }
 
 // TestChainMutationFailuresRedeliverExhaustedAttempt verifies store outages cannot terminally settle a chain.
@@ -371,7 +639,14 @@ func TestCallbackStoreFailuresRedeliverWithoutTerminalFacts(t *testing.T) {
 				CallbackKind:  "chain_finally",
 			},
 			seed: func(ctx context.Context, store Store) error {
-				return store.CreateChain(ctx, ChainRecord{ChainID: "chain_callback_store_failure"})
+				if err := store.CreateChain(ctx, ChainRecord{
+					ChainID: "chain_callback_store_failure",
+					Nodes:   []ChainNode{{NodeID: "chain_callback_node", Job: wireJob{Type: "callback:source"}}},
+				}); err != nil {
+					return err
+				}
+				_, _, err := store.AdvanceChain(ctx, "chain_callback_store_failure", "chain_callback_node")
+				return err
 			},
 			configure: func(store *workflowMutationFaultStore) {
 				store.getChainErr = storeErr
@@ -398,7 +673,14 @@ func TestCallbackStoreFailuresRedeliverWithoutTerminalFacts(t *testing.T) {
 				CallbackKind:  "batch_then",
 			},
 			seed: func(ctx context.Context, store Store) error {
-				return store.CreateBatch(ctx, BatchRecord{BatchID: "batch_callback_store_failure"})
+				if err := store.CreateBatch(ctx, BatchRecord{
+					BatchID: "batch_callback_store_failure",
+					Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: wireJob{Type: "callback:source"}}},
+				}); err != nil {
+					return err
+				}
+				_, _, err := store.MarkBatchJobSucceeded(ctx, "batch_callback_store_failure", "batch_callback_job")
+				return err
 			},
 			configure: func(store *workflowMutationFaultStore) {
 				store.getBatchErr = storeErr
@@ -425,7 +707,14 @@ func TestCallbackStoreFailuresRedeliverWithoutTerminalFacts(t *testing.T) {
 				CallbackKind:  "batch_then",
 			},
 			seed: func(ctx context.Context, store Store) error {
-				return store.CreateBatch(ctx, BatchRecord{BatchID: "batch_callback_store_failure"})
+				if err := store.CreateBatch(ctx, BatchRecord{
+					BatchID: "batch_callback_store_failure",
+					Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: wireJob{Type: "callback:source"}}},
+				}); err != nil {
+					return err
+				}
+				_, _, err := store.MarkBatchJobSucceeded(ctx, "batch_callback_store_failure", "batch_callback_job")
+				return err
 			},
 			configure: func(store *workflowMutationFaultStore) {
 				store.markCallbackErr = storeErr
@@ -472,6 +761,15 @@ func TestCallbackStoreFailuresRedeliverWithoutTerminalFacts(t *testing.T) {
 			}
 			if callbackCalls != 1 {
 				t.Fatalf("callback calls after retry and duplicate = %d, want 1", callbackCalls)
+			}
+			succeeded := 0
+			for _, event := range recorder.events {
+				if event.Kind == EventCallbackSucceeded {
+					succeeded++
+				}
+			}
+			if succeeded != 1 {
+				t.Fatalf("callback success events after retry and duplicate = %d, want 1", succeeded)
 			}
 		})
 	}

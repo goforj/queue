@@ -64,20 +64,20 @@ func main() {
 
 | Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout | Native Stats | Queue Admin |
 | ---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched jobs; useful for disabled queue modes and smoke tests. | - | - | - | - | - | - | - | - |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | ⚠ | - | ✓ | - | - |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | ⚠ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL durable queue | MySQL driver module (`driver/mysqlqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ⚠ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="Postgres"> | SQL durable queue | Postgres driver module (`driver/postgresqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ⚠ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL durable queue | SQLite driver module (`driver/sqlitequeue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ⚠ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend (Asynq semantics). | ✓ | ✓ | ✓ | ⚠ | - | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/nats-%23007ACC?style=flat" alt="NATS"> | Broker target | NATS transport with queue-subject routing. | - | ✓ | ✓ | ⚠ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/sqs-%23FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ⚠ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | ⚠ | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched jobs; useful for disabled queue modes and smoke tests. | - | - | - | Instance | - | - | - | - |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | Instance | - | ✓ | - | - |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL durable queue | MySQL driver module (`driver/mysqlqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | Backend | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="Postgres"> | SQL durable queue | Postgres driver module (`driver/postgresqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | Backend | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL durable queue | SQLite driver module (`driver/sqlitequeue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | Backend | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend (Asynq semantics). | ✓ | ✓ | ✓ | Backend | - | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/nats-%23007ACC?style=flat" alt="NATS"> | Ephemeral broker | Core NATS subject routing; every plain subscription can receive a broadcast copy. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/sqs-%23FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
 
 > SQL-backed queues (`sqlite`, `mysql`, `postgres`) are durable and convenient, but they trade throughput for operational simplicity. They default to `1` worker, and increasing concurrency may require DB tuning (indexes, connection pool, lock contention). Prefer broker-backed drivers for higher-throughput workloads.
 >
-> **Unique status:** ⚠ means the backend has a uniqueness primitive, but the high-level workflow facade currently includes volatile envelope IDs in its physical key. Do not rely on public `Job.UniqueFor` duplicate suppression until M1-05 through M1-07 in `plan.md` are complete.
+> **Unique scope:** `Instance` suppresses duplicates only within one queue runtime instance; `Backend` shares claims through the configured database or Redis service. Identity is the effective queue, logical application job type, and canonical serialized payload. Absent, zero-byte, and exact JSON `null` payloads share one absence identity; generated workflow IDs and delivery options do not change it. See [`docs/backend-guarantees.md`](docs/backend-guarantees.md) for acceptance, rollout, and failure-boundary details.
 >
 > **Queue Admin status:** the cross-driver admin contract is defined in core (`ListJobs`, `RetryJob`, `CancelJob`, `DeleteJob`, `ClearQueue`, `QueueHistory`), but **full queue admin operations are currently implemented only for Redis**. Other drivers return `ErrQueueAdminUnsupported` for unsupported admin actions.
 
@@ -1910,6 +1910,7 @@ q, err := mysqlqueue.NewWithConfig(
 		},
 		DB: nil, // optional; provide *sql.DB instead of DSN
 		DSN: "user:pass@tcp(127.0.0.1:3306)/queue?parseTime=true", // optional if DB is set
+		DisableAutoMigrate: false, // set true when schema migrations are managed externally
 		ProcessingRecoveryGrace:  2 * time.Second, // default if <=0: 2s
 		ProcessingLeaseNoTimeout: 5 * time.Minute, // default if <=0: 5m
 	},
@@ -1987,6 +1988,7 @@ q, err := postgresqueue.NewWithConfig(
 		},
 		DB: nil, // optional; provide *sql.DB instead of DSN
 		DSN: "postgres://user:pass@127.0.0.1:5432/queue?sslmode=disable", // optional if DB is set
+		DisableAutoMigrate: false, // set true when schema migrations are managed externally
 		ProcessingRecoveryGrace:  2 * time.Second, // default if <=0: 2s
 		ProcessingLeaseNoTimeout: 5 * time.Minute, // default if <=0: 5m
 	},
@@ -2105,6 +2107,7 @@ q, err := sqlitequeue.NewWithConfig(
 		},
 		DB: nil, // optional; provide *sql.DB instead of DSN
 		DSN: "file:queue.db?_busy_timeout=5000", // optional if DB is set
+		DisableAutoMigrate: false, // set true when schema migrations are managed externally
 		ProcessingRecoveryGrace:  2 * time.Second, // default if <=0: 2s
 		ProcessingLeaseNoTimeout: 5 * time.Minute, // default if <=0: 5m
 	},

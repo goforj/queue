@@ -15,6 +15,7 @@ type ModuleConfig struct {
 	queueconfig.DriverBaseConfig
 	DB                       *sql.DB
 	DSN                      string
+	DisableAutoMigrate       bool
 	ProcessingRecoveryGrace  time.Duration
 	ProcessingLeaseNoTimeout time.Duration
 }
@@ -27,6 +28,7 @@ func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue
 		DB:                       cfg.DB,
 		DriverName:               driverName,
 		DSN:                      cfg.DSN,
+		DisableAutoMigrate:       cfg.DisableAutoMigrate,
 		DefaultQueue:             queue.PhysicalQueueName(cfg.DefaultQueue, cfg.DefaultQueue),
 		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
 		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,

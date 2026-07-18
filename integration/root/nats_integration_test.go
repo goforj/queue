@@ -101,6 +101,57 @@ func TestNATSIntegration_BindPayloadThroughWorker(t *testing.T) {
 	}
 }
 
+// TestNATSIntegration_ShutdownDrainsQueuedCallbacks proves the real asynchronous client drain completes admitted callback backlog before closing publication resources.
+func TestNATSIntegration_ShutdownDrainsQueuedCallbacks(t *testing.T) {
+	if !integrationBackendEnabled(testenv.BackendNATS) {
+		t.Skip("nats integration backend not selected")
+	}
+	const jobs = 8
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var handled atomic.Int32
+
+	q, err := newQueueRuntime(natsCfg(ensureNATS(t)))
+	if err != nil {
+		t.Fatalf("new nats queue failed: %v", err)
+	}
+	q.Register("job:nats:drain-backlog", func(context.Context, queue.Job) error {
+		if handled.Add(1) == 1 {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		return nil
+	})
+	if err := withWorkers(q, 1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("nats queue start failed: %v", err)
+	}
+
+	if err := q.Dispatch(queue.NewJob("job:nats:drain-backlog").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch first backlog job: %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first backlog job")
+	}
+	for i := 1; i < jobs; i++ {
+		if err := q.Dispatch(queue.NewJob("job:nats:drain-backlog").OnQueue("default")); err != nil {
+			t.Fatalf("dispatch backlog job %d: %v", i, err)
+		}
+	}
+	// The first callback holds the only worker permit, giving the real NATS client time to queue the flushed backlog locally.
+	time.Sleep(100 * time.Millisecond)
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- q.Shutdown(context.Background()) }()
+	close(releaseFirst)
+	if err := <-shutdownResult; err != nil {
+		t.Fatalf("shutdown nats backlog: %v", err)
+	}
+	if got := handled.Load(); got != jobs {
+		t.Fatalf("handled backlog = %d, want %d before shutdown", got, jobs)
+	}
+}
+
 func TestNATSIntegration_OptionBehavior(t *testing.T) {
 	if !integrationBackendEnabled(testenv.BackendNATS) {
 		t.Skip("nats integration backend not selected")

@@ -71,6 +71,34 @@ func TestStatsCollector_CapturesProcessingFailure(t *testing.T) {
 	t.Fatal("expected failed counter to be incremented")
 }
 
+// TestStatsCollector_SettlementFailureClosesActive verifies unresolved broker settlement cannot leak active delivery gauges or fabricate an application outcome.
+func TestStatsCollector_SettlementFailureClosesActive(t *testing.T) {
+	collector := NewStatsCollector()
+	now := time.Now()
+	collector.Observe(context.Background(), Event{
+		Kind:   EventProcessStarted,
+		Driver: DriverSQS,
+		Queue:  "default",
+		JobKey: "job-settlement",
+		Time:   now,
+	})
+	collector.Observe(context.Background(), Event{
+		Kind:   EventSettlementFailed,
+		Driver: DriverSQS,
+		Queue:  "default",
+		JobKey: "job-settlement",
+		Err:    errors.New("delete failed"),
+		Time:   now.Add(time.Millisecond),
+	})
+	counters, ok := collector.Snapshot().Queue("default")
+	if !ok {
+		t.Fatal("expected settlement queue counters")
+	}
+	if counters.Active != 0 || counters.Processed != 0 || counters.Failed != 0 {
+		t.Fatalf("settlement counters = %+v, want active closed without terminal application count", counters)
+	}
+}
+
 func TestStatsSnapshot_Getters(t *testing.T) {
 	collector := NewStatsCollector()
 	now := time.Now()

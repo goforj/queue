@@ -68,11 +68,13 @@ Track counts/rates for runtime events (from `queue.Observer`), including:
 - `process_retried`
 - `process_archived`
 - `republish_failed`
+- `settlement_failed`
 - `process_recovered`
 
 Why:
 
 - `republish_failed` exposes hidden delay/retry republish churn
+- `settlement_failed` exposes broker acknowledgements or deletions that left original work redeliverable
 - `process_recovered` shows DB stale-processing recovery activity
 
 ## Minimum Alerts (Baseline)
@@ -129,7 +131,11 @@ Suggested default posture:
 - warning on any sustained non-zero rate
 - critical if rising during backlog growth or broker instability
 
-### E. Stale Processing Recovery Alert (DB Backends)
+### E. Settlement Failure Alert
+
+Fire when `settlement_failed` is non-zero. Treat a sustained rate as duplicate-delivery and broker-health risk because handler or replacement work may already have completed while the original remained unsettled.
+
+### F. Stale Processing Recovery Alert (DB Backends)
 
 Fire when `process_recovered` rate exceeds expected baseline.
 
@@ -137,7 +143,7 @@ Why:
 
 - A rising rate indicates worker crashes, DB finalization failures, or unhealthy pods causing stale `processing` rows
 
-### F. Worker Crash Loop / Restart Alert
+### G. Worker Crash Loop / Restart Alert
 
 Fire when worker restart count exceeds threshold over a short window.
 
@@ -159,6 +165,7 @@ At minimum, document fields/labels for:
 Events that must be covered:
 
 - `republish_failed`
+- `settlement_failed`
 - `process_recovered`
 
 See also:

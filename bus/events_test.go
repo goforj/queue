@@ -82,8 +82,8 @@ func TestUnknownCallbackKindEmitsCallbackFailed(t *testing.T) {
 	if err := q.DispatchJSON(context.Background(), internalJobCallback, payload); err == nil {
 		t.Fatal("expected unknown callback kind error")
 	}
-	if started != 1 {
-		t.Fatalf("expected callback started once, got %d", started)
+	if started != 0 {
+		t.Fatalf("invalid callback emitted %d started events, want 0", started)
 	}
 	if failed != 1 {
 		t.Fatalf("expected callback failed once, got %d", failed)
@@ -132,6 +132,205 @@ func TestCallbackMissingRequiredIDsEmitsCallbackFailed(t *testing.T) {
 
 	if failed != len(tests) {
 		t.Fatalf("expected %d callback failed events, got %d", len(tests), failed)
+	}
+}
+
+// TestCallbackFunctionErrorEmitsFailed verifies an invoked ephemeral callback cannot be reported as successful.
+func TestCallbackFunctionErrorEmitsFailed(t *testing.T) {
+	tests := []struct {
+		name       string
+		handlerErr error
+		dispatch   func(Bus, error)
+	}{
+		{
+			name:       "chain catch",
+			handlerErr: errors.New("handler failed"),
+			dispatch: func(b Bus, callbackErr error) {
+				_, _ = b.Chain(NewJob("job:callback-error", nil)).
+					Catch(func(context.Context, ChainState, error) error { return callbackErr }).
+					Dispatch(context.Background())
+			},
+		},
+		{
+			name: "chain finally",
+			dispatch: func(b Bus, callbackErr error) {
+				_, _ = b.Chain(NewJob("job:callback-error", nil)).
+					Finally(func(context.Context, ChainState) error { return callbackErr }).
+					Dispatch(context.Background())
+			},
+		},
+		{
+			name:       "batch catch",
+			handlerErr: errors.New("handler failed"),
+			dispatch: func(b Bus, callbackErr error) {
+				_, _ = b.Batch(NewJob("job:callback-error", nil)).
+					Catch(func(context.Context, BatchState, error) error { return callbackErr }).
+					Dispatch(context.Background())
+			},
+		},
+		{
+			name: "batch then",
+			dispatch: func(b Bus, callbackErr error) {
+				_, _ = b.Batch(NewJob("job:callback-error", nil)).
+					Then(func(context.Context, BatchState) error { return callbackErr }).
+					Dispatch(context.Background())
+			},
+		},
+		{
+			name: "batch finally",
+			dispatch: func(b Bus, callbackErr error) {
+				_, _ = b.Batch(NewJob("job:callback-error", nil)).
+					Finally(func(context.Context, BatchState) error { return callbackErr }).
+					Dispatch(context.Background())
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			q := newSyncTestRuntime()
+			callbackErr := errors.New("callback failed")
+			var (
+				failed    []Event
+				succeeded []Event
+			)
+			b, err := New(q, WithObserver(ObserverFunc(func(_ context.Context, event Event) {
+				switch event.Kind {
+				case EventCallbackFailed:
+					failed = append(failed, event)
+				case EventCallbackSucceeded:
+					succeeded = append(succeeded, event)
+				}
+			})))
+			if err != nil {
+				t.Fatalf("new bus: %v", err)
+			}
+			b.Register("job:callback-error", func(context.Context, Context) error { return test.handlerErr })
+			if err := b.StartWorkers(context.Background()); err != nil {
+				t.Fatalf("start workers: %v", err)
+			}
+			test.dispatch(b, callbackErr)
+			if len(failed) != 1 || !errors.Is(failed[0].Err, callbackErr) {
+				t.Fatalf("callback failed events = %#v, want callback cause", failed)
+			}
+			for _, event := range succeeded {
+				if event.JobID == failed[0].JobID {
+					t.Fatalf("failed callback job %q later emitted success", event.JobID)
+				}
+			}
+		})
+	}
+}
+
+// TestCallbackPanicEmitsFailed verifies callback recovery preserves a terminal lifecycle fact and the panic cause.
+func TestCallbackPanicEmitsFailed(t *testing.T) {
+	queueRuntime := newSyncTestRuntime()
+	panicErr := errors.New("callback panic")
+	var started int
+	var failed []Event
+	var succeeded int
+	busRuntime, err := New(queueRuntime, WithObserver(ObserverFunc(func(_ context.Context, event Event) {
+		switch event.Kind {
+		case EventCallbackStarted:
+			started++
+		case EventCallbackFailed:
+			failed = append(failed, event)
+		case EventCallbackSucceeded:
+			succeeded++
+		}
+	})))
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	busRuntime.Register("job:callback-panic", func(context.Context, Context) error { return nil })
+	if err := busRuntime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	if _, err := busRuntime.Batch(NewJob("job:callback-panic", nil)).
+		Then(func(context.Context, BatchState) error { panic(panicErr) }).
+		Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch batch: %v", err)
+	}
+	if started != 1 || len(failed) != 1 || succeeded != 0 {
+		t.Fatalf("callback started/failed/succeeded = %d/%d/%d, want 1/1/0", started, len(failed), succeeded)
+	}
+	if !errors.Is(failed[0].Err, panicErr) {
+		t.Fatalf("callback panic event error = %v, want cause %v", failed[0].Err, panicErr)
+	}
+}
+
+// TestPositiveWorkflowEventsWaitForDeliverySettlement verifies broker-backed success facts remain pending until acknowledgement.
+func TestPositiveWorkflowEventsWaitForDeliverySettlement(t *testing.T) {
+	positive := []EventKind{
+		EventJobSucceeded,
+		EventChainAdvanced,
+		EventChainCompleted,
+		EventBatchProgressed,
+		EventBatchCompleted,
+		EventCallbackSucceeded,
+	}
+	for _, kind := range positive {
+		t.Run(string(kind), func(t *testing.T) {
+			var events []Event
+			runtime := &runtime{observer: ObserverFunc(func(_ context.Context, event Event) {
+				events = append(events, event)
+			})}
+			ctx, settlement := busruntime.WithDeliverySettlement(context.Background())
+			runtime.emit(ctx, Event{Kind: kind})
+			if len(events) != 0 {
+				t.Fatalf("event %q emitted before settlement: %+v", kind, events)
+			}
+			settlement.Commit()
+			if len(events) != 1 || events[0].Kind != kind {
+				t.Fatalf("events after settlement = %+v, want %q", events, kind)
+			}
+		})
+	}
+}
+
+// TestDuplicateFailedCallbackDoesNotBecomeSuccessful verifies an at-most-once callback marker cannot turn redelivery into a false success.
+func TestDuplicateFailedCallbackDoesNotBecomeSuccessful(t *testing.T) {
+	const batchID = "batch_callback_failed_duplicate"
+	store := NewMemoryStore()
+	if err := store.CreateBatch(context.Background(), BatchRecord{
+		BatchID: batchID,
+		Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: wireJob{Type: "callback:source"}}},
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	if _, _, err := store.MarkBatchJobSucceeded(context.Background(), batchID, "batch_callback_job"); err != nil {
+		t.Fatalf("complete batch: %v", err)
+	}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	callbackErr := errors.New("callback failed")
+	runtime.batchCallbacks[batchID] = batchCallbacks{
+		then: func(context.Context, BatchState) error { return callbackErr },
+	}
+	env := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch_callback_failed_duplicate",
+		JobID:         "job_callback_failed_duplicate",
+		BatchID:       batchID,
+		CallbackKind:  "batch_then",
+	}
+	if err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobCallback, env); !errors.Is(err, callbackErr) {
+		t.Fatalf("first callback error = %v, want %v", err, callbackErr)
+	}
+	if err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobCallback, env); err != nil {
+		t.Fatalf("duplicate callback delivery: %v", err)
+	}
+	failed := 0
+	succeeded := 0
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventCallbackFailed:
+			failed++
+		case EventCallbackSucceeded:
+			succeeded++
+		}
+	}
+	if failed != 1 || succeeded != 0 {
+		t.Fatalf("callback failed/succeeded events = %d/%d, want 1/0", failed, succeeded)
 	}
 }
 

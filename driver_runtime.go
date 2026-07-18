@@ -3,6 +3,8 @@ package queue
 import (
 	"context"
 	"fmt"
+
+	"github.com/goforj/queue/busruntime"
 )
 
 type driverQueueBackend interface {
@@ -51,7 +53,8 @@ func newQueueFromDriver(cfg Config, backend driverQueueBackend, workerFactory dr
 			common:  common,
 			runtime: runtime,
 			nativeQueueRuntimeState: &nativeQueueRuntimeState{
-				registered: make(map[string]Handler),
+				registered:   make(map[string]Handler),
+				continuation: busruntime.NewContinuationScope(),
 			},
 		}, nil
 	}
@@ -59,7 +62,8 @@ func newQueueFromDriver(cfg Config, backend driverQueueBackend, workerFactory dr
 		common:    common,
 		newWorker: workerFactory,
 		externalQueueRuntimeState: &externalQueueRuntimeState{
-			registered: make(map[string]Handler),
+			registered:   make(map[string]Handler),
+			continuation: busruntime.NewContinuationScope(),
 		},
 	}, nil
 }

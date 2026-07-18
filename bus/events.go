@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// EventKind identifies one legacy workflow lifecycle fact.
 type EventKind string
 
 const (
@@ -28,6 +29,7 @@ const (
 	EventCallbackFailed    EventKind = "callback_failed"
 )
 
+// Event carries legacy bus workflow correlation until the package becomes a forwarding facade.
 type Event struct {
 	SchemaVersion int
 	EventID       string
@@ -38,16 +40,19 @@ type Event struct {
 	BatchID       string
 	Attempt       int
 	JobType       string
+	JobKey        string
 	Queue         string
 	Duration      time.Duration
 	Time          time.Time
 	Err           error
 }
 
+// Observer receives legacy bus workflow events.
 type Observer interface {
 	Observe(ctx context.Context, event Event)
 }
 
+// ObserverFunc adapts a function to Observer.
 type ObserverFunc func(ctx context.Context, event Event)
 
 // Observe calls the wrapped observer function.

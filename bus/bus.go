@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue/busruntime"
+	"github.com/goforj/queue/internal/jobidentity"
 )
 
 const (
@@ -229,16 +230,16 @@ func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error)
 		JobID:         newID("job"),
 		Job:           wj,
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, JobKey: wireJobEventKey(wj), Queue: wj.Options.Queue, Time: r.now()})
 	if err := r.dispatchEnvelope(ctx, internalJob, env); err != nil {
 		if executionErr, ok := acceptedDispatchExecutionError(err); ok {
-			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
+			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, JobKey: wireJobEventKey(wj), Queue: wj.Options.Queue, Time: r.now()})
 			return DispatchResult{DispatchID: dispatchID}, executionErr
 		}
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now(), Err: err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, JobKey: wireJobEventKey(wj), Queue: wj.Options.Queue, Time: r.now(), Err: err})
 		return DispatchResult{DispatchID: dispatchID}, err
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, Queue: wj.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, JobKey: wireJobEventKey(wj), Queue: wj.Options.Queue, Time: r.now()})
 	return DispatchResult{DispatchID: dispatchID}, nil
 }
 
@@ -371,8 +372,21 @@ func (r *runtime) dispatchEnvelope(ctx context.Context, jobType string, env enve
 	})
 }
 
+// dispatchCallback schedules only configured ephemeral closures through the same queue delivery path.
 func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind string, err error) error {
-	cbEnv := envelope{
+	callback, ok := r.callbackEnvelope(base, kind, err)
+	if !ok {
+		return nil
+	}
+	return r.dispatchEnvelope(ctx, internalJobCallback, callback)
+}
+
+// callbackEnvelope constructs one configured ephemeral callback delivery without coupling invocation to its transport.
+func (r *runtime) callbackEnvelope(base envelope, kind string, err error) (envelope, bool) {
+	if !r.callbackConfigured(base, kind) {
+		return envelope{}, false
+	}
+	callback := envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    base.DispatchID,
 		Kind:          "callback",
@@ -381,15 +395,46 @@ func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind stri
 		BatchID:       base.BatchID,
 		CallbackKind:  kind,
 		Job: wireJob{
+			Type:    base.Job.Type,
+			Payload: append([]byte(nil), base.Job.Payload...),
 			Options: JobOptions{
 				Queue: base.Job.Options.Queue,
 			},
 		},
 	}
 	if err != nil {
-		cbEnv.Error = err.Error()
+		callback.Error = err.Error()
 	}
-	return r.dispatchEnvelope(ctx, internalJobCallback, cbEnv)
+	return callback, true
+}
+
+// invokeCallbackInline preserves callback lifecycle semantics when initial workflow enqueue never reaches a worker.
+func (r *runtime) invokeCallbackInline(ctx context.Context, base envelope, kind string, err error) error {
+	callback, ok := r.callbackEnvelope(base, kind, err)
+	if !ok {
+		return nil
+	}
+	return r.handleCallbackEnvelope(ctx, callback)
+}
+
+// callbackConfigured keeps absent optional closures from becoming artificial callback deliveries and success facts.
+func (r *runtime) callbackConfigured(base envelope, kind string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	switch kind {
+	case "chain_catch":
+		return r.chainCallbacks[base.ChainID].catch != nil
+	case "chain_finally":
+		return r.chainCallbacks[base.ChainID].finally != nil
+	case "batch_catch":
+		return r.batchCallbacks[base.BatchID].catch != nil
+	case "batch_then":
+		return r.batchCallbacks[base.BatchID].then != nil
+	case "batch_finally":
+		return r.batchCallbacks[base.BatchID].finally != nil
+	default:
+		return false
+	}
 }
 
 func (r *runtime) handleInternalJob(ctx context.Context, job busruntime.InboundJob) error {
@@ -430,6 +475,7 @@ func (r *runtime) executeWireJobAttempt(ctx context.Context, env envelope) wireJ
 		BatchID:       env.BatchID,
 		Attempt:       env.Attempt,
 		JobType:       env.Job.Type,
+		JobKey:        wireJobEventKey(env.Job),
 		Queue:         env.Job.Options.Queue,
 		Time:          started,
 	})
@@ -473,11 +519,17 @@ func (r *runtime) emitWireJobOutcome(ctx context.Context, outcome wireJobOutcome
 		BatchID:       outcome.env.BatchID,
 		Attempt:       outcome.env.Attempt,
 		JobType:       outcome.env.Job.Type,
+		JobKey:        wireJobEventKey(outcome.env.Job),
 		Queue:         outcome.env.Job.Options.Queue,
 		Duration:      outcome.finished.Sub(outcome.started),
 		Time:          outcome.finished,
 		Err:           outcome.err,
 	})
+}
+
+// wireJobEventKey keeps workflow facts on the same logical type-and-payload correlation as queue and worker facts.
+func wireJobEventKey(job wireJob) string {
+	return jobidentity.ObservedKey(job.Type, job.Payload)
 }
 
 // uncommittedMutationError marks state persistence failures for same-attempt infrastructure redelivery.
@@ -512,8 +564,43 @@ func (r *runtime) lookupHandler(jobType string) (Handler, bool) {
 	return handler, ok
 }
 
+// emit delays positive workflow facts when the physical driver owns a later settlement boundary.
 func (r *runtime) emit(ctx context.Context, event Event) {
+	if eventWaitsForDeliverySettlement(event.Kind) && busruntime.DeferUntilDeliveryCommitted(ctx, func() {
+		safeObserve(ctx, r.observer, event)
+	}) {
+		return
+	}
 	safeObserve(ctx, r.observer, event)
+}
+
+// eventWaitsForDeliverySettlement identifies positive workflow facts that would be false if broker acknowledgement remains unresolved.
+func eventWaitsForDeliverySettlement(kind EventKind) bool {
+	switch kind {
+	case EventJobSucceeded,
+		EventChainAdvanced,
+		EventChainCompleted,
+		EventBatchProgressed,
+		EventBatchCompleted,
+		EventCallbackSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// runEphemeralCallback converts application panics into callback failures without unwinding committed workflow state.
+func runEphemeralCallback(callback func() error) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recoveredErr, ok := recovered.(error); ok {
+				err = fmt.Errorf("workflow callback panicked: %w", recoveredErr)
+				return
+			}
+			err = fmt.Errorf("workflow callback panicked: %v", recovered)
+		}
+	}()
+	return callback()
 }
 
 type wireJob struct {

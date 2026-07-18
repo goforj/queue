@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,72 @@ import (
 	"github.com/goforj/queue/queuecore"
 	"github.com/nats-io/nats.go"
 )
+
+type natsWorkerSubscriptionStub struct {
+	drained  chan struct{}
+	once     sync.Once
+	drainErr error
+}
+
+// Drain records that intake stopped before worker settlement resources closed.
+func (s *natsWorkerSubscriptionStub) Drain() error {
+	s.once.Do(func() { close(s.drained) })
+	return s.drainErr
+}
+
+type natsWorkerConnectionLifecycleStub struct {
+	mu        sync.Mutex
+	published chan struct{}
+	drained   chan struct{}
+	pubOnce   sync.Once
+	drainOnce sync.Once
+	closed    bool
+	flushErr  error
+	drainErr  error
+}
+
+// Publish records replacement work and rejects publication after Close.
+func (s *natsWorkerConnectionLifecycleStub) Publish(string, []byte) error {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nats.ErrConnectionClosed
+	}
+	s.pubOnce.Do(func() { close(s.published) })
+	return nil
+}
+
+// FlushWithContext completes the fake server roundtrip unless the connection already closed.
+func (s *natsWorkerConnectionLifecycleStub) FlushWithContext(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nats.ErrConnectionClosed
+	}
+	return s.flushErr
+}
+
+// Drain records graceful connection drain after every expected replacement publish.
+func (s *natsWorkerConnectionLifecycleStub) Drain() error {
+	s.drainOnce.Do(func() { close(s.drained) })
+	return s.drainErr
+}
+
+// Close marks the fake connection unavailable for later publication.
+func (s *natsWorkerConnectionLifecycleStub) Close() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+}
+
+// newNATSWorkerLifecycleStubs creates observable subscription and connection boundaries for shutdown tests.
+func newNATSWorkerLifecycleStubs() (*natsWorkerConnectionLifecycleStub, *natsWorkerSubscriptionStub) {
+	return &natsWorkerConnectionLifecycleStub{
+		published: make(chan struct{}),
+		drained:   make(chan struct{}),
+	}, &natsWorkerSubscriptionStub{drained: make(chan struct{})}
+}
 
 func TestNATSWorker_NewRegisterAndShutdown(t *testing.T) {
 	w := newNATSWorker("nats://example:4222")
@@ -46,6 +113,151 @@ func TestNATSWorker_StartWorkersCanceledContext(t *testing.T) {
 	err := w.StartWorkers(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+// TestNATSWorkerStartRetriesAfterConnectionFailure verifies one transient connect error cannot poison worker startup.
+func TestNATSWorkerStartRetriesAfterConnectionFailure(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	connectErr := errors.New("nats unavailable")
+	var calls int
+	w.connect = func(string, string, nats.MsgHandler) (natsConnection, natsWorkerSubscription, error) {
+		calls++
+		if calls == 1 {
+			return nil, nil, connectErr
+		}
+		return connection, subscription, nil
+	}
+	if err := w.StartWorkers(context.Background()); !errors.Is(err, connectErr) {
+		t.Fatalf("first start error = %v, want %v", err, connectErr)
+	}
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("retry start: %v", err)
+	}
+	if calls != 2 || !w.started || w.conn == nil || w.sub == nil {
+		t.Fatalf("retry state = calls:%d started:%t conn:%T sub:%T", calls, w.started, w.conn, w.sub)
+	}
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+}
+
+// TestNATSWorkerStartRetriesAfterSubscriptionFlushFailure verifies startup is not accepted until the server observes the subscription.
+func TestNATSWorkerStartRetriesAfterSubscriptionFlushFailure(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	firstConnection, firstSubscription := newNATSWorkerLifecycleStubs()
+	firstConnection.flushErr = errors.New("subscription flush failed")
+	secondConnection, secondSubscription := newNATSWorkerLifecycleStubs()
+	connections := []*natsWorkerConnectionLifecycleStub{firstConnection, secondConnection}
+	subscriptions := []*natsWorkerSubscriptionStub{firstSubscription, secondSubscription}
+	var calls int
+	w.connect = func(string, string, nats.MsgHandler) (natsConnection, natsWorkerSubscription, error) {
+		index := calls
+		calls++
+		return connections[index], subscriptions[index], nil
+	}
+	if err := w.StartWorkers(context.Background()); !errors.Is(err, firstConnection.flushErr) {
+		t.Fatalf("first start error = %v, want %v", err, firstConnection.flushErr)
+	}
+	if !firstConnection.closed || w.started || w.conn != nil || w.sub != nil {
+		t.Fatalf("failed flush cleanup = closed:%t started:%t conn:%T sub:%T", firstConnection.closed, w.started, w.conn, w.sub)
+	}
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("retry start after flush failure: %v", err)
+	}
+	if calls != 2 || !w.started {
+		t.Fatalf("retry state = calls:%d started:%t", calls, w.started)
+	}
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+}
+
+// TestNATSWorkerShutdownDrainDiagnosticConverges verifies completed cleanup does not poison every later root shutdown attempt.
+func TestNATSWorkerShutdownDrainDiagnosticConverges(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	drainErr := errors.New("subscription drain diagnostic")
+	subscription.drainErr = drainErr
+	w.conn = connection
+	w.sub = subscription
+	w.started = true
+	if err := w.Shutdown(context.Background()); !errors.Is(err, drainErr) {
+		t.Fatalf("first shutdown error = %v, want %v", err, drainErr)
+	}
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("completed cleanup remained poisoned: %v", err)
+	}
+}
+
+// TestNATSWorkerShutdownWaitsForInFlightRepublish verifies the connection remains open through a handler's best-effort Core NATS retry publication.
+func TestNATSWorkerShutdownWaitsForInFlightRepublish(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	w.conn = connection
+	w.sub = subscription
+	w.started = true
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	w.Register("job:retry-on-shutdown", func(context.Context, queue.Job) error {
+		close(handlerStarted)
+		<-releaseHandler
+		return errors.New("retry me")
+	})
+	payload, err := json.Marshal(natsMessage{Type: "job:retry-on-shutdown", Queue: "default", MaxRetry: 1})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	w.running.Add(1)
+	go func() {
+		defer w.running.Done()
+		w.processMessage(&nats.Msg{Data: payload})
+	}()
+	<-handlerStarted
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- w.Shutdown(context.Background()) }()
+	<-subscription.drained
+	select {
+	case <-connection.drained:
+		t.Fatal("connection drained before the in-flight handler finished")
+	default:
+	}
+	close(releaseHandler)
+	<-connection.published
+	if err := <-shutdownResult; err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	select {
+	case <-connection.drained:
+	default:
+		t.Fatal("connection did not drain after replacement publication")
+	}
+}
+
+// TestNATSWorkerShutdownTracksDelayedRepublish verifies timer-backed accepted work finishes before connection drain.
+func TestNATSWorkerShutdownTracksDelayedRepublish(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	w.conn = connection
+	w.sub = subscription
+	w.started = true
+	payload, err := json.Marshal(natsMessage{
+		Type:          "job:delayed-shutdown",
+		Queue:         "default",
+		AvailableAtMS: time.Now().Add(25 * time.Millisecond).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	w.processMessage(&nats.Msg{Data: payload})
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	select {
+	case <-connection.published:
+	default:
+		t.Fatal("shutdown returned before delayed replacement publication")
 	}
 }
 

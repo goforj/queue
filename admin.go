@@ -262,14 +262,22 @@ func resolveQueueAdmin(v any) QueueAdmin {
 			return nil
 		}
 		if admin, ok := rt.common.inner.(QueueAdmin); ok {
-			return queueAdminWithNamespace{admin: admin, common: rt.common}
+			return queueAdminWithNamespace{
+				admin:  admin,
+				common: rt.common,
+				lease:  func(ctx context.Context) (func(), error) { return rt.acquireOperation(ctx, false) },
+			}
 		}
 	case *externalQueueRuntime:
 		if rt == nil || rt.common == nil {
 			return nil
 		}
 		if admin, ok := rt.common.inner.(QueueAdmin); ok {
-			return queueAdminWithNamespace{admin: admin, common: rt.common}
+			return queueAdminWithNamespace{
+				admin:  admin,
+				common: rt.common,
+				lease:  func(ctx context.Context) (func(), error) { return rt.acquireOperation(ctx, false) },
+			}
 		}
 	default:
 		if admin, ok := raw.(QueueAdmin); ok {
@@ -290,14 +298,22 @@ func resolveQueueHistory(v any) QueueHistoryProvider {
 			return nil
 		}
 		if history, ok := rt.common.inner.(QueueHistoryProvider); ok {
-			return queueHistoryWithNamespace{history: history, common: rt.common}
+			return queueHistoryWithNamespace{
+				history: history,
+				common:  rt.common,
+				lease:   func(ctx context.Context) (func(), error) { return rt.acquireOperation(ctx, false) },
+			}
 		}
 	case *externalQueueRuntime:
 		if rt == nil || rt.common == nil {
 			return nil
 		}
 		if history, ok := rt.common.inner.(QueueHistoryProvider); ok {
-			return queueHistoryWithNamespace{history: history, common: rt.common}
+			return queueHistoryWithNamespace{
+				history: history,
+				common:  rt.common,
+				lease:   func(ctx context.Context) (func(), error) { return rt.acquireOperation(ctx, false) },
+			}
 		}
 	default:
 		if history, ok := raw.(QueueHistoryProvider); ok {
@@ -310,40 +326,93 @@ func resolveQueueHistory(v any) QueueHistoryProvider {
 type queueAdminWithNamespace struct {
 	admin  QueueAdmin
 	common *queueCommon
+	lease  func(context.Context) (func(), error)
 }
 
 func (a queueAdminWithNamespace) ListJobs(ctx context.Context, opts ListJobsOptions) (ListJobsResult, error) {
+	release, err := a.acquire(ctx)
+	if err != nil {
+		return ListJobsResult{}, err
+	}
+	defer release()
 	opts.Queue = a.common.physicalQueueNameOrDefault(opts.Queue)
 	return a.admin.ListJobs(ctx, opts)
 }
 
 func (a queueAdminWithNamespace) RetryJob(ctx context.Context, queueName, jobID string) error {
+	release, err := a.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return a.admin.RetryJob(ctx, a.common.physicalQueueNameOrDefault(queueName), jobID)
 }
 
 func (a queueAdminWithNamespace) CancelJob(ctx context.Context, jobID string) error {
+	release, err := a.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return a.admin.CancelJob(ctx, jobID)
 }
 
 func (a queueAdminWithNamespace) DeleteJob(ctx context.Context, queueName, jobID string) error {
+	release, err := a.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return a.admin.DeleteJob(ctx, a.common.physicalQueueNameOrDefault(queueName), jobID)
 }
 
 func (a queueAdminWithNamespace) ClearQueue(ctx context.Context, queueName string) error {
+	release, err := a.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return a.admin.ClearQueue(ctx, a.common.physicalQueueNameOrDefault(queueName))
 }
 
 func (a queueAdminWithNamespace) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	release, err := a.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	return a.admin.History(ctx, a.common.physicalQueueNameOrDefault(queueName), window)
+}
+
+// acquire reserves runtime resources for one administrative operation.
+func (a queueAdminWithNamespace) acquire(ctx context.Context) (func(), error) {
+	if a.lease == nil {
+		return func() {}, nil
+	}
+	return a.lease(ctx)
 }
 
 type queueHistoryWithNamespace struct {
 	history QueueHistoryProvider
 	common  *queueCommon
+	lease   func(context.Context) (func(), error)
 }
 
 func (h queueHistoryWithNamespace) History(ctx context.Context, queueName string, window QueueHistoryWindow) ([]QueueHistoryPoint, error) {
+	release, err := h.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	return h.history.History(ctx, h.common.physicalQueueNameOrDefault(queueName), window)
+}
+
+// acquire reserves runtime resources for one history operation.
+func (h queueHistoryWithNamespace) acquire(ctx context.Context) (func(), error) {
+	if h.lease == nil {
+		return func() {}, nil
+	}
+	return h.lease(ctx)
 }
 
 // ListJobs lists jobs via queue admin capability when supported.

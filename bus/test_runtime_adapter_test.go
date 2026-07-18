@@ -21,8 +21,22 @@ func (j testInboundJob) PayloadBytes() []byte {
 }
 
 type syncTestRuntime struct {
-	handlers map[string]busruntime.Handler
+	handlers    map[string]busruntime.Handler
+	dispatchErr error
 }
+
+type syncTestAcceptedError struct {
+	cause error
+}
+
+// Error preserves the inline handler failure returned by the synchronous test runtime.
+func (e syncTestAcceptedError) Error() string { return e.cause.Error() }
+
+// Unwrap exposes the inline handler failure to errors.Is and errors.As.
+func (e syncTestAcceptedError) Unwrap() error { return e.cause }
+
+// DispatchAccepted reports that the test runtime invoked a handler after accepting its delivery.
+func (e syncTestAcceptedError) DispatchAccepted() bool { return true }
 
 func newSyncTestRuntime() *syncTestRuntime {
 	return &syncTestRuntime{handlers: make(map[string]busruntime.Handler)}
@@ -36,11 +50,17 @@ func (r *syncTestRuntime) BusRegister(jobType string, handler busruntime.Handler
 }
 
 func (r *syncTestRuntime) BusDispatch(ctx context.Context, jobType string, payload []byte, _ busruntime.JobOptions) error {
+	if r.dispatchErr != nil {
+		return r.dispatchErr
+	}
 	h, ok := r.handlers[jobType]
 	if !ok || h == nil {
 		return fmt.Errorf("handler not registered for %q", jobType)
 	}
-	return h(ctx, testInboundJob{payload: append([]byte(nil), payload...)})
+	if err := h(ctx, testInboundJob{payload: append([]byte(nil), payload...)}); err != nil {
+		return syncTestAcceptedError{cause: err}
+	}
+	return nil
 }
 
 func (r *syncTestRuntime) StartWorkers(context.Context) error { return nil }

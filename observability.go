@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/internal/observation"
 )
 
@@ -65,6 +66,8 @@ const (
 	EventProcessRecovered EventKind = "process_recovered"
 	// EventRepublishFailed indicates an internal delay/retry republish attempt failed.
 	EventRepublishFailed EventKind = "republish_failed"
+	// EventSettlementFailed indicates a broker acknowledgement or deletion failed after handler or replacement work completed.
+	EventSettlementFailed EventKind = "settlement_failed"
 	// EventJobStarted indicates logical job execution began.
 	EventJobStarted EventKind = "job_started"
 	// EventJobSucceeded indicates logical job execution succeeded.
@@ -692,6 +695,11 @@ func (c *StatsCollector) Observe(_ context.Context, event Event) {
 		state.runSum += event.Duration
 		state.runCount++
 		state.counters.AvgRun = state.runSum / time.Duration(state.runCount)
+	case EventSettlementFailed:
+		// Handler execution ended, but the delivery remains unresolved; close Active without inventing a processed or application-failed outcome.
+		if state.counters.Active > 0 {
+			state.counters.Active--
+		}
 	}
 
 	c.pruneThroughputLocked(state, now)
@@ -992,6 +1000,7 @@ func (q *observedQueue) Driver() Driver {
 	return q.driver
 }
 
+// wrapObservedHandler emits physical attempt facts while deferring success to any driver-owned settlement boundary.
 func wrapObservedHandler(observer Observer, driver Driver, queueName string, jobType string, ctxDecorator func(context.Context) context.Context, handler Handler) Handler {
 	return func(ctx context.Context, job Job) error {
 		if ctxDecorator != nil {
@@ -1036,6 +1045,11 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 		finish.Err = err
 		if err == nil {
 			finish.Kind = EventProcessSucceeded
+			if busruntime.DeferUntilDeliveryCommitted(ctx, func() {
+				safeObserve(ctx, observer, finish)
+			}) {
+				return nil
+			}
 			safeObserve(ctx, observer, finish)
 			return nil
 		}
@@ -1095,7 +1109,8 @@ func eventLayerForKind(kind EventKind) EventLayer {
 		EventProcessRetried,
 		EventProcessArchived,
 		EventProcessRecovered,
-		EventRepublishFailed:
+		EventRepublishFailed,
+		EventSettlementFailed:
 		return EventLayerWorker
 	case EventJobStarted,
 		EventJobSucceeded,

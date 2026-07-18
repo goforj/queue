@@ -29,14 +29,46 @@ type redisInspectorStub struct {
 	deleteAllErr    error
 }
 
+// Close releases the inspector stub without external resources.
+func (s *redisInspectorStub) Close() error { return nil }
+
 type redisEnqueueClientStub struct {
 	enqueueErr error
 	enqueueN   int
 	closeN     int
+	task       *backend.Task
+	opts       []backend.Option
 }
 
-func (s *redisEnqueueClientStub) Enqueue(*backend.Task, ...backend.Option) (*backend.TaskInfo, error) {
+type redisUniqueStoreStub struct {
+	acquired     bool
+	acquireErr   error
+	releaseErr   error
+	acquireKey   string
+	acquireToken string
+	releaseKey   string
+	releaseToken string
+}
+
+// Acquire records the logical claim requested by the queue.
+func (s *redisUniqueStoreStub) Acquire(_ context.Context, key, token string, _ time.Duration) (bool, error) {
+	s.acquireKey = key
+	s.acquireToken = token
+	return s.acquired, s.acquireErr
+}
+
+// Release records the ownership token used for compensation.
+func (s *redisUniqueStoreStub) Release(_ context.Context, key, token string) error {
+	s.releaseKey = key
+	s.releaseToken = token
+	return s.releaseErr
+}
+
+// Enqueue records the task and options passed through the Redis acceptance boundary.
+func (s *redisEnqueueClientStub) Enqueue(task *backend.Task, opts ...backend.Option) (*backend.TaskInfo, error) {
 	s.enqueueN++
+	s.task = task
+	s.opts = append([]backend.Option(nil), opts...)
 	return &backend.TaskInfo{}, s.enqueueErr
 }
 
@@ -262,7 +294,15 @@ func TestRedisQueue_AdminBranches(t *testing.T) {
 		tasksByQueue: map[string]map[string][]*backend.TaskInfo{
 			"default": {
 				backend.TaskStatePending.String(): {
-					{ID: "job-pending", Queue: "default", Type: "job:pending", Payload: []byte("payload"), State: backend.TaskStatePending},
+					{
+						ID:       "job-pending",
+						Queue:    "default",
+						Type:     "job:pending",
+						Payload:  []byte("payload"),
+						State:    backend.TaskStatePending,
+						MaxRetry: 3,
+						Headers:  map[string]string{redisApplicationMaxRetryHeader: "2"},
+					},
 				},
 			},
 		},
@@ -276,6 +316,9 @@ func TestRedisQueue_AdminBranches(t *testing.T) {
 	}
 	if list.Total != 1 || len(list.Jobs) != 1 {
 		t.Fatalf("expected one job, got total=%d len=%d", list.Total, len(list.Jobs))
+	}
+	if list.Jobs[0].MaxRetry != 2 {
+		t.Fatalf("admin max retry = %d, want application budget 2", list.Jobs[0].MaxRetry)
 	}
 
 	if err := r.CancelJob(context.Background(), "job-pending"); err != nil {
@@ -359,7 +402,92 @@ func TestRedisQueue_DispatchBranches(t *testing.T) {
 		if client.enqueueN != 1 {
 			t.Fatalf("expected one enqueue call, got %d", client.enqueueN)
 		}
+		if got := client.task.Headers()[redisApplicationMaxRetryHeader]; got != "2" {
+			t.Fatalf("application retry header = %q, want 2", got)
+		}
+		var transportMaxRetry int
+		for _, option := range client.opts {
+			if option.Type() == backend.MaxRetryOpt {
+				transportMaxRetry = option.Value().(int)
+			}
+		}
+		if transportMaxRetry != 3 {
+			t.Fatalf("transport max retry = %d, want one-slot reserve 3", transportMaxRetry)
+		}
 	})
+
+	t.Run("retry reserve wire boundary", func(t *testing.T) {
+		client := &redisEnqueueClientStub{}
+		r := &redisQueue{client: client}
+		if err := r.Dispatch(context.Background(), queue.NewJob("job:redis").OnQueue("default").Retry(redisMaximumApplicationRetry)); err != nil {
+			t.Fatalf("maximum application retry rejected: %v", err)
+		}
+		if client.enqueueN != 1 {
+			t.Fatalf("maximum application retry enqueues = %d, want 1", client.enqueueN)
+		}
+		err := r.Dispatch(context.Background(), queue.NewJob("job:redis").OnQueue("default").Retry(redisMaximumApplicationRetry+1))
+		if err == nil || client.enqueueN != 1 {
+			t.Fatalf("retry reserve overflow = error:%v total enqueues:%d, want rejection after first boundary enqueue", err, client.enqueueN)
+		}
+	})
+
+	t.Run("unique ttl validates before canonical claim", func(t *testing.T) {
+		client := &redisEnqueueClientStub{}
+		claims := &redisUniqueStoreStub{acquired: true}
+		r := &redisQueue{client: client, unique: claims}
+		err := r.Dispatch(context.Background(), queue.NewJob("job:redis").OnQueue("default").UniqueFor(time.Millisecond))
+		if err == nil {
+			t.Fatal("sub-second redis uniqueness unexpectedly passed validation")
+		}
+		if claims.acquireKey != "" || client.enqueueN != 0 {
+			t.Fatalf("invalid uniqueness reached claim/enqueue: key=%q enqueues=%d", claims.acquireKey, client.enqueueN)
+		}
+	})
+}
+
+// TestRedisQueueLogicalUniqueFailureBoundaries verifies ambiguous failures retain claims while definite physical duplicates compensate them.
+func TestRedisQueueLogicalUniqueFailureBoundaries(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"dispatch_id":"volatile","job_id":"job_1","job":{"type":"reports:build","payload":"eyJpZCI6MX0="}}`)
+	job := queue.NewJob("bus:job").Payload(payload).OnQueue("critical").UniqueFor(time.Minute)
+	enqueueErr := errors.New("redis response lost")
+	client := &redisEnqueueClientStub{enqueueErr: enqueueErr}
+	claims := &redisUniqueStoreStub{acquired: true}
+	r := &redisQueue{client: client, unique: claims}
+
+	err := r.Dispatch(context.Background(), job)
+	if !errors.Is(err, enqueueErr) {
+		t.Fatalf("dispatch error = %v, want enqueue rejection", err)
+	}
+	if claims.acquireKey == "" || claims.acquireToken == "" {
+		t.Fatalf("logical claim was incomplete: %+v", claims)
+	}
+	if claims.releaseKey != "" || claims.releaseToken != "" {
+		t.Fatalf("ambiguous enqueue failure released its safety claim: %+v", claims)
+	}
+
+	client = &redisEnqueueClientStub{enqueueErr: backend.ErrDuplicateTask}
+	claims = &redisUniqueStoreStub{acquired: true}
+	r = &redisQueue{client: client, unique: claims}
+	if err := r.Dispatch(context.Background(), job); !errors.Is(err, queue.ErrDuplicate) {
+		t.Fatalf("physical duplicate error = %v, want ErrDuplicate", err)
+	}
+	if claims.releaseKey != claims.acquireKey || claims.releaseToken != claims.acquireToken {
+		t.Fatalf("physical duplicate compensation released a different owner: %+v", claims)
+	}
+
+	releaseErr := errors.New("redis release failed")
+	claims = &redisUniqueStoreStub{acquired: true, releaseErr: releaseErr}
+	r = &redisQueue{client: &redisEnqueueClientStub{enqueueErr: backend.ErrDuplicateTask}, unique: claims}
+	err = r.Dispatch(context.Background(), job)
+	if !errors.Is(err, queue.ErrDuplicate) || !errors.Is(err, releaseErr) {
+		t.Fatalf("release failure error = %v, want duplicate and release causes", err)
+	}
+
+	claims = &redisUniqueStoreStub{acquired: false}
+	r = &redisQueue{client: &redisEnqueueClientStub{}, unique: claims}
+	if err := r.Dispatch(context.Background(), job); !errors.Is(err, queue.ErrDuplicate) {
+		t.Fatalf("duplicate logical claim error = %v, want ErrDuplicate", err)
+	}
 }
 
 func TestRedisQueue_ShutdownOwnsClientCloseOnce(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue/busruntime"
+	"github.com/goforj/queue/internal/uniqueness"
 )
 
 // localQueue is an in-memory queue implementation supporting sync and workerpool drivers.
@@ -18,11 +19,14 @@ type localQueue struct {
 	metricsMu    sync.RWMutex
 	queueMu      sync.RWMutex
 	handlers     map[string]Handler
-	unique       map[string]time.Time
+	unique       uniqueness.MemoryStore
 	metrics      map[string]*localQueueMetrics
 	pausedQueues map[string]bool
 	workQueue    chan queuedJob
-	shutdownCh   chan struct{}
+	workPending  int
+	workIdle     chan struct{}
+	continuation *busruntime.ContinuationScope
+	resizeBuffer bool
 	shutdownOnce sync.Once
 	workerWG     sync.WaitGroup
 	delayedWG    sync.WaitGroup
@@ -32,10 +36,6 @@ type localQueue struct {
 	finished     atomic.Int64
 	delayed      atomic.Int64
 }
-
-type workerContextKey string
-
-const workerEnqueueKey workerContextKey = "queue.worker.enqueue.allowed"
 
 const localRedeliveryBackoff = time.Millisecond
 
@@ -59,14 +59,15 @@ func newLocalQueue(driver Driver) *localQueue {
 }
 
 func newLocalQueueWithConfig(driver Driver, cfg WorkerpoolConfig) *localQueue {
+	resizeBuffer := cfg.QueueCapacity <= 0
 	q := &localQueue{
 		driver:       driver,
 		cfg:          cfg.normalize(),
 		handlers:     make(map[string]Handler),
-		unique:       make(map[string]time.Time),
 		metrics:      make(map[string]*localQueueMetrics),
 		pausedQueues: make(map[string]bool),
-		shutdownCh:   make(chan struct{}),
+		continuation: busruntime.NewContinuationScope(),
+		resizeBuffer: resizeBuffer,
 	}
 	return q
 }
@@ -145,25 +146,27 @@ func (d *localQueue) StartWorkers(_ context.Context) error {
 //	_ = q.StartWorkers(context.Background())
 //	_ = q.Shutdown(context.Background())
 func (d *localQueue) Shutdown(ctx context.Context) error {
-	if d.driver != DriverWorkerpool {
+	if d.driver != DriverWorkerpool && d.driver != DriverSync {
 		return nil
 	}
 
 	d.shutdownOnce.Do(func() {
 		d.shuttingDown.Store(true)
-		close(d.shutdownCh)
 	})
 
+	if d.driver == DriverSync {
+		if err := waitGroupWithContext(ctx, &d.delayedWG); err != nil {
+			return fmt.Errorf("sync delayed jobs drain failed: %w (%s)", err, d.shutdownStats())
+		}
+		return nil
+	}
+
+	if err := d.closeWorkerQueueWhenIdle(ctx); err != nil {
+		return fmt.Errorf("workerpool queued jobs drain failed: %w (%s)", err, d.shutdownStats())
+	}
 	if err := waitGroupWithContext(ctx, &d.delayedWG); err != nil {
 		return fmt.Errorf("workerpool delayed jobs drain failed: %w (%s)", err, d.shutdownStats())
 	}
-
-	d.queueMu.Lock()
-	if d.workQueue != nil {
-		close(d.workQueue)
-		d.workQueue = nil
-	}
-	d.queueMu.Unlock()
 
 	if err := waitGroupWithContext(ctx, &d.workerWG); err != nil {
 		return fmt.Errorf("workerpool active jobs drain failed: %w (%s)", err, d.shutdownStats())
@@ -204,7 +207,8 @@ func (d *localQueue) Ready(ctx context.Context) error {
 //		Delay(10 * time.Millisecond)
 //	_, _ = q.Dispatch(job)
 func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
-	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
+	ctx, acceptance := ensureDispatchAcceptance(ctx)
+	if d.shuttingDown.Load() && !d.continuation.Owns(ctx) {
 		return ErrQueuerShuttingDown
 	}
 	if err := job.validate(); err != nil {
@@ -215,13 +219,32 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	if err := d.validateEnqueue(job, queueName); err != nil {
 		return err
 	}
+	var (
+		uniqueKey   string
+		uniqueToken uint64
+	)
 	if parsed.uniqueTTL > 0 {
-		if !d.claimUnique(job, queueName, parsed.uniqueTTL) {
+		var acquired bool
+		uniqueKey, uniqueToken, acquired = d.claimUnique(job, queueName, parsed.uniqueTTL)
+		if !acquired {
 			return ErrDuplicate
 		}
 	}
 	if parsed.delay <= 0 {
-		return d.enqueueNow(ctx, job, parsed)
+		err := d.enqueueNow(ctx, job, parsed)
+		if err != nil && !acceptance.isAccepted() {
+			d.unique.Release(uniqueKey, uniqueToken)
+		}
+		return err
+	}
+	var reservedQueue chan queuedJob
+	if d.driver == DriverWorkerpool {
+		var reserveErr error
+		reservedQueue, reserveErr = d.reserveWorkerQueue()
+		if reserveErr != nil {
+			d.unique.Release(uniqueKey, uniqueToken)
+			return reserveErr
+		}
 	}
 	d.delayedWG.Add(1)
 	d.delayed.Add(1)
@@ -231,6 +254,7 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	if acceptance := dispatchAcceptanceFromContext(ctx); acceptance != nil {
 		acceptance.markAccepted()
 	}
+	delayedCtx := context.WithoutCancel(ctx)
 	go func() {
 		defer d.delayedWG.Done()
 		defer d.delayed.Add(-1)
@@ -241,12 +265,14 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 		})
 		timer := time.NewTimer(parsed.delay)
 		defer timer.Stop()
-		select {
-		case <-timer.C:
-			_ = d.enqueueNow(context.Background(), job, parsed)
-		case <-d.shutdownCh:
+		<-timer.C
+		if d.driver == DriverWorkerpool {
+			if err := d.enqueueReservedAsync(delayedCtx, job, parsed, reservedQueue, false); err != nil {
+				d.finishQueuedWork()
+			}
 			return
 		}
+		_ = d.enqueueNow(delayedCtx, job, parsed)
 	}()
 	return nil
 }
@@ -280,62 +306,119 @@ func (d *localQueue) enqueueNow(ctx context.Context, job Job, parsed jobOptions)
 }
 
 func (d *localQueue) enqueueAsync(ctx context.Context, job Job, parsed jobOptions) error {
-	if d.shuttingDown.Load() && !allowEnqueueDuringShutdown(ctx) {
+	if d.shuttingDown.Load() && !d.continuation.Owns(ctx) {
 		return ErrQueuerShuttingDown
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	workQueue, err := d.workerQueueForEnqueue()
+	workQueue, err := d.reserveWorkerQueue()
 	if err != nil {
 		return err
 	}
+	return d.enqueueReservedAsync(ctx, job, parsed, workQueue, true)
+}
+
+// enqueueReservedAsync accepts one already-reserved workerpool slot and preserves handler progress when bounded capacity is full.
+func (d *localQueue) enqueueReservedAsync(ctx context.Context, job Job, parsed jobOptions, workQueue chan queuedJob, markAcceptance bool) error {
 	var ready chan struct{}
-	if dispatchAcceptanceFromContext(ctx) != nil {
+	acceptance := dispatchAcceptanceFromContext(ctx)
+	if markAcceptance && acceptance != nil {
 		ready = make(chan struct{})
 	}
-	select {
-	case workQueue <- queuedJob{ctx: ctx, job: job, opts: parsed, ready: ready}:
-		d.enqueued.Add(1)
-		d.updateQueueMetrics(normalizeQueueName(parsed.queueName), func(metrics *localQueueMetrics) {
-			metrics.Pending++
-		})
-		if ready != nil {
-			acceptance := dispatchAcceptanceFromContext(ctx)
-			func() {
-				defer close(ready)
+	queued := queuedJob{ctx: ctx, job: job, opts: parsed, ready: ready}
+	if d.continuation.Owns(ctx) {
+		select {
+		case workQueue <- queued:
+			d.recordQueuedJob(parsed, acceptance, ready)
+			return nil
+		default:
+			if ready != nil {
 				acceptance.markAccepted()
-			}()
+				close(ready)
+				queued.ready = nil
+			}
+			d.recordQueuedJob(parsed, nil, nil)
+			go func() { workQueue <- queued }()
+			return nil
 		}
+	}
+	select {
+	case workQueue <- queued:
+		d.recordQueuedJob(parsed, acceptance, ready)
 		return nil
 	case <-ctx.Done():
+		d.finishQueuedWork()
 		return ctx.Err()
 	}
 }
 
-func (d *localQueue) workerQueueForEnqueue() (chan queuedJob, error) {
-	d.queueMu.RLock()
-	workQueue := d.workQueue
-	d.queueMu.RUnlock()
-	if workQueue != nil {
-		return workQueue, nil
+// recordQueuedJob updates acceptance and metrics only after this in-memory backend owns the reserved work.
+func (d *localQueue) recordQueuedJob(parsed jobOptions, acceptance *dispatchAcceptance, ready chan struct{}) {
+	d.enqueued.Add(1)
+	d.updateQueueMetrics(normalizeQueueName(parsed.queueName), func(metrics *localQueueMetrics) {
+		metrics.Pending++
+	})
+	if ready != nil {
+		defer close(ready)
+		acceptance.markAccepted()
 	}
+}
 
-	// Self-heal: if the in-memory worker queue is unexpectedly nil while the
-	// the queue runtime is active, rebuild workers so dispatch can continue.
+// reserveWorkerQueue keeps the channel open until this queued or active job and all descendants finish.
+func (d *localQueue) reserveWorkerQueue() (chan queuedJob, error) {
 	d.queueMu.Lock()
 	defer d.queueMu.Unlock()
-	if d.workQueue != nil {
-		return d.workQueue, nil
+	if d.workQueue == nil {
+		if d.shuttingDown.Load() {
+			return nil, ErrWorkerpoolQueueNotInitialized
+		}
+		d.startMemoryWorkersLocked()
 	}
-	if d.shuttingDown.Load() {
-		return nil, ErrWorkerpoolQueueNotInitialized
-	}
-	d.startMemoryWorkersLocked()
 	if d.workQueue == nil {
 		return nil, ErrWorkerpoolQueueNotInitialized
 	}
+	if d.workPending == 0 {
+		d.workIdle = make(chan struct{})
+	}
+	d.workPending++
 	return d.workQueue, nil
+}
+
+// finishQueuedWork releases one accepted workerpool job after its handler can no longer enqueue descendants.
+func (d *localQueue) finishQueuedWork() {
+	d.queueMu.Lock()
+	d.workPending--
+	if d.workPending == 0 && d.workIdle != nil {
+		close(d.workIdle)
+		d.workIdle = nil
+	}
+	d.queueMu.Unlock()
+}
+
+// closeWorkerQueueWhenIdle waits for the accepted work tree to quiesce before closing the worker channel.
+func (d *localQueue) closeWorkerQueueWhenIdle(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		d.queueMu.Lock()
+		if d.workPending == 0 {
+			if d.workQueue != nil {
+				close(d.workQueue)
+				d.workQueue = nil
+			}
+			d.queueMu.Unlock()
+			return nil
+		}
+		idle := d.workIdle
+		d.queueMu.Unlock()
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func (d *localQueue) startMemoryWorkers() {
@@ -345,7 +428,7 @@ func (d *localQueue) startMemoryWorkers() {
 }
 
 func (d *localQueue) startMemoryWorkersLocked() {
-	if d.workQueue != nil {
+	if d.workQueue != nil || d.shuttingDown.Load() {
 		return
 	}
 	workers := d.cfg.Workers
@@ -358,11 +441,28 @@ func (d *localQueue) startMemoryWorkersLocked() {
 	}
 }
 
+// setWorkers applies high-level worker configuration before the in-memory runtime starts.
+func (d *localQueue) setWorkers(count int) {
+	if count <= 0 {
+		return
+	}
+	d.queueMu.Lock()
+	defer d.queueMu.Unlock()
+	if d.workQueue != nil || d.shuttingDown.Load() {
+		return
+	}
+	d.cfg.Workers = count
+	if d.resizeBuffer {
+		d.cfg.QueueCapacity = count
+	}
+}
+
 func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	defer d.workerWG.Done()
 	jobTimeout := d.cfg.DefaultJobTimeout
 	for job := range workQueue {
 		func() {
+			defer d.finishQueuedWork()
 			if job.ready != nil {
 				<-job.ready
 			}
@@ -386,7 +486,7 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 				}
 				metrics.Failed++
 			})
-			workerCtx := context.WithValue(job.ctx, workerEnqueueKey, true)
+			workerCtx := job.ctx
 			if jobTimeout > 0 {
 				var cancel context.CancelFunc
 				workerCtx, cancel = context.WithTimeout(workerCtx, jobTimeout)
@@ -446,7 +546,11 @@ func (d *localQueue) runWithRetry(ctx context.Context, job Job, parsed jobOption
 	for attempt := 0; ; {
 		delivery := busruntime.DeliveryAttempt{Number: attempt, MaxRetry: maxRetry}
 		attemptCtx := busruntime.WithDeliveryAttempt(ctx, delivery)
-		err := d.run(attemptCtx, jobForRun.withAttempt(attempt))
+		attemptCtx, release := d.continuation.Permit(attemptCtx)
+		err := func() error {
+			defer release()
+			return d.run(attemptCtx, jobForRun.withAttempt(attempt))
+		}()
 		switch busruntime.ClassifyAttempt(delivery, err) {
 		case busruntime.AttemptSucceeded:
 			return nil
@@ -567,23 +671,11 @@ func (d *localQueue) History(ctx context.Context, queueName string, window Queue
 	return SinglePointHistory(snapshot, queueName), nil
 }
 
-func (d *localQueue) claimUnique(job Job, queueName string, ttl time.Duration) bool {
-	now := time.Now()
-	key := queueName + ":" + job.Type + ":" + string(job.PayloadBytes())
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	for candidate, expiresAt := range d.unique {
-		if expiresAt.Before(now) {
-			delete(d.unique, candidate)
-		}
-	}
-	if expiresAt, ok := d.unique[key]; ok && expiresAt.After(now) {
-		return false
-	}
-	d.unique[key] = now.Add(ttl)
-	return true
+// claimUnique returns the ownership token needed to compensate a pre-acceptance failure.
+func (d *localQueue) claimUnique(job Job, queueName string, ttl time.Duration) (string, uint64, bool) {
+	key := DriverUniqueKey(job, queueName)
+	token, ok := d.unique.Acquire(key, ttl)
+	return key, token, ok
 }
 
 func (d *localQueue) updateQueueMetrics(queueName string, update func(metrics *localQueueMetrics)) {
@@ -637,15 +729,6 @@ func waitGroupWithContext(ctx context.Context, waitGroup *sync.WaitGroup) error 
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-func allowEnqueueDuringShutdown(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	value := ctx.Value(workerEnqueueKey)
-	allowed, _ := value.(bool)
-	return allowed
 }
 
 func (d *localQueue) shutdownStats() string {

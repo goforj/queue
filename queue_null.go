@@ -3,17 +3,17 @@ package queue
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
+
+	"github.com/goforj/queue/internal/uniqueness"
 )
 
 type nullQueue struct {
-	mu     sync.Mutex
-	unique map[string]time.Time
+	unique uniqueness.MemoryStore
 }
 
 func newNullQueue() queueBackend {
-	return &nullQueue{unique: make(map[string]time.Time)}
+	return &nullQueue{}
 }
 
 func (q *nullQueue) Driver() Driver {
@@ -61,19 +61,8 @@ func (q *nullQueue) Ready(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// claimUnique records the null backend's accepted TTL window.
 func (q *nullQueue) claimUnique(job Job, queueName string, ttl time.Duration) bool {
-	now := time.Now()
-	key := queueName + ":" + jobEventKey(job)
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for k, expiresAt := range q.unique {
-		if now.After(expiresAt) {
-			delete(q.unique, k)
-		}
-	}
-	if expiresAt, ok := q.unique[key]; ok && now.Before(expiresAt) {
-		return false
-	}
-	q.unique[key] = now.Add(ttl)
-	return true
+	_, ok := q.unique.Acquire(DriverUniqueKey(job, queueName), ttl)
+	return ok
 }

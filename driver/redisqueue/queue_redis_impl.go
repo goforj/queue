@@ -2,9 +2,13 @@ package redisqueue
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +24,7 @@ type redisEnqueueClient interface {
 }
 
 type redisInspector interface {
+	Close() error
 	Queues() ([]string, error)
 	GetQueueInfo(queue string) (*backend.QueueInfo, error)
 	PauseQueue(queue string) error
@@ -47,14 +52,28 @@ type redisQueue struct {
 	client    redisEnqueueClient
 	inspector redisInspector
 	timeline  redisTimelineStore
+	unique    redisUniqueStore
+	state     redisStateStore
 
 	ownsClient bool
 	closeOnce  sync.Once
+	closeErr   error
 }
 
 type redisTimelineStore interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key string, value any, expiration time.Duration) error
+}
+
+type redisUniqueStore interface {
+	Acquire(ctx context.Context, key, token string, ttl time.Duration) (bool, error)
+	Release(ctx context.Context, key, token string) error
+}
+
+type redisStateStore interface {
+	redisTimelineStore
+	redisUniqueStore
+	Close() error
 }
 
 type redisTimelineClient struct {
@@ -75,10 +94,37 @@ func (c *redisTimelineClient) Set(ctx context.Context, key string, value any, ex
 	return c.client.Set(ctx, key, value, expiration).Err()
 }
 
-const redisDefaultJobTimeout = 30 * time.Second
+// Close releases the Redis client shared by timeline and logical uniqueness state.
+func (c *redisTimelineClient) Close() error {
+	if c == nil || c.client == nil {
+		return nil
+	}
+	return c.client.Close()
+}
 
-func newRedisQueue(client redisEnqueueClient, inspector redisInspector, timeline redisTimelineStore, ownsClient bool) *redisQueue {
-	return &redisQueue{client: client, inspector: inspector, timeline: timeline, ownsClient: ownsClient}
+// Acquire atomically creates a logical uniqueness claim for its TTL window.
+func (c *redisTimelineClient) Acquire(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
+	return c.client.SetNX(ctx, key, token, ttl).Result()
+}
+
+// Release compensates a rejected enqueue without deleting a claim acquired after this token expired.
+func (c *redisTimelineClient) Release(ctx context.Context, key, token string) error {
+	const compareAndDelete = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+return 0`
+	return redis.NewScript(compareAndDelete).Run(ctx, c.client, []string{key}, token).Err()
+}
+
+const redisDefaultJobTimeout = 30 * time.Second
+const redisUniqueCompensationTimeout = 5 * time.Second
+const redisMinimumUniqueTTL = time.Second
+const redisMaximumApplicationRetry = int(^uint32(0)>>1) - 1
+
+// newRedisQueue requires one state implementation so timeline and uniqueness behavior cannot silently diverge.
+func newRedisQueue(client redisEnqueueClient, inspector redisInspector, state redisStateStore, ownsClient bool) *redisQueue {
+	return &redisQueue{client: client, inspector: inspector, timeline: state, unique: state, state: state, ownsClient: ownsClient}
 }
 
 func newRedisClient(cfg Config) redisEnqueueClient {
@@ -97,7 +143,8 @@ func newRedisInspector(cfg Config) redisInspector {
 	})
 }
 
-func newRedisTimelineStore(cfg Config) redisTimelineStore {
+// newRedisTimelineStore creates the shared Redis state client used by history and logical claims.
+func newRedisTimelineStore(cfg Config) redisStateStore {
 	return &redisTimelineClient{
 		client: redis.NewClient(&redis.Options{
 			Addr:     cfg.Addr,
@@ -125,16 +172,34 @@ func (d *redisQueue) Preflight(ctx context.Context) error {
 	return err
 }
 
+// Shutdown closes every Redis resource owned by this producer exactly once.
 func (d *redisQueue) Shutdown(_ context.Context) error {
-	if d.ownsClient && d.client != nil {
+	if d.ownsClient {
 		d.closeOnce.Do(func() {
-			_ = d.client.Close()
+			var closeErrs []error
+			if d.client != nil {
+				closeErrs = append(closeErrs, d.client.Close())
+			}
+			if d.inspector != nil {
+				closeErrs = append(closeErrs, d.inspector.Close())
+			}
+			if d.state != nil {
+				closeErrs = append(closeErrs, d.state.Close())
+			}
+			d.closeErr = errors.Join(closeErrs...)
 		})
 	}
-	return nil
+	return d.closeErr
 }
 
-func (d *redisQueue) Dispatch(_ context.Context, job queue.Job) error {
+// Dispatch validates Asynq options before acquiring the canonical logical claim.
+func (d *redisQueue) Dispatch(ctx context.Context, job queue.Job) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if d.client == nil {
 		return fmt.Errorf("queue client unavailable for redis driver")
 	}
@@ -142,8 +207,14 @@ func (d *redisQueue) Dispatch(_ context.Context, job queue.Job) error {
 		return err
 	}
 	parsed := queuecore.DriverOptions(job)
-	if parsed.QueueName == "" {
+	if strings.TrimSpace(job.Type) == "" {
+		return fmt.Errorf("redis job type must contain one or more characters")
+	}
+	if strings.TrimSpace(parsed.QueueName) == "" {
 		return fmt.Errorf("job queue is required")
+	}
+	if parsed.UniqueTTL > 0 && parsed.UniqueTTL < redisMinimumUniqueTTL {
+		return fmt.Errorf("redis unique ttl must be >= %s", redisMinimumUniqueTTL)
 	}
 	backendOpts := make([]backend.Option, 0, 5)
 	backendOpts = append(backendOpts, backend.Queue(parsed.QueueName))
@@ -152,8 +223,15 @@ func (d *redisQueue) Dispatch(_ context.Context, job queue.Job) error {
 	} else {
 		backendOpts = append(backendOpts, backend.Timeout(redisDefaultJobTimeout))
 	}
+	task := backend.NewTask(job.Type, job.PayloadBytes())
 	if parsed.MaxRetry != nil {
-		backendOpts = append(backendOpts, backend.MaxRetry(*parsed.MaxRetry))
+		if *parsed.MaxRetry > redisMaximumApplicationRetry {
+			return fmt.Errorf("redis retry must be <= %d so its transport reserve fits the Asynq wire format", redisMaximumApplicationRetry)
+		}
+		backendOpts = append(backendOpts, backend.MaxRetry(*parsed.MaxRetry+1))
+		task = backend.NewTaskWithHeaders(job.Type, job.PayloadBytes(), map[string]string{
+			redisApplicationMaxRetryHeader: strconv.Itoa(*parsed.MaxRetry),
+		})
 	}
 	if parsed.Backoff != nil && *parsed.Backoff > 0 {
 		return queuecore.ErrBackoffUnsupported
@@ -161,14 +239,58 @@ func (d *redisQueue) Dispatch(_ context.Context, job queue.Job) error {
 	if parsed.Delay > 0 {
 		backendOpts = append(backendOpts, backend.ProcessIn(parsed.Delay))
 	}
+	var (
+		uniqueKey   string
+		uniqueToken string
+	)
+	logicalUnique := parsed.UniqueTTL > 0 && d.unique != nil
+	if logicalUnique {
+		uniqueKey = redisLogicalUniqueKey(job, parsed.QueueName)
+		var tokenErr error
+		uniqueToken, tokenErr = newRedisUniqueToken()
+		if tokenErr != nil {
+			return tokenErr
+		}
+		acquired, acquireErr := d.unique.Acquire(ctx, uniqueKey, uniqueToken, parsed.UniqueTTL)
+		if acquireErr != nil {
+			return acquireErr
+		}
+		if !acquired {
+			return queuecore.ErrDuplicate
+		}
+	}
 	if parsed.UniqueTTL > 0 {
+		// Retaining Asynq's physical claim keeps direct jobs visible to older producers during one TTL rollout window.
 		backendOpts = append(backendOpts, backend.Unique(parsed.UniqueTTL))
 	}
-	_, err := d.client.Enqueue(backend.NewTask(job.Type, job.PayloadBytes()), backendOpts...)
+	_, err := d.client.Enqueue(task, backendOpts...)
 	if errors.Is(err, backend.ErrDuplicateTask) {
+		if !logicalUnique {
+			return queuecore.ErrDuplicate
+		}
+		compensationCtx, cancel := context.WithTimeout(context.Background(), redisUniqueCompensationTimeout)
+		defer cancel()
+		if releaseErr := d.unique.Release(compensationCtx, uniqueKey, uniqueToken); releaseErr != nil {
+			return errors.Join(queuecore.ErrDuplicate, fmt.Errorf("release redis uniqueness claim: %w", releaseErr))
+		}
 		return queuecore.ErrDuplicate
 	}
+	// Other enqueue errors may arrive after Redis committed the task. Retaining the claim fails closed until its TTL instead of admitting a duplicate retry.
 	return err
+}
+
+// redisLogicalUniqueKey isolates goforj claims from Asynq's private key namespace.
+func redisLogicalUniqueKey(job queue.Job, queueName string) string {
+	return "goforj:queue:unique:" + queuecore.UniqueKey(job, queueName)
+}
+
+// newRedisUniqueToken prevents late compensation from deleting a newer TTL claim.
+func newRedisUniqueToken() (string, error) {
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		return "", fmt.Errorf("create redis uniqueness token: %w", err)
+	}
+	return hex.EncodeToString(token[:]), nil
 }
 
 func (d *redisQueue) Pause(_ context.Context, queueName string) error {
@@ -283,7 +405,7 @@ func (d *redisQueue) ListJobs(ctx context.Context, opts queue.ListJobsOptions) (
 			Type:          task.Type,
 			Payload:       string(task.Payload),
 			Attempt:       task.Retried,
-			MaxRetry:      task.MaxRetry,
+			MaxRetry:      redisApplicationMaxRetryFromHeaders(task.Headers, task.MaxRetry),
 			LastError:     task.LastErr,
 			NextProcessAt: nextProcessAt,
 			CompletedAt:   completedAt,

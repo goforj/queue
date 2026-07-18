@@ -161,8 +161,8 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 	}
 	b.r.mu.Unlock()
 
-	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, Queue: b.queue, Time: b.r.now()})
 	first := nodes[0]
+	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: wireJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
 	if err := b.r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    dispatchID,
@@ -172,17 +172,25 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 		JobID:         newID("job"),
 		Job:           first.Job,
 	}); err != nil {
+		if executionErr, ok := acceptedDispatchExecutionError(err); ok {
+			return chainID, executionErr
+		}
 		if st, stErr := b.r.store.GetChain(ctx, chainID); stErr == nil && (st.Failed || st.Completed || st.NextIndex > 0) {
 			return chainID, err
 		}
-		_ = b.r.store.FailChain(ctx, chainID, err)
-		st, stErr := b.r.store.GetChain(ctx, chainID)
-		if stErr == nil {
-			_ = b.r.invokeChainCatch(ctx, st, err)
-			_ = b.r.invokeChainFinally(ctx, st)
+		if failErr := b.r.store.FailChain(ctx, chainID, err); failErr != nil {
+			return chainID, uncommittedMutationError("fail chain after initial dispatch rejection", errors.Join(err, failErr))
 		}
-		b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, Time: b.r.now(), Err: err})
-		return chainID, err
+		base := envelope{DispatchID: dispatchID, ChainID: chainID, Job: first.Job}
+		b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: wireJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now(), Err: err})
+		_, stErr := b.r.store.GetChain(ctx, chainID)
+		if stErr != nil {
+			return chainID, errors.Join(err, uncommittedMutationError("read chain after initial dispatch rejection", stErr))
+		}
+		catchErr := b.r.invokeCallbackInline(ctx, base, "chain_catch", err)
+		finallyErr := b.r.invokeCallbackInline(ctx, base, "chain_finally", nil)
+		b.r.cleanupChainCallbacks(chainID)
+		return chainID, errors.Join(err, catchErr, finallyErr)
 	}
 	if executionErr := synchronousResult.executionError(); executionErr != nil {
 		return chainID, executionErr
@@ -193,6 +201,47 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 type chainCallbacks struct {
 	catch   func(ctx context.Context, st ChainState, err error) error
 	finally func(ctx context.Context, st ChainState) error
+}
+
+// prepareChainSuccessCallbacks discards the failure-only closure before a successful terminal callback is scheduled.
+func (r *runtime) prepareChainSuccessCallbacks(chainID string) {
+	r.mu.Lock()
+	callbacks, ok := r.chainCallbacks[chainID]
+	if ok {
+		callbacks.catch = nil
+		r.chainCallbacks[chainID] = callbacks
+	}
+	r.mu.Unlock()
+}
+
+// finishChainCallback clears only the closure that ran so concurrently scheduled terminal callbacks remain available.
+func (r *runtime) finishChainCallback(chainID, kind string) {
+	r.mu.Lock()
+	callbacks, ok := r.chainCallbacks[chainID]
+	if ok {
+		switch kind {
+		case "catch":
+			callbacks.catch = nil
+		case "finally":
+			callbacks.finally = nil
+		}
+		if callbacks.catch == nil && callbacks.finally == nil {
+			delete(r.chainCallbacks, chainID)
+		} else {
+			r.chainCallbacks[chainID] = callbacks
+		}
+	}
+	r.mu.Unlock()
+}
+
+// cleanupChainCallbacks removes terminal workflow entries that have no remaining configured closure.
+func (r *runtime) cleanupChainCallbacks(chainID string) {
+	r.mu.Lock()
+	callbacks, ok := r.chainCallbacks[chainID]
+	if ok && callbacks.catch == nil && callbacks.finally == nil {
+		delete(r.chainCallbacks, chainID)
+	}
+	r.mu.Unlock()
 }
 
 func nodeID(chainID string, idx int) string {
@@ -214,9 +263,10 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 			return uncommittedMutationError("fail chain", markErr)
 		}
 		r.emitWireJobOutcome(ctx, outcome)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
 		_ = r.dispatchCallback(ctx, env, "chain_catch", outcome.err)
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
+		r.cleanupChainCallbacks(env.ChainID)
 		return outcome.err
 	}
 	next, done, advErr := r.store.AdvanceChain(ctx, env.ChainID, env.NodeID)
@@ -225,11 +275,13 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 	}
 	r.emitWireJobOutcome(ctx, outcome)
 	if done {
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
+		r.prepareChainSuccessCallbacks(env.ChainID)
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
+		r.cleanupChainCallbacks(env.ChainID)
 		return nil
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 	dispatchErr := r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    env.DispatchID,
@@ -243,44 +295,70 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 		recordSynchronousChainError(ctx, executionErr)
 		return nil
 	}
-	return dispatchErr
+	if dispatchErr != nil {
+		return uncommittedMutationError("dispatch next chain node", dispatchErr)
+	}
+	return nil
 }
 
+// invokeChainCatch claims the ephemeral catch callback before application code can run.
 func (r *runtime) invokeChainCatch(ctx context.Context, st ChainState, err error) error {
+	return r.invokeChainCatchObserved(ctx, st, err, nil)
+}
+
+// invokeChainCatchObserved emits lifecycle start only after state validation and idempotency claim succeed.
+func (r *runtime) invokeChainCatchObserved(ctx context.Context, st ChainState, err error, onClaimed func()) error {
+	if !st.Failed {
+		return errCallbackNotReady
+	}
 	key := "chain_catch:" + st.ChainID
 	ok, onceErr := r.callbackOnce(ctx, key)
 	if onceErr != nil {
 		return onceErr
 	}
 	if !ok {
-		return nil
+		return errCallbackAlreadyInvoked
+	}
+	if onClaimed != nil {
+		onClaimed()
 	}
 	r.mu.RLock()
 	cb := r.chainCallbacks[st.ChainID]
 	r.mu.RUnlock()
 	if cb.catch != nil {
-		_ = cb.catch(ctx, st, err)
+		defer r.finishChainCallback(st.ChainID, "catch")
+		return runEphemeralCallback(func() error { return cb.catch(ctx, st, err) })
 	}
-	return nil
+	return errCallbackUnavailable
 }
 
+// invokeChainFinally claims the terminal closure before application code can run.
 func (r *runtime) invokeChainFinally(ctx context.Context, st ChainState) error {
+	return r.invokeChainFinallyObserved(ctx, st, nil)
+}
+
+// invokeChainFinallyObserved emits lifecycle start only after state validation and idempotency claim succeed.
+func (r *runtime) invokeChainFinallyObserved(ctx context.Context, st ChainState, onClaimed func()) error {
+	if !st.Failed && !st.Completed {
+		return errCallbackNotReady
+	}
 	key := "chain_finally:" + st.ChainID
 	ok, onceErr := r.callbackOnce(ctx, key)
 	if onceErr != nil {
 		return onceErr
 	}
 	if !ok {
-		return nil
+		return errCallbackAlreadyInvoked
+	}
+	if onClaimed != nil {
+		onClaimed()
 	}
 	r.mu.RLock()
 	cb := r.chainCallbacks[st.ChainID]
 	r.mu.RUnlock()
-	if cb.finally != nil {
-		_ = cb.finally(ctx, st)
+	if cb.finally == nil {
+		return errCallbackUnavailable
 	}
-	r.mu.Lock()
-	delete(r.chainCallbacks, st.ChainID)
-	r.mu.Unlock()
-	return nil
+	defer r.finishChainCallback(st.ChainID, "finally")
+	return runEphemeralCallback(func() error { return cb.finally(ctx, st) })
 }

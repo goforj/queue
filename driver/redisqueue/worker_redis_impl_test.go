@@ -95,8 +95,23 @@ func TestRedisWorker_ShutdownHonorsContext(t *testing.T) {
 	if err := w.Shutdown(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
 	}
+	if !w.started || !w.draining {
+		t.Fatalf("worker lost retryable drain state: started=%t draining=%t", w.started, w.draining)
+	}
+	if err := w.StartWorkers(context.Background()); !errors.Is(err, queue.ErrQueuerShuttingDown) {
+		t.Fatalf("start during drain error = %v, want ErrQueuerShuttingDown", err)
+	}
 
 	close(server.shutdownCh)
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown failed: %v", err)
+	}
+	if server.shutdownCalls != 1 {
+		t.Fatalf("server shutdown calls = %d, want 1", server.shutdownCalls)
+	}
+	if w.started || w.draining {
+		t.Fatalf("worker remained active after drain: started=%t draining=%t", w.started, w.draining)
+	}
 }
 
 func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
@@ -189,7 +204,7 @@ func TestRedisWorker_PermanentFailureIncludesSkipRetryWithoutObserver(t *testing
 	}
 }
 
-// TestRedisSettlementErrorDecisions verifies only permanent errors request Asynq's immediate terminal settlement.
+// TestRedisSettlementErrorDecisions verifies every terminal application outcome consumes no reserved transport retry.
 func TestRedisSettlementErrorDecisions(t *testing.T) {
 	cause := errors.New("handler failed")
 
@@ -199,7 +214,7 @@ func TestRedisSettlementErrorDecisions(t *testing.T) {
 	}
 
 	exhaustedErr := redisSettlementError(busruntime.DeliveryAttempt{Number: 2, MaxRetry: 2}, cause)
-	if !errors.Is(exhaustedErr, cause) || errors.Is(exhaustedErr, backend.SkipRetry) {
+	if !errors.Is(exhaustedErr, cause) || !errors.Is(exhaustedErr, backend.SkipRetry) {
 		t.Fatalf("exhausted settlement = %v", exhaustedErr)
 	}
 
@@ -217,6 +232,28 @@ func TestRedisSettlementErrorDecisions(t *testing.T) {
 	)
 	if !errors.Is(uncommittedErr, cause) || errors.Is(uncommittedErr, backend.SkipRetry) {
 		t.Fatalf("uncommitted settlement = %v", uncommittedErr)
+	}
+}
+
+// TestRedisApplicationMaxRetry verifies only a valid reserve header changes the handler-visible retry budget.
+func TestRedisApplicationMaxRetry(t *testing.T) {
+	tests := []struct {
+		name         string
+		task         *backend.Task
+		transportMax int
+		want         int
+	}{
+		{name: "legacy task", task: backend.NewTask("job", nil), transportMax: 3, want: 3},
+		{name: "reserved task", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "2"}), transportMax: 3, want: 2},
+		{name: "mismatched reserve", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "2"}), transportMax: 4, want: 4},
+		{name: "malformed reserve", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "bad"}), transportMax: 3, want: 3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := redisApplicationMaxRetry(test.task, test.transportMax); got != test.want {
+				t.Fatalf("application max retry = %d, want %d", got, test.want)
+			}
+		})
 	}
 }
 

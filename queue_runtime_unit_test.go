@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,15 +11,107 @@ import (
 )
 
 type runtimeBackendStub struct {
-	registered map[string]Handler
-	startCalls int
-	stopCalls  int
-	startErr   error
-	stopErr    error
+	registered      map[string]Handler
+	startCalls      int
+	stopCalls       int
+	startErr        error
+	stopErr         error
+	dispatchEntered chan struct{}
+	releaseDispatch chan struct{}
+	dispatchOnce    sync.Once
+}
+
+type blockingRuntimeBackendStub struct {
+	runtimeBackendStub
+	startEntered chan struct{}
+	releaseStart chan struct{}
+	startOnce    sync.Once
+}
+
+type blockingReadyRuntimeBackendStub struct {
+	runtimeBackendStub
+	readyEntered chan struct{}
+	releaseReady chan struct{}
+	readyOnce    sync.Once
+	readyCalls   int
+}
+
+type blockingShutdownRuntimeBackendStub struct {
+	runtimeBackendStub
+	shutdownEntered chan struct{}
+	releaseShutdown chan struct{}
+	shutdownOnce    sync.Once
+}
+
+type strictRegistrationRuntimeBackendStub struct {
+	runtimeBackendStub
+	registrations map[string]int
+}
+
+// Register panics when one worker receives the same pattern twice, matching Asynq ServeMux behavior.
+func (s *strictRegistrationRuntimeBackendStub) Register(jobType string, handler Handler) {
+	if s.registrations == nil {
+		s.registrations = make(map[string]int)
+	}
+	s.registrations[jobType]++
+	if s.registrations[jobType] > 1 {
+		panic("duplicate worker registration: " + jobType)
+	}
+	s.runtimeBackendStub.Register(jobType, handler)
+}
+
+// StartWorkers rejects a canceled attempt before accepting a later live retry.
+func (s *strictRegistrationRuntimeBackendStub) StartWorkers(ctx context.Context) error {
+	s.startCalls++
+	return ctx.Err()
+}
+
+// Shutdown exposes the worker-drained boundary while deliberately ignoring cancellation like a backend cleanup that already committed.
+func (s *blockingShutdownRuntimeBackendStub) Shutdown(context.Context) error {
+	s.stopCalls++
+	s.shutdownOnce.Do(func() { close(s.shutdownEntered) })
+	<-s.releaseShutdown
+	return s.stopErr
+}
+
+// Ready exposes a deterministic producer-resource boundary for shutdown lease tests.
+func (s *blockingReadyRuntimeBackendStub) Ready(ctx context.Context) error {
+	s.readyCalls++
+	s.readyOnce.Do(func() { close(s.readyEntered) })
+	select {
+	case <-s.releaseReady:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// StartWorkers exposes a deterministic startup boundary for lifecycle race tests.
+func (s *blockingRuntimeBackendStub) StartWorkers(context.Context) error {
+	s.startCalls++
+	s.startOnce.Do(func() { close(s.startEntered) })
+	<-s.releaseStart
+	return s.startErr
+}
+
+// waitForRuntimeDraining waits until a shutdown goroutine has crossed the lifecycle gate.
+func waitForRuntimeDraining(t *testing.T, draining func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !draining() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for runtime to begin draining")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func (s *runtimeBackendStub) Driver() Driver { return DriverSync }
 func (s *runtimeBackendStub) Dispatch(context.Context, Job) error {
+	if s.dispatchEntered != nil {
+		s.dispatchOnce.Do(func() { close(s.dispatchEntered) })
+		<-s.releaseDispatch
+	}
 	return nil
 }
 
@@ -40,18 +133,26 @@ func (s *runtimeBackendStub) Shutdown(context.Context) error {
 }
 
 type queueBackendRecorder struct {
-	dispatched []Job
-	shutdowns  int
+	dispatched      []Job
+	shutdowns       int
+	shutdownErr     error
+	dispatchEntered chan struct{}
+	releaseDispatch chan struct{}
+	dispatchOnce    sync.Once
 }
 
 func (q *queueBackendRecorder) Driver() Driver { return DriverNull }
 func (q *queueBackendRecorder) Dispatch(_ context.Context, job Job) error {
 	q.dispatched = append(q.dispatched, job)
+	if q.dispatchEntered != nil {
+		q.dispatchOnce.Do(func() { close(q.dispatchEntered) })
+		<-q.releaseDispatch
+	}
 	return nil
 }
 func (q *queueBackendRecorder) Shutdown(context.Context) error {
 	q.shutdowns++
-	return nil
+	return q.shutdownErr
 }
 
 type driverQueueBackendStub struct {
@@ -311,6 +412,622 @@ func TestExternalQueueRuntimeRegisterShutdownAndWorkers(t *testing.T) {
 	}
 }
 
+// TestRuntimeSameKeyReplacementDuringBlockedStart verifies a completed registration remains current while startup is in flight.
+func TestRuntimeSameKeyReplacementDuringBlockedStart(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		name := "native"
+		if external {
+			name = "external"
+		}
+		t.Run(name, func(t *testing.T) {
+			worker := &blockingRuntimeBackendStub{
+				startEntered: make(chan struct{}),
+				releaseStart: make(chan struct{}),
+			}
+			var runtime queueRuntime
+			if external {
+				runtime = &externalQueueRuntime{
+					common: &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+					newWorker: func(int) (driverWorkerBackend, error) {
+						return worker, nil
+					},
+					externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+				}
+			} else {
+				runtime = &nativeQueueRuntime{
+					common:  &queueCommon{inner: worker, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+					runtime: worker,
+					nativeQueueRuntimeState: &nativeQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+			}
+
+			var firstCalls, secondCalls int
+			runtime.Register("job:replace", func(context.Context, Job) error {
+				firstCalls++
+				return nil
+			})
+			startResult := make(chan error, 1)
+			go func() { startResult <- runtime.StartWorkers(context.Background()) }()
+			<-worker.startEntered
+			runtime.Register("job:replace", func(context.Context, Job) error {
+				secondCalls++
+				return nil
+			})
+			close(worker.releaseStart)
+			if err := <-startResult; err != nil {
+				t.Fatalf("start workers: %v", err)
+			}
+			handler := worker.registered["job:replace"]
+			if handler == nil {
+				t.Fatal("worker did not receive replacement slot")
+			}
+			if err := handler(context.Background(), NewJob("job:replace")); err != nil {
+				t.Fatalf("invoke replacement: %v", err)
+			}
+			if firstCalls != 0 || secondCalls != 1 {
+				t.Fatalf("replacement calls = first:%d second:%d, want 0/1", firstCalls, secondCalls)
+			}
+			if err := runtime.Shutdown(context.Background()); err != nil {
+				t.Fatalf("shutdown: %v", err)
+			}
+		})
+	}
+}
+
+// TestNativeRuntimeShutdownRetainsStateForPublicRetry verifies a failed drain cannot make later cleanup a no-op.
+func TestNativeRuntimeShutdownRetainsStateForPublicRetry(t *testing.T) {
+	shutdownErr := errors.New("native shutdown timed out")
+	backend := &runtimeBackendStub{stopErr: shutdownErr}
+	runtime := &nativeQueueRuntime{
+		common:  &queueCommon{inner: backend, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+		runtime: backend,
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+			started:    true,
+		},
+	}
+	publicQueue, err := newQueueFromRuntime(runtime)
+	if err != nil {
+		t.Fatalf("new public queue: %v", err)
+	}
+
+	if err := publicQueue.Shutdown(context.Background()); !errors.Is(err, shutdownErr) {
+		t.Fatalf("first shutdown error = %v, want %v", err, shutdownErr)
+	}
+	if !runtime.started || !runtime.draining {
+		t.Fatalf("native runtime lost retryable state: started=%t draining=%t", runtime.started, runtime.draining)
+	}
+	if err := publicQueue.StartWorkers(context.Background()); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("start during drain error = %v, want ErrQueuerShuttingDown", err)
+	}
+
+	backend.stopErr = nil
+	if err := publicQueue.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown: %v", err)
+	}
+	if backend.stopCalls != 2 {
+		t.Fatalf("native shutdown calls = %d, want 2", backend.stopCalls)
+	}
+	if runtime.started || runtime.draining {
+		t.Fatalf("native runtime remained active: started=%t draining=%t", runtime.started, runtime.draining)
+	}
+}
+
+// TestExternalRuntimeShutdownRetainsWorkerForPublicRetry verifies worker and producer cleanup preserve their ordering after timeout.
+func TestExternalRuntimeShutdownRetainsWorkerForPublicRetry(t *testing.T) {
+	shutdownErr := errors.New("worker shutdown timed out")
+	inner := &queueBackendRecorder{}
+	worker := &runtimeBackendStub{stopErr: shutdownErr}
+	runtime := &externalQueueRuntime{
+		common: &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: map[string]Handler{},
+			worker:     worker,
+			started:    true,
+		},
+	}
+	publicQueue, err := newQueueFromRuntime(runtime)
+	if err != nil {
+		t.Fatalf("new public queue: %v", err)
+	}
+
+	if err := publicQueue.Shutdown(context.Background()); !errors.Is(err, shutdownErr) {
+		t.Fatalf("first shutdown error = %v, want %v", err, shutdownErr)
+	}
+	if runtime.worker != worker || !runtime.started || !runtime.draining {
+		t.Fatalf("external runtime lost retryable state: worker=%T started=%t draining=%t", runtime.worker, runtime.started, runtime.draining)
+	}
+	if inner.shutdowns != 0 {
+		t.Fatalf("producer shutdowns = %d before worker drain, want 0", inner.shutdowns)
+	}
+	if err := publicQueue.StartWorkers(context.Background()); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("start during drain error = %v, want ErrQueuerShuttingDown", err)
+	}
+
+	worker.stopErr = nil
+	if err := publicQueue.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown: %v", err)
+	}
+	if worker.stopCalls != 2 || inner.shutdowns != 1 {
+		t.Fatalf("worker/producer shutdown calls = %d/%d, want 2/1", worker.stopCalls, inner.shutdowns)
+	}
+	if runtime.worker != nil || runtime.started || runtime.draining {
+		t.Fatalf("external runtime retained completed state: worker=%T started=%t draining=%t", runtime.worker, runtime.started, runtime.draining)
+	}
+}
+
+// TestNativeRuntimeShutdownClosesNeverStartedBackend verifies producer-owned resources do not depend on worker startup.
+func TestNativeRuntimeShutdownClosesNeverStartedBackend(t *testing.T) {
+	backend := &runtimeBackendStub{}
+	runtime := &nativeQueueRuntime{
+		common:  &queueCommon{inner: backend, cfg: Config{DefaultQueue: "default"}, driver: DriverDatabase},
+		runtime: backend,
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown never-started runtime: %v", err)
+	}
+	if backend.stopCalls != 1 || !runtime.closed {
+		t.Fatalf("backend stops/closed = %d/%t, want 1/true", backend.stopCalls, runtime.closed)
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("idempotent shutdown: %v", err)
+	}
+	if backend.stopCalls != 1 {
+		t.Fatalf("idempotent backend stops = %d, want 1", backend.stopCalls)
+	}
+	if err := runtime.StartWorkers(context.Background()); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("start after shutdown error = %v, want ErrQueuerShuttingDown", err)
+	}
+	if err := runtime.Dispatch(NewJob("job:closed")); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("dispatch after shutdown error = %v, want ErrQueuerShuttingDown", err)
+	}
+}
+
+// TestExternalRuntimeShutdownLatchesIntentDuringStart verifies a blocked startup cannot admit work after shutdown begins.
+func TestExternalRuntimeShutdownLatchesIntentDuringStart(t *testing.T) {
+	inner := &queueBackendRecorder{}
+	worker := &blockingRuntimeBackendStub{
+		startEntered: make(chan struct{}),
+		releaseStart: make(chan struct{}),
+	}
+	var factoryCalls int
+	runtime := &externalQueueRuntime{
+		common: &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+		newWorker: func(int) (driverWorkerBackend, error) {
+			factoryCalls++
+			return worker, nil
+		},
+		externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+	}
+
+	startResult := make(chan error, 1)
+	go func() { startResult <- runtime.StartWorkers(context.Background()) }()
+	<-worker.startEntered
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- runtime.Shutdown(context.Background()) }()
+	waitForRuntimeDraining(t, func() bool {
+		runtime.mu.Lock()
+		defer runtime.mu.Unlock()
+		return runtime.draining
+	})
+	if err := runtime.Dispatch(NewJob("job:rejected").OnQueue("default")); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("dispatch during startup drain = %v, want ErrQueuerShuttingDown", err)
+	}
+	if err := runtime.StartWorkers(context.Background()); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("fresh start during startup drain = %v, want ErrQueuerShuttingDown", err)
+	}
+	close(worker.releaseStart)
+	if err := <-startResult; err != nil {
+		t.Fatalf("original start: %v", err)
+	}
+	if err := <-shutdownResult; err != nil {
+		t.Fatalf("shutdown racing start: %v", err)
+	}
+	if factoryCalls != 1 || worker.startCalls != 1 || worker.stopCalls != 1 || inner.shutdowns != 1 {
+		t.Fatalf("factory/start/stop/producer calls = %d/%d/%d/%d, want 1/1/1/1", factoryCalls, worker.startCalls, worker.stopCalls, inner.shutdowns)
+	}
+	if runtime.worker != nil || runtime.started || runtime.draining || !runtime.closed {
+		t.Fatalf("runtime lifecycle after shutdown = worker:%T started:%t draining:%t closed:%t", runtime.worker, runtime.started, runtime.draining, runtime.closed)
+	}
+}
+
+// TestNativeRuntimeShutdownLatchesIntentDuringStart verifies native startup uses the same shutdown gate.
+func TestNativeRuntimeShutdownLatchesIntentDuringStart(t *testing.T) {
+	worker := &blockingRuntimeBackendStub{
+		startEntered: make(chan struct{}),
+		releaseStart: make(chan struct{}),
+	}
+	runtime := &nativeQueueRuntime{
+		common:  &queueCommon{inner: worker, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+		runtime: worker,
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
+	}
+	startResult := make(chan error, 1)
+	go func() { startResult <- runtime.StartWorkers(context.Background()) }()
+	<-worker.startEntered
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- runtime.Shutdown(context.Background()) }()
+	waitForRuntimeDraining(t, func() bool {
+		runtime.mu.Lock()
+		defer runtime.mu.Unlock()
+		return runtime.draining
+	})
+	if err := runtime.Dispatch(NewJob("job:rejected")); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("dispatch during startup drain = %v, want ErrQueuerShuttingDown", err)
+	}
+	if err := runtime.StartWorkers(context.Background()); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("fresh start during startup drain = %v, want ErrQueuerShuttingDown", err)
+	}
+	close(worker.releaseStart)
+	if err := <-startResult; err != nil {
+		t.Fatalf("original start: %v", err)
+	}
+	if err := <-shutdownResult; err != nil {
+		t.Fatalf("shutdown racing start: %v", err)
+	}
+	if worker.startCalls != 1 || worker.stopCalls != 1 {
+		t.Fatalf("native start/stop calls = %d/%d, want 1/1", worker.startCalls, worker.stopCalls)
+	}
+	if runtime.started || runtime.draining || !runtime.closed {
+		t.Fatalf("native lifecycle after shutdown = started:%t draining:%t closed:%t", runtime.started, runtime.draining, runtime.closed)
+	}
+}
+
+// TestExternalRuntimeRetainsFailedStartWorkerForCleanup verifies partial factory resources remain reachable by Shutdown.
+func TestExternalRuntimeRetainsFailedStartWorkerForCleanup(t *testing.T) {
+	startErr := errors.New("worker start failed")
+	worker := &runtimeBackendStub{startErr: startErr}
+	inner := &queueBackendRecorder{}
+	runtime := &externalQueueRuntime{
+		common: &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+		newWorker: func(int) (driverWorkerBackend, error) {
+			return worker, nil
+		},
+		externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+	}
+	if err := runtime.StartWorkers(context.Background()); !errors.Is(err, startErr) {
+		t.Fatalf("start error = %v, want %v", err, startErr)
+	}
+	if runtime.worker == nil || runtime.started {
+		t.Fatalf("failed-start ownership = worker:%T started:%t", runtime.worker, runtime.started)
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown failed-start worker: %v", err)
+	}
+	if worker.stopCalls != 1 || inner.shutdowns != 1 || runtime.worker != nil || !runtime.closed {
+		t.Fatalf("cleanup = worker stops:%d producer stops:%d retained:%T closed:%t", worker.stopCalls, inner.shutdowns, runtime.worker, runtime.closed)
+	}
+}
+
+// TestExternalRuntimeRetryPreservesSameKeyReplacement verifies a retained worker exposes the latest handler without duplicate registration.
+func TestExternalRuntimeRetryPreservesSameKeyReplacement(t *testing.T) {
+	worker := &strictRegistrationRuntimeBackendStub{}
+	var factoryCalls int
+	runtime := &externalQueueRuntime{
+		common: &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{DefaultQueue: "default"}, driver: DriverRedis},
+		newWorker: func(int) (driverWorkerBackend, error) {
+			factoryCalls++
+			return worker, nil
+		},
+		externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+	}
+	t.Cleanup(func() {
+		if err := runtime.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown retried runtime: %v", err)
+		}
+	})
+	var firstCalls, secondCalls int
+	runtime.Register("job:replace", func(context.Context, Job) error {
+		firstCalls++
+		return nil
+	})
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := runtime.StartWorkers(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled start error = %v, want context.Canceled", err)
+	}
+	runtime.Register("job:replace", func(context.Context, Job) error {
+		secondCalls++
+		return nil
+	})
+	if err := runtime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("retry start: %v", err)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("worker factory calls = %d, want retained worker reused once", factoryCalls)
+	}
+	if worker.registrations["job:replace"] != 1 {
+		t.Fatalf("worker registrations = %d, want 1", worker.registrations["job:replace"])
+	}
+	if err := worker.registered["job:replace"](context.Background(), NewJob("job:replace")); err != nil {
+		t.Fatalf("invoke replacement: %v", err)
+	}
+	if firstCalls != 0 || secondCalls != 1 {
+		t.Fatalf("replacement calls = first:%d second:%d, want 0/1", firstCalls, secondCalls)
+	}
+}
+
+// TestExternalRuntimeStartedReplacementUsesOneRegistration verifies strict workers never receive a duplicate pattern after startup.
+func TestExternalRuntimeStartedReplacementUsesOneRegistration(t *testing.T) {
+	worker := &strictRegistrationRuntimeBackendStub{}
+	runtime := &externalQueueRuntime{
+		common: &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{DefaultQueue: "default"}, driver: DriverRedis},
+		newWorker: func(int) (driverWorkerBackend, error) {
+			return worker, nil
+		},
+		externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+	}
+	t.Cleanup(func() {
+		if err := runtime.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown started runtime: %v", err)
+		}
+	})
+	var firstCalls, secondCalls int
+	runtime.Register("job:replace", func(context.Context, Job) error {
+		firstCalls++
+		return nil
+	})
+	if err := runtime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	runtime.Register("job:replace", func(context.Context, Job) error {
+		secondCalls++
+		return nil
+	})
+	if worker.registrations["job:replace"] != 1 {
+		t.Fatalf("worker registrations = %d, want 1", worker.registrations["job:replace"])
+	}
+	if err := worker.registered["job:replace"](context.Background(), NewJob("job:replace")); err != nil {
+		t.Fatalf("invoke replacement: %v", err)
+	}
+	if firstCalls != 0 || secondCalls != 1 {
+		t.Fatalf("replacement calls = first:%d second:%d, want 0/1", firstCalls, secondCalls)
+	}
+}
+
+// TestExternalRuntimeDoesNotRedrainWorkerAfterProducerFailure verifies retry resumes at the incomplete cleanup phase.
+func TestExternalRuntimeDoesNotRedrainWorkerAfterProducerFailure(t *testing.T) {
+	producerErr := errors.New("producer shutdown failed")
+	worker := &runtimeBackendStub{}
+	inner := &queueBackendRecorder{shutdownErr: producerErr}
+	runtime := &externalQueueRuntime{
+		common: &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: map[string]Handler{},
+			worker:     worker,
+			started:    true,
+		},
+	}
+	if err := runtime.Shutdown(context.Background()); !errors.Is(err, producerErr) {
+		t.Fatalf("first shutdown error = %v, want %v", err, producerErr)
+	}
+	if worker.stopCalls != 1 || runtime.worker != nil || runtime.started || !runtime.draining {
+		t.Fatalf("partial cleanup = worker stops:%d retained:%T started:%t draining:%t", worker.stopCalls, runtime.worker, runtime.started, runtime.draining)
+	}
+	inner.shutdownErr = nil
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry producer shutdown: %v", err)
+	}
+	if worker.stopCalls != 1 || inner.shutdowns != 2 || !runtime.closed {
+		t.Fatalf("retry cleanup = worker stops:%d producer stops:%d closed:%t", worker.stopCalls, inner.shutdowns, runtime.closed)
+	}
+}
+
+// TestRuntimeShutdownWaitsForDispatchLease verifies cleanup honors its deadline without overtaking an accepted producer operation.
+func TestRuntimeShutdownWaitsForDispatchLease(t *testing.T) {
+	tests := []struct {
+		name      string
+		construct func(backend *runtimeBackendStub, producer *queueBackendRecorder) queueRuntime
+		shutdowns func(backend *runtimeBackendStub, producer *queueBackendRecorder) int
+	}{
+		{
+			name: "native",
+			construct: func(backend *runtimeBackendStub, _ *queueBackendRecorder) queueRuntime {
+				return &nativeQueueRuntime{
+					common:  &queueCommon{inner: backend, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+					runtime: backend,
+					nativeQueueRuntimeState: &nativeQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+			},
+			shutdowns: func(backend *runtimeBackendStub, _ *queueBackendRecorder) int { return backend.stopCalls },
+		},
+		{
+			name: "external",
+			construct: func(_ *runtimeBackendStub, producer *queueBackendRecorder) queueRuntime {
+				return &externalQueueRuntime{
+					common: &queueCommon{inner: producer, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+					externalQueueRuntimeState: &externalQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+			},
+			shutdowns: func(_ *runtimeBackendStub, producer *queueBackendRecorder) int { return producer.shutdowns },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			backend := &runtimeBackendStub{dispatchEntered: entered, releaseDispatch: release}
+			producer := &queueBackendRecorder{dispatchEntered: entered, releaseDispatch: release}
+			runtime := test.construct(backend, producer)
+			dispatchResult := make(chan error, 1)
+			go func() { dispatchResult <- runtime.Dispatch(NewJob("job:leased")) }()
+			<-entered
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+			if err := runtime.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+			}
+			if calls := test.shutdowns(backend, producer); calls != 0 {
+				t.Fatalf("backend shutdown overtook dispatch: calls=%d", calls)
+			}
+			close(release)
+			if err := <-dispatchResult; err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			if err := runtime.Shutdown(context.Background()); err != nil {
+				t.Fatalf("retry shutdown: %v", err)
+			}
+			if calls := test.shutdowns(backend, producer); calls != 1 {
+				t.Fatalf("backend shutdown calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+// TestExternalRuntimeShutdownWaitsForLateContinuationLease verifies a descendant admitted during worker drain finishes before producer cleanup.
+func TestExternalRuntimeShutdownWaitsForLateContinuationLease(t *testing.T) {
+	worker := &blockingShutdownRuntimeBackendStub{
+		shutdownEntered: make(chan struct{}),
+		releaseShutdown: make(chan struct{}),
+	}
+	producer := &queueBackendRecorder{
+		dispatchEntered: make(chan struct{}),
+		releaseDispatch: make(chan struct{}),
+	}
+	runtime := &externalQueueRuntime{
+		common: &queueCommon{inner: producer, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered:   map[string]Handler{},
+			worker:       worker,
+			started:      true,
+			continuation: busruntime.NewContinuationScope(),
+		},
+	}
+
+	shutdownCtx, cancelShutdown := context.WithCancel(context.Background())
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- runtime.Shutdown(shutdownCtx) }()
+	<-worker.shutdownEntered
+
+	continuationCtx, releaseContinuation := runtime.continuationScope().Permit(context.Background())
+	dispatchResult := make(chan error, 1)
+	go func() {
+		dispatchResult <- runtime.WithContext(continuationCtx).Dispatch(NewJob("job:late-continuation"))
+	}()
+	<-producer.dispatchEntered
+	// Handler return expires its permit, but the operation it admitted still owns the producer until Dispatch returns.
+	releaseContinuation()
+	cancelShutdown()
+	close(worker.releaseShutdown)
+
+	if err := <-shutdownResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown error = %v, want context canceled while continuation is active", err)
+	}
+	if producer.shutdowns != 0 {
+		t.Fatalf("producer shutdown overtook late continuation: calls=%d", producer.shutdowns)
+	}
+
+	close(producer.releaseDispatch)
+	if err := <-dispatchResult; err != nil {
+		t.Fatalf("late continuation dispatch: %v", err)
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown: %v", err)
+	}
+	if worker.stopCalls != 1 || producer.shutdowns != 1 {
+		t.Fatalf("worker/producer shutdown calls = %d/%d, want 1/1", worker.stopCalls, producer.shutdowns)
+	}
+}
+
+// TestRuntimeShutdownWaitsForReadinessLease verifies readiness cannot reopen or outlive producer cleanup.
+func TestRuntimeShutdownWaitsForReadinessLease(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		name := "native"
+		if external {
+			name = "external"
+		}
+		t.Run(name, func(t *testing.T) {
+			backend := &blockingReadyRuntimeBackendStub{
+				readyEntered: make(chan struct{}),
+				releaseReady: make(chan struct{}),
+			}
+			var runtime queueRuntime
+			if external {
+				runtime = &externalQueueRuntime{
+					common: &queueCommon{inner: backend, cfg: Config{DefaultQueue: "default"}, driver: DriverNATS},
+					externalQueueRuntimeState: &externalQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+			} else {
+				runtime = &nativeQueueRuntime{
+					common:  &queueCommon{inner: backend, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+					runtime: backend,
+					nativeQueueRuntimeState: &nativeQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+			}
+			readyResult := make(chan error, 1)
+			go func() { readyResult <- runtime.Ready(context.Background()) }()
+			<-backend.readyEntered
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			if err := runtime.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+			}
+			cancel()
+			if backend.stopCalls != 0 {
+				t.Fatalf("backend shutdown overtook readiness: calls=%d", backend.stopCalls)
+			}
+			if err := runtime.Ready(context.Background()); !errors.Is(err, ErrQueuerShuttingDown) {
+				t.Fatalf("ready during drain = %v, want ErrQueuerShuttingDown", err)
+			}
+			close(backend.releaseReady)
+			if err := <-readyResult; err != nil {
+				t.Fatalf("readiness operation: %v", err)
+			}
+			if err := runtime.Shutdown(context.Background()); err != nil {
+				t.Fatalf("retry shutdown: %v", err)
+			}
+			if err := runtime.Ready(context.Background()); !errors.Is(err, ErrQueuerShuttingDown) {
+				t.Fatalf("ready after close = %v, want ErrQueuerShuttingDown", err)
+			}
+			if backend.readyCalls != 1 {
+				t.Fatalf("backend readiness calls = %d, want 1", backend.readyCalls)
+			}
+		})
+	}
+}
+
+// TestRuntimeContinuationPermissionIsScopedAndEphemeral verifies foreign or escaped handler contexts cannot bypass a drain.
+func TestRuntimeContinuationPermissionIsScopedAndEphemeral(t *testing.T) {
+	backend := &runtimeBackendStub{}
+	runtime := &nativeQueueRuntime{
+		common:  &queueCommon{inner: backend, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+		runtime: backend,
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+			draining:   true,
+		},
+	}
+	foreign := busruntime.NewContinuationScope()
+	foreignCtx, releaseForeign := foreign.Permit(context.Background())
+	defer releaseForeign()
+	if err := runtime.WithContext(foreignCtx).Dispatch(NewJob("job:foreign")); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("foreign continuation dispatch = %v, want ErrQueuerShuttingDown", err)
+	}
+
+	ownCtx, releaseOwn := runtime.continuationScope().Permit(context.Background())
+	if err := runtime.WithContext(ownCtx).Dispatch(NewJob("job:owned")); err != nil {
+		t.Fatalf("owned continuation dispatch: %v", err)
+	}
+	releaseOwn()
+	if err := runtime.WithContext(ownCtx).Dispatch(NewJob("job:escaped")); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("escaped continuation dispatch = %v, want ErrQueuerShuttingDown", err)
+	}
+}
+
 func TestQueueCommon_PauseResumeStatsUnsupported(t *testing.T) {
 	common := &queueCommon{
 		inner:  &queueBackendRecorder{},
@@ -458,6 +1175,28 @@ func TestRuntimeBusDispatchPhysicalizesTargetQueue(t *testing.T) {
 	}
 	if got := inner.dispatched[0].jobOptions().queueName; got != "billing_reports" {
 		t.Fatalf("expected bus queue billing_reports, got %q", got)
+	}
+}
+
+// TestRuntimeBusDispatchPreservesZeroRetry verifies backend defaults cannot replace workflow policy.
+func TestRuntimeBusDispatchPreservesZeroRetry(t *testing.T) {
+	inner := &queueBackendRecorder{}
+	native := &nativeQueueRuntime{
+		common:  &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+		runtime: &runtimeBackendStub{},
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
+	}
+	if err := native.BusDispatch(context.Background(), "bus:job", []byte(`{"schema_version":1}`), busruntime.JobOptions{}); err != nil {
+		t.Fatalf("BusDispatch failed: %v", err)
+	}
+	if len(inner.dispatched) != 1 {
+		t.Fatalf("dispatched jobs = %d, want 1", len(inner.dispatched))
+	}
+	maxRetry := inner.dispatched[0].jobOptions().maxRetry
+	if maxRetry == nil || *maxRetry != 0 {
+		t.Fatalf("max retry = %v, want explicit zero", maxRetry)
 	}
 }
 

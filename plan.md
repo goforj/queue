@@ -163,7 +163,7 @@ The shared internal classifier uses zero-based attempt numbers and four decision
 
 Core NATS cannot fully satisfy the durable committed-outcome contract while it uses ephemeral pub/sub. Publish plus flush may prove only an ephemeral republish; D-004 remains a required reliability decision rather than weakening the contract for durable drivers.
 
-Asynq v0.26 checks retry exhaustion before consulting its `IsFailure` predicate. Redis can therefore preserve an uncommitted attempt only while the transport retry counter remains below its limit; an uncommitted final attempt is currently archived. Do not claim complete same-attempt redelivery for Redis until M1-04 defines a mixed-version-safe reserve or replacement-delivery protocol and proves it against the real Asynq processor.
+Asynq v0.26 checks retry exhaustion before consulting its `IsFailure` predicate. The behavior is an upstream ordering regression: revocation, skip-retry, and non-failure classification should precede exhaustion. New explicit-retry Redis tasks reserve one Asynq transport slot and carry their application retry budget in a task header; workers classify against the application budget, explicitly archive its terminal outcome, and reuse the reserve for uncommitted or lease-recovery redelivery without incrementing the application attempt. This preserves one Asynq settlement owner and queued-task decoding, but requires workers to roll out before producers and cannot repair an already-exhausted legacy task. An upstream fix remains preferred so the compatibility reserve can eventually be removed.
 
 ### D-002: Workflow Durability Contract
 
@@ -248,7 +248,7 @@ Decision: the observer collapse is an intentional source/API and runtime-behavio
 
 Migration requirements:
 
-- replace unkeyed `Event` literals with keyed literals because the canonical event envelope gained correlation fields;
+- replace unkeyed `queue.Event` and `bus.Event` literals with keyed literals because the event envelopes gained correlation fields;
 - adapt custom `bus.Observer` implementations with `queue.ObserverFunc`, or keep direct legacy bus consumers on `bus.WithObserver` until `bus` becomes a forwarding facade;
 - filter `Event.Layer` when an existing workflow observer should retain workflow-only volume;
 - make observer-owned mutable state concurrency-safe because dispatchers and workers may call the same observer concurrently.
@@ -298,22 +298,22 @@ Objective: repair behavior already promised by the public API without first requ
 
 ### Retry and terminal outcomes
 
-- [ ] **M1-01 — Add retry-state regressions.** Cover chain and batch transient success, terminal exhaustion, fatal errors, attempt numbers, callbacks, and event ordering through public queues. Public transient, exhaustion, permanent, attempt, callback, ordering, downstream-node, and workflow-store fault cases are in place; real settlement-owner and cross-driver store-failure cases remain.
+- [ ] **M1-01 — Add retry-state regressions.** Cover chain and batch transient success, terminal exhaustion, fatal errors, attempt numbers, callbacks, and event ordering through public queues. Public transient, exhaustion, permanent, attempt, callback, ordering, downstream-node, allowed-batch-failure ordering, and workflow-store fault cases are in place; real settlement-owner and cross-driver store-failure cases remain.
 - [x] **M1-02 — Stop premature workflow failure.** Chain and batch state, callbacks, and terminal logical events now wait for a permanent or exhausted outcome; retryable attempts remain worker-layer failures.
 - [x] **M1-03 — Make `FailOnError` operational.** `queue.Permanent`, `FailOnError`, and the shared classifier now stop application retries across local, Redis, SQL, NATS, SQS, and RabbitMQ paths.
-- [ ] **M1-04 — Emit only committed outcome events.** Workflow mutation failures are classified as uncommitted before terminal facts publish, retry facts appear only when a numbered retry delivery begins, and generic/archive predictions were removed. Real settlement confirmation, callback-dispatch recovery, Redis final-attempt redelivery, and NATS's explicit nonconformance remain.
+- [ ] **M1-04 — Emit only committed outcome events.** Workflow mutation failures are classified as uncommitted before terminal facts publish, retry facts appear only when a numbered retry delivery begins, and generic/archive predictions were removed. SQL, SQS, and RabbitMQ now defer positive process/workflow facts until durable row finalization, deletion, or acknowledgement; failed settlement emits a correlated worker fact. Callback redelivery no longer turns an at-most-once marker into false success, premature callback envelopes cannot consume the marker, callback panics become failures, and new Redis tasks preserve final-attempt uncommitted redelivery through one header-marked transport reserve. Durable callback dispatch, Redis post-`Done` success, legacy Redis task rollout, and NATS's explicit nonconformance remain.
 
 ### Identity and uniqueness
 
-- [ ] **M1-05 — Define logical job identity.** Keep volatile dispatch/job IDs out of the uniqueness key while retaining correlation metadata.
-- [ ] **M1-06 — Repair public `UniqueFor`.** Add same-process, multi-producer, restart, and failed-first-dispatch tests according to each driver's declared capability.
-- [ ] **M1-07 — Make uniqueness acquisition atomic with acceptance.** Use backend transactions or release/compensation where a single atomic operation is unavailable.
+- [x] **M1-05 — Define logical job identity.** The versioned identity length-frames effective queue, logical type, and canonical payload while excluding volatile correlation IDs and delivery options. Golden vectors pin direct/workflow parity and normalize absent, zero-byte, and exact JSON `null` payloads before direct execution replaces legacy envelopes.
+- [x] **M1-06 — Repair public `UniqueFor`.** Public workflows use canonical logical identity across every backend; concurrent public SQL/Redis clients prove one backend-wide winner, restart persistence, and documented instance-versus-backend scope.
+- [ ] **M1-07 — Make uniqueness acquisition atomic with acceptance.** SQL claims and queue rows now share one transaction; local and broker paths compensate known pre-acceptance failures with token-owned claims. Redis compensates only definite physical duplicates and intentionally retains other ambiguous enqueue outcomes, but its separate claim/enqueue operations leave an unavoidable crash window until a stronger atomic protocol exists.
 
 ### Configuration and lifecycle behavior
 
 - [ ] **M1-08 — Apply `DefaultQueue` centrally.** Preserve explicit queue names and ensure empty names follow one documented rule across every driver.
 - [ ] **M1-09 — Make worker targeting explicit.** Implement D-005 and test that every accepted target is consumed by the intended runtime configuration.
-- [ ] **M1-10 — Make `WithWorkers` effective.** Verify actual concurrency for workerpool, SQL, Redis, NATS, SQS, and RabbitMQ rather than wrapper state.
+- [ ] **M1-10 — Make `WithWorkers` effective.** Workerpool now applies the configured count to execution concurrency and derives its default buffer from that count. Verify the same end-to-end behavior for SQL, Redis, NATS, SQS, and RabbitMQ rather than wrapper state; Core NATS plain subscriptions currently make higher counts duplicate broadcast consumers rather than queue workers.
 - [ ] **M1-11 — Clarify sync startup semantics.** Either register bus handlers immediately for synchronous dispatch or consistently require startup and correct every example and contract.
 - [ ] **M1-12 — Validate registrations and options.** Reject nil handlers and nil options deterministically; preserve explicit zero versus unset retry, timeout, and backoff values.
 - [ ] **M1-13 — Normalize payload contracts.** Give `Payload` and `PayloadJSON` distinct, documented behavior and consistent binding errors.
@@ -322,9 +322,9 @@ Objective: repair behavior already promised by the public API without first requ
 
 - [ ] **M1-14 — Restore backend readiness.** Forward readiness through every bridge and add negative unreachable-backend tests.
 - [ ] **M1-15 — Replace wrapper-inflated capability checks.** Report actual capabilities independently of observers and adapters.
-- [ ] **M1-16 — Make shutdown retryable and context-aware.** Do not discard lifecycle/resource state before cleanup succeeds.
-- [ ] **M1-17 — Close producer-owned resources without worker startup.** Cover SQL and Redis producer-only lifecycles and externally supplied resource ownership.
-- [ ] **M1-18 — Drain before broker settlement resources close.** Verify in-flight SQS deletes and RabbitMQ acknowledgements during shutdown.
+- [ ] **M1-16 — Make shutdown retryable and context-aware.** Root native/external lifecycles serialize startup with shutdown, latch drain intent before waiting on startup, retain partially started workers for cleanup or retry, keep one replaceable handler slot per backend registration, lease dispatch/readiness/control/admin operations before resources can close, retain state after failed cleanup, reject restart while draining, and close successfully exactly once. Scoped continuation permits expire when their handler returns, while Sync and Workerpool reserve accepted delayed descendants and drain them within the caller's shutdown deadline. Context-unaware broker dialing and RabbitMQ resource closure, plus real broker deadline evidence, remain.
+- [x] **M1-17 — Close producer-owned resources without worker startup.** Native and external shutdown now reach producer cleanup without worker startup, Redis closes every owned producer client exactly once, SQL closes only internally opened handles, and a real SQLite test proves caller-owned handles remain usable.
+- [ ] **M1-18 — Drain before broker settlement resources close.** Root operation leases prevent producer closure during admitted public work; SQS and RabbitMQ workers wait for active delivery loops before closing settlement resources; and NATS startup/drain coordination waits for admitted callbacks. Real in-flight delete, acknowledgement, replacement-publication, and connection-close shutdown scenarios remain. Core NATS can still accept a replacement after its own ephemeral subscription has drained, so D-004 remains a correctness boundary rather than a shutdown guarantee.
 
 Exit criteria:
 
@@ -348,7 +348,7 @@ Objective: introduce a stable internal architecture while preserving the root ap
 - [ ] **M2-07 — Resolve the public `bus` direction.** Implement D-003 and D-010 in bounded slices: extract `internal/workflow`, remove root production imports of public `bus`, establish physical root models, then make `bus` a deprecated forwarding facade with source- and wire-compatibility fixtures.
 - [ ] **M2-08 — Separate producer and worker lifecycle.** Model start, running, draining, stopped, and failed states without `sync.Once` poisoning.
 - [x] **M2-09 — Collapse root observers.** One root observer receives delivery and workflow events through a shared sink without duplicate execution events. The legacy public `bus` observer remains until M2-07 makes that package a forwarding facade.
-- [ ] **M2-10 — Stop enveloping direct jobs as workflows.** Implement D-008 while preserving correlation, middleware, retry, and uniqueness behavior.
+- [ ] **M2-10 — Stop enveloping direct jobs as workflows.** Implement D-008 while preserving correlation, middleware, retry, and uniqueness behavior. Persisted uniqueness vectors now pin the payload-absence boundary that this cutover must preserve.
 
 Exit criteria:
 
@@ -366,9 +366,9 @@ Objective: chains, batches, callbacks, and stores behave correctly across retrie
 - [ ] **M3-04 — Make chain advancement atomic.** Use transactions, row locks, or compare-and-swap semantics and test concurrent duplicate deliveries.
 - [ ] **M3-05 — Make batch aggregation atomic.** Prevent lost updates across simultaneous workers and drivers.
 - [ ] **M3-06 — Recover partial dispatch.** Ensure a partially enqueued batch or chain reaches a recoverable terminal or resumable state rather than permanent pending state.
-- [ ] **M3-07 — Make callback invocation truthful.** Mark callbacks complete only after a callback is found and succeeds or reaches a defined terminal outcome.
+- [ ] **M3-07 — Make callback invocation truthful.** State validation now precedes idempotency claims, missing process-local closures fail visibly, panics become callback failures, duplicate envelopes emit no orphan start, and reverse-order serialized sibling callbacks each complete once. The marker still precedes application success and callback enqueue errors have no durable recovery path, so named persisted continuations remain required.
 - [ ] **M3-08 — Unify memory and SQL store contracts.** Align missing-ID, terminal transition, clock, copy/ownership, and validation behavior.
-- [ ] **M3-09 — Make schema migration configurable.** Preserve an explicit `AutoMigrate=false`, define migration ownership, and test transient migration failures and restart.
+- [ ] **M3-09 — Make schema migration configurable.** `DisableAutoMigrate` is now an additive opt-out while the established default remains enabled; startup is retryable after real SQLite DDL lock failure, and a real no-DDL test proves externally managed schema ownership. SQL processing fencing additively migrates a nullable generation-token column with an explicit quiescent worker-fleet rollout. Define the remaining versioned migration ownership/rollback policy and add concurrent migration and permission evidence for MySQL and PostgreSQL, including the uniqueness expiry index and processing-token column.
 - [ ] **M3-10 — Reclassify the Temporal adapter.** Either implement a real external workflow-engine contract or clearly separate the current façade from queue-backed workflow guarantees.
 
 Exit criteria:
@@ -383,10 +383,10 @@ Objective: every advertised capability has a conformance test and every semantic
 
 - [ ] **M4-01 — Resolve NATS semantics.** Implement D-004 and test two workers, crash recovery, delayed work, broker restart, and poison handling.
 - [ ] **M4-02 — Define poison/dead-letter behavior.** Prevent silent deletion/acknowledgement of malformed, unhandled, and terminally failed jobs in SQS and RabbitMQ.
-- [ ] **M4-03 — Harden SQS delivery.** Configure visibility/redrive behavior, extend visibility for long handlers, validate credential pairs, and surface receive/delete failures.
-- [ ] **M4-04 — Harden RabbitMQ delivery.** Add publisher confirms for dispatch/retry, worker reconnect, context-aware dialing, and safe settlement during drain.
-- [ ] **M4-05 — Harden Redis resources and admin.** Close every owned client, align totals/windows, remove unreachable queue-resolution branches, and define bounded clear behavior.
-- [ ] **M4-06 — Harden SQL execution and admin.** Surface finalization failures, constrain active-job admin races, check affected rows, preserve timeout precision, and index claim/recovery queries.
+- [ ] **M4-03 — Harden SQS delivery.** Configure visibility/redrive behavior, extend visibility for long handlers, validate credential pairs, and add deterministic receive-failure coverage. Missing receipts and delete failures now surface as settlement failures without false success.
+- [ ] **M4-04 — Harden RabbitMQ delivery.** Preserve positive publisher confirms for dispatch/retry while adding worker reconnect, context-aware dialing, and real safe-settlement drain scenarios.
+- [ ] **M4-05 — Harden Redis resources and admin.** Owned producer clients and state stores now close exactly once; align totals/windows, remove unreachable queue-resolution branches, and define bounded clear behavior.
+- [ ] **M4-06 — Harden SQL execution and admin.** Finalization retries are bounded, require one affected row, and surface settlement failure; constrain active-job admin races, preserve timeout precision, and finish claim/recovery indexing evidence.
 - [ ] **M4-07 — Make uniqueness claims precise.** Label each driver as process-local or distributed and test exactly that scope.
 - [ ] **M4-08 — Separate guarantees from evidence.** Maintain a portable contract plus a driver evidence matrix whose cells link to executable scenarios.
 
@@ -401,7 +401,7 @@ Exit criteria:
 Objective: operational surfaces describe real state consistently and testing APIs model production behavior.
 
 - [x] **M5-01 — Define a shared root event envelope.** The normal facade now includes stable correlation, layer/source, queue, logical job, delivery attempt, event identity, and timestamps. Settlement-owner completion remains M1-04, and the legacy `bus` envelope remains M2-07.
-- [ ] **M5-02 — Preserve distinct event vocabularies without duplicate observer models.** Transport and workflow events may differ, but subscription and correlation should be coherent.
+- [ ] **M5-02 — Preserve distinct event vocabularies without duplicate observer models.** The root observer now retains effective queue, logical job key/type, delivery attempt, and workflow correlation across queue, worker, aggregate, and callback facts. The legacy `bus` event surface remains until M2-07 makes it a forwarding facade.
 - [x] **M5-03 — Correct event ordering.** Local acceptance callbacks and workerpool delivery gates ensure synchronous/in-process processing cannot begin before enqueue acceptance appears to observers; distributed arrival order remains correlation-based rather than globally ordered.
 - [ ] **M5-04 — Make stats semantically comparable.** Define pending, scheduled, retry, active, processed, failed, and throughput windows for each capability level.
 - [ ] **M5-05 — Make history instance-scoped and truthful.** Do not present process-wide sampled memory as durable backend history.
@@ -504,8 +504,13 @@ Record accepted decisions here using the next stable ID.
 | DL-004 | 2026-07-18 | Keep observation separate from reliable workflow continuation. | Durable continuations become persisted jobs; closure callbacks are explicitly ephemeral compatibility behavior. |
 | DL-005 | 2026-07-18 | Dispatch direct jobs without a workflow envelope. | Envelope/schema changes require mixed-version tests; logical job identity must remain stable for uniqueness. |
 | DL-006 | 2026-07-18 | Make worker settlement the authoritative retry boundary. | Workflow state and events follow only committed retry, permanent failure, exhaustion, or success outcomes. |
-| DL-007 | 2026-07-18 | Take an explicit pre-v1 observer compatibility boundary instead of retaining two typed models or using `any`. | Migration covers keyed event literals, custom bus observers, layer filtering, and concurrent observer calls; no persisted-data or wire change is implied. |
+| DL-007 | 2026-07-18 | Take an explicit pre-v1 observer compatibility boundary instead of retaining two typed models or using `any`. | Migration covers keyed `queue.Event` and `bus.Event` literals, custom bus observers, layer filtering, and concurrent observer calls; no persisted-data or wire change is implied. |
 | DL-008 | 2026-07-18 | Invert orchestration dependencies through `internal/workflow`; root owns public models and `bus` becomes a compatibility facade. | Extract behavior first, preserve the legacy raw-runtime route, and migrate type ownership incrementally with compile and wire fixtures. |
+| DL-009 | 2026-07-18 | Preserve an explicit zero workflow retry budget and require positive settlement before SQL/SQS/RabbitMQ success facts. | This corrects runtime behavior: Redis no longer substitutes Asynq's 25-retry default, NATS dispatch gains flush latency, RabbitMQ dispatch gains confirmation latency, SQS rejects an SDK success without a service `MessageId`, and observer success timing moves later. Deploy Redis workers before producers, set `.Retry(25)` explicitly if the old fallback was intentional, update SQS test doubles to return a message ID, and treat canonical uniqueness cutover as the documented operational migration. |
+| DL-010 | 2026-07-18 | Preserve database migration-on-start as the default and add `DisableAutoMigrate` as the explicit externally managed-schema opt-out. | Existing keyed configurations retain their runtime behavior; the prior `AutoMigrate: false` value was normalized to enabled and therefore could not express an opt-out. The additive public field can break unkeyed struct literals at compile time, so those callers must migrate to keyed literals before upgrading. No persisted-data format or minimum-Go-version change is implied. |
+| DL-011 | 2026-07-18 | Treat accepted local work, including delayed workflow descendants, as a shutdown drain obligation bounded by the supplied context. | Shutdown may now wait for accepted delayed work and return the context error when the deadline expires; cleanup remains retryable and a later call converges. This is a runtime-lifecycle correction with no API, configuration, persisted-data, or minimum-Go-version change. |
+| DL-012 | 2026-07-18 | Make successful queue shutdown terminal while keeping incomplete cleanup retryable. | `Dispatch` and `StartWorkers` now reject use after successful shutdown instead of reporting false success over closed resources; construct a new queue instance to restart. Repeated shutdown is idempotent. This is a runtime-behavior correction with no source/API, configuration, persisted-data, operational-migration, or minimum-Go-version change. |
+| DL-013 | 2026-07-18 | Fence every SQL processing generation with a random token and require that exact claim to finalize the row. | This is a persisted-schema and operational rollout change, not a source/API, configuration, wire-envelope, or minimum-Go-version break. The nullable `processing_token` column preserves existing rows and old producer-only binaries. Externally managed schemas must add it before new workers start. Quiesce every old SQL worker before migration and then start the new worker fleet; mixed old/new workers are unsafe because old workers settle by row ID and cannot honor the generation fence. Rollback likewise requires quiescing new workers before running an old worker binary. |
 
 ## Progress Log
 
@@ -532,11 +537,40 @@ Record accepted decisions here using the next stable ID.
 - Found a release blocker: published nested modules require siblings at nonexistent `v0.0.0` versions. Keep relative replacements for repository testing, but pin every sibling requirement to the prospective release before the next tag family is created.
 - Removed the blanket at-least-once documentation claim: the evidence matrix now distinguishes fixture coverage from production guarantees, calls Core NATS explicitly ephemeral, records RabbitMQ's missing publisher-confirm boundary, and no longer presents fixture contention tests as proof of public `UniqueFor`.
 - Fast-forwarded to `origin/main` at `18a7647`, preserved its retired-badge removal during regeneration, and moved the reconciled work to `refactor/unify-queue-workflow` for scoped commits and later PR/CI validation.
-- Made permanent outcomes operational across local, Redis, SQL, NATS, SQS, and RabbitMQ workers, and introduced a distinct uncommitted outcome for infrastructure/workflow-state failures. Local, SQL, NATS, SQS, and RabbitMQ preserve that application attempt; Redis does so only before Asynq's final transport attempt, an explicit M1-04 blocker.
+- Made permanent outcomes operational across local, Redis, SQL, NATS, SQS, and RabbitMQ workers, and introduced a distinct uncommitted outcome for infrastructure/workflow-state failures. Redis's original final-attempt gap is now covered for newly reserved tasks, while legacy queued tasks retain the upstream limitation.
 - Deferred logical job and chain/batch terminal facts until the owning workflow mutation commits. Chain, batch, and callback store failures now return the uncommitted outcome, suppress premature callbacks/events, preserve the store cause, and have exhausted-attempt recovery/idempotency regressions.
 - Separated synchronous continuation failure from its predecessor's physical outcome: a downstream chain node can return its exact error to the caller without retrying the already-successful node or corrupting failed state into completion.
 - Verified the reconciled branch with the full 12-module test-and-vet matrix, independent nested modules under `GOWORK=off`, root race tests, README snippet compilation, the module inventory guard, and stable README/example generation. Integration test-count discovery timed out at its bounded 30-second limit and deliberately retained the existing integration badge rather than fabricating a count.
+- Defined one canonical, versioned logical uniqueness identity from effective queue, application job type, and exact payload; workflow correlation IDs and delivery options no longer defeat public `UniqueFor`.
+- Replaced duplicated in-memory uniqueness maps with one token-owned store, added pre-acceptance compensation across local and broker drivers, coupled SQL claims to queue-row insertion, and added a backend-shared public facade scenario.
+- Added backend-shared Redis logical claims while retaining Asynq physical claims for direct-job rollout compatibility; documented the non-atomic claim/enqueue boundary and coordinated public-workflow rollout requirement.
+- Preserved explicit workflow `Retry(0)` instead of falling through to backend defaults, required SQS message receipts and RabbitMQ publisher confirms before replacement settlement, surfaced RabbitMQ/SQS settlement ambiguity, and made closure callback failures observable instead of silently successful.
+- Added a header-marked Asynq transport reserve so new Redis tasks can redeliver an uncommitted final application attempt without inflating handler-visible retry counts; terminal outcomes explicitly skip the reserve and lease recovery does not consume it. A container-backed test now proves `Retry(0)` redelivers the same application attempt through the real v0.26 processor.
+- Pinned the Redis retry-budget boundary through a real broker: task storage carries `application retries + 1`, the versioned header retains the application value, and worker observation restores that original value for handlers and users.
+- Proved canonical Redis uniqueness across concurrent public clients, producer shutdown/restart, and TTL expiry; proved the same public logical composition across concurrent and restarted SQLite clients, and pinned the persisted `v1` key with a golden vector.
+- Deferred SQL, SQS, and RabbitMQ positive process/workflow facts until their settlement owner commits. Missing or failed settlement now suppresses success and emits `settlement_failed` with the original delivery attempt; SQL finalization retries are bounded and require exactly one affected row.
+- Prevented callback redelivery from converting a prior callback failure into success, skipped absent optional callback deliveries, and made missing ephemeral callback state fail visibly instead of reporting a no-op success.
+- Made the Redis timeline/uniqueness store structurally required, validated Asynq's one-second unique TTL before claiming, and closed all owned producer state resources.
+- Added an explicit MySQL expiry-index migration probe so existing uniqueness tables receive bounded-pruning support rather than only new installations.
+- Normalized absent, zero-byte, and exact JSON `null` payloads into one pinned uniqueness identity so the eventual direct-job cutover cannot split existing workflow claims.
+- Made allowed-failure batches derive completion from aggregate state regardless of failure order, proved the behavior through the public facade, and ensured Catch, Then, and Finally each execute once.
+- Validated callback workflow state before consuming idempotency markers, isolated callback and Progress panics, removed duplicate orphan starts, and exercised real serialized Catch/Then/Finally envelopes in reverse order.
+- Reworked root lifecycle coordination so concurrent starts and shutdown share attempts, failed cleanup remains retryable, never-started producers close, and post-close work is rejected.
+- Preserved caller ownership of supplied SQL handles, propagated owned close errors, and added a real SQLite ownership proof alongside Redis owned-resource coverage.
+- Leased every root operation that can touch runtime resources, including dispatch, readiness, pause/resume, stats, administration, and history, so shutdown cannot close resources underneath an admitted call.
+- Replaced the process-global continuation marker with runtime-scoped, non-transferable permits that expire when a handler returns; foreign and escaped contexts can no longer enqueue after drain begins.
+- Added a post-worker quiescence barrier so a descendant admitted during drain finishes before producer cleanup, and gave direct SQL runtimes their own scoped permit rather than trusting a caller-forgeable generic marker.
+- Retained partially started external workers for retryable cleanup and installed one stable, replaceable handler slot per job type, so canceled Redis/Asynq startup can retry, same-key replacement remains continuous across startup races, and a started strict mux never receives a duplicate pattern.
+- Latched shutdown intent before waiting on in-flight startup, preventing a fresh start or dispatch from overtaking cleanup while the original start is still blocked.
+- Made Sync and Workerpool reserve accepted delayed descendants through shutdown, gave bounded workerpool callbacks a reentrant relay that avoids one-worker Catch/Finally deadlock, and made `WithWorkers` control local execution concurrency.
+- Made NATS worker startup retryable and subscription-flush-gated, synchronized real Core NATS drain completion, retained the producer connection for admitted callback/delay work, and proved a real queued callback backlog drains. Core NATS remains an ephemeral broadcast adapter whose retry replacement can be accepted without a subscriber, so D-004 is still open.
+- Kept workflow queue, job type, and logical `JobKey` correlation across aggregate/callback events, and made allowed batch failures emit progress rather than a false terminal failure before later completion.
+- Propagated the first workflow job's queue, type, and logical key into chain/batch start facts, and preserved the triggering job's physical payload metadata through callback envelopes so the unified observer sees one continuous identity.
+- Made `settlement_failed` end the collector's active attempt without inventing a processed or application-failed count.
+- Added an explicit `DisableAutoMigrate` path across database wrappers, removed poisoned one-shot SQL startup, proved no schema is created when migration is disabled, and proved startup can recover from a real SQLite schema lock.
+- Added per-claim SQL processing tokens, invalidated them on stale recovery and administrative transitions, and required token-matched finalization so an expired handler cannot delete, retry, archive, overwrite, or report success for a row already reclaimed by another worker. Real SQLite tests cover legacy-schema migration plus stale success and stale failure races across two runtimes.
+- Validated the frozen slice with the full 12-module test/vet gate, root and every concurrency-sensitive driver under the race detector, README snippets, stable two-pass generation, the complete local/SQLite integration matrix, and real container-backed Redis and NATS lifecycle scenarios.
 
 ## Next Action
 
-Finish **M1-01/M1-04** by proving workflow-store and callback failures through settlement owners and resolving Asynq's exhausted-uncommitted limitation without breaking queued-task compatibility. Then complete **M1-05/M1-06** with one canonical logical uniqueness identity before beginning the behavior-preserving `internal/workflow` extraction from **M2-07**.
+Finish **M1-01/M1-04** with durable callback dispatch/recovery, Redis post-`Done` success evidence, and the explicit NATS product decision; pursue the minimal upstream Asynq ordering fix so the proven reserve can later retire. Address the SQL batch lost-update race, partial batch fan-out recovery, and atomic chain advance under **M3-04/M3-05/M3-06**, then begin the behavior-preserving `internal/workflow` extraction from **M2-07**. Keep the Redis claim/enqueue crash window, Core NATS ephemerality, SQS visibility extension, and RabbitMQ reconnect/context-aware lifecycle gaps explicit under **M1-07/M4**.

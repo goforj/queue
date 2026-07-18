@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/uniqueness"
 	"github.com/goforj/queue/queuecore"
 )
 
@@ -43,7 +45,7 @@ type sqsQueue struct {
 	mu        sync.Mutex
 	client    sqsClient
 	queueURLs map[string]string
-	unique    map[string]time.Time
+	unique    uniqueness.MemoryStore
 }
 
 func (q *sqsQueue) physicalQueueName() string {
@@ -57,7 +59,6 @@ func newSQSQueue(cfg Config) *sqsQueue {
 	return &sqsQueue{
 		cfg:       normalizeConfig(cfg),
 		queueURLs: make(map[string]string),
-		unique:    make(map[string]time.Time),
 	}
 }
 
@@ -104,9 +105,13 @@ func (q *sqsQueue) Shutdown(_ context.Context) error {
 	return nil
 }
 
+// Dispatch requires a service message identifier before reporting SQS acceptance.
 func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := queuecore.ValidateDriverJob(job); err != nil {
 		return err
@@ -118,8 +123,16 @@ func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	if err := q.ensureClient(ctx); err != nil {
 		return err
 	}
-	if parsed.UniqueTTL > 0 && !q.claimUnique(job, parsed.QueueName, parsed.UniqueTTL) {
-		return queuecore.ErrDuplicate
+	var (
+		uniqueKey   string
+		uniqueToken uint64
+	)
+	if parsed.UniqueTTL > 0 {
+		var acquired bool
+		uniqueKey, uniqueToken, acquired = q.claimUnique(job, parsed.QueueName, parsed.UniqueTTL)
+		if !acquired {
+			return queuecore.ErrDuplicate
+		}
 	}
 
 	msg := sqsMessage{
@@ -142,11 +155,20 @@ func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	}
 	body, err := json.Marshal(msg)
 	if err != nil {
+		q.unique.Release(uniqueKey, uniqueToken)
 		return err
 	}
 	queueURL, err := q.ensureQueue(ctx, parsed.QueueName)
 	if err != nil {
+		q.unique.Release(uniqueKey, uniqueToken)
 		return err
+	}
+	q.mu.Lock()
+	client := q.client
+	q.mu.Unlock()
+	if client == nil {
+		q.unique.Release(uniqueKey, uniqueToken)
+		return fmt.Errorf("sqs client unavailable during dispatch")
 	}
 	input := &sqs.SendMessageInput{
 		QueueUrl:    &queueURL,
@@ -161,10 +183,23 @@ func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 			input.DelaySeconds = seconds
 		}
 	}
-	_, err = q.client.SendMessage(ctx, input)
+	output, err := client.SendMessage(ctx, input)
+	if err == nil {
+		err = sqsSendAccepted(output)
+	}
+	// Send failures and missing receipts are ambiguous: the service may have committed before its response was lost.
 	return err
 }
 
+// sqsSendAccepted requires the service-generated receipt that proves SQS accepted the message.
+func sqsSendAccepted(output *sqs.SendMessageOutput) error {
+	if output == nil || output.MessageId == nil || strings.TrimSpace(*output.MessageId) == "" {
+		return fmt.Errorf("sqs send message returned no message id")
+	}
+	return nil
+}
+
+// ensureQueue resolves one queue through a stable client snapshot so concurrent shutdown cannot dereference nil.
 func (q *sqsQueue) ensureQueue(ctx context.Context, queueName string) (string, error) {
 	q.mu.Lock()
 	if url, ok := q.queueURLs[queueName]; ok && url != "" {
@@ -173,6 +208,9 @@ func (q *sqsQueue) ensureQueue(ctx context.Context, queueName string) (string, e
 	}
 	client := q.client
 	q.mu.Unlock()
+	if client == nil {
+		return "", fmt.Errorf("sqs client unavailable while resolving queue")
+	}
 
 	url, err := getOrCreateSQSQueue(ctx, client, queueName)
 	if err != nil {
@@ -217,21 +255,11 @@ func isQueueDoesNotExist(err error, target **types.QueueDoesNotExist) bool {
 	return false
 }
 
-func (q *sqsQueue) claimUnique(job queue.Job, queueName string, ttl time.Duration) bool {
-	now := time.Now()
-	key := queueName + ":" + job.Type + ":" + string(job.PayloadBytes())
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for candidate, expiresAt := range q.unique {
-		if expiresAt.Before(now) {
-			delete(q.unique, candidate)
-		}
-	}
-	if expiresAt, ok := q.unique[key]; ok && expiresAt.After(now) {
-		return false
-	}
-	q.unique[key] = now.Add(ttl)
-	return true
+// claimUnique returns the ownership token needed to compensate a rejected send.
+func (q *sqsQueue) claimUnique(job queue.Job, queueName string, ttl time.Duration) (string, uint64, bool) {
+	key := queuecore.UniqueKey(job, queueName)
+	token, ok := q.unique.Acquire(key, ttl)
+	return key, token, ok
 }
 
 func newSQSClient(ctx context.Context, cfg Config) (sqsClient, error) {

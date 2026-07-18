@@ -10,7 +10,7 @@ This is a baseline contract. Before GA, pin a version and treat field/label chan
 
 - Common field names across logs/metrics/traces
 - Predictable event semantics across backends
-- Explicit handling of recovery/failure internals (`republish_failed`, `process_recovered`)
+- Explicit handling of recovery/failure internals (`republish_failed`, `settlement_failed`, `process_recovered`)
 - Stable labels for dashboards and alerts
 
 ## Unified Event Stream
@@ -25,7 +25,7 @@ Source:
 
 `queue.Config.Observer` is a deprecated compatibility path into the same stream.
 
-Queue, worker, and workflow events carry the same applicable dispatch/job/chain/batch correlation IDs. Internal envelope IDs are excluded from `Event.JobKey`, so telemetry grouping follows the logical application job rather than a one-off wrapper delivery. Driver-enforced `UniqueFor` identity is a separate delivery contract and is not derived from this observability field.
+Queue, worker, and workflow events carry the same applicable dispatch/job/chain/batch correlation IDs. Internal envelope IDs are excluded from `Event.JobKey`, so telemetry grouping follows the logical application job rather than a one-off wrapper delivery. `Event.JobKey` remains an observability field rather than a persisted uniqueness key; both contracts resolve the same logical job type and payload, while uniqueness additionally includes version and effective queue framing.
 
 Event kind type:
 
@@ -50,6 +50,7 @@ Current runtime event kinds include:
 - internal recovery/failure:
   - `process_recovered`
   - `republish_failed`
+  - `settlement_failed`
 
 Recommended required fields (when available):
 
@@ -160,7 +161,10 @@ These may be implemented via logs, counters, histograms, or OTel metrics.
 - `queue_process_duration_ms` histogram `{driver,queue,job_type}`
 - `queue_enqueue_failures_total{driver,queue}`
 - `queue_republish_failed_total{driver,queue}` (from `republish_failed`)
+- `queue_settlement_failed_total{driver,queue}` (from `settlement_failed`)
 - `queue_process_recovered_total{driver,queue}` (from `process_recovered`)
+
+For `StatsCollector`, `settlement_failed` closes the corresponding active attempt because handler execution has ended, but it increments neither `Processed` nor application `Failed`: the delivery outcome remains unresolved and may redeliver. Track `queue_settlement_failed_total` separately rather than folding it into either terminal counter.
 
 ### Workflow Metrics
 

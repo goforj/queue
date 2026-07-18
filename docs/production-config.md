@@ -35,6 +35,14 @@ Watch for:
 - downstream rate limiting
 - DB connection pool exhaustion (DB backends)
 
+### Shutdown deadlines
+
+Shutdown drains operations and handler work already admitted to the current process. For local runtimes that includes accepted delayed workflow descendants; durable database or broker backlog remains stored for another worker or process restart. Supply a context deadline that covers the longest in-flight handler, local accepted delay, and settlement time. If the deadline expires, shutdown returns the context error; call it again with a fresh context to continue retryable cleanup.
+
+Root operations admitted before draining hold a lifecycle lease, while new public work is rejected after draining begins. Continuations may cross that gate only while an active handler owns the same runtime-scoped permit.
+
+Successful shutdown is terminal for that queue instance. Construct a new queue to restart processing; repeated shutdown calls remain idempotent, while a failed cleanup attempt can be retried with a fresh context.
+
 ## Job Retry / Backoff Guidance
 
 ### Retries (`Job.Retry(n)`)
@@ -97,6 +105,13 @@ Important DB recovery knobs (`queue.Config`):
   - fallback lease for jobs without explicit timeout
   - increase for very long-running jobs if you observe premature stale recovery
 
+Schema migration ownership:
+
+- startup migrations are enabled by default
+- set `DisableAutoMigrate: true` when migrations are applied by your deployment tooling; startup then performs no DDL
+- keep the default only when the runtime identity has DDL permission and concurrent application startup is coordinated
+- a failed migration can be retried with a later `Start` after the lock, permission, or connectivity issue is corrected
+
 When tuning:
 
 - longer leases reduce false-positive recovery
@@ -111,8 +126,9 @@ Good default when:
 
 Starting points:
 
+- use Core NATS only where ephemeral broadcast delivery is acceptable; this adapter is not a durable competing-consumer work queue
 - use conservative concurrency while validating duplicate/ordering expectations
-- confirm delayed/retry durability expectations against your workload (see capability matrix)
+- do not rely on delayed/retry survival across disconnect, process shutdown, or periods with no subscriber
 
 ### SQS (`DriverSQS`)
 
@@ -124,6 +140,7 @@ Starting points:
 
 - partition critical and bulk jobs into separate queues
 - validate handler duration vs SQS visibility timeout behavior in your environment
+- size visibility for sequential processing of a received batch; workers do not yet extend visibility while handlers run
 - monitor duplicate deliveries and end-to-end latency under retries
 
 Operational note:
@@ -141,6 +158,11 @@ Starting points:
 - separate queues by priority/workload class
 - validate restart/retry behavior and throughput under your expected publish/consume rate
 - watch connection/channel health and reconnect churn
+
+Operational note:
+
+- workers do not currently reconnect after their delivery channel closes; replace the runtime after connection loss
+- AMQP dialing and resource closure may exceed a lifecycle context deadline, so supervise shutdown at the process level
 
 ## Queue Layout Recommendations
 
@@ -172,6 +194,7 @@ Track and alert on:
 - `process_failed`
 - `process_retried`
 - `republish_failed`
+- `settlement_failed`
 - `process_recovered` (DB backends)
 
 See:

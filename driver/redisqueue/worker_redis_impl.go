@@ -24,8 +24,10 @@ type redisWorker struct {
 	obs          queue.Observer
 	ctxDecorator func(context.Context) context.Context
 
-	mu      sync.Mutex
-	started bool
+	mu       sync.Mutex
+	started  bool
+	draining bool
+	stopDone chan struct{}
 }
 
 func newRedisWorker(server server, mux *backend.ServeMux, observer queue.Observer) *redisWorker {
@@ -47,7 +49,8 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 			}
 		}
 		attempt, _ := backend.GetRetryCount(ctx)
-		maxRetry, _ := backend.GetMaxRetry(ctx)
+		transportMaxRetry, _ := backend.GetMaxRetry(ctx)
+		maxRetry := redisApplicationMaxRetry(job, transportMaxRetry)
 		physicalAttempt := busruntime.DeliveryAttempt{Number: attempt, MaxRetry: maxRetry}
 		queueName, _ := backend.GetQueueName(ctx)
 		queueName = queuecore.NormalizeQueueName(queueName)
@@ -106,9 +109,9 @@ func observeRedisAttemptStart(ctx context.Context, observer queue.Observer, even
 	queuecore.SafeObserve(ctx, observer, event)
 }
 
-// redisSettlementError translates terminal application intent into Asynq's settlement control without hiding the handler error.
+// redisSettlementError explicitly archives terminal application outcomes before the reserved Asynq slot can become an extra application retry.
 func redisSettlementError(attempt busruntime.DeliveryAttempt, err error) error {
-	if busruntime.ClassifyAttempt(attempt, err) != busruntime.AttemptFailed || !busruntime.IsPermanent(err) {
+	if busruntime.ClassifyAttempt(attempt, err) != busruntime.AttemptFailed {
 		return err
 	}
 	if errors.Is(err, backend.SkipRetry) {
@@ -117,12 +120,16 @@ func redisSettlementError(attempt busruntime.DeliveryAttempt, err error) error {
 	return errors.Join(err, backend.SkipRetry)
 }
 
+// StartWorkers rejects restart while an earlier server instance is still draining.
 func (w *redisWorker) StartWorkers(ctx context.Context) error {
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.draining {
+		return queue.ErrQueuerShuttingDown
+	}
 	if w.started {
 		return nil
 	}
@@ -133,25 +140,32 @@ func (w *redisWorker) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
+// Shutdown retains the server drain until completion so a caller can retry after its context expires.
 func (w *redisWorker) Shutdown(ctx context.Context) error {
-	w.mu.Lock()
-	started := w.started
-	w.started = false
-	w.mu.Unlock()
-
-	if !started {
-		return nil
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w.server.Shutdown()
-	}()
-
 	if ctx == nil {
-		<-done
+		ctx = context.Background()
+	}
+	w.mu.Lock()
+	if !w.started && !w.draining {
+		w.mu.Unlock()
 		return nil
 	}
+	if !w.draining {
+		w.draining = true
+		w.stopDone = make(chan struct{})
+		done := w.stopDone
+		go func() {
+			w.server.Shutdown()
+			w.mu.Lock()
+			w.started = false
+			w.draining = false
+			w.stopDone = nil
+			w.mu.Unlock()
+			close(done)
+		}()
+	}
+	done := w.stopDone
+	w.mu.Unlock()
 
 	select {
 	case <-done:

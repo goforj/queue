@@ -1,6 +1,7 @@
 package redisqueue
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -113,8 +114,9 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 
 func serverConfig(cfg Config, workers int) backend.Config {
 	serverCfg := backend.Config{
-		Concurrency: workers,
-		IsFailure:   redisAttemptIsFailure,
+		Concurrency:    workers,
+		IsFailure:      redisAttemptIsFailure,
+		RetryDelayFunc: redisRetryDelay,
 	}
 	if queues := normalizeQueues(cfg.Queues, cfg.DefaultQueue); len(queues) > 0 {
 		serverCfg.Queues = queues
@@ -133,9 +135,17 @@ func serverConfig(cfg Config, workers int) backend.Config {
 	return serverCfg
 }
 
-// redisAttemptIsFailure keeps infrastructure redelivery from consuming Asynq's counter while retry capacity remains; Asynq evaluates final exhaustion before this predicate.
+// redisAttemptIsFailure keeps workflow mutation and lease-recovery redelivery from consuming the application retry counter.
 func redisAttemptIsFailure(err error) bool {
-	return err != nil && !busruntime.IsUncommitted(err)
+	return err != nil && !busruntime.IsUncommitted(err) && !errors.Is(err, backend.ErrLeaseExpired)
+}
+
+// redisRetryDelay keeps infrastructure redelivery responsive without changing application retry backoff.
+func redisRetryDelay(attempt int, err error, task *backend.Task) time.Duration {
+	if busruntime.IsUncommitted(err) || errors.Is(err, backend.ErrLeaseExpired) {
+		return time.Second
+	}
+	return backend.DefaultRetryDelayFunc(attempt, err, task)
 }
 
 func normalizeQueues(raw map[string]int, fallbackDefault string) map[string]int {

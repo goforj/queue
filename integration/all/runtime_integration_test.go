@@ -158,6 +158,8 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 				_ = q.Shutdown(shutdownCtx)
 			}()
 
+			testQueueWorkflowUniqueScenario(t, q, queueName)
+
 			if !backend.executes {
 				testQueueWorkflowNullScenario(t, q, queueName)
 				return
@@ -168,6 +170,31 @@ func TestIntegrationQueue_AllBackends(t *testing.T) {
 			testQueueWorkflowBatchScenario(t, q, queueName)
 			testQueueWorkflowPruneScenario(t, q, queueName)
 		})
+	}
+}
+
+// testQueueWorkflowUniqueScenario exercises logical identity through the normal public facade.
+func testQueueWorkflowUniqueScenario(t *testing.T, q *Queue, queueName string) {
+	t.Helper()
+
+	type payload struct {
+		AccountID string `json:"account_id"`
+	}
+
+	jobType := uniqueQueueJobType("queue:unique")
+	q.Register(jobType, func(context.Context, Message) error { return nil })
+	newUniqueJob := func() Job {
+		return NewJob(jobType).
+			Payload(payload{AccountID: "account-123"}).
+			OnQueue(queueName).
+			UniqueFor(time.Minute)
+	}
+
+	if _, err := q.Dispatch(newUniqueJob()); err != nil {
+		t.Fatalf("unique scenario: initial dispatch failed: %v", err)
+	}
+	if _, err := q.Dispatch(newUniqueJob()); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("unique scenario: duplicate dispatch error = %v, want %v", err, ErrDuplicate)
 	}
 }
 

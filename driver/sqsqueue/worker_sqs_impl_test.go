@@ -19,6 +19,9 @@ type sqsWorkerClientStub struct {
 	sendInputs   []*sqs.SendMessageInput
 	deleteInputs []*sqs.DeleteMessageInput
 	sendErr      error
+	deleteErr    error
+	sendNil      bool
+	sendEmptyID  bool
 }
 
 func (s *sqsWorkerClientStub) GetQueueUrl(context.Context, *sqs.GetQueueUrlInput, ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error) {
@@ -35,7 +38,66 @@ func (s *sqsWorkerClientStub) ReceiveMessage(context.Context, *sqs.ReceiveMessag
 
 func (s *sqsWorkerClientStub) DeleteMessage(_ context.Context, params *sqs.DeleteMessageInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error) {
 	s.deleteInputs = append(s.deleteInputs, params)
-	return &sqs.DeleteMessageOutput{}, nil
+	return &sqs.DeleteMessageOutput{}, s.deleteErr
+}
+
+// TestSQSWorkerDeleteFailureEmitsSettlementEvent verifies delete ambiguity is visible and retains logical correlation.
+func TestSQSWorkerDeleteFailureEmitsSettlementEvent(t *testing.T) {
+	deleteErr := errors.New("delete response lost")
+	stub := &sqsWorkerClientStub{deleteErr: deleteErr}
+	var events []queue.Event
+	committed := false
+	w := &sqsWorker{
+		handlers: map[string]queue.Handler{"bus:job": func(ctx context.Context, _ queue.Job) error {
+			if !busruntime.DeferUntilDeliveryCommitted(ctx, func() { committed = true }) {
+				t.Fatal("handler context did not carry a settlement boundary")
+			}
+			return nil
+		}},
+		client:   stub,
+		queueURL: "https://example.local/queue/default",
+		observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+	}
+	payload := []byte(`{"schema_version":1,"dispatch_id":"dsp_sqs_settle","job_id":"job_sqs_settle","job":{"type":"reports:build","payload":"eyJpZCI6MX0="}}`)
+	body, err := json.Marshal(sqsMessage{Type: "bus:job", Queue: "critical", Payload: payload, Attempt: 2, MaxRetry: 4})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	w.process(context.Background(), sqstypes.Message{Body: aws.String(string(body)), ReceiptHandle: aws.String("rh-settle")})
+	if len(events) != 1 || events[0].Kind != queue.EventSettlementFailed || !errors.Is(events[0].Err, deleteErr) {
+		t.Fatalf("settlement events = %+v, want one delete failure", events)
+	}
+	if events[0].Layer != queue.EventLayerWorker || events[0].JobType != "reports:build" || events[0].DispatchID != "dsp_sqs_settle" {
+		t.Fatalf("settlement correlation = %+v", events[0])
+	}
+	if committed {
+		t.Fatal("delete failure committed deferred handler success")
+	}
+}
+
+// TestSQSWorkerRetrySettlementFailureUsesDeliveredAttempt verifies replacement metadata does not overwrite the unsettled receipt's correlation.
+func TestSQSWorkerRetrySettlementFailureUsesDeliveredAttempt(t *testing.T) {
+	stub := &sqsWorkerClientStub{deleteErr: errors.New("delete failed")}
+	var events []queue.Event
+	w := &sqsWorker{
+		handlers: map[string]queue.Handler{"job:retry:settlement": func(context.Context, queue.Job) error {
+			return errors.New("retry me")
+		}},
+		client:   stub,
+		queueURL: "https://example.local/queue/default",
+		observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+	}
+	body, err := json.Marshal(sqsMessage{Type: "job:retry:settlement", Queue: "critical", Attempt: 1, MaxRetry: 3})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	w.process(context.Background(), sqstypes.Message{Body: aws.String(string(body)), ReceiptHandle: aws.String("rh-retry")})
+	if len(stub.sendInputs) != 1 {
+		t.Fatalf("replacement sends = %d, want 1", len(stub.sendInputs))
+	}
+	if len(events) != 1 || events[0].Kind != queue.EventSettlementFailed || events[0].Attempt != 1 {
+		t.Fatalf("settlement events = %+v, want original attempt 1", events)
+	}
 }
 
 func (s *sqsWorkerClientStub) SendMessage(_ context.Context, params *sqs.SendMessageInput, _ ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
@@ -43,7 +105,13 @@ func (s *sqsWorkerClientStub) SendMessage(_ context.Context, params *sqs.SendMes
 	if s.sendErr != nil {
 		return nil, s.sendErr
 	}
-	return &sqs.SendMessageOutput{}, nil
+	if s.sendNil {
+		return nil, nil
+	}
+	if s.sendEmptyID {
+		return &sqs.SendMessageOutput{}, nil
+	}
+	return &sqs.SendMessageOutput{MessageId: aws.String("msg-1")}, nil
 }
 
 func decodeSQSBody(t *testing.T, input *sqs.SendMessageInput) sqsMessage {
@@ -56,6 +124,28 @@ func decodeSQSBody(t *testing.T, input *sqs.SendMessageInput) sqsMessage {
 		t.Fatalf("unmarshal send message body: %v", err)
 	}
 	return out
+}
+
+// TestSQSSendAcceptedRequiresMessageID verifies only a service receipt crosses the publish boundary.
+func TestSQSSendAcceptedRequiresMessageID(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  *sqs.SendMessageOutput
+		wantErr bool
+	}{
+		{name: "nil output", wantErr: true},
+		{name: "missing id", output: &sqs.SendMessageOutput{}, wantErr: true},
+		{name: "blank id", output: &sqs.SendMessageOutput{MessageId: aws.String(" ")}, wantErr: true},
+		{name: "accepted", output: &sqs.SendMessageOutput{MessageId: aws.String("msg-1")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := sqsSendAccepted(test.output)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("sqsSendAccepted() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
 }
 
 func TestSQSWorker_ProcessFutureMessageRepublishesAndDeletes(t *testing.T) {
@@ -116,6 +206,34 @@ func TestSQSWorker_ProcessFutureMessageRepublishFailureDoesNotDelete(t *testing.
 	}
 	if len(stub.deleteInputs) != 0 {
 		t.Fatalf("expected no delete when republish fails, got %d", len(stub.deleteInputs))
+	}
+}
+
+// TestSQSWorkerMissingSendReceiptDoesNotDelete verifies an ambiguous replacement send leaves the original redeliverable.
+func TestSQSWorkerMissingSendReceiptDoesNotDelete(t *testing.T) {
+	tests := []struct {
+		name string
+		stub *sqsWorkerClientStub
+	}{
+		{name: "nil output", stub: &sqsWorkerClientStub{sendNil: true}},
+		{name: "empty message id", stub: &sqsWorkerClientStub{sendEmptyID: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := &sqsWorker{handlers: map[string]queue.Handler{}, client: test.stub, queueURL: "https://example.local/queue/default"}
+			body, err := json.Marshal(sqsMessage{
+				Type:          "job:future",
+				Queue:         "default",
+				AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli(),
+			})
+			if err != nil {
+				t.Fatalf("marshal body: %v", err)
+			}
+			w.process(context.Background(), sqstypes.Message{Body: aws.String(string(body)), ReceiptHandle: aws.String("rh-1")})
+			if len(test.stub.sendInputs) != 1 || len(test.stub.deleteInputs) != 0 {
+				t.Fatalf("send/delete calls = %d/%d, want 1/0", len(test.stub.sendInputs), len(test.stub.deleteInputs))
+			}
+		})
 	}
 }
 
@@ -182,6 +300,7 @@ func TestSQSWorker_RepublishFailureUnwrapsBusEnvelopeJobType(t *testing.T) {
 func TestSQSWorker_ProcessSuccessInvokesHandlerAndDeletes(t *testing.T) {
 	stub := &sqsWorkerClientStub{}
 	called := 0
+	committed := false
 	w := &sqsWorker{
 		handlers: map[string]queue.Handler{
 			"job:ok": func(ctx context.Context, job queue.Job) error {
@@ -195,6 +314,9 @@ func TestSQSWorker_ProcessSuccessInvokesHandlerAndDeletes(t *testing.T) {
 				}
 				if opts.MaxRetry == nil || *opts.MaxRetry != 3 {
 					t.Fatalf("expected max retry 3, got %+v", opts.MaxRetry)
+				}
+				if !busruntime.DeferUntilDeliveryCommitted(ctx, func() { committed = true }) {
+					t.Fatal("handler context did not carry a settlement boundary")
 				}
 				return nil
 			},
@@ -227,6 +349,9 @@ func TestSQSWorker_ProcessSuccessInvokesHandlerAndDeletes(t *testing.T) {
 	}
 	if len(stub.deleteInputs) != 1 {
 		t.Fatalf("expected one delete on success, got %d", len(stub.deleteInputs))
+	}
+	if !committed {
+		t.Fatal("successful delete did not commit deferred handler success")
 	}
 }
 
@@ -436,6 +561,34 @@ func TestSQSWorker_StartWorkersFastPaths(t *testing.T) {
 	}
 }
 
+// TestSQSWorkerShutdownHonorsDeadline verifies a stuck in-flight handler cannot block the caller forever.
+func TestSQSWorkerShutdownHonorsDeadline(t *testing.T) {
+	w := newSQSWorker(sqsWorkerConfig{})
+	w.started = true
+	w.cancel = func() {}
+	release := make(chan struct{})
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		<-release
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	if err := w.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+	}
+	if !w.started {
+		t.Fatal("timed-out shutdown exposed the worker as restartable while work remained")
+	}
+	close(release)
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("complete shutdown: %v", err)
+	}
+	if w.started {
+		t.Fatal("completed shutdown retained started state")
+	}
+}
+
 func TestSQSWorker_StartWorkersInvalidEndpoint(t *testing.T) {
 	backend := newSQSWorker(sqsWorkerConfig{
 		DefaultQueue: "default",
@@ -455,13 +608,16 @@ func TestSQSWorker_StartWorkersInvalidEndpoint(t *testing.T) {
 	}
 }
 
-func TestSQSWorker_DeleteIgnoresNilReceiptHandle(t *testing.T) {
+// TestSQSWorkerDeleteRejectsNilReceiptHandle verifies missing settlement identity cannot commit handler success.
+func TestSQSWorkerDeleteRejectsNilReceiptHandle(t *testing.T) {
 	stub := &sqsWorkerClientStub{}
 	w := &sqsWorker{
 		client:   stub,
 		queueURL: "https://example.local/queue/default",
 	}
-	w.delete(context.Background(), sqstypes.Message{})
+	if err := w.delete(sqstypes.Message{}); err == nil {
+		t.Fatal("delete without receipt unexpectedly committed")
+	}
 	if len(stub.deleteInputs) != 0 {
 		t.Fatalf("expected no delete call for nil receipt handle, got %d", len(stub.deleteInputs))
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/goforj/queue"
@@ -20,13 +21,47 @@ type natsWorker struct {
 	mu       sync.RWMutex
 	handlers map[string]queue.Handler
 
-	conn     *nats.Conn
-	sub      *nats.Subscription
-	start    sync.Once
-	sem      chan struct{}
+	startStop sync.Mutex
+	started   bool
+	stopDone  chan struct{}
+	stopErr   error
+	connect   natsWorkerConnector
+
+	conn natsConnection
+	sub  natsWorkerSubscription
+	sem  chan struct{}
+
 	running  sync.WaitGroup
+	delayed  sync.WaitGroup
 	observer queue.Observer
 }
+
+type natsWorkerSubscription interface {
+	Drain() error
+}
+
+type synchronousNATSSubscription struct {
+	*nats.Subscription
+}
+
+// Drain waits until Core NATS has stopped intake and completed every queued callback.
+func (s *synchronousNATSSubscription) Drain() error {
+	if s == nil || s.Subscription == nil || !s.IsValid() {
+		return nil
+	}
+	closed := s.StatusChanged(nats.SubscriptionClosed)
+	if err := s.Subscription.Drain(); err != nil {
+		return err
+	}
+	for status := range closed {
+		if status == nats.SubscriptionClosed {
+			return nil
+		}
+	}
+	return nil
+}
+
+type natsWorkerConnector func(url, subject string, callback nats.MsgHandler) (natsConnection, natsWorkerSubscription, error)
 
 type natsWorkerConfig struct {
 	URL          string
@@ -63,49 +98,114 @@ func (w *natsWorker) Register(jobType string, handler queue.Handler) {
 }
 
 func (w *natsWorker) StartWorkers(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	var startErr error
-	w.start.Do(func() {
-		nc, err := nats.Connect(w.url)
-		if err != nil {
-			startErr = err
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	w.startStop.Lock()
+	defer w.startStop.Unlock()
+	if w.stopDone != nil {
+		return queue.ErrQueuerShuttingDown
+	}
+	if w.started {
+		return nil
+	}
+	connect := w.connect
+	if connect == nil {
+		connect = connectNATSWorker
+	}
+	w.sem = make(chan struct{}, w.workers)
+	ready := make(chan struct{})
+	var acceptCallbacks atomic.Bool
+	nc, sub, err := connect(w.url, natsSubject(w.defaultQueue), func(message *nats.Msg) {
+		<-ready
+		if !acceptCallbacks.Load() {
 			return
 		}
-		w.sem = make(chan struct{}, w.workers)
-		sub, err := nc.Subscribe(natsSubject(w.defaultQueue), func(message *nats.Msg) {
-			w.sem <- struct{}{}
-			w.running.Add(1)
-			go func() {
-				defer func() {
-					<-w.sem
-					w.running.Done()
-				}()
-				w.processMessage(message)
+		w.running.Add(1)
+		w.sem <- struct{}{}
+		go func() {
+			defer func() {
+				<-w.sem
+				w.running.Done()
 			}()
-		})
-		if err != nil {
-			nc.Close()
-			startErr = err
-			return
-		}
-		w.conn = nc
-		w.sub = sub
+			w.processMessage(message)
+		}()
 	})
-	return startErr
+	if err != nil {
+		return err
+	}
+	w.conn = nc
+	w.sub = sub
+	flushCtx, cancel := natsPublishContext(ctx)
+	flushErr := nc.FlushWithContext(flushCtx)
+	cancel()
+	if flushErr != nil {
+		close(ready)
+		_ = sub.Drain()
+		nc.Close()
+		w.conn = nil
+		w.sub = nil
+		return flushErr
+	}
+	acceptCallbacks.Store(true)
+	w.started = true
+	close(ready)
+	return nil
 }
 
-func (w *natsWorker) Shutdown(_ context.Context) error {
-	if w.sub != nil {
-		_ = w.sub.Drain()
+// Shutdown stops intake before waiting for handlers and delayed republishes, then closes their shared connection.
+func (w *natsWorker) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if w.conn != nil {
-		_ = w.conn.Drain()
-		w.conn.Close()
+	w.startStop.Lock()
+	if !w.started && w.stopDone == nil {
+		w.startStop.Unlock()
+		return nil
 	}
-	w.running.Wait()
-	return nil
+	if w.stopDone == nil {
+		w.stopDone = make(chan struct{})
+		done := w.stopDone
+		sub := w.sub
+		conn := w.conn
+		go func() {
+			var stopErr error
+			if sub != nil {
+				stopErr = sub.Drain()
+			}
+			w.running.Wait()
+			w.delayed.Wait()
+			if conn != nil {
+				if drainErr := conn.Drain(); stopErr == nil {
+					stopErr = drainErr
+				}
+				conn.Close()
+			}
+			w.startStop.Lock()
+			w.started = false
+			w.conn = nil
+			w.sub = nil
+			w.stopErr = stopErr
+			w.startStop.Unlock()
+			close(done)
+		}()
+	}
+	done := w.stopDone
+	w.startStop.Unlock()
+	select {
+	case <-done:
+		w.startStop.Lock()
+		err := w.stopErr
+		// Drain diagnostics describe a cleanup that has already completed; report them once so a later root shutdown can finish producer cleanup.
+		w.stopErr = nil
+		w.startStop.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (w *natsWorker) processMessage(message *nats.Msg) {
@@ -116,7 +216,9 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 	if incoming.AvailableAtMS > 0 {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
+			w.delayed.Add(1)
 			time.AfterFunc(remaining, func() {
+				defer w.delayed.Done()
 				if err := w.republish(incoming); err != nil {
 					w.observeRepublishFailure(context.Background(), incoming, err)
 				}
@@ -172,6 +274,20 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 	}
 }
 
+// connectNATSWorker creates the Core NATS subscription owned by one worker lifecycle.
+func connectNATSWorker(url, subject string, callback nats.MsgHandler) (natsConnection, natsWorkerSubscription, error) {
+	nc, err := nats.Connect(url)
+	if err != nil {
+		return nil, nil, err
+	}
+	sub, err := nc.Subscribe(subject, callback)
+	if err != nil {
+		nc.Close()
+		return nil, nil, err
+	}
+	return &synchronousNATSConnection{Conn: nc}, &synchronousNATSSubscription{Subscription: sub}, nil
+}
+
 func (w *natsWorker) republish(message natsMessage) error {
 	if w.conn == nil {
 		return nats.ErrConnectionClosed
@@ -180,7 +296,12 @@ func (w *natsWorker) republish(message natsMessage) error {
 	if err != nil {
 		return err
 	}
-	return w.conn.Publish(natsSubject(message.Queue), payload)
+	if err := w.conn.Publish(natsSubject(message.Queue), payload); err != nil {
+		return err
+	}
+	ctx, cancel := natsPublishContext(context.Background())
+	defer cancel()
+	return w.conn.FlushWithContext(ctx)
 }
 
 func (w *natsWorker) observeRepublishFailure(ctx context.Context, message natsMessage, err error) {

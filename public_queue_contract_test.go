@@ -235,6 +235,83 @@ func TestPublicQueueContractBatchUsesCanonicalJobs(t *testing.T) {
 	}
 }
 
+// TestPublicQueueContractAllowedBatchFailureIsOrderIndependent verifies the root facade finishes every accepted item and derives callbacks from aggregate state.
+func TestPublicQueueContractAllowedBatchFailureIsOrderIndependent(t *testing.T) {
+	for _, failureFirst := range []bool{true, false} {
+		name := "failure_last"
+		if failureFirst {
+			name = "failure_first"
+		}
+		t.Run(name, func(t *testing.T) {
+			q, err := queue.NewSync()
+			if err != nil {
+				t.Fatalf("new sync queue: %v", err)
+			}
+			t.Cleanup(func() {
+				if shutdownErr := q.Shutdown(context.Background()); shutdownErr != nil {
+					t.Errorf("shutdown: %v", shutdownErr)
+				}
+			})
+
+			failureErr := errors.New("allowed public batch failure")
+			var handled int
+			q.Register("contract:batch:allowed-success", func(context.Context, queue.Message) error {
+				handled++
+				return nil
+			})
+			q.Register("contract:batch:allowed-failure", func(context.Context, queue.Message) error {
+				handled++
+				return failureErr
+			})
+			if err := q.StartWorkers(context.Background()); err != nil {
+				t.Fatalf("start workers: %v", err)
+			}
+
+			jobs := []queue.Job{
+				queue.NewJob("contract:batch:allowed-success"),
+				queue.NewJob("contract:batch:allowed-failure"),
+			}
+			if failureFirst {
+				jobs[0], jobs[1] = jobs[1], jobs[0]
+			}
+
+			var catchCalls, thenCalls, finallyCalls int
+			batchID, dispatchErr := q.Batch(jobs...).
+				AllowFailures().
+				Catch(func(_ context.Context, _ queue.BatchState, callbackErr error) error {
+					if callbackErr == nil || (!errors.Is(callbackErr, failureErr) && callbackErr.Error() != failureErr.Error()) {
+						t.Fatalf("catch error = %v, want %v", callbackErr, failureErr)
+					}
+					catchCalls++
+					return nil
+				}).
+				Then(func(context.Context, queue.BatchState) error {
+					thenCalls++
+					return nil
+				}).
+				Finally(func(context.Context, queue.BatchState) error {
+					finallyCalls++
+					return nil
+				}).
+				Dispatch(context.Background())
+			if !errors.Is(dispatchErr, failureErr) {
+				t.Fatalf("dispatch error = %v, want %v", dispatchErr, failureErr)
+			}
+
+			state, err := q.FindBatch(context.Background(), batchID)
+			if err != nil {
+				t.Fatalf("find batch: %v", err)
+			}
+			if handled != 2 || state.Processed != 2 || state.Pending != 0 || state.Failed != 1 || !state.Completed || state.Cancelled {
+				t.Fatalf("handled/state = %d/%+v, want two processed and completed with one allowed failure", handled, state)
+			}
+			if catchCalls != 1 || thenCalls != 1 || finallyCalls != 1 {
+				t.Fatalf("catch/then/finally calls = %d/%d/%d, want 1/1/1", catchCalls, thenCalls, finallyCalls)
+			}
+		})
+	}
+}
+
 // TestPublicQueueContractRetryEventuallySucceeds verifies retry policy remains effective when dispatched through the workflow-capable facade.
 func TestPublicQueueContractRetryEventuallySucceeds(t *testing.T) {
 	var (
@@ -306,6 +383,34 @@ func TestPublicQueueContractUniqueValidationReachesFacade(t *testing.T) {
 	}
 }
 
+// TestPublicQueueContractUniqueUsesLogicalJob verifies random workflow correlation IDs cannot bypass deduplication.
+func TestPublicQueueContractUniqueUsesLogicalJob(t *testing.T) {
+	q, err := queue.NewSync()
+	if err != nil {
+		t.Fatalf("new sync queue: %v", err)
+	}
+	q.Register("contract:logical-unique", func(context.Context, queue.Message) error { return nil })
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	t.Cleanup(func() {
+		if shutdownErr := q.Shutdown(context.Background()); shutdownErr != nil {
+			t.Errorf("shutdown: %v", shutdownErr)
+		}
+	})
+
+	job := queue.NewJob("contract:logical-unique").
+		Payload(map[string]int{"account_id": 42}).
+		OnQueue("critical").
+		UniqueFor(time.Minute)
+	if _, err := q.Dispatch(job); err != nil {
+		t.Fatalf("first dispatch: %v", err)
+	}
+	if _, err := q.Dispatch(job); !errors.Is(err, queue.ErrDuplicate) {
+		t.Fatalf("second dispatch error = %v, want ErrDuplicate", err)
+	}
+}
+
 // TestPublicQueueContractObserverSpansEveryLayer verifies one exported observer receives queue, worker, and workflow facts.
 func TestPublicQueueContractObserverSpansEveryLayer(t *testing.T) {
 	var (
@@ -349,6 +454,7 @@ func TestPublicQueueContractObserverSpansEveryLayer(t *testing.T) {
 		queue.EventDispatchSucceeded: queue.EventLayerQueue,
 	}
 	var correlatedJobID string
+	var correlatedJobKey string
 	for kind, wantLayer := range required {
 		var found *queue.Event
 		for index := range snapshot {
@@ -370,6 +476,16 @@ func TestPublicQueueContractObserverSpansEveryLayer(t *testing.T) {
 		if found.JobType != "contract:observed" {
 			t.Errorf("%q job type = %q, want %q", kind, found.JobType, "contract:observed")
 		}
+		if found.Queue != "default" {
+			t.Errorf("%q queue = %q, want default", kind, found.Queue)
+		}
+		if found.JobKey == "" {
+			t.Errorf("%q job key is empty", kind)
+		} else if correlatedJobKey == "" {
+			correlatedJobKey = found.JobKey
+		} else if found.JobKey != correlatedJobKey {
+			t.Errorf("%q job key = %q, want shared key %q", kind, found.JobKey, correlatedJobKey)
+		}
 		if found.DispatchID != result.DispatchID {
 			t.Errorf("%q dispatch ID = %q, want %q", kind, found.DispatchID, result.DispatchID)
 		}
@@ -379,6 +495,152 @@ func TestPublicQueueContractObserverSpansEveryLayer(t *testing.T) {
 			correlatedJobID = found.JobID
 		} else if found.JobID != correlatedJobID {
 			t.Errorf("%q job ID = %q, want shared ID %q", kind, found.JobID, correlatedJobID)
+		}
+	}
+}
+
+// TestPublicQueueContractWorkflowAggregatesPreserveQueueAndIdentity verifies aggregate facts retain the triggering logical job's known correlation.
+func TestPublicQueueContractWorkflowAggregatesPreserveQueueAndIdentity(t *testing.T) {
+	var events []queue.Event
+	q, err := queue.NewSync(queue.WithObserver(queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+		events = append(events, event)
+	})))
+	if err != nil {
+		t.Fatalf("new observed sync queue: %v", err)
+	}
+	q.Register("contract:aggregate:first", func(context.Context, queue.Message) error { return nil })
+	q.Register("contract:aggregate:second", func(context.Context, queue.Message) error { return nil })
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	t.Cleanup(func() {
+		if shutdownErr := q.Shutdown(context.Background()); shutdownErr != nil {
+			t.Errorf("shutdown: %v", shutdownErr)
+		}
+	})
+	if _, err := q.Batch().Dispatch(context.Background()); err == nil {
+		t.Fatal("empty batch dispatch unexpectedly succeeded")
+	}
+	chainID, err := q.Chain(
+		queue.NewJob("contract:aggregate:first").Payload(map[string]string{"value": "first"}).OnQueue("critical"),
+		queue.NewJob("contract:aggregate:second").Payload(map[string]string{"value": "second"}).OnQueue("critical"),
+	).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch chain: %v", err)
+	}
+	batchID, err := q.Batch(
+		queue.NewJob("contract:aggregate:first").Payload(map[string]string{"value": "batch"}).OnQueue("critical"),
+	).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch batch: %v", err)
+	}
+
+	tests := []struct {
+		kind    queue.EventKind
+		chainID string
+		batchID string
+		jobType string
+	}{
+		{kind: queue.EventChainStarted, chainID: chainID, jobType: "contract:aggregate:first"},
+		{kind: queue.EventChainAdvanced, chainID: chainID, jobType: "contract:aggregate:first"},
+		{kind: queue.EventChainCompleted, chainID: chainID, jobType: "contract:aggregate:second"},
+		{kind: queue.EventBatchStarted, batchID: batchID, jobType: "contract:aggregate:first"},
+		{kind: queue.EventBatchCompleted, batchID: batchID, jobType: "contract:aggregate:first"},
+	}
+	for _, test := range tests {
+		var aggregate, triggeringJob *queue.Event
+		for index := range events {
+			event := &events[index]
+			if event.ChainID != test.chainID || event.BatchID != test.batchID {
+				continue
+			}
+			if event.Kind == test.kind {
+				aggregate = event
+			}
+			if event.Kind == queue.EventJobStarted && event.JobType == test.jobType {
+				triggeringJob = event
+			}
+		}
+		if aggregate == nil || triggeringJob == nil {
+			t.Errorf("missing aggregate or triggering job event %q: aggregate=%+v triggering_job=%+v", test.kind, aggregate, triggeringJob)
+			continue
+		}
+		if aggregate.Queue != "critical" || aggregate.Queue != triggeringJob.Queue || aggregate.JobType != triggeringJob.JobType || aggregate.JobKey == "" || aggregate.JobKey != triggeringJob.JobKey {
+			t.Errorf("aggregate event %q lost triggering job identity: aggregate=%+v triggering_job=%+v", test.kind, *aggregate, *triggeringJob)
+		}
+	}
+}
+
+// TestPublicQueueContractCallbacksPreserveTriggeringJobIdentity verifies callback deliveries keep one logical identity across queue, worker, and workflow facts.
+func TestPublicQueueContractCallbacksPreserveTriggeringJobIdentity(t *testing.T) {
+	var events []queue.Event
+	q, err := queue.NewSync(queue.WithObserver(queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+		events = append(events, event)
+	})))
+	if err != nil {
+		t.Fatalf("new observed sync queue: %v", err)
+	}
+	t.Cleanup(func() {
+		if shutdownErr := q.Shutdown(context.Background()); shutdownErr != nil {
+			t.Errorf("shutdown: %v", shutdownErr)
+		}
+	})
+
+	sourceErr := errors.New("callback source failed")
+	q.Register("contract:callback:source", func(context.Context, queue.Message) error {
+		return sourceErr
+	})
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	_, dispatchErr := q.Chain(
+		queue.NewJob("contract:callback:source").
+			Payload(map[string]string{"value": "callback"}).
+			OnQueue("critical").
+			Retry(0),
+	).Catch(func(context.Context, queue.ChainState, error) error {
+		return nil
+	}).Dispatch(context.Background())
+	if !errors.Is(dispatchErr, sourceErr) {
+		t.Fatalf("dispatch error = %v, want %v", dispatchErr, sourceErr)
+	}
+
+	var sourceKey, callbackJobID string
+	for _, event := range events {
+		switch event.Kind {
+		case queue.EventJobStarted:
+			if event.JobType == "contract:callback:source" {
+				sourceKey = event.JobKey
+			}
+		case queue.EventCallbackStarted:
+			callbackJobID = event.JobID
+		}
+	}
+	if sourceKey == "" || callbackJobID == "" {
+		t.Fatalf("source or callback identity missing: source_key=%q callback_job_id=%q events=%+v", sourceKey, callbackJobID, events)
+	}
+
+	required := map[queue.EventKind]queue.EventLayer{
+		queue.EventEnqueueAccepted:   queue.EventLayerQueue,
+		queue.EventProcessStarted:    queue.EventLayerWorker,
+		queue.EventCallbackStarted:   queue.EventLayerWorkflow,
+		queue.EventProcessSucceeded:  queue.EventLayerWorker,
+		queue.EventCallbackSucceeded: queue.EventLayerWorkflow,
+	}
+	for kind, wantLayer := range required {
+		var found *queue.Event
+		for index := range events {
+			if events[index].Kind == kind && events[index].JobID == callbackJobID {
+				found = &events[index]
+				break
+			}
+		}
+		if found == nil {
+			t.Errorf("callback observer did not receive %q for job %q: %+v", kind, callbackJobID, events)
+			continue
+		}
+		if found.Layer != wantLayer || found.Queue != "critical" || found.JobType != "contract:callback:source" || found.JobKey != sourceKey {
+			t.Errorf("callback event %q lost triggering identity: %+v", kind, *found)
 		}
 	}
 }

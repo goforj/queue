@@ -23,10 +23,12 @@ Queue dispatch lifecycle:
 Processing lifecycle:
 
 - `EventProcessStarted`: handler attempt started.
-- `EventProcessSucceeded`: handler attempt succeeded.
+- `EventProcessSucceeded`: handler attempt succeeded. SQL, SQS, and RabbitMQ emit this only after durable row finalization, deletion, or acknowledgement respectively; backends without a post-handler settlement hook retain their documented weaker boundary.
 - `EventProcessFailed`: handler attempt failed.
 - `EventProcessRetried`: processing began for a numbered application retry attempt. Infrastructure redelivery of that same attempt may repeat the fact.
 - `EventProcessArchived`: the driver confirmed terminal settlement for a failed attempt.
+- `EventRepublishFailed`: an internal delay or retry replacement could not be published.
+- `EventSettlementFailed`: durable SQL finalization, broker acknowledgement, or broker deletion failed after handler or replacement work completed, so redelivery remains possible.
 
 Queue control lifecycle:
 
@@ -39,6 +41,10 @@ Workflow lifecycle:
 - `EventChainStarted`, `EventChainAdvanced`, `EventChainCompleted`, `EventChainFailed`
 - `EventBatchStarted`, `EventBatchProgressed`, `EventBatchCompleted`, `EventBatchFailed`, `EventBatchCancelled`
 - `EventCallbackStarted`, `EventCallbackSucceeded`, `EventCallbackFailed`
+
+Positive job, chain, batch, and callback facts use the same SQL/SQS/RabbitMQ settlement boundary as `EventProcessSucceeded`. Callback redelivery after an at-most-once marker emits no second success fact; closure callbacks remain explicitly ephemeral and can be lost with their owning process.
+
+An allowed batch item failure emits `EventBatchProgressed` with `Err` and does not emit `EventBatchFailed`. The aggregate can later emit `EventBatchCompleted` after every item reaches an allowed terminal outcome. `EventBatchFailed` is reserved for a non-allowed failure or cancellation path that makes the aggregate fail.
 
 ## Required fields
 
@@ -74,6 +80,7 @@ Every layer includes the applicable `DispatchID`, `JobID`, `ChainID`, and `Batch
 - `EventProcessArchived` is reserved for a driver-confirmed terminal settlement; drivers that cannot yet confirm that boundary omit it rather than emitting a prediction.
 - `JobKey` is a deterministic hash of the logical job type and payload. Volatile dispatch/workflow IDs are excluded, and the value is not guaranteed globally unique.
 - `Queue` defaults to `"default"` when not explicitly set.
+- Aggregate and callback workflow facts retain the triggering job's effective queue, logical job type, and `JobKey`, so observers can join them to queue and worker facts without reading payloads.
 
 ## Cross-driver support
 
@@ -109,7 +116,7 @@ The observer collapse is an explicit pre-v1 compatibility boundary:
 
 - `queue.WithObserver` accepts `queue.Observer` and receives queue, worker, and workflow layers.
 - `queue.WorkflowEvent`, `queue.WorkflowEventKind`, `queue.WorkflowObserver`, and `queue.WorkflowObserverFunc` are deprecated aliases of the root event model.
-- Code that used unkeyed `queue.Event` literals must switch to keyed literals because the canonical envelope now includes layer and correlation fields.
+- Code that used unkeyed `queue.Event` or `bus.Event` literals must switch to keyed literals because the envelopes now include correlation fields.
 - A custom `bus.Observer` passed to the root option must be adapted with `queue.ObserverFunc`. Direct legacy `bus` consumers can continue using `bus.WithObserver` during the facade migration.
 - Existing workflow-only sinks can retain their previous scope by returning early unless `event.Layer == queue.EventLayerWorkflow`.
 

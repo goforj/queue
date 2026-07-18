@@ -17,18 +17,105 @@ type ackRecorder struct {
 	acks        int
 	nacks       int
 	nackRequeue bool
+	ackErr      error
+	nackErr     error
+}
+
+type rabbitConfirmationStub struct {
+	acked bool
+	err   error
+}
+
+type rabbitContextConfirmationStub struct{}
+
+// WaitContext returns the configured broker confirmation.
+func (s rabbitConfirmationStub) WaitContext(context.Context) (bool, error) {
+	return s.acked, s.err
+}
+
+// WaitContext exposes cancellation from the caller's publish boundary.
+func (rabbitContextConfirmationStub) WaitContext(ctx context.Context) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
 }
 
 func (a *ackRecorder) Ack(_ uint64, _ bool) error {
 	a.acks++
-	return nil
+	return a.ackErr
 }
 
 // Nack records whether the worker requested broker redelivery.
 func (a *ackRecorder) Nack(_ uint64, _ bool, requeue bool) error {
 	a.nacks++
 	a.nackRequeue = requeue
-	return nil
+	return a.nackErr
+}
+
+// TestRabbitMQWorkerSettlementFailuresAreObserved verifies Ack and Nack errors become correlated worker facts.
+func TestRabbitMQWorkerSettlementFailuresAreObserved(t *testing.T) {
+	tests := []struct {
+		name       string
+		handlerErr error
+		maxRetry   int
+		acks       *ackRecorder
+	}{
+		{name: "ack", maxRetry: 0, acks: &ackRecorder{ackErr: errors.New("ack failed")}},
+		{name: "nack", handlerErr: busruntime.Uncommitted(errors.New("store failed")), maxRetry: 2, acks: &ackRecorder{nackErr: errors.New("nack failed")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var events []queue.Event
+			committed := false
+			w := &rabbitMQWorker{
+				handlers: map[string]queue.Handler{"bus:job": func(ctx context.Context, _ queue.Job) error {
+					if !busruntime.DeferUntilDeliveryCommitted(ctx, func() { committed = true }) {
+						t.Fatal("handler context did not carry a settlement boundary")
+					}
+					return test.handlerErr
+				}},
+				observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+			}
+			payload := []byte(`{"schema_version":1,"dispatch_id":"dsp_rabbit_settle","job_id":"job_rabbit_settle","job":{"type":"reports:build","payload":"eyJpZCI6MX0="}}`)
+			body, err := json.Marshal(rabbitMQMessage{Type: "bus:job", Queue: "critical", Payload: payload, MaxRetry: test.maxRetry})
+			if err != nil {
+				t.Fatalf("marshal body: %v", err)
+			}
+			w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: test.acks, DeliveryTag: 70})
+			if len(events) != 1 || events[0].Kind != queue.EventSettlementFailed {
+				t.Fatalf("settlement events = %+v, want one failure", events)
+			}
+			if events[0].Layer != queue.EventLayerWorker || events[0].JobType != "reports:build" || events[0].DispatchID != "dsp_rabbit_settle" {
+				t.Fatalf("settlement correlation = %+v", events[0])
+			}
+			if committed {
+				t.Fatal("failed acknowledgement committed deferred handler outcome")
+			}
+		})
+	}
+}
+
+// TestRabbitMQWorkerRetrySettlementFailureUsesDeliveredAttempt verifies replacement metadata does not overwrite the unsettled delivery's correlation.
+func TestRabbitMQWorkerRetrySettlementFailureUsesDeliveredAttempt(t *testing.T) {
+	acks := &ackRecorder{ackErr: errors.New("ack failed")}
+	var events []queue.Event
+	w := &rabbitMQWorker{
+		handlers: map[string]queue.Handler{"job:retry:settlement": func(context.Context, queue.Job) error {
+			return errors.New("retry me")
+		}},
+		cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
+		observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+		publishOverride: func(context.Context, rabbitMQMessage) error {
+			return nil
+		},
+	}
+	body, err := json.Marshal(rabbitMQMessage{Type: "job:retry:settlement", Queue: "critical", Attempt: 1, MaxRetry: 3})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 71})
+	if len(events) != 1 || events[0].Kind != queue.EventSettlementFailed || events[0].Attempt != 1 {
+		t.Fatalf("settlement events = %+v, want original attempt 1", events)
+	}
 }
 
 func (a *ackRecorder) Reject(_ uint64, _ bool) error { return nil }
@@ -79,6 +166,34 @@ func TestRabbitMQWorker_StartWorkersNilContextDialFailure(t *testing.T) {
 	}
 }
 
+// TestRabbitMQWorkerShutdownHonorsDeadline verifies a stuck in-flight handler cannot block the caller forever.
+func TestRabbitMQWorkerShutdownHonorsDeadline(t *testing.T) {
+	w := newRabbitMQWorker(rabbitMQWorkerConfig{})
+	w.started = true
+	w.cancel = func() {}
+	release := make(chan struct{})
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		<-release
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	if err := w.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+	}
+	if !w.started {
+		t.Fatal("timed-out shutdown exposed the worker as restartable while work remained")
+	}
+	close(release)
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("complete shutdown: %v", err)
+	}
+	if w.started {
+		t.Fatal("completed shutdown retained started state")
+	}
+}
+
 func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 	t.Run("invalid json ack", func(t *testing.T) {
 		acks := &ackRecorder{}
@@ -105,6 +220,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 	t.Run("success handler ack", func(t *testing.T) {
 		acks := &ackRecorder{}
 		called := 0
+		committed := false
 		w := &rabbitMQWorker{handlers: map[string]queue.Handler{
 			"job:ok": func(ctx context.Context, job queue.Job) error {
 				called++
@@ -114,6 +230,9 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 				opts := queuecore.DriverOptions(job)
 				if job.Type != "job:ok" || opts.QueueName != "critical" || opts.Attempt != 1 {
 					t.Fatalf("unexpected job fields: type=%q queue=%q attempt=%d", job.Type, opts.QueueName, opts.Attempt)
+				}
+				if !busruntime.DeferUntilDeliveryCommitted(ctx, func() { committed = true }) {
+					t.Fatal("handler context did not carry a settlement boundary")
 				}
 				return nil
 			},
@@ -125,6 +244,9 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 3})
 		if called != 1 || acks.acks != 1 {
 			t.Fatalf("expected handler once and ack once, got called=%d ack=%d", called, acks.acks)
+		}
+		if !committed {
+			t.Fatal("successful acknowledgement did not commit deferred handler success")
 		}
 	})
 
@@ -196,6 +318,114 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 5})
 		if acks.acks != 0 || acks.nacks != 1 {
 			t.Fatalf("expected nack once, got ack=%d nack=%d", acks.acks, acks.nacks)
+		}
+	})
+
+	t.Run("failed handler acks only after confirmed replacement", func(t *testing.T) {
+		acks := &ackRecorder{}
+		published := 0
+		w := &rabbitMQWorker{
+			handlers: map[string]queue.Handler{
+				"job:retry:confirmed": func(context.Context, queue.Job) error { return errors.New("boom") },
+			},
+			cfg: rabbitMQWorkerConfig{DefaultQueue: "default"},
+			publishOverride: func(ctx context.Context, message rabbitMQMessage) error {
+				published++
+				if ctx.Err() != nil {
+					t.Fatalf("replacement publish context is already canceled: %v", ctx.Err())
+				}
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("replacement publish context has no settlement deadline")
+				}
+				if acks.acks != 0 {
+					t.Fatal("original delivery was acknowledged before replacement confirmation")
+				}
+				if message.Attempt != 1 {
+					t.Fatalf("replacement attempt = %d, want 1", message.Attempt)
+				}
+				return nil
+			},
+		}
+		body, err := json.Marshal(rabbitMQMessage{Type: "job:retry:confirmed", Queue: "default", MaxRetry: 2})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 55})
+		if published != 1 || acks.acks != 1 || acks.nacks != 0 {
+			t.Fatalf("publish/ack/nack = %d/%d/%d, want 1/1/0", published, acks.acks, acks.nacks)
+		}
+	})
+
+	t.Run("expired handler timeout does not cancel replacement settlement", func(t *testing.T) {
+		acks := &ackRecorder{}
+		published := 0
+		w := &rabbitMQWorker{
+			handlers: map[string]queue.Handler{
+				"job:retry:timeout": func(ctx context.Context, _ queue.Job) error {
+					<-ctx.Done()
+					return ctx.Err()
+				},
+			},
+			cfg: rabbitMQWorkerConfig{DefaultQueue: "default"},
+			publishOverride: func(ctx context.Context, message rabbitMQMessage) error {
+				published++
+				if ctx.Err() != nil {
+					t.Fatalf("expired handler context leaked into settlement: %v", ctx.Err())
+				}
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("replacement settlement context has no deadline")
+				}
+				if message.Attempt != 1 {
+					t.Fatalf("replacement attempt = %d, want 1", message.Attempt)
+				}
+				return nil
+			},
+		}
+		body, err := json.Marshal(rabbitMQMessage{
+			Type:          "job:retry:timeout",
+			Queue:         "default",
+			MaxRetry:      1,
+			TimeoutMillis: 1,
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 56})
+		if published != 1 || acks.acks != 1 || acks.nacks != 0 {
+			t.Fatalf("publish/ack/nack = %d/%d/%d, want 1/1/0", published, acks.acks, acks.nacks)
+		}
+	})
+
+	t.Run("canceled delivery context does not cancel delayed replacement settlement", func(t *testing.T) {
+		acks := &ackRecorder{}
+		published := 0
+		w := &rabbitMQWorker{
+			handlers: map[string]queue.Handler{},
+			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
+			publishOverride: func(ctx context.Context, _ rabbitMQMessage) error {
+				published++
+				if ctx.Err() != nil {
+					t.Fatalf("delivery cancellation leaked into delayed settlement: %v", ctx.Err())
+				}
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("delayed settlement context has no deadline")
+				}
+				return nil
+			},
+		}
+		body, err := json.Marshal(rabbitMQMessage{
+			Type:          "job:future:canceled",
+			Queue:         "default",
+			AvailableAtMS: time.Now().Add(time.Second).UnixMilli(),
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		deliveryCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		w.processDelivery(deliveryCtx, amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 57})
+		if published != 1 || acks.acks != 1 || acks.nacks != 0 {
+			t.Fatalf("publish/ack/nack = %d/%d/%d, want 1/1/0", published, acks.acks, acks.nacks)
 		}
 	})
 
@@ -291,14 +521,80 @@ func TestRabbitMQWorker_AttemptDecisionSettlement(t *testing.T) {
 
 func TestRabbitMQWorker_PublishNilChannelAndImmediateDelay(t *testing.T) {
 	w := &rabbitMQWorker{cfg: rabbitMQWorkerConfig{DefaultQueue: ""}}
-	if err := w.publish(rabbitMQMessage{Type: "job:nilch", Queue: "default"}); !errors.Is(err, amqp.ErrClosed) {
+	if err := w.publish(context.Background(), rabbitMQMessage{Type: "job:nilch", Queue: "default"}); !errors.Is(err, amqp.ErrClosed) {
 		t.Fatalf("publish with nil channel should return amqp.ErrClosed, got %v", err)
 	}
-	if err := w.publish(rabbitMQMessage{
+	if err := w.publish(context.Background(), rabbitMQMessage{
 		Type:          "job:past",
 		Queue:         "default",
 		AvailableAtMS: time.Now().Add(-10 * time.Millisecond).UnixMilli(),
 	}); !errors.Is(err, amqp.ErrClosed) {
 		t.Fatalf("publish past delay with nil channel should return amqp.ErrClosed, got %v", err)
+	}
+}
+
+// TestAwaitRabbitConfirmation verifies only a positive confirmation commits a publish.
+func TestAwaitRabbitConfirmation(t *testing.T) {
+	cause := errors.New("confirmation channel closed")
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		name         string
+		ctx          context.Context
+		confirmation rabbitPublishConfirmation
+		wantErr      bool
+	}{
+		{name: "missing", wantErr: true},
+		{name: "nack", confirmation: rabbitConfirmationStub{}, wantErr: true},
+		{name: "wait error", confirmation: rabbitConfirmationStub{err: cause}, wantErr: true},
+		{name: "context canceled", ctx: canceledCtx, confirmation: rabbitContextConfirmationStub{}, wantErr: true},
+		{name: "ack", confirmation: rabbitConfirmationStub{acked: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := test.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			err := awaitRabbitConfirmation(ctx, test.confirmation)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("awaitRabbitConfirmation() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+// TestRabbitPublishContextBoundsBackground verifies producer confirmation cannot wait forever without a caller deadline.
+func TestRabbitPublishContextBoundsBackground(t *testing.T) {
+	ctx, cancel, err := rabbitPublishContext(context.Background())
+	if err != nil {
+		t.Fatalf("rabbit publish context: %v", err)
+	}
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("bounded publish context has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > rabbitPublishConfirmationTimeout {
+		t.Fatalf("publish confirmation deadline remaining = %v", remaining)
+	}
+
+	canceled, cancelCanceled := context.WithCancel(context.Background())
+	cancelCanceled()
+	if err := publishRabbitConfirmed(canceled, nil, "", "default", amqp.Publishing{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled publish error = %v, want context.Canceled", err)
+	}
+}
+
+// TestRabbitPublishAmbiguityClassification verifies lost confirmations cannot be treated as safe pre-publish rejection.
+func TestRabbitPublishAmbiguityClassification(t *testing.T) {
+	waitErr := errors.New("confirmation lost")
+	err := awaitRabbitConfirmation(context.Background(), rabbitConfirmationStub{err: waitErr})
+	if !isRabbitPublishAmbiguous(err) || !errors.Is(err, waitErr) {
+		t.Fatalf("confirmation error = %v, want ambiguous wrapped cause", err)
+	}
+	if isRabbitPublishAmbiguous(errors.New("dial rejected")) {
+		t.Fatal("pre-publish failure classified as ambiguous")
 	}
 }

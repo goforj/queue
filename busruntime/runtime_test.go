@@ -24,6 +24,23 @@ func TestDeliveryAttemptContext(t *testing.T) {
 	}
 }
 
+// TestContinuationScope verifies drain permission is runtime-owned, explicit, expiring, and nil-context safe.
+func TestContinuationScope(t *testing.T) {
+	first := NewContinuationScope()
+	second := NewContinuationScope()
+	if first.Owns(nil) || first.Owns(context.Background()) {
+		t.Fatal("unmarked context unexpectedly belonged to a continuation scope")
+	}
+	ctx, release := first.Permit(nil)
+	if !first.Owns(ctx) || second.Owns(ctx) {
+		t.Fatal("marked context did not preserve scoped continuation ownership")
+	}
+	release()
+	if first.Owns(ctx) {
+		t.Fatal("released or escaped context retained continuation permission")
+	}
+}
+
 // TestDeliveryAttemptExhausted verifies MaxRetry counts retries after the initial attempt.
 func TestDeliveryAttemptExhausted(t *testing.T) {
 	tests := []struct {

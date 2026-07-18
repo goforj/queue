@@ -105,8 +105,25 @@ func TestServerConfig_UncommittedErrorsDoNotCountAsFailures(t *testing.T) {
 	if isFailure(fmt.Errorf("commit callback: %w", busruntime.Uncommitted(cause))) {
 		t.Fatal("wrapped uncommitted error must not count as a failure")
 	}
+	if isFailure(backend.ErrLeaseExpired) {
+		t.Fatal("lease recovery must not consume the application retry counter")
+	}
 	if !isFailure(busruntime.Permanent(cause)) {
 		t.Fatal("permanent application error must count as a failure")
+	}
+}
+
+// TestRedisRetryDelaySeparatesInfrastructureFromApplicationBackoff verifies recovery does not inherit randomized application delays.
+func TestRedisRetryDelaySeparatesInfrastructureFromApplicationBackoff(t *testing.T) {
+	cause := errors.New("failed")
+	if got := redisRetryDelay(0, busruntime.Uncommitted(cause), backend.NewTask("job", nil)); got != time.Second {
+		t.Fatalf("uncommitted retry delay = %v, want 1s", got)
+	}
+	if got := redisRetryDelay(0, backend.ErrLeaseExpired, backend.NewTask("job", nil)); got != time.Second {
+		t.Fatalf("lease recovery delay = %v, want 1s", got)
+	}
+	if got := redisRetryDelay(0, cause, backend.NewTask("job", nil)); got < 15*time.Second {
+		t.Fatalf("application retry delay = %v, want Asynq default", got)
 	}
 }
 

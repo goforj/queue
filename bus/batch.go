@@ -120,6 +120,7 @@ func (b *batchBuilder) Finally(fn func(ctx context.Context, st BatchState) error
 	return b
 }
 
+// Dispatch persists the complete batch before enqueueing its canonical jobs.
 func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 	if len(b.jobs) == 0 {
 		return "", errors.New("batch requires at least one job")
@@ -161,7 +162,9 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 	}
 	b.r.mu.Unlock()
 
-	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, Queue: b.queue, Time: b.r.now()})
+	first := jobs[0]
+	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, JobType: first.Job.Type, JobKey: wireJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
+	var synchronousErr error
 	for _, job := range jobs {
 		if err := b.r.dispatchEnvelope(ctx, internalJobBatchJob, envelope{
 			SchemaVersion: schemaVersion,
@@ -171,21 +174,36 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 			JobID:         job.JobID,
 			Job:           job.Job,
 		}); err != nil {
+			if executionErr, ok := acceptedDispatchExecutionError(err); ok {
+				if synchronousErr == nil {
+					synchronousErr = executionErr
+				}
+				if b.allowFailed && !busruntime.IsUncommitted(executionErr) {
+					continue
+				}
+				return batchID, executionErr
+			}
 			if st, stErr := b.r.store.GetBatch(ctx, batchID); stErr == nil && (st.Completed || st.Processed > 0 || st.Failed > 0) {
 				return batchID, err
 			}
-			_ = b.r.store.CancelBatch(ctx, batchID)
-			st, stErr := b.r.store.GetBatch(ctx, batchID)
-			if stErr == nil {
-				_ = b.r.invokeBatchCatch(ctx, st, err)
-				_ = b.r.invokeBatchFinally(ctx, st)
+			if cancelErr := b.r.store.CancelBatch(ctx, batchID); cancelErr != nil {
+				return batchID, uncommittedMutationError("cancel batch after initial dispatch rejection", errors.Join(err, cancelErr))
 			}
-			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: dispatchID, BatchID: batchID, Time: b.r.now(), Err: err})
-			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: dispatchID, BatchID: batchID, Time: b.r.now()})
-			return batchID, err
+			base := envelope{DispatchID: dispatchID, BatchID: batchID, Job: job.Job}
+			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: wireJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now(), Err: err})
+			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: wireJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now()})
+			st, stErr := b.r.store.GetBatch(ctx, batchID)
+			if stErr != nil {
+				return batchID, errors.Join(err, uncommittedMutationError("read batch after initial dispatch rejection", stErr))
+			}
+			b.r.prepareBatchTerminalCallbacks(batchID, false, st.Failed > 0)
+			catchErr := b.r.invokeCallbackInline(ctx, base, "batch_catch", err)
+			finallyErr := b.r.invokeCallbackInline(ctx, base, "batch_finally", nil)
+			b.r.cleanupBatchCallbacks(batchID)
+			return batchID, errors.Join(err, catchErr, finallyErr)
 		}
 	}
-	return batchID, nil
+	return batchID, synchronousErr
 }
 
 type batchCallbacks struct {
@@ -195,12 +213,87 @@ type batchCallbacks struct {
 	finally  func(ctx context.Context, st BatchState) error
 }
 
+// errCallbackAlreadyInvoked suppresses duplicate terminal facts when a broker redelivers an already-claimed ephemeral callback.
+var errCallbackAlreadyInvoked = errors.New("workflow callback already invoked")
+
+// errCallbackUnavailable reports an ephemeral callback whose owning process state no longer exists.
+var errCallbackUnavailable = errors.New("workflow callback is unavailable")
+
+// errCallbackNotReady rejects callback delivery before its workflow reaches the required state.
+var errCallbackNotReady = errors.New("workflow callback state is not ready")
+
+// prepareBatchTerminalCallbacks discards closures that cannot run for the selected terminal outcome.
+func (r *runtime) prepareBatchTerminalCallbacks(batchID string, succeeded, hasFailures bool) {
+	r.mu.Lock()
+	callbacks, ok := r.batchCallbacks[batchID]
+	if ok {
+		callbacks.progress = nil
+		if succeeded && !hasFailures {
+			callbacks.catch = nil
+		}
+		if !succeeded {
+			callbacks.then = nil
+		}
+		if callbacks.progress == nil && callbacks.then == nil && callbacks.catch == nil && callbacks.finally == nil {
+			delete(r.batchCallbacks, batchID)
+		} else {
+			r.batchCallbacks[batchID] = callbacks
+		}
+	}
+	r.mu.Unlock()
+}
+
+// finishBatchCallback clears only the closure that ran so concurrently scheduled terminal callbacks remain available.
+func (r *runtime) finishBatchCallback(batchID, kind string) {
+	r.mu.Lock()
+	callbacks, ok := r.batchCallbacks[batchID]
+	if ok {
+		switch kind {
+		case "then":
+			callbacks.then = nil
+		case "catch":
+			callbacks.catch = nil
+		case "finally":
+			callbacks.finally = nil
+		}
+		if callbacks.progress == nil && callbacks.then == nil && callbacks.catch == nil && callbacks.finally == nil {
+			delete(r.batchCallbacks, batchID)
+		} else {
+			r.batchCallbacks[batchID] = callbacks
+		}
+	}
+	r.mu.Unlock()
+}
+
+// cleanupBatchCallbacks removes terminal workflow entries that have no remaining configured closure.
+func (r *runtime) cleanupBatchCallbacks(batchID string) {
+	r.mu.Lock()
+	callbacks, ok := r.batchCallbacks[batchID]
+	if ok && callbacks.progress == nil && callbacks.then == nil && callbacks.catch == nil && callbacks.finally == nil {
+		delete(r.batchCallbacks, batchID)
+	}
+	r.mu.Unlock()
+}
+
+// dispatchBatchTerminal publishes one aggregate terminal outcome regardless of which job finishes last.
+func (r *runtime) dispatchBatchTerminal(ctx context.Context, env envelope, st BatchState) {
+	succeeded := st.Completed && !st.Cancelled
+	r.prepareBatchTerminalCallbacks(env.BatchID, succeeded, st.Failed > 0)
+	if succeeded {
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+		_ = r.dispatchCallback(ctx, env, "batch_then", nil)
+	}
+	_ = r.dispatchCallback(ctx, env, "batch_finally", nil)
+	r.cleanupBatchCallbacks(env.BatchID)
+}
+
 // handleInternalBatchJob records each batch mutation before publishing its corresponding workflow fact.
 func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
+	progress := r.batchProgressCallback(env.BatchID)
 	if markErr := r.store.MarkBatchJobStarted(ctx, env.BatchID, env.JobID); markErr != nil {
 		return uncommittedMutationError("mark batch job started", markErr)
 	}
@@ -215,14 +308,17 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 			return uncommittedMutationError("mark batch job failed", markErr)
 		}
 		r.emitWireJobOutcome(ctx, outcome)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
 		if st.Cancelled {
-			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, Time: r.now()})
+			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		}
-		_ = r.dispatchCallback(ctx, env, "batch_catch", outcome.err)
-		r.invokeBatchProgress(ctx, st)
+		if st.Failed == 1 {
+			_ = r.dispatchCallback(ctx, env, "batch_catch", outcome.err)
+		}
+		r.invokeBatchProgress(ctx, st, progress)
 		if done {
-			_ = r.dispatchCallback(ctx, env, "batch_finally", nil)
+			r.dispatchBatchTerminal(ctx, env, st)
 		}
 		return outcome.err
 	}
@@ -231,80 +327,120 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 		return uncommittedMutationError("mark batch job succeeded", markErr)
 	}
 	r.emitWireJobOutcome(ctx, outcome)
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, Queue: env.Job.Options.Queue, Time: r.now()})
-	r.invokeBatchProgress(ctx, st)
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+	r.invokeBatchProgress(ctx, st, progress)
 	if done {
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, Time: r.now()})
-		_ = r.dispatchCallback(ctx, env, "batch_then", nil)
-		_ = r.dispatchCallback(ctx, env, "batch_finally", nil)
+		r.dispatchBatchTerminal(ctx, env, st)
 	}
 	return nil
 }
 
-func (r *runtime) invokeBatchProgress(ctx context.Context, st BatchState) {
+// batchProgressCallback snapshots an in-flight job's hook before another completion can prepare terminal callbacks.
+func (r *runtime) batchProgressCallback(batchID string) func(context.Context, BatchState) error {
 	r.mu.RLock()
-	cb := r.batchCallbacks[st.BatchID]
+	progress := r.batchCallbacks[batchID].progress
 	r.mu.RUnlock()
-	if cb.progress != nil {
-		_ = cb.progress(ctx, st)
+	return progress
+}
+
+// invokeBatchProgress runs the snapshotted ephemeral progress hook without treating it as durable state.
+func (r *runtime) invokeBatchProgress(ctx context.Context, st BatchState, progress func(context.Context, BatchState) error) {
+	if progress != nil {
+		_ = runEphemeralCallback(func() error { return progress(ctx, st) })
 	}
 }
 
+// invokeBatchThen claims the successful terminal callback before application code can run.
 func (r *runtime) invokeBatchThen(ctx context.Context, st BatchState) error {
+	return r.invokeBatchThenObserved(ctx, st, nil)
+}
+
+// invokeBatchThenObserved emits lifecycle start only after state validation and idempotency claim succeed.
+func (r *runtime) invokeBatchThenObserved(ctx context.Context, st BatchState, onClaimed func()) error {
+	if !st.Completed || st.Cancelled {
+		return errCallbackNotReady
+	}
 	key := "batch_then:" + st.BatchID
 	ok, onceErr := r.callbackOnce(ctx, key)
 	if onceErr != nil {
 		return onceErr
 	}
 	if !ok {
-		return nil
+		return errCallbackAlreadyInvoked
+	}
+	if onClaimed != nil {
+		onClaimed()
 	}
 	r.mu.RLock()
 	cb := r.batchCallbacks[st.BatchID]
 	r.mu.RUnlock()
 	if cb.then != nil {
-		_ = cb.then(ctx, st)
+		defer r.finishBatchCallback(st.BatchID, "then")
+		return runEphemeralCallback(func() error { return cb.then(ctx, st) })
 	}
-	return nil
+	return errCallbackUnavailable
 }
 
+// invokeBatchCatch claims the failure callback before application code can run.
 func (r *runtime) invokeBatchCatch(ctx context.Context, st BatchState, err error) error {
+	return r.invokeBatchCatchObserved(ctx, st, err, nil)
+}
+
+// invokeBatchCatchObserved emits lifecycle start only after state validation and idempotency claim succeed.
+func (r *runtime) invokeBatchCatchObserved(ctx context.Context, st BatchState, err error, onClaimed func()) error {
+	if st.Failed <= 0 && !st.Cancelled {
+		return errCallbackNotReady
+	}
 	key := "batch_catch:" + st.BatchID
 	ok, onceErr := r.callbackOnce(ctx, key)
 	if onceErr != nil {
 		return onceErr
 	}
 	if !ok {
-		return nil
+		return errCallbackAlreadyInvoked
+	}
+	if onClaimed != nil {
+		onClaimed()
 	}
 	r.mu.RLock()
 	cb := r.batchCallbacks[st.BatchID]
 	r.mu.RUnlock()
 	if cb.catch != nil {
-		_ = cb.catch(ctx, st, err)
+		defer r.finishBatchCallback(st.BatchID, "catch")
+		return runEphemeralCallback(func() error { return cb.catch(ctx, st, err) })
 	}
-	return nil
+	return errCallbackUnavailable
 }
 
+// invokeBatchFinally claims the terminal closure before application code can run.
 func (r *runtime) invokeBatchFinally(ctx context.Context, st BatchState) error {
+	return r.invokeBatchFinallyObserved(ctx, st, nil)
+}
+
+// invokeBatchFinallyObserved emits lifecycle start only after state validation and idempotency claim succeed.
+func (r *runtime) invokeBatchFinallyObserved(ctx context.Context, st BatchState, onClaimed func()) error {
+	if !st.Completed {
+		return errCallbackNotReady
+	}
 	key := "batch_finally:" + st.BatchID
 	ok, onceErr := r.callbackOnce(ctx, key)
 	if onceErr != nil {
 		return onceErr
 	}
 	if !ok {
-		return nil
+		return errCallbackAlreadyInvoked
+	}
+	if onClaimed != nil {
+		onClaimed()
 	}
 	r.mu.RLock()
 	cb := r.batchCallbacks[st.BatchID]
 	r.mu.RUnlock()
-	if cb.finally != nil {
-		_ = cb.finally(ctx, st)
+	if cb.finally == nil {
+		return errCallbackUnavailable
 	}
-	r.mu.Lock()
-	delete(r.batchCallbacks, st.BatchID)
-	r.mu.Unlock()
-	return nil
+	defer r.finishBatchCallback(st.BatchID, "finally")
+	return runEphemeralCallback(func() error { return cb.finally(ctx, st) })
 }
 
 // callbackOnce persists callback idempotency before invoking application code.
@@ -322,22 +458,32 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
+	return r.handleCallbackEnvelope(ctx, env)
+}
+
+// handleCallbackEnvelope validates, claims, invokes, and observes one decoded callback delivery.
+func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) error {
 	cbErr := error(nil)
 	if env.Error != "" {
 		cbErr = errors.New(env.Error)
 	}
 	start := r.now()
-	r.emit(ctx, Event{
-		SchemaVersion: schemaVersion,
-		EventID:       newID("evt"),
-		Kind:          EventCallbackStarted,
-		DispatchID:    env.DispatchID,
-		JobID:         env.JobID,
-		ChainID:       env.ChainID,
-		BatchID:       env.BatchID,
-		Queue:         env.Job.Options.Queue,
-		Time:          r.now(),
-	})
+	onClaimed := func() {
+		start = r.now()
+		r.emit(ctx, Event{
+			SchemaVersion: schemaVersion,
+			EventID:       newID("evt"),
+			Kind:          EventCallbackStarted,
+			DispatchID:    env.DispatchID,
+			JobID:         env.JobID,
+			ChainID:       env.ChainID,
+			BatchID:       env.BatchID,
+			JobType:       env.Job.Type,
+			JobKey:        wireJobEventKey(env.Job),
+			Queue:         env.Job.Options.Queue,
+			Time:          start,
+		})
+	}
 	var err error
 	switch env.CallbackKind {
 	case "chain_catch":
@@ -350,7 +496,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 			err = uncommittedMutationError("read chain callback state", stErr)
 			break
 		}
-		err = r.invokeChainCatch(ctx, st, cbErr)
+		err = r.invokeChainCatchObserved(ctx, st, cbErr, onClaimed)
 	case "chain_finally":
 		if env.ChainID == "" {
 			err = errors.New("chain callback requires chain_id")
@@ -361,7 +507,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 			err = uncommittedMutationError("read chain callback state", stErr)
 			break
 		}
-		err = r.invokeChainFinally(ctx, st)
+		err = r.invokeChainFinallyObserved(ctx, st, onClaimed)
 	case "batch_catch":
 		if env.BatchID == "" {
 			err = errors.New("batch callback requires batch_id")
@@ -372,7 +518,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 			err = uncommittedMutationError("read batch callback state", stErr)
 			break
 		}
-		err = r.invokeBatchCatch(ctx, st, cbErr)
+		err = r.invokeBatchCatchObserved(ctx, st, cbErr, onClaimed)
 	case "batch_then":
 		if env.BatchID == "" {
 			err = errors.New("batch callback requires batch_id")
@@ -383,7 +529,7 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 			err = uncommittedMutationError("read batch callback state", stErr)
 			break
 		}
-		err = r.invokeBatchThen(ctx, st)
+		err = r.invokeBatchThenObserved(ctx, st, onClaimed)
 	case "batch_finally":
 		if env.BatchID == "" {
 			err = errors.New("batch callback requires batch_id")
@@ -394,11 +540,14 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 			err = uncommittedMutationError("read batch callback state", stErr)
 			break
 		}
-		err = r.invokeBatchFinally(ctx, st)
+		err = r.invokeBatchFinallyObserved(ctx, st, onClaimed)
 	default:
 		err = errors.New("unknown callback kind")
 	}
 	if err != nil {
+		if errors.Is(err, errCallbackAlreadyInvoked) {
+			return nil
+		}
 		if busruntime.IsUncommitted(err) {
 			return err
 		}
@@ -410,6 +559,8 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 			JobID:         env.JobID,
 			ChainID:       env.ChainID,
 			BatchID:       env.BatchID,
+			JobType:       env.Job.Type,
+			JobKey:        wireJobEventKey(env.Job),
 			Queue:         env.Job.Options.Queue,
 			Duration:      r.now().Sub(start),
 			Time:          r.now(),
@@ -425,6 +576,8 @@ func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.Inb
 		JobID:         env.JobID,
 		ChainID:       env.ChainID,
 		BatchID:       env.BatchID,
+		JobType:       env.Job.Type,
+		JobKey:        wireJobEventKey(env.Job),
 		Queue:         env.Job.Options.Queue,
 		Duration:      r.now().Sub(start),
 		Time:          r.now(),

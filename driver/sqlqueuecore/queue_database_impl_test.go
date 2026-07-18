@@ -2,12 +2,85 @@ package sqlqueuecore
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
+	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/goforj/queue"
 	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queuecore"
 )
+
+// TestDatabaseStartAfterShutdownRejectsFalseRestart verifies direct core callers cannot receive success after workers and resources stopped.
+func TestDatabaseStartAfterShutdownRejectsFalseRestart(t *testing.T) {
+	database := &databaseQueue{}
+	database.started.Store(true)
+	database.shuttingDown.Store(true)
+	if err := database.StartWorkers(context.Background()); !errors.Is(err, queue.ErrQueuerShuttingDown) {
+		t.Fatalf("start after shutdown = %v, want ErrQueuerShuttingDown", err)
+	}
+}
+
+// TestLocalDatabaseConfigDisableAutoMigrate verifies the additive opt-out preserves the established default while overriding legacy true values.
+func TestLocalDatabaseConfigDisableAutoMigrate(t *testing.T) {
+	if normalized := (localDatabaseConfig{}).normalize(); !normalized.AutoMigrate {
+		t.Fatal("default configuration no longer enables compatibility migrations")
+	}
+	normalized := (localDatabaseConfig{AutoMigrate: true, DisableAutoMigrate: true}).normalize()
+	if normalized.AutoMigrate {
+		t.Fatal("DisableAutoMigrate did not override migration startup")
+	}
+}
+
+// TestDatabaseContinuationPermissionIsScopedAndEphemeral verifies only this queue's active handler may dispatch during drain.
+func TestDatabaseContinuationPermissionIsScopedAndEphemeral(t *testing.T) {
+	database := &databaseQueue{continuation: busruntime.NewContinuationScope()}
+	database.shuttingDown.Store(true)
+	invalidJob := queue.Job{}
+
+	foreign := busruntime.NewContinuationScope()
+	foreignCtx, releaseForeign := foreign.Permit(context.Background())
+	defer releaseForeign()
+	if err := database.Dispatch(foreignCtx, invalidJob); !errors.Is(err, queue.ErrQueuerShuttingDown) {
+		t.Fatalf("foreign continuation dispatch = %v, want ErrQueuerShuttingDown", err)
+	}
+
+	var escaped context.Context
+	err := database.runHandlerWithContinuationPermit(context.Background(), func(ctx context.Context, _ queue.Job) error {
+		escaped = ctx
+		if !database.continuation.Owns(ctx) {
+			t.Fatal("active SQL handler did not own its continuation permit")
+		}
+		dispatchErr := database.Dispatch(ctx, invalidJob)
+		if errors.Is(dispatchErr, queue.ErrQueuerShuttingDown) || dispatchErr == nil {
+			t.Fatalf("owned continuation dispatch = %v, want validation error after shutdown gate", dispatchErr)
+		}
+		return nil
+	}, invalidJob)
+	if err != nil {
+		t.Fatalf("run handler with continuation permit: %v", err)
+	}
+	if database.continuation.Owns(escaped) {
+		t.Fatal("handler context retained SQL continuation ownership after return")
+	}
+	if err := database.Dispatch(escaped, invalidJob); !errors.Is(err, queue.ErrQueuerShuttingDown) {
+		t.Fatalf("escaped continuation dispatch = %v, want ErrQueuerShuttingDown", err)
+	}
+}
+
+type databaseResultStub struct {
+	rows int64
+	err  error
+}
+
+// LastInsertId returns an unused identifier for the sql.Result contract.
+func (r databaseResultStub) LastInsertId() (int64, error) { return 0, nil }
+
+// RowsAffected returns the configured settlement evidence.
+func (r databaseResultStub) RowsAffected() (int64, error) { return r.rows, r.err }
 
 // TestDatabaseDeliveryJobRestoresAttemptMetadata verifies SQL persistence reaches the shared orchestration context intact.
 func TestDatabaseDeliveryJobRestoresAttemptMetadata(t *testing.T) {
@@ -83,6 +156,82 @@ func TestClassifyDatabaseFailure(t *testing.T) {
 			}
 			if got != test.want {
 				t.Fatalf("settlement = %+v, want %+v", got, test.want)
+			}
+		})
+	}
+}
+
+// TestRequireDatabaseSettlementRow verifies only one affected durable row commits a delivery outcome.
+func TestRequireDatabaseSettlementRow(t *testing.T) {
+	rowsErr := errors.New("rows unavailable")
+	tests := []struct {
+		name    string
+		result  sql.Result
+		wantErr bool
+	}{
+		{name: "nil", wantErr: true},
+		{name: "zero", result: databaseResultStub{}, wantErr: true},
+		{name: "one", result: databaseResultStub{rows: 1}},
+		{name: "many", result: databaseResultStub{rows: 2}, wantErr: true},
+		{name: "rows error", result: databaseResultStub{err: rowsErr}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := requireDatabaseSettlementRow(test.result)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("requireDatabaseSettlementRow() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+// TestDatabaseProcessingClaimRequiresGeneration verifies settlement cannot fall back to an unfenced row identifier.
+func TestDatabaseProcessingClaimRequiresGeneration(t *testing.T) {
+	tests := []struct {
+		name    string
+		job     *dbJob
+		wantErr bool
+	}{
+		{name: "nil", wantErr: true},
+		{name: "missing id", job: &dbJob{processingToken: "claim"}, wantErr: true},
+		{name: "missing token", job: &dbJob{id: 7}, wantErr: true},
+		{name: "fenced claim", job: &dbJob{id: 7, processingToken: "claim"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			id, token, err := databaseProcessingClaim(test.job)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("databaseProcessingClaim() = (%d, %q, %v), wantErr %t", id, token, err, test.wantErr)
+			}
+			if !test.wantErr && (id != test.job.id || token != test.job.processingToken) {
+				t.Fatalf("databaseProcessingClaim() = (%d, %q), want (%d, %q)", id, token, test.job.id, test.job.processingToken)
+			}
+		})
+	}
+}
+
+// TestNewDatabaseProcessingToken verifies processing generations fit every additive dialect column.
+func TestNewDatabaseProcessingToken(t *testing.T) {
+	token, err := newDatabaseProcessingToken()
+	if err != nil {
+		t.Fatalf("newDatabaseProcessingToken(): %v", err)
+	}
+	decoded, err := hex.DecodeString(token)
+	if err != nil {
+		t.Fatalf("decode processing token %q: %v", token, err)
+	}
+	if len(decoded) != databaseProcessingTokenBytes {
+		t.Fatalf("processing token bytes = %d, want %d", len(decoded), databaseProcessingTokenBytes)
+	}
+}
+
+// TestDatabaseSchemaStatementsIncludeProcessingToken verifies fresh schemas never depend on the additive migration pass.
+func TestDatabaseSchemaStatementsIncludeProcessingToken(t *testing.T) {
+	for _, driverName := range []string{"sqlite", "pgx", "mysql"} {
+		t.Run(driverName, func(t *testing.T) {
+			statements := (&databaseQueue{cfg: localDatabaseConfig{DriverName: driverName}}).schemaStatements()
+			if len(statements) == 0 || !strings.Contains(statements[0], "processing_token") {
+				t.Fatalf("fresh %s queue schema does not include processing_token", driverName)
 			}
 		})
 	}

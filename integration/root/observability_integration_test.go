@@ -171,13 +171,13 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 			})
 
-			t.Run("scenario_dispatch_retry_archive", func(t *testing.T) {
+			t.Run("scenario_dispatch_terminal_failure", func(t *testing.T) {
 				failJob := queue.NewJob(failType).
 					Payload(scenarioPayload{ID: 2, Name: "obs-fail"}).
 					OnQueue(fx.queue).
 					Retry(0)
-				requireScenarioNoErr(t, "dispatch_retry_archive", q.Dispatch(failJob))
-				waitForObservabilityScenario(t, "retry_archive_attempts", 12*time.Second, func() bool {
+				requireScenarioNoErr(t, "dispatch_terminal_failure", q.Dispatch(failJob))
+				waitForObservabilityScenario(t, "terminal_failure_attempts", 12*time.Second, func() bool {
 					return failedCalls.Load() >= 1
 				})
 			})
@@ -206,7 +206,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				})
 				requireScenarioTrue(t, "collector_processed", counters.Processed >= 1, "processed=%d expected>=1", counters.Processed)
 				requireScenarioTrue(t, "collector_failed", counters.Failed >= 1, "failed=%d expected>=1", counters.Failed)
-				requireScenarioTrue(t, "collector_archived", counters.Archived >= 1, "archived=%d expected>=1", counters.Archived)
+				// Archived is intentionally not a cross-driver counter until each settlement owner emits a confirmed terminal fact.
 				if fx.name != testenv.BackendRedis {
 					requireScenarioTrue(t, "collector_retried", counters.Retry >= 1, "retry=%d expected>=1", counters.Retry)
 				}

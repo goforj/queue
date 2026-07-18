@@ -324,14 +324,19 @@ type workflowObserverAdapter struct {
 
 // Observe converts workflow facts into the canonical event envelope without exposing the internal bus model to applications.
 func (a workflowObserverAdapter) Observe(ctx context.Context, event bus.Event) {
+	queueName := event.Queue
+	if queueName == "" {
+		queueName = "default"
+	}
 	safeObserve(ctx, a.observer, Event{
 		SchemaVersion: event.SchemaVersion,
 		EventID:       event.EventID,
 		Layer:         eventLayerForKind(EventKind(event.Kind)),
 		Kind:          EventKind(event.Kind),
 		Driver:        a.driver,
-		Queue:         event.Queue,
+		Queue:         queueName,
 		JobType:       event.JobType,
+		JobKey:        event.JobKey,
 		DispatchID:    event.DispatchID,
 		JobID:         event.JobID,
 		ChainID:       event.ChainID,

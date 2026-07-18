@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/goforj/queue/busruntime"
 )
 
 type queueBackendStub struct {
@@ -158,6 +160,25 @@ func TestWrapObservedHandler_EmitsRetryOnlyWhenAttemptBegins(t *testing.T) {
 			t.Fatalf("unexpected later attempt events: %+v", recorder.events)
 		}
 	})
+}
+
+// TestWrapObservedHandlerDefersSuccessUntilSettlement verifies a broker-backed handler cannot report success before acknowledgement.
+func TestWrapObservedHandlerDefersSuccessUntilSettlement(t *testing.T) {
+	recorder := &observerRecorder{}
+	handler := wrapObservedHandler(recorder, DriverSQS, "", "job:settled", nil, func(context.Context, Job) error {
+		return nil
+	})
+	ctx, settlement := busruntime.WithDeliverySettlement(context.Background())
+	if err := handler(ctx, NewJob("job:settled").OnQueue("default")); err != nil {
+		t.Fatalf("wrapped handler returned error: %v", err)
+	}
+	if len(recorder.events) != 1 || recorder.events[0].Kind != EventProcessStarted {
+		t.Fatalf("events before settlement = %+v, want process_started only", recorder.events)
+	}
+	settlement.Commit()
+	if len(recorder.events) != 2 || recorder.events[1].Kind != EventProcessSucceeded {
+		t.Fatalf("events after settlement = %+v, want process_succeeded", recorder.events)
+	}
 }
 
 func TestWrapObservedHandler_DecoratesObserverContext(t *testing.T) {

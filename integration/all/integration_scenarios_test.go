@@ -61,7 +61,10 @@ var integrationRabbitMQ struct {
 	url       string
 }
 
-const redisDefaultJobTimeout = 30 * time.Second
+const (
+	redisApplicationMaxRetryHeader = "goforj-queue-application-max-retry"
+	redisDefaultJobTimeout         = 30 * time.Second
+)
 
 type runtimeWorkerBackend interface {
 	Register(jobType string, handler Handler)
@@ -261,20 +264,48 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
+	const (
+		jobType         = "job:options"
+		deliveryJobType = "job:options:delivery"
+	)
+	queueName := uniqueQueueName("redis-options")
+	attempts := make(chan Event, 1)
+	observer := ObserverFunc(func(_ context.Context, event Event) {
+		if event.Kind == EventProcessStarted && event.JobType == deliveryJobType {
+			select {
+			case attempts <- event:
+			default:
+			}
+		}
+	})
 	inspector := newRedisInspector(t)
-	q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
+	q, err := newQueueRuntime(withObserverAll(
+		withDefaultQueue(redisCfg(integrationRedis.addr), queueName),
+		observer,
+	))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if shutdownErr := q.Shutdown(shutdownCtx); shutdownErr != nil {
+			t.Errorf("shutdown redis option queue: %v", shutdownErr)
+		}
+	})
+	q.Register(jobType, func(context.Context, Job) error { return nil })
+	q.Register(deliveryJobType, func(context.Context, Job) error { return nil })
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start redis option worker: %v", err)
+	}
 
-	queueName := uniqueQueueName("redis-options")
 	delay := 2 * time.Second
 	timeout := 7 * time.Second
 	maxRetry := 4
 	start := time.Now()
 
 	err = q.Dispatch(
-		NewJob("job:options").
+		NewJob(jobType).
 			Payload([]byte("opts")).
 			OnQueue(queueName).
 			Delay(delay).
@@ -292,11 +323,25 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 	if scheduled.Timeout != timeout {
 		t.Fatalf("expected timeout %s, got %s", timeout, scheduled.Timeout)
 	}
-	if scheduled.MaxRetry != maxRetry {
-		t.Fatalf("expected max retry %d, got %d", maxRetry, scheduled.MaxRetry)
+	if scheduled.MaxRetry != maxRetry+1 {
+		t.Fatalf("expected transport max retry %d, got %d", maxRetry+1, scheduled.MaxRetry)
+	}
+	if got := scheduled.Headers[redisApplicationMaxRetryHeader]; got != fmt.Sprintf("%d", maxRetry) {
+		t.Fatalf("expected application max retry header %d, got %q", maxRetry, got)
 	}
 	if scheduled.NextProcessAt.Before(start.Add(delay - time.Second)) {
 		t.Fatalf("expected next process time after delay, got %s", scheduled.NextProcessAt)
+	}
+	if err := q.Dispatch(NewJob(deliveryJobType).OnQueue(queueName).Retry(maxRetry)); err != nil {
+		t.Fatalf("dispatch immediate Redis option probe: %v", err)
+	}
+	select {
+	case event := <-attempts:
+		if event.MaxRetry != maxRetry {
+			t.Fatalf("expected handler-visible max retry %d, got %d", maxRetry, event.MaxRetry)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Redis option delivery")
 	}
 }
 

@@ -21,6 +21,11 @@ func ValidateDriverJob(job queue.Job) error { return queue.ValidateDriverJob(job
 // DriverOptions returns normalized driver-facing job options for a queue.Job.
 func DriverOptions(job queue.Job) queue.DriverJobOptions { return queue.DriverOptions(job) }
 
+// UniqueKey returns the queue-scoped logical identity used for driver deduplication.
+func UniqueKey(job queue.Job, queueName string) string {
+	return queue.DriverUniqueKey(job, queueName)
+}
+
 // DriverWithAttempt annotates a queue.Job with an attempt count for worker
 // handler execution paths.
 func DriverWithAttempt(job queue.Job, attempt int) queue.Job {

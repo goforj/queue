@@ -137,8 +137,8 @@ What is not yet sufficient for a GA claim:
 
 - [ ] Canonical metrics/events contract is documented.
   - Acceptance: names, labels/fields, and semantics are documented and versioned.
-  - Must include recovery/failure events (for example `republish_failed`, `process_recovered`).
-  - Progress (2026-02-23): baseline contract added in `docs/metrics-contract.md` and baseline ops guidance added in `docs/ops-alerts.md` (includes `republish_failed` and `process_recovered` coverage).
+  - Must include recovery/failure events (for example `republish_failed`, `settlement_failed`, `process_recovered`).
+  - Progress (2026-02-23): baseline contract added in `docs/metrics-contract.md` and baseline ops guidance added in `docs/ops-alerts.md` (includes `republish_failed`, `settlement_failed`, and `process_recovered` coverage).
   - Remaining: pin a contract version, define required fields precisely, and align emitted metrics/log labels in production instrumentation.
 
 - [ ] Alerts and dashboards exist for core operations.

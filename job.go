@@ -27,13 +27,16 @@ type Job struct {
 }
 
 type jobOptions struct {
-	queueName string
-	timeout   *time.Duration
-	maxRetry  *int
-	attempt   int
-	backoff   *time.Duration
-	delay     time.Duration
-	uniqueTTL time.Duration
+	queueName      string
+	timeout        *time.Duration
+	maxRetry       *int
+	attempt        int
+	backoff        *time.Duration
+	delay          time.Duration
+	uniqueTTL      time.Duration
+	logicalType    string
+	logicalPayload []byte
+	logicalSet     bool
 }
 
 // DriverJobOptions exposes parsed job enqueue metadata for driver-module implementations.
@@ -326,6 +329,14 @@ func (t Job) withBuildErr(err error) Job {
 
 func (t Job) withAttempt(attempt int) Job {
 	t.options.attempt = attempt
+	return t
+}
+
+// withLogicalIdentity carries application bytes separately from their physical delivery envelope.
+func (t Job) withLogicalIdentity(jobType string, payload []byte) Job {
+	t.options.logicalType = jobType
+	t.options.logicalPayload = append([]byte(nil), payload...)
+	t.options.logicalSet = true
 	return t
 }
 

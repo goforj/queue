@@ -3,6 +3,7 @@ package busruntime
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,6 +34,22 @@ const (
 )
 
 type deliveryAttemptContextKey struct{}
+type continuationDispatchContextKey struct{}
+
+type continuationScopeToken struct {
+	identity byte
+}
+
+type continuationPermit struct {
+	scope  *continuationScopeToken
+	active atomic.Bool
+}
+
+// ContinuationScope owns short-lived permission for one runtime's handlers to enqueue descendants while that runtime drains.
+// Its zero value grants no permission; use NewContinuationScope.
+type ContinuationScope struct {
+	token *continuationScopeToken
+}
 
 // WithDeliveryAttempt attaches physical delivery metadata for orchestration and middleware classification.
 func WithDeliveryAttempt(ctx context.Context, attempt DeliveryAttempt) context.Context {
@@ -49,6 +66,51 @@ func DeliveryAttemptFromContext(ctx context.Context) (DeliveryAttempt, bool) {
 	}
 	attempt, ok := ctx.Value(deliveryAttemptContextKey{}).(DeliveryAttempt)
 	return attempt, ok
+}
+
+// NewContinuationScope creates an unforgeable runtime-specific continuation scope.
+func NewContinuationScope() *ContinuationScope {
+	return &ContinuationScope{token: &continuationScopeToken{}}
+}
+
+// Permit marks ctx only until the returned release function runs.
+// Runtime adapters release the permit as the originating handler returns so escaped contexts cannot enqueue during a later drain.
+func (s *ContinuationScope) Permit(ctx context.Context) (context.Context, func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.token == nil {
+		return ctx, func() {}
+	}
+	permit := &continuationPermit{scope: s.token}
+	permit.active.Store(true)
+	current := continuationPermits(ctx)
+	permits := append(make([]*continuationPermit, 0, len(current)+1), current...)
+	permits = append(permits, permit)
+	marked := context.WithValue(ctx, continuationDispatchContextKey{}, permits)
+	return marked, func() { permit.active.Store(false) }
+}
+
+// Owns reports whether ctx carries a still-active permit issued by this scope.
+func (s *ContinuationScope) Owns(ctx context.Context) bool {
+	if s == nil || s.token == nil {
+		return false
+	}
+	for _, permit := range continuationPermits(ctx) {
+		if permit != nil && permit.scope == s.token && permit.active.Load() {
+			return true
+		}
+	}
+	return false
+}
+
+// continuationPermits returns the immutable permit snapshot attached by nested runtime handlers.
+func continuationPermits(ctx context.Context) []*continuationPermit {
+	if ctx == nil {
+		return nil
+	}
+	permits, _ := ctx.Value(continuationDispatchContextKey{}).([]*continuationPermit)
+	return permits
 }
 
 // ClassifyAttempt maps a handler result to the settlement decision owned by its worker or driver.

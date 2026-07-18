@@ -109,6 +109,26 @@ func TestLocalQueue_DispatchWithUnique(t *testing.T) {
 	}
 }
 
+// TestLocalQueueUniqueClaimCompensatesRejectedEnqueue verifies a failed acceptance cannot poison the TTL window.
+func TestLocalQueueUniqueClaimCompensatesRejectedEnqueue(t *testing.T) {
+	d := newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{Workers: 1})
+	d.Register("job:unique:rejected", func(context.Context, Job) error { return nil })
+	d.queueMu.Lock()
+	d.workQueue = make(chan queuedJob)
+	d.queueMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	job := NewJob("job:unique:rejected").Payload([]byte("same")).OnQueue("default").UniqueFor(time.Minute)
+	if err := d.Dispatch(ctx, job); !errors.Is(err, context.Canceled) {
+		t.Fatalf("rejected dispatch error = %v, want context canceled", err)
+	}
+	key := DriverUniqueKey(job, "default")
+	if _, ok := d.unique.Acquire(key, time.Minute); !ok {
+		t.Fatal("rejected dispatch retained its uniqueness claim")
+	}
+}
+
 func TestLocalQueue_WorkerpoolDispatchRunsOnWorkers(t *testing.T) {
 	t.Setenv("QUEUE_WORKERPOOL_WORKERS", "2")
 	t.Setenv("QUEUE_WORKERPOOL_BUFFER", "4")
@@ -468,5 +488,119 @@ func TestLocalQueue_SyncStatsTrackFailuresPerQueue(t *testing.T) {
 	}
 	if low.Processed != 0 || low.Failed != 1 {
 		t.Fatalf("unexpected low counters: %+v", low)
+	}
+}
+
+// TestWorkerpoolShutdownDrainsWorkflowDescendants verifies channel closure waits until an active chain can enqueue and run its next node.
+func TestWorkerpoolShutdownDrainsWorkflowDescendants(t *testing.T) {
+	q, err := NewWorkerpool(WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new workerpool: %v", err)
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondRan := make(chan struct{})
+	q.Register("shutdown:chain:first", func(context.Context, Message) error {
+		close(firstStarted)
+		<-releaseFirst
+		return nil
+	})
+	q.Register("shutdown:chain:second", func(context.Context, Message) error {
+		close(secondRan)
+		return nil
+	})
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	chainID, err := q.Chain(
+		NewJob("shutdown:chain:first"),
+		NewJob("shutdown:chain:second").Delay(25*time.Millisecond),
+	).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch chain: %v", err)
+	}
+	<-firstStarted
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- q.Shutdown(context.Background()) }()
+	runtime := q.q.(*nativeQueueRuntime)
+	local := runtime.runtime.(*localQueue)
+	if local.cfg.Workers != 1 || local.cfg.QueueCapacity != 1 {
+		t.Fatalf("configured workerpool = workers:%d capacity:%d, want 1/1", local.cfg.Workers, local.cfg.QueueCapacity)
+	}
+	for {
+		runtime.mu.Lock()
+		draining := runtime.draining
+		runtime.mu.Unlock()
+		if draining {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseFirst)
+	select {
+	case <-secondRan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown stranded the descendant chain node")
+	}
+	select {
+	case shutdownErr := <-shutdownResult:
+		if shutdownErr != nil {
+			t.Fatalf("shutdown: %v", shutdownErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not finish after descendant work quiesced")
+	}
+	state, err := q.FindChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("find chain: %v", err)
+	}
+	if !state.Completed || state.Failed || state.NextIndex != 2 {
+		t.Fatalf("chain state after shutdown = %+v", state)
+	}
+}
+
+// TestWorkerpoolTerminalCallbacksDoNotDeadlockBoundedQueue verifies one handler can schedule sibling callbacks when its only queue slot is already occupied.
+func TestWorkerpoolTerminalCallbacksDoNotDeadlockBoundedQueue(t *testing.T) {
+	q, err := NewWorkerpool(WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new workerpool: %v", err)
+	}
+	q.Register("shutdown:batch:failure", func(context.Context, Message) error {
+		return errors.New("terminal batch failure")
+	})
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	catchRan := make(chan struct{}, 1)
+	finallyRan := make(chan struct{}, 1)
+	batchID, err := q.Batch(NewJob("shutdown:batch:failure").Retry(0)).
+		Catch(func(context.Context, BatchState, error) error {
+			catchRan <- struct{}{}
+			return nil
+		}).
+		Finally(func(context.Context, BatchState) error {
+			finallyRan <- struct{}{}
+			return nil
+		}).
+		Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch batch: %v", err)
+	}
+	for name, callback := range map[string]<-chan struct{}{"catch": catchRan, "finally": finallyRan} {
+		select {
+		case <-callback:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s callback deadlocked behind bounded worker queue", name)
+		}
+	}
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	state, err := q.FindBatch(context.Background(), batchID)
+	if err != nil {
+		t.Fatalf("find batch: %v", err)
+	}
+	if !state.Completed || !state.Cancelled || state.Failed != 1 {
+		t.Fatalf("terminal batch state = %+v", state)
 	}
 }
