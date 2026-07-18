@@ -1,6 +1,6 @@
 # Queue Events Contract
 
-This document defines the root application facade's unified observability contract emitted through `queue.Observer`. `Event.Layer` distinguishes queue, worker, and workflow facts without requiring separate observer models on the normal `*queue.Queue` path. The public `bus` package still exposes its legacy compatibility event model until the forwarding-facade migration in `plan.md` M2-07 is complete.
+This document defines the root application facade's unified observability contract emitted through `queue.Observer`. `Event.Layer` distinguishes queue, worker, and workflow facts without requiring separate observer models on the normal `*queue.Queue` path. The deprecated `bus` package retains its legacy event shape only as an adapter at the compatibility boundary; it no longer owns a second event producer or orchestration engine.
 
 ## Goals
 
@@ -117,7 +117,7 @@ The observer collapse is an explicit pre-v1 compatibility boundary:
 - `queue.WithObserver` accepts `queue.Observer` and receives queue, worker, and workflow layers.
 - `queue.WorkflowEvent`, `queue.WorkflowEventKind`, `queue.WorkflowObserver`, and `queue.WorkflowObserverFunc` are deprecated aliases of the root event model.
 - Code that used unkeyed `queue.Event` or `bus.Event` literals must switch to keyed literals because the envelopes now include correlation fields.
-- A custom `bus.Observer` passed to the root option must be adapted with `queue.ObserverFunc`. Direct legacy `bus` consumers can continue using `bus.WithObserver` during the facade migration.
+- Adapt custom `bus.Observer` implementations with `queue.ObserverFunc` when constructing a root queue. `bus.WithObserver` remains supported only on the retained raw-`busruntime.Runtime` construction route; an already-built `*queue.Queue` must receive observation options when it is constructed.
 - Existing workflow-only sinks can retain their previous scope by returning early unless `event.Layer == queue.EventLayerWorkflow`.
 
 This migration changes Go source compatibility and observer volume/concurrency. It does not change persisted workflow records or queue wire envelopes.

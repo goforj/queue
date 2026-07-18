@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -17,7 +17,7 @@ func TestMemoryStorePruneRemovesTerminalRecordsOnly(t *testing.T) {
 		ChainID:    "chain-old-done",
 		DispatchID: "d1",
 		Queue:      "default",
-		Nodes:      []ChainNode{{NodeID: "n1", Job: wireJob{Type: "monitor:poll"}}},
+		Nodes:      []ChainNode{{NodeID: "n1", Job: StoredJob{Type: "monitor:poll"}}},
 		CreatedAt:  old,
 	}); err != nil {
 		t.Fatalf("create chain old done: %v", err)
@@ -30,7 +30,7 @@ func TestMemoryStorePruneRemovesTerminalRecordsOnly(t *testing.T) {
 		ChainID:    "chain-old-failed",
 		DispatchID: "d2",
 		Queue:      "default",
-		Nodes:      []ChainNode{{NodeID: "n1", Job: wireJob{Type: "monitor:downsample"}}},
+		Nodes:      []ChainNode{{NodeID: "n1", Job: StoredJob{Type: "monitor:downsample"}}},
 		CreatedAt:  old,
 	}); err != nil {
 		t.Fatalf("create chain old failed: %v", err)
@@ -45,7 +45,7 @@ func TestMemoryStorePruneRemovesTerminalRecordsOnly(t *testing.T) {
 		Name:        "old",
 		Queue:       "default",
 		AllowFailed: true,
-		Jobs:        []BatchJob{{JobID: "j1", Job: wireJob{Type: "monitor:poll"}}},
+		Jobs:        []BatchJob{{JobID: "j1", Job: StoredJob{Type: "monitor:poll"}}},
 		CreatedAt:   old,
 	}); err != nil {
 		t.Fatalf("create batch old done: %v", err)
@@ -59,8 +59,8 @@ func TestMemoryStorePruneRemovesTerminalRecordsOnly(t *testing.T) {
 		DispatchID: "d4",
 		Queue:      "default",
 		Nodes: []ChainNode{
-			{NodeID: "n1", Job: wireJob{Type: "monitor:poll"}},
-			{NodeID: "n2", Job: wireJob{Type: "monitor:alert"}},
+			{NodeID: "n1", Job: StoredJob{Type: "monitor:poll"}},
+			{NodeID: "n2", Job: StoredJob{Type: "monitor:alert"}},
 		},
 		CreatedAt: time.Now(),
 	}); err != nil {

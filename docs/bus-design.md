@@ -1,4 +1,35 @@
-# Bus Library Design (Handoff)
+# Workflow Architecture (Historical Bus Design)
+
+> **Status:** This is the original bus design record, retained to explain the
+> version-one wire and API constraints. It is not the current architecture or
+> implementation roadmap; use `plan.md` for both.
+
+## Current Ownership
+
+- `*queue.Queue` is the sole canonical application facade for dispatch, handlers, middleware, chains, batches, workflow state, stores, and observation.
+- `internal/workflow.Engine` owns orchestration implementation. It depends on the neutral `busruntime.Runtime` transport seam and does not import root `queue`, public `bus`, or `queuecore`.
+- Public messages, results, middleware, persisted workflow records, and store contracts are physical root `queue` types. Private adapters translate them at the engine boundary so GoDoc, reflection, generators, and custom stores never expose `internal/workflow` as their apparent owner.
+- Public `bus` is a deprecated compatibility package. `bus.New(existingQueue)` returns an option-free adapter over that queue's existing engine; it does not register a second engine. Construction options and `NewWithStore` are rejected for an already-built queue and must instead be supplied through root queue options.
+- The legacy raw-`busruntime.Runtime` construction route remains temporarily supported for integrations and preserves its observer, store, clock, and middleware options.
+- `bus.Job` remains a boundary DTO because its public fields, composite literals, deferred JSON encoding, and raw string/byte semantics cannot alias `queue.Job` compatibly. `bus.JobOptions` is a source-compatible alias of the root persisted-options shape, and the facade converts the job once into the canonical root path.
+- The self-returning `bus.ChainBuilder` and `bus.BatchBuilder` interfaces remain physical deprecated contracts. Keeping them distinct avoids breaking downstream type switches and custom implementations; their adapters still delegate every operation to the canonical engine.
+- The legacy `bus.Event` observer shape remains only at that compatibility boundary. Root `queue.Observer` is the canonical event model and the internal engine has one event producer.
+- Version-one physical names (`bus:job`, `bus:chain:node`, `bus:batch:job`, `bus:callback`), JSON envelopes, and SQL tables remain stable compatibility contracts despite the historical prefix.
+
+## Compatibility Migration
+
+Ordinary source forms remain supported: custom `bus.Bus`, store, middleware, observer, and builder implementations; keyed and unkeyed legacy DTO literals; the Temporal adapter; and the legacy fake all compile against the facade. The following runtime/tooling identity migration is intentional:
+
+- compatible `bus` message, result, middleware, workflow-record, and store aliases now have the root package identity `github.com/goforj/queue`;
+- `bus.Job`, `bus.Event`, `bus.Observer`, `bus.Bus`, `bus.Option`, `bus.ChainBuilder`, and `bus.BatchBuilder` retain their legacy `github.com/goforj/queue/bus` identity;
+- code that keys behavior on `%T`, `reflect.Type.PkgPath`, gob/interface registration names, generated registries, dependency-injection keys, or a custom type-sensitive persistence format must map the applicable old `bus` names to the root `queue` names.
+
+One configuration and runtime-behavior incompatibility is intentional: every option-free `bus.New(existingQueue)` facade now shares the root queue's handler registry, store, observer, middleware, and lifecycle instead of constructing independent state over the same physical runtime. Code that deliberately relied on isolated root and bus state must use distinct queue runtimes; ordinary callers should register and configure one root queue and treat `bus` only as a compatibility view. `bus.New(existingQueue, nonNilOption...)` and `bus.NewWithStore(existingQueue, ...)` now return `bus.ErrQueueOptionsUnsupported` because those options cannot configure only the shared view. Supply `queue.WithObserver`, `queue.WithStore`, `queue.WithClock`, and `queue.WithMiddleware` when constructing the root queue, then call `bus.New(existingQueue)` without options. The retained raw-`busruntime.Runtime` route continues to accept legacy bus options.
+
+The type-identity migration does not otherwise change physical delivery names, JSON payload encoding, SQL table layouts or rows, retry/workflow outcomes, operational rollout, or the minimum Go version. Literal wire and legacy-SQL fixtures guard those contracts.
+
+The remainder of this document describes the superseded proposal. Examples that
+construct or configure `bus` directly should not be treated as current guidance.
 
 This document defines a `bus` package for GoForj that composes on top of `github.com/goforj/queue` and provides workflow orchestration primitives: dispatch, chain, batch, callbacks, middleware, events, and test fakes.
 

@@ -1,9 +1,8 @@
-// Package bus provides the workflow orchestration engine used by queue.
+// Package bus preserves the legacy workflow API as a compatibility facade over queue.
 //
-// Most applications should use the top-level queue package (`queue.New(...)`,
-// `Queue.Dispatch`, `Queue.Chain`, `Queue.Batch`) rather than importing bus
-// directly.
-//
-// This package remains available for advanced/internal orchestration plumbing,
-// custom workflow integration, and lower-level testing.
+// Deprecated: use the top-level queue package. The low-level raw-runtime route
+// remains temporarily available for existing integrations, but all orchestration
+// behavior is owned by queue's internal workflow engine. Compatible model aliases
+// resolve to physical root queue types; legacy boundary DTOs and interfaces remain
+// here only where aliasing would change source behavior.
 package bus

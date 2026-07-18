@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// Fake records calls made through the legacy bus testing contract.
+//
+// Deprecated: prefer root queue testing helpers for new code.
 type Fake struct {
 	dispatched []Job
 	chains     [][]Job
@@ -25,6 +28,7 @@ func NewFake() *Fake {
 	return &Fake{}
 }
 
+// Register is inert because Fake records dispatch intent rather than executing handlers.
 func (f *Fake) Register(string, Handler) {}
 
 // Dispatch records a dispatched job.
@@ -69,14 +73,23 @@ func (f *Fake) Batch(jobs ...Job) BatchBuilder {
 	return &fakeBatch{fake: f}
 }
 
+// StartWorkers is inert because Fake owns no worker runtime.
 func (f *Fake) StartWorkers(context.Context) error { return nil }
-func (f *Fake) Shutdown(context.Context) error     { return nil }
+
+// Shutdown is inert because Fake owns no worker runtime.
+func (f *Fake) Shutdown(context.Context) error { return nil }
+
+// FindBatch reports missing state because Fake records only dispatch specifications.
 func (f *Fake) FindBatch(context.Context, string) (BatchState, error) {
 	return BatchState{}, ErrNotFound
 }
+
+// FindChain reports missing state because Fake records only dispatch specifications.
 func (f *Fake) FindChain(context.Context, string) (ChainState, error) {
 	return ChainState{}, ErrNotFound
 }
+
+// Prune is inert because Fake persists no workflow state.
 func (f *Fake) Prune(context.Context, time.Time) error { return nil }
 
 // AssertNothingDispatched fails if any job was dispatched.
@@ -261,28 +274,51 @@ func (f *Fake) AssertBatched(t testing.TB, predicate func(spec BatchSpec) bool) 
 	t.Fatalf("expected at least one batch to match predicate")
 }
 
+// BatchSpec is the assertion-friendly projection of one recorded legacy batch.
 type BatchSpec struct {
 	JobTypes []string
 }
 
 type fakeChain struct{ fake *Fake }
 
+// OnQueue preserves fluent compatibility because Fake does not execute or route work.
 func (f *fakeChain) OnQueue(string) ChainBuilder { return f }
+
+// Catch preserves fluent compatibility because Fake does not invoke callbacks.
 func (f *fakeChain) Catch(func(context.Context, ChainState, error) error) ChainBuilder {
 	return f
 }
+
+// Finally preserves fluent compatibility because Fake does not invoke callbacks.
 func (f *fakeChain) Finally(func(context.Context, ChainState) error) ChainBuilder { return f }
-func (f *fakeChain) Dispatch(context.Context) (string, error)                     { return "fake-chain", nil }
+
+// Dispatch returns a deterministic identifier for assertion-only chains.
+func (f *fakeChain) Dispatch(context.Context) (string, error) { return "fake-chain", nil }
 
 type fakeBatch struct{ fake *Fake }
 
-func (f *fakeBatch) Name(string) BatchBuilder                                      { return f }
-func (f *fakeBatch) OnQueue(string) BatchBuilder                                   { return f }
-func (f *fakeBatch) AllowFailures() BatchBuilder                                   { return f }
+// Name preserves fluent compatibility because Fake records only member types.
+func (f *fakeBatch) Name(string) BatchBuilder { return f }
+
+// OnQueue preserves fluent compatibility because Fake does not execute or route work.
+func (f *fakeBatch) OnQueue(string) BatchBuilder { return f }
+
+// AllowFailures preserves fluent compatibility because Fake does not execute members.
+func (f *fakeBatch) AllowFailures() BatchBuilder { return f }
+
+// Progress preserves fluent compatibility because Fake does not invoke callbacks.
 func (f *fakeBatch) Progress(func(context.Context, BatchState) error) BatchBuilder { return f }
-func (f *fakeBatch) Then(func(context.Context, BatchState) error) BatchBuilder     { return f }
+
+// Then preserves fluent compatibility because Fake does not invoke callbacks.
+func (f *fakeBatch) Then(func(context.Context, BatchState) error) BatchBuilder { return f }
+
+// Catch preserves fluent compatibility because Fake does not invoke callbacks.
 func (f *fakeBatch) Catch(func(context.Context, BatchState, error) error) BatchBuilder {
 	return f
 }
+
+// Finally preserves fluent compatibility because Fake does not invoke callbacks.
 func (f *fakeBatch) Finally(func(context.Context, BatchState) error) BatchBuilder { return f }
-func (f *fakeBatch) Dispatch(context.Context) (string, error)                     { return "fake-batch", nil }
+
+// Dispatch returns a deterministic identifier for assertion-only batches.
+func (f *fakeBatch) Dispatch(context.Context) (string, error) { return "fake-batch", nil }

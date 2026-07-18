@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -154,7 +154,7 @@ func TestInitialDispatchRejectionRequiresTerminalStoreMutation(t *testing.T) {
 	tests := []struct {
 		name      string
 		configure func(*workflowMutationFaultStore)
-		dispatch  func(Bus) (string, error)
+		dispatch  func(Engine) (string, error)
 		forbidden []EventKind
 	}{
 		{
@@ -162,7 +162,7 @@ func TestInitialDispatchRejectionRequiresTerminalStoreMutation(t *testing.T) {
 			configure: func(store *workflowMutationFaultStore) {
 				store.failChainErr = storeErr
 			},
-			dispatch: func(workflow Bus) (string, error) {
+			dispatch: func(workflow Engine) (string, error) {
 				return workflow.Chain(NewJob("initial:chain", nil)).Dispatch(context.Background())
 			},
 			forbidden: []EventKind{EventChainFailed, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed},
@@ -172,7 +172,7 @@ func TestInitialDispatchRejectionRequiresTerminalStoreMutation(t *testing.T) {
 			configure: func(store *workflowMutationFaultStore) {
 				store.cancelBatchErr = storeErr
 			},
-			dispatch: func(workflow Bus) (string, error) {
+			dispatch: func(workflow Engine) (string, error) {
 				return workflow.Batch(NewJob("initial:batch", nil)).Dispatch(context.Background())
 			},
 			forbidden: []EventKind{EventBatchFailed, EventBatchCancelled, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed},
@@ -204,13 +204,13 @@ func TestInitialDispatchRejectionUsesObservedCallbackLifecycle(t *testing.T) {
 	enqueueErr := errors.New("queue rejected initial workflow job")
 	tests := []struct {
 		name      string
-		dispatch  func(Bus, *int) (string, error)
+		dispatch  func(Engine, *int) (string, error)
 		failed    EventKind
 		cancelled bool
 	}{
 		{
 			name: "chain",
-			dispatch: func(workflow Bus, calls *int) (string, error) {
+			dispatch: func(workflow Engine, calls *int) (string, error) {
 				return workflow.Chain(NewJob("initial:chain:callbacks", nil)).
 					Catch(func(context.Context, ChainState, error) error { *calls++; return nil }).
 					Finally(func(context.Context, ChainState) error { *calls++; return nil }).
@@ -220,7 +220,7 @@ func TestInitialDispatchRejectionUsesObservedCallbackLifecycle(t *testing.T) {
 		},
 		{
 			name: "batch",
-			dispatch: func(workflow Bus, calls *int) (string, error) {
+			dispatch: func(workflow Engine, calls *int) (string, error) {
 				return workflow.Batch(NewJob("initial:batch:callbacks", nil)).
 					Catch(func(context.Context, BatchState, error) error { *calls++; return nil }).
 					Finally(func(context.Context, BatchState) error { *calls++; return nil }).
@@ -276,8 +276,8 @@ func TestInitialDispatchRejectionUsesObservedCallbackLifecycle(t *testing.T) {
 func TestChainNextDispatchRejectionRemainsUncommitted(t *testing.T) {
 	store := NewMemoryStore()
 	const chainID = "chain_next_dispatch_rejected"
-	first := wireJob{Type: "chain:first"}
-	second := wireJob{Type: "chain:second"}
+	first := StoredJob{Type: "chain:first"}
+	second := StoredJob{Type: "chain:second"}
 	if err := store.CreateChain(context.Background(), ChainRecord{
 		ChainID:    chainID,
 		DispatchID: "dispatch_next_rejected",
@@ -436,7 +436,7 @@ func TestChainMutationFailuresRedeliverExhaustedAttempt(t *testing.T) {
 				jobID   = "job_store_failure"
 				jobType = "workflow:chain:store-failure"
 			)
-			job := wireJob{Type: jobType, Options: JobOptions{Retry: 2}}
+			job := StoredJob{Type: jobType, Options: JobOptions{Retry: 2}}
 			baseStore := NewMemoryStore()
 			if err := baseStore.CreateChain(context.Background(), ChainRecord{
 				ChainID: chainID,
@@ -542,7 +542,7 @@ func TestBatchMutationFailuresRedeliverExhaustedAttempt(t *testing.T) {
 				jobID   = "job_store_failure"
 				jobType = "workflow:batch:store-failure"
 			)
-			job := wireJob{Type: jobType, Options: JobOptions{Retry: 2}}
+			job := StoredJob{Type: jobType, Options: JobOptions{Retry: 2}}
 			baseStore := NewMemoryStore()
 			if err := baseStore.CreateBatch(context.Background(), BatchRecord{
 				BatchID: batchID,
@@ -641,7 +641,7 @@ func TestCallbackStoreFailuresRedeliverWithoutTerminalFacts(t *testing.T) {
 			seed: func(ctx context.Context, store Store) error {
 				if err := store.CreateChain(ctx, ChainRecord{
 					ChainID: "chain_callback_store_failure",
-					Nodes:   []ChainNode{{NodeID: "chain_callback_node", Job: wireJob{Type: "callback:source"}}},
+					Nodes:   []ChainNode{{NodeID: "chain_callback_node", Job: StoredJob{Type: "callback:source"}}},
 				}); err != nil {
 					return err
 				}
@@ -675,7 +675,7 @@ func TestCallbackStoreFailuresRedeliverWithoutTerminalFacts(t *testing.T) {
 			seed: func(ctx context.Context, store Store) error {
 				if err := store.CreateBatch(ctx, BatchRecord{
 					BatchID: "batch_callback_store_failure",
-					Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: wireJob{Type: "callback:source"}}},
+					Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: StoredJob{Type: "callback:source"}}},
 				}); err != nil {
 					return err
 				}
@@ -709,7 +709,7 @@ func TestCallbackStoreFailuresRedeliverWithoutTerminalFacts(t *testing.T) {
 			seed: func(ctx context.Context, store Store) error {
 				if err := store.CreateBatch(ctx, BatchRecord{
 					BatchID: "batch_callback_store_failure",
-					Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: wireJob{Type: "callback:source"}}},
+					Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: StoredJob{Type: "callback:source"}}},
 				}); err != nil {
 					return err
 				}

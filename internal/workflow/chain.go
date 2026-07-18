@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -8,45 +8,15 @@ import (
 	"github.com/goforj/queue/busruntime"
 )
 
+// ChainBuilder configures and dispatches a sequential workflow.
 type ChainBuilder interface {
 	// OnQueue applies a default queue to chain jobs that do not set one.
-	// @group Chaining
-	//
-	// Example: set chain queue
-	//
-	//	chainID, _ := b.Chain(
-	//		bus.NewJob("a", nil),
-	//		bus.NewJob("b", nil),
-	//	).OnQueue("critical").Dispatch(context.Background())
-	//	_ = chainID
 	OnQueue(queue string) ChainBuilder
 	// Catch registers a callback invoked when chain execution fails.
-	// @group Chaining
-	//
-	// Example: chain catch callback
-	//
-	//	chainID, _ := b.Chain(bus.NewJob("a", nil)).
-	//		Catch(func(context.Context, bus.ChainState, error) error { return nil }).
-	//		Dispatch(context.Background())
-	//	_ = chainID
 	Catch(fn func(ctx context.Context, st ChainState, err error) error) ChainBuilder
 	// Finally registers a callback invoked once when chain execution finishes.
-	// @group Chaining
-	//
-	// Example: chain finally callback
-	//
-	//	chainID, _ := b.Chain(bus.NewJob("a", nil)).
-	//		Finally(func(context.Context, bus.ChainState) error { return nil }).
-	//		Dispatch(context.Background())
-	//	_ = chainID
 	Finally(fn func(ctx context.Context, st ChainState) error) ChainBuilder
 	// Dispatch creates and starts the chain workflow.
-	// @group Chaining
-	//
-	// Example: dispatch chain
-	//
-	//	chainID, _ := b.Chain(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
-	//	_ = chainID
 	Dispatch(ctx context.Context) (string, error)
 }
 
@@ -109,21 +79,25 @@ func recordSynchronousChainError(ctx context.Context, err error) {
 	result.record(err)
 }
 
+// OnQueue supplies a target only for chain jobs that do not already select one.
 func (b *chainBuilder) OnQueue(queue string) ChainBuilder {
 	b.queue = queue
 	return b
 }
 
+// Catch retains the explicitly ephemeral failure closure for this process lifetime.
 func (b *chainBuilder) Catch(fn func(ctx context.Context, st ChainState, err error) error) ChainBuilder {
 	b.catch = fn
 	return b
 }
 
+// Finally retains the explicitly ephemeral terminal closure for this process lifetime.
 func (b *chainBuilder) Finally(fn func(ctx context.Context, st ChainState) error) ChainBuilder {
 	b.done = fn
 	return b
 }
 
+// Dispatch persists every node before enqueueing the first canonical delivery.
 func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 	if len(b.jobs) == 0 {
 		return "", errors.New("chain requires at least one job")
@@ -133,7 +107,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 	dispatchID := newID("dsp")
 	nodes := make([]ChainNode, 0, len(b.jobs))
 	for i, job := range b.jobs {
-		wj, err := toWireJob(job)
+		wj, err := toStoredJob(job)
 		if err != nil {
 			return "", err
 		}
@@ -162,7 +136,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 	b.r.mu.Unlock()
 
 	first := nodes[0]
-	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: wireJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
+	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
 	if err := b.r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    dispatchID,
@@ -182,7 +156,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 			return chainID, uncommittedMutationError("fail chain after initial dispatch rejection", errors.Join(err, failErr))
 		}
 		base := envelope{DispatchID: dispatchID, ChainID: chainID, Job: first.Job}
-		b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: wireJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now(), Err: err})
+		b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now(), Err: err})
 		_, stErr := b.r.store.GetChain(ctx, chainID)
 		if stErr != nil {
 			return chainID, errors.Join(err, uncommittedMutationError("read chain after initial dispatch rejection", stErr))
@@ -244,6 +218,7 @@ func (r *runtime) cleanupChainCallbacks(chainID string) {
 	r.mu.Unlock()
 }
 
+// nodeID combines chain ownership with random entropy so persisted completion markers cannot collide across chains.
 func nodeID(chainID string, idx int) string {
 	return chainID + "_" + newID("n")
 }
@@ -254,7 +229,7 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
-	outcome := r.executeWireJobAttempt(ctx, env)
+	outcome := r.executeStoredJobAttempt(ctx, env)
 	switch busruntime.ClassifyAttempt(outcome.attempt, outcome.err) {
 	case busruntime.AttemptRetry, busruntime.AttemptRedeliver:
 		return outcome.err
@@ -262,8 +237,8 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 		if markErr := r.store.FailChain(ctx, env.ChainID, outcome.err); markErr != nil {
 			return uncommittedMutationError("fail chain", markErr)
 		}
-		r.emitWireJobOutcome(ctx, outcome)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+		r.emitStoredJobOutcome(ctx, outcome)
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
 		_ = r.dispatchCallback(ctx, env, "chain_catch", outcome.err)
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		r.cleanupChainCallbacks(env.ChainID)
@@ -273,15 +248,15 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 	if advErr != nil {
 		return uncommittedMutationError("advance chain", advErr)
 	}
-	r.emitWireJobOutcome(ctx, outcome)
+	r.emitStoredJobOutcome(ctx, outcome)
 	if done {
 		r.prepareChainSuccessCallbacks(env.ChainID)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		r.cleanupChainCallbacks(env.ChainID)
 		return nil
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 	dispatchErr := r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    env.DispatchID,

@@ -1,58 +1,53 @@
-package bus
+package workflow
 
 import (
 	"context"
 	"time"
 )
 
-// EventKind identifies one legacy workflow lifecycle fact.
-//
-// Deprecated: use queue.EventKind.
+// EventKind identifies one workflow lifecycle fact.
 type EventKind string
 
 const (
-	// EventDispatchStarted identifies the start of a legacy dispatch operation.
+	// EventDispatchStarted marks the beginning of logical dispatch submission.
 	EventDispatchStarted EventKind = "dispatch_started"
-	// EventDispatchSucceeded identifies an accepted legacy dispatch operation.
+	// EventDispatchSucceeded records that a logical dispatch was accepted.
 	EventDispatchSucceeded EventKind = "dispatch_succeeded"
-	// EventDispatchFailed identifies a rejected legacy dispatch operation.
+	// EventDispatchFailed records that a logical dispatch was rejected.
 	EventDispatchFailed EventKind = "dispatch_failed"
-	// EventJobStarted identifies the start of logical workflow job execution.
+	// EventJobStarted records the beginning of a logical handler attempt.
 	EventJobStarted EventKind = "job_started"
-	// EventJobSucceeded identifies committed logical workflow job success.
+	// EventJobSucceeded records a committed logical job success.
 	EventJobSucceeded EventKind = "job_succeeded"
-	// EventJobFailed identifies terminal logical workflow job failure.
+	// EventJobFailed records a permanent or exhausted logical job failure.
 	EventJobFailed EventKind = "job_failed"
-	// EventChainStarted identifies creation of a chain workflow.
+	// EventChainStarted records creation and initial scheduling of a chain.
 	EventChainStarted EventKind = "chain_started"
-	// EventChainAdvanced identifies committed advancement of a chain workflow.
+	// EventChainAdvanced records a committed transition to the next chain node.
 	EventChainAdvanced EventKind = "chain_advanced"
-	// EventChainCompleted identifies successful completion of a chain workflow.
+	// EventChainCompleted records terminal chain success.
 	EventChainCompleted EventKind = "chain_completed"
-	// EventChainFailed identifies terminal failure of a chain workflow.
+	// EventChainFailed records terminal chain failure.
 	EventChainFailed EventKind = "chain_failed"
-	// EventBatchStarted identifies creation of a batch workflow.
+	// EventBatchStarted records creation and initial scheduling of a batch.
 	EventBatchStarted EventKind = "batch_started"
-	// EventBatchProgressed identifies committed progress of a batch workflow.
+	// EventBatchProgressed records a committed change to aggregate batch state.
 	EventBatchProgressed EventKind = "batch_progressed"
-	// EventBatchCompleted identifies completion of a batch workflow.
+	// EventBatchCompleted records terminal batch completion.
 	EventBatchCompleted EventKind = "batch_completed"
-	// EventBatchFailed identifies a failed member of a batch workflow.
+	// EventBatchFailed records a logical batch failure.
 	EventBatchFailed EventKind = "batch_failed"
-	// EventBatchCancelled identifies cancellation of a batch workflow.
+	// EventBatchCancelled records cancellation after a batch can no longer continue.
 	EventBatchCancelled EventKind = "batch_cancelled"
-	// EventCallbackStarted identifies the start of an ephemeral callback.
+	// EventCallbackStarted records the beginning of an ephemeral callback attempt.
 	EventCallbackStarted EventKind = "callback_started"
-	// EventCallbackSucceeded identifies successful completion of an ephemeral callback.
+	// EventCallbackSucceeded records successful callback completion.
 	EventCallbackSucceeded EventKind = "callback_succeeded"
-	// EventCallbackFailed identifies failure of an ephemeral callback.
+	// EventCallbackFailed records callback failure.
 	EventCallbackFailed EventKind = "callback_failed"
 )
 
-// Event carries the legacy bus workflow event shape.
-//
-// Deprecated: use queue.Event. This shape remains available only at the bus
-// compatibility boundary and is translated from the canonical producer.
+// Event carries internal workflow facts and correlation into public observer adapters.
 type Event struct {
 	SchemaVersion int
 	EventID       string
@@ -70,16 +65,13 @@ type Event struct {
 	Err           error
 }
 
-// Observer receives legacy bus workflow events.
-//
-// Deprecated: use queue.Observer.
+// Observer receives internal workflow events.
 type Observer interface {
+	// Observe consumes one best-effort workflow fact.
 	Observe(ctx context.Context, event Event)
 }
 
 // ObserverFunc adapts a function to Observer.
-//
-// Deprecated: use queue.ObserverFunc.
 type ObserverFunc func(ctx context.Context, event Event)
 
 // Observe calls the wrapped observer function.
@@ -87,9 +79,7 @@ func (f ObserverFunc) Observe(ctx context.Context, event Event) {
 	f(ctx, event)
 }
 
-// MultiObserver fans out one legacy event while isolating observer panics.
-//
-// Deprecated: use queue.MultiObserver.
+// MultiObserver fans out one event to multiple observers.
 func MultiObserver(observers ...Observer) Observer {
 	filtered := make([]Observer, 0, len(observers))
 	for _, observer := range observers {
@@ -102,14 +92,14 @@ func MultiObserver(observers ...Observer) Observer {
 
 type multiObserver []Observer
 
-// Observe forwards the unchanged legacy event to each configured observer.
+// Observe forwards one event to every configured observer while preserving panic isolation.
 func (m multiObserver) Observe(ctx context.Context, event Event) {
 	for _, observer := range m {
 		safeObserve(ctx, observer, event)
 	}
 }
 
-// safeObserve prevents optional telemetry from changing workflow execution.
+// safeObserve prevents observer panics or nil contexts from changing workflow execution.
 func safeObserve(ctx context.Context, observer Observer, event Event) {
 	if observer == nil {
 		return

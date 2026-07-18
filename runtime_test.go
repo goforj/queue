@@ -6,8 +6,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/goforj/queue/bus"
 )
 
 func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
@@ -226,7 +224,7 @@ func TestNew_WithStoreClockMiddlewareAndPrune(t *testing.T) {
 
 	q, err := New(
 		Config{Driver: DriverSync},
-		WithStore(bus.NewMemoryStore()),
+		WithStore(NewMemoryStore()),
 		WithClock(func() time.Time { return fixedNow }),
 		WithObserver(WorkflowObserverFunc(func(context.Context, WorkflowEvent) { observed.Add(1) })),
 		WithMiddleware(MiddlewareFunc(func(ctx context.Context, m Message, next Next) error {

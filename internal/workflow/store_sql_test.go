@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -34,8 +34,8 @@ func TestSQLStoreChainAdvanceIdempotent(t *testing.T) {
 		DispatchID: "d1",
 		Queue:      "default",
 		Nodes: []ChainNode{
-			{NodeID: "n1", Job: wireJob{Type: "a"}},
-			{NodeID: "n2", Job: wireJob{Type: "b"}},
+			{NodeID: "n1", Job: StoredJob{Type: "a"}},
+			{NodeID: "n2", Job: StoredJob{Type: "b"}},
 		},
 		CreatedAt: time.Now(),
 	}); err != nil {
@@ -86,8 +86,8 @@ func TestSQLStoreBatchLifecycle(t *testing.T) {
 		Queue:       "default",
 		AllowFailed: false,
 		Jobs: []BatchJob{
-			{JobID: "j1", Job: wireJob{Type: "monitor:poll"}},
-			{JobID: "j2", Job: wireJob{Type: "monitor:downsample"}},
+			{JobID: "j1", Job: StoredJob{Type: "monitor:poll"}},
+			{JobID: "j2", Job: StoredJob{Type: "monitor:downsample"}},
 		},
 		CreatedAt: time.Now(),
 	}); err != nil {
@@ -152,7 +152,7 @@ func TestSQLStorePruneRemovesOldTerminalState(t *testing.T) {
 		ChainID:    "chain-old-done",
 		DispatchID: "d1",
 		Queue:      "default",
-		Nodes:      []ChainNode{{NodeID: "n1", Job: wireJob{Type: "monitor:poll"}}},
+		Nodes:      []ChainNode{{NodeID: "n1", Job: StoredJob{Type: "monitor:poll"}}},
 		CreatedAt:  old,
 	}); err != nil {
 		t.Fatalf("create chain old done: %v", err)
@@ -167,7 +167,7 @@ func TestSQLStorePruneRemovesOldTerminalState(t *testing.T) {
 		Name:        "old-batch",
 		Queue:       "default",
 		AllowFailed: true,
-		Jobs:        []BatchJob{{JobID: "j1", Job: wireJob{Type: "monitor:poll"}}},
+		Jobs:        []BatchJob{{JobID: "j1", Job: StoredJob{Type: "monitor:poll"}}},
 		CreatedAt:   old,
 	}); err != nil {
 		t.Fatalf("create batch old done: %v", err)
@@ -185,8 +185,8 @@ func TestSQLStorePruneRemovesOldTerminalState(t *testing.T) {
 		DispatchID: "d3",
 		Queue:      "default",
 		Nodes: []ChainNode{
-			{NodeID: "n1", Job: wireJob{Type: "monitor:poll"}},
-			{NodeID: "n2", Job: wireJob{Type: "monitor:alert"}},
+			{NodeID: "n1", Job: StoredJob{Type: "monitor:poll"}},
+			{NodeID: "n2", Job: StoredJob{Type: "monitor:alert"}},
 		},
 		CreatedAt: time.Now(),
 	}); err != nil {
@@ -246,7 +246,7 @@ func TestSQLStoreFailChainAndCancelBatch(t *testing.T) {
 		ChainID:    "chain-fail",
 		DispatchID: "d-fail",
 		Queue:      "default",
-		Nodes:      []ChainNode{{NodeID: "n1", Job: wireJob{Type: "monitor:poll"}}},
+		Nodes:      []ChainNode{{NodeID: "n1", Job: StoredJob{Type: "monitor:poll"}}},
 		CreatedAt:  time.Now(),
 	}); err != nil {
 		t.Fatalf("create chain: %v", err)
@@ -268,7 +268,7 @@ func TestSQLStoreFailChainAndCancelBatch(t *testing.T) {
 		Name:        "cancel-me",
 		Queue:       "default",
 		AllowFailed: true,
-		Jobs:        []BatchJob{{JobID: "j1", Job: wireJob{Type: "monitor:poll"}}},
+		Jobs:        []BatchJob{{JobID: "j1", Job: StoredJob{Type: "monitor:poll"}}},
 		CreatedAt:   time.Now(),
 	}); err != nil {
 		t.Fatalf("create batch: %v", err)
@@ -299,7 +299,7 @@ func TestSQLStoreBatchTerminalIdempotentAndNotFound(t *testing.T) {
 		Name:        "idem",
 		Queue:       "default",
 		AllowFailed: true,
-		Jobs:        []BatchJob{{JobID: "j1", Job: wireJob{Type: "monitor:poll"}}},
+		Jobs:        []BatchJob{{JobID: "j1", Job: StoredJob{Type: "monitor:poll"}}},
 		CreatedAt:   time.Now(),
 	}); err != nil {
 		t.Fatalf("create batch: %v", err)

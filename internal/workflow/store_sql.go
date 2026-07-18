@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// SQLStoreConfig configures connection ownership, dialect binding, and schema setup for a SQL store.
 type SQLStoreConfig struct {
 	DB          *sql.DB
 	DriverName  string
@@ -18,15 +19,6 @@ type SQLStoreConfig struct {
 }
 
 // NewSQLStore creates a SQL-backed orchestration store.
-// @group Constructors
-//
-// Example: new sql store
-//
-//	store, _ := bus.NewSQLStore(bus.SQLStoreConfig{
-//		DriverName: "sqlite",
-//		DSN:        "file:bus.db?_busy_timeout=5000",
-//	})
-//	_ = store
 func NewSQLStore(cfg SQLStoreConfig) (Store, error) {
 	if cfg.DB == nil {
 		if cfg.DriverName == "" {
@@ -65,6 +57,7 @@ type sqlStore struct {
 
 var _ Store = (*sqlStore)(nil)
 
+// ensureSchema runs schema creation once so concurrent first use cannot race the DDL sequence.
 func (s *sqlStore) ensureSchema(ctx context.Context) error {
 	s.ensureOnce.Do(func() {
 		if !s.autoMigrate {
@@ -127,6 +120,7 @@ func (s *sqlStore) ensureSchema(ctx context.Context) error {
 	return s.ensureErr
 }
 
+// CreateChain persists the complete encoded chain as one durable initial state.
 func (s *sqlStore) CreateChain(ctx context.Context, rec ChainRecord) error {
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
@@ -147,6 +141,7 @@ func (s *sqlStore) CreateChain(ctx context.Context, rec ChainRecord) error {
 	return err
 }
 
+// AdvanceChain records deduplication and advances chain state in one transaction so redelivery cannot advance twice.
 func (s *sqlStore) AdvanceChain(ctx context.Context, chainID string, completedNode string) (next *ChainNode, done bool, err error) {
 	if err := s.ensureSchema(ctx); err != nil {
 		return nil, false, err
@@ -190,6 +185,7 @@ func (s *sqlStore) AdvanceChain(ctx context.Context, chainID string, completedNo
 	return &n, false, nil
 }
 
+// FailChain persists the terminal cause using placeholders appropriate for the configured dialect.
 func (s *sqlStore) FailChain(ctx context.Context, chainID string, cause error) error {
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
@@ -202,6 +198,7 @@ func (s *sqlStore) FailChain(ctx context.Context, chainID string, cause error) e
 	return err
 }
 
+// GetChain decodes the stored node payload and normalizes missing rows to ErrNotFound.
 func (s *sqlStore) GetChain(ctx context.Context, chainID string) (ChainState, error) {
 	if err := s.ensureSchema(ctx); err != nil {
 		return ChainState{}, err
@@ -238,6 +235,7 @@ func (s *sqlStore) GetChain(ctx context.Context, chainID string) (ChainState, er
 	}, nil
 }
 
+// CreateBatch inserts aggregate and member rows in one transaction to prevent partial batches.
 func (s *sqlStore) CreateBatch(ctx context.Context, rec BatchRecord) error {
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
@@ -272,6 +270,7 @@ func (s *sqlStore) CreateBatch(ctx context.Context, rec BatchRecord) error {
 	return tx.Commit()
 }
 
+// MarkBatchJobStarted idempotently records that a member has begun without changing settlement counters.
 func (s *sqlStore) MarkBatchJobStarted(ctx context.Context, batchID, jobID string) error {
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
@@ -280,14 +279,17 @@ func (s *sqlStore) MarkBatchJobStarted(ctx context.Context, batchID, jobID strin
 	return err
 }
 
+// MarkBatchJobSucceeded delegates successful settlement to the shared transactional counter path.
 func (s *sqlStore) MarkBatchJobSucceeded(ctx context.Context, batchID, jobID string) (BatchState, bool, error) {
 	return s.markBatchTerminal(ctx, batchID, jobID, false)
 }
 
+// MarkBatchJobFailed delegates failed settlement to the shared transactional counter path.
 func (s *sqlStore) MarkBatchJobFailed(ctx context.Context, batchID, jobID string, _ error) (BatchState, bool, error) {
 	return s.markBatchTerminal(ctx, batchID, jobID, true)
 }
 
+// CancelBatch persists cancellation and completion together so readers cannot observe an intermediate state.
 func (s *sqlStore) CancelBatch(ctx context.Context, batchID string) error {
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
@@ -296,6 +298,7 @@ func (s *sqlStore) CancelBatch(ctx context.Context, batchID string) error {
 	return err
 }
 
+// GetBatch reconstructs aggregate state and normalizes missing rows to ErrNotFound.
 func (s *sqlStore) GetBatch(ctx context.Context, batchID string) (BatchState, error) {
 	if err := s.ensureSchema(ctx); err != nil {
 		return BatchState{}, err
@@ -331,6 +334,7 @@ func (s *sqlStore) GetBatch(ctx context.Context, batchID string) (BatchState, er
 	}, nil
 }
 
+// MarkCallbackInvoked uses dialect-specific conflict suppression to claim each callback key once.
 func (s *sqlStore) MarkCallbackInvoked(ctx context.Context, key string) (bool, error) {
 	if err := s.ensureSchema(ctx); err != nil {
 		return false, err
@@ -361,6 +365,7 @@ func (s *sqlStore) MarkCallbackInvoked(ctx context.Context, key string) (bool, e
 	}
 }
 
+// Prune deletes dependent rows and terminal parents in one transaction to avoid orphaned state.
 func (s *sqlStore) Prune(ctx context.Context, before time.Time) error {
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
@@ -400,6 +405,7 @@ func (s *sqlStore) Prune(ctx context.Context, before time.Time) error {
 	return tx.Commit()
 }
 
+// markBatchTerminal settles member and aggregate state in one transaction while counting retries once.
 func (s *sqlStore) markBatchTerminal(ctx context.Context, batchID, jobID string, isFailure bool) (BatchState, bool, error) {
 	if err := s.ensureSchema(ctx); err != nil {
 		return BatchState{}, false, err
@@ -455,6 +461,7 @@ func (s *sqlStore) markBatchTerminal(ctx context.Context, batchID, jobID string,
 	return st, st.Completed, nil
 }
 
+// getChainTx reads chain state through the caller's transaction so advancement uses one consistent view.
 func (s *sqlStore) getChainTx(ctx context.Context, tx *sql.Tx, chainID string) (ChainState, error) {
 	row := tx.QueryRowContext(ctx, s.rebind(`SELECT dispatch_id, queue_name, nodes_json, next_index, completed, failed, failure, created_at_ms, updated_at_ms FROM bus_chains WHERE chain_id=?`), chainID)
 	var (
@@ -487,6 +494,7 @@ func (s *sqlStore) getChainTx(ctx context.Context, tx *sql.Tx, chainID string) (
 	}, nil
 }
 
+// updateChainStateTx writes advancement through the caller's transaction so deduplication commits with it.
 func (s *sqlStore) updateChainStateTx(ctx context.Context, tx *sql.Tx, st ChainState) error {
 	completed := 0
 	if st.Completed {
@@ -502,6 +510,7 @@ func (s *sqlStore) updateChainStateTx(ctx context.Context, tx *sql.Tx, st ChainS
 	return err
 }
 
+// getBatchTx reads aggregate state through the caller's transaction so settlement uses one consistent view.
 func (s *sqlStore) getBatchTx(ctx context.Context, tx *sql.Tx, batchID string) (BatchState, error) {
 	row := tx.QueryRowContext(ctx, s.rebind(`SELECT dispatch_id, name, queue_name, allow_failed, total_jobs, pending_jobs, processed_jobs, failed_jobs, cancelled, completed, created_at_ms, updated_at_ms FROM bus_batches WHERE batch_id=?`), batchID)
 	var (
@@ -533,6 +542,7 @@ func (s *sqlStore) getBatchTx(ctx context.Context, tx *sql.Tx, batchID string) (
 	}, nil
 }
 
+// updateBatchStateTx writes aggregate counters through the transaction that settled the member.
 func (s *sqlStore) updateBatchStateTx(ctx context.Context, tx *sql.Tx, st BatchState) error {
 	cancelled := 0
 	if st.Cancelled {
@@ -548,6 +558,7 @@ func (s *sqlStore) updateBatchStateTx(ctx context.Context, tx *sql.Tx, st BatchS
 	return err
 }
 
+// insertChainCompletedNode uses dialect-specific conflict suppression to detect the first completion atomically.
 func (s *sqlStore) insertChainCompletedNode(ctx context.Context, tx *sql.Tx, chainID, nodeID string) (bool, error) {
 	now := time.Now().UnixMilli()
 	switch s.driverName {
@@ -575,6 +586,7 @@ func (s *sqlStore) insertChainCompletedNode(ctx context.Context, tx *sql.Tx, cha
 	}
 }
 
+// rebind converts portable question-mark placeholders to PostgreSQL positional parameters when required.
 func (s *sqlStore) rebind(query string) string {
 	if s.driverName != "pgx" && s.driverName != "postgres" {
 		return query

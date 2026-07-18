@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -60,8 +60,8 @@ func TestStoreContract_ChainAdvanceIdempotent(t *testing.T) {
 				DispatchID: "d1",
 				Queue:      "default",
 				Nodes: []ChainNode{
-					{NodeID: "n1", Job: wireJob{Type: "monitor:poll"}},
-					{NodeID: "n2", Job: wireJob{Type: "monitor:downsample"}},
+					{NodeID: "n1", Job: StoredJob{Type: "monitor:poll"}},
+					{NodeID: "n2", Job: StoredJob{Type: "monitor:downsample"}},
 				},
 				CreatedAt: time.Now(),
 			}); err != nil {
@@ -109,8 +109,8 @@ func TestStoreContract_BatchTerminalBehavior(t *testing.T) {
 				Queue:       "default",
 				AllowFailed: false,
 				Jobs: []BatchJob{
-					{JobID: "j1", Job: wireJob{Type: "monitor:poll"}},
-					{JobID: "j2", Job: wireJob{Type: "monitor:downsample"}},
+					{JobID: "j1", Job: StoredJob{Type: "monitor:poll"}},
+					{JobID: "j2", Job: StoredJob{Type: "monitor:downsample"}},
 				},
 				CreatedAt: time.Now(),
 			}); err != nil {
@@ -213,9 +213,9 @@ func TestStoreContract_BatchAllowFailuresContinues(t *testing.T) {
 				Queue:       "default",
 				AllowFailed: true,
 				Jobs: []BatchJob{
-					{JobID: "j1", Job: wireJob{Type: "monitor:poll"}},
-					{JobID: "j2", Job: wireJob{Type: "monitor:downsample"}},
-					{JobID: "j3", Job: wireJob{Type: "monitor:alert"}},
+					{JobID: "j1", Job: StoredJob{Type: "monitor:poll"}},
+					{JobID: "j2", Job: StoredJob{Type: "monitor:downsample"}},
+					{JobID: "j3", Job: StoredJob{Type: "monitor:alert"}},
 				},
 				CreatedAt: time.Now(),
 			}); err != nil {
@@ -269,7 +269,7 @@ func TestStoreContract_BatchDuplicateTerminalUpdateDoesNotDoubleCount(t *testing
 				Queue:       "default",
 				AllowFailed: true,
 				Jobs: []BatchJob{
-					{JobID: "j1", Job: wireJob{Type: "monitor:poll"}},
+					{JobID: "j1", Job: StoredJob{Type: "monitor:poll"}},
 				},
 				CreatedAt: time.Now(),
 			}); err != nil {

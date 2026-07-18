@@ -2,7 +2,7 @@
 
 This document defines the baseline observability contract for `queue` before GA.
 
-For the normal root facade, it covers one event stream: `queue.Event` values delivered to the `queue.Observer` installed with `queue.WithObserver(...)`. `Event.Layer` identifies whether a fact came from queueing, worker execution, or workflow orchestration. Direct users of the public `bus` compatibility package still have its legacy event model until M2-07 in `plan.md` turns that package into a forwarding facade.
+For the normal root facade, it covers one event stream: `queue.Event` values delivered to the `queue.Observer` installed with `queue.WithObserver(...)`. `Event.Layer` identifies whether a fact came from queueing, worker execution, or workflow orchestration. The deprecated `bus` package translates the same internal producer into its frozen legacy event shape only for compatibility consumers; it no longer owns a second event stream.
 
 This is a baseline contract. Before GA, pin a version and treat field/label changes as compatibility-impacting.
 

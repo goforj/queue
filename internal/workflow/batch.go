@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -7,78 +7,23 @@ import (
 	"github.com/goforj/queue/busruntime"
 )
 
+// BatchBuilder configures and dispatches an aggregate workflow.
 type BatchBuilder interface {
 	// Name sets a display name for the batch.
-	// @group Batching
-	//
-	// Example: set batch name
-	//
-	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).Name("nightly").Dispatch(context.Background())
-	//	_ = batchID
 	Name(name string) BatchBuilder
 	// OnQueue applies a default queue to batch jobs that do not set one.
-	// @group Batching
-	//
-	// Example: set batch queue
-	//
-	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).OnQueue("critical").Dispatch(context.Background())
-	//	_ = batchID
 	OnQueue(queue string) BatchBuilder
 	// AllowFailures keeps the batch running when individual jobs fail.
-	// @group Batching
-	//
-	// Example: allow failures
-	//
-	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).AllowFailures().Dispatch(context.Background())
-	//	_ = batchID
 	AllowFailures() BatchBuilder
 	// Progress registers a callback invoked as jobs complete.
-	// @group Batching
-	//
-	// Example: progress callback
-	//
-	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	//		Progress(func(context.Context, bus.BatchState) error { return nil }).
-	//		Dispatch(context.Background())
-	//	_ = batchID
 	Progress(fn func(ctx context.Context, st BatchState) error) BatchBuilder
 	// Then registers a callback invoked once when batch succeeds.
-	// @group Batching
-	//
-	// Example: then callback
-	//
-	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	//		Then(func(context.Context, bus.BatchState) error { return nil }).
-	//		Dispatch(context.Background())
-	//	_ = batchID
 	Then(fn func(ctx context.Context, st BatchState) error) BatchBuilder
 	// Catch registers a callback invoked when batch encounters a failure.
-	// @group Batching
-	//
-	// Example: catch callback
-	//
-	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	//		Catch(func(context.Context, bus.BatchState, error) error { return nil }).
-	//		Dispatch(context.Background())
-	//	_ = batchID
 	Catch(fn func(ctx context.Context, st BatchState, err error) error) BatchBuilder
 	// Finally registers a callback invoked once when batch reaches terminal state.
-	// @group Batching
-	//
-	// Example: finally callback
-	//
-	//	batchID, _ := b.Batch(bus.NewJob("a", nil)).
-	//		Finally(func(context.Context, bus.BatchState) error { return nil }).
-	//		Dispatch(context.Background())
-	//	_ = batchID
 	Finally(fn func(ctx context.Context, st BatchState) error) BatchBuilder
 	// Dispatch creates and starts the batch workflow.
-	// @group Batching
-	//
-	// Example: dispatch batch
-	//
-	//	batchID, _ := b.Batch(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
-	//	_ = batchID
 	Dispatch(ctx context.Context) (string, error)
 }
 
@@ -94,27 +39,40 @@ type batchBuilder struct {
 	finally     func(ctx context.Context, st BatchState) error
 }
 
+// Name retains an application-facing label alongside persisted batch state.
 func (b *batchBuilder) Name(name string) BatchBuilder { b.name = name; return b }
+
+// OnQueue supplies a target only for batch jobs that do not already select one.
 func (b *batchBuilder) OnQueue(queue string) BatchBuilder {
 	b.queue = queue
 	return b
 }
+
+// AllowFailures records that terminal member failures should not cancel remaining work.
 func (b *batchBuilder) AllowFailures() BatchBuilder {
 	b.allowFailed = true
 	return b
 }
+
+// Progress retains the explicitly ephemeral progress closure for this process lifetime.
 func (b *batchBuilder) Progress(fn func(ctx context.Context, st BatchState) error) BatchBuilder {
 	b.progress = fn
 	return b
 }
+
+// Then retains the explicitly ephemeral successful-terminal closure for this process lifetime.
 func (b *batchBuilder) Then(fn func(ctx context.Context, st BatchState) error) BatchBuilder {
 	b.then = fn
 	return b
 }
+
+// Catch retains the explicitly ephemeral failure closure for this process lifetime.
 func (b *batchBuilder) Catch(fn func(ctx context.Context, st BatchState, err error) error) BatchBuilder {
 	b.catch = fn
 	return b
 }
+
+// Finally retains the explicitly ephemeral terminal closure for this process lifetime.
 func (b *batchBuilder) Finally(fn func(ctx context.Context, st BatchState) error) BatchBuilder {
 	b.finally = fn
 	return b
@@ -129,7 +87,7 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 	dispatchID := newID("dsp")
 	jobs := make([]BatchJob, 0, len(b.jobs))
 	for _, job := range b.jobs {
-		wj, err := toWireJob(job)
+		wj, err := toStoredJob(job)
 		if err != nil {
 			return "", err
 		}
@@ -163,7 +121,7 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 	b.r.mu.Unlock()
 
 	first := jobs[0]
-	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, JobType: first.Job.Type, JobKey: wireJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
+	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
 	var synchronousErr error
 	for _, job := range jobs {
 		if err := b.r.dispatchEnvelope(ctx, internalJobBatchJob, envelope{
@@ -190,8 +148,8 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 				return batchID, uncommittedMutationError("cancel batch after initial dispatch rejection", errors.Join(err, cancelErr))
 			}
 			base := envelope{DispatchID: dispatchID, BatchID: batchID, Job: job.Job}
-			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: wireJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now(), Err: err})
-			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: wireJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now()})
+			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: storedJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now(), Err: err})
+			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: storedJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now()})
 			st, stErr := b.r.store.GetBatch(ctx, batchID)
 			if stErr != nil {
 				return batchID, errors.Join(err, uncommittedMutationError("read batch after initial dispatch rejection", stErr))
@@ -280,7 +238,7 @@ func (r *runtime) dispatchBatchTerminal(ctx context.Context, env envelope, st Ba
 	succeeded := st.Completed && !st.Cancelled
 	r.prepareBatchTerminalCallbacks(env.BatchID, succeeded, st.Failed > 0)
 	if succeeded {
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "batch_then", nil)
 	}
 	_ = r.dispatchCallback(ctx, env, "batch_finally", nil)
@@ -298,7 +256,7 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 		return uncommittedMutationError("mark batch job started", markErr)
 	}
 
-	outcome := r.executeWireJobAttempt(ctx, env)
+	outcome := r.executeStoredJobAttempt(ctx, env)
 	switch busruntime.ClassifyAttempt(outcome.attempt, outcome.err) {
 	case busruntime.AttemptRetry, busruntime.AttemptRedeliver:
 		return outcome.err
@@ -307,11 +265,11 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 		if markErr != nil {
 			return uncommittedMutationError("mark batch job failed", markErr)
 		}
-		r.emitWireJobOutcome(ctx, outcome)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+		r.emitStoredJobOutcome(ctx, outcome)
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
 		if st.Cancelled {
-			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
-			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		}
 		if st.Failed == 1 {
 			_ = r.dispatchCallback(ctx, env, "batch_catch", outcome.err)
@@ -326,8 +284,8 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 	if markErr != nil {
 		return uncommittedMutationError("mark batch job succeeded", markErr)
 	}
-	r.emitWireJobOutcome(ctx, outcome)
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: wireJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+	r.emitStoredJobOutcome(ctx, outcome)
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 	r.invokeBatchProgress(ctx, st, progress)
 	if done {
 		r.dispatchBatchTerminal(ctx, env, st)
@@ -479,7 +437,7 @@ func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) erro
 			ChainID:       env.ChainID,
 			BatchID:       env.BatchID,
 			JobType:       env.Job.Type,
-			JobKey:        wireJobEventKey(env.Job),
+			JobKey:        storedJobEventKey(env.Job),
 			Queue:         env.Job.Options.Queue,
 			Time:          start,
 		})
@@ -560,7 +518,7 @@ func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) erro
 			ChainID:       env.ChainID,
 			BatchID:       env.BatchID,
 			JobType:       env.Job.Type,
-			JobKey:        wireJobEventKey(env.Job),
+			JobKey:        storedJobEventKey(env.Job),
 			Queue:         env.Job.Options.Queue,
 			Duration:      r.now().Sub(start),
 			Time:          r.now(),
@@ -577,7 +535,7 @@ func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) erro
 		ChainID:       env.ChainID,
 		BatchID:       env.BatchID,
 		JobType:       env.Job.Type,
-		JobKey:        wireJobEventKey(env.Job),
+		JobKey:        storedJobEventKey(env.Job),
 		Queue:         env.Job.Options.Queue,
 		Duration:      r.now().Sub(start),
 		Time:          r.now(),

@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -7,12 +7,6 @@ import (
 )
 
 // NewMemoryStore creates an in-memory orchestration store implementation.
-// @group Constructors
-//
-// Example: new memory store
-//
-//	store := bus.NewMemoryStore()
-//	_ = store
 func NewMemoryStore() Store {
 	return &memoryStore{
 		chains:    make(map[string]*memoryChain),
@@ -46,6 +40,7 @@ type memoryBatch struct {
 	jobs  map[string]batchJobStatus
 }
 
+// CreateChain installs the complete chain under one mutex so readers never observe partial state.
 func (m *memoryStore) CreateChain(_ context.Context, rec ChainRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -65,6 +60,7 @@ func (m *memoryStore) CreateChain(_ context.Context, rec ChainRecord) error {
 	return nil
 }
 
+// AdvanceChain serializes node deduplication and index advancement so retries cannot skip work.
 func (m *memoryStore) AdvanceChain(_ context.Context, chainID string, completedNode string) (next *ChainNode, done bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -93,6 +89,7 @@ func (m *memoryStore) AdvanceChain(_ context.Context, chainID string, completedN
 	return &n, false, nil
 }
 
+// FailChain leaves completed chains successful while recording a terminal cause for unfinished work.
 func (m *memoryStore) FailChain(_ context.Context, chainID string, cause error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -110,6 +107,7 @@ func (m *memoryStore) FailChain(_ context.Context, chainID string, cause error) 
 	return nil
 }
 
+// GetChain reads chain state under the same mutex used for every mutation.
 func (m *memoryStore) GetChain(_ context.Context, chainID string) (ChainState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,6 +118,7 @@ func (m *memoryStore) GetChain(_ context.Context, chainID string) (ChainState, e
 	return ch.state, nil
 }
 
+// CreateBatch installs aggregate and per-job state together so readers cannot observe a partial batch.
 func (m *memoryStore) CreateBatch(_ context.Context, rec BatchRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -146,6 +145,7 @@ func (m *memoryStore) CreateBatch(_ context.Context, rec BatchRecord) error {
 	return nil
 }
 
+// MarkBatchJobStarted records a retry-safe started marker without changing aggregate counters.
 func (m *memoryStore) MarkBatchJobStarted(_ context.Context, batchID, jobID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -160,6 +160,7 @@ func (m *memoryStore) MarkBatchJobStarted(_ context.Context, batchID, jobID stri
 	return nil
 }
 
+// MarkBatchJobSucceeded applies completion counters at most once while holding the aggregate lock.
 func (m *memoryStore) MarkBatchJobSucceeded(_ context.Context, batchID, jobID string) (BatchState, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -183,6 +184,7 @@ func (m *memoryStore) MarkBatchJobSucceeded(_ context.Context, batchID, jobID st
 	return b.state, false, nil
 }
 
+// MarkBatchJobFailed counts each failure once and applies fail-fast cancellation atomically.
 func (m *memoryStore) MarkBatchJobFailed(_ context.Context, batchID, jobID string, _ error) (BatchState, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -214,6 +216,7 @@ func (m *memoryStore) MarkBatchJobFailed(_ context.Context, batchID, jobID strin
 	return b.state, false, nil
 }
 
+// CancelBatch marks the batch terminal under the mutation lock so observers see a consistent state.
 func (m *memoryStore) CancelBatch(_ context.Context, batchID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -227,6 +230,7 @@ func (m *memoryStore) CancelBatch(_ context.Context, batchID string) error {
 	return nil
 }
 
+// GetBatch reads aggregate batch state under the same mutex used for settlement.
 func (m *memoryStore) GetBatch(_ context.Context, batchID string) (BatchState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -237,6 +241,7 @@ func (m *memoryStore) GetBatch(_ context.Context, batchID string) (BatchState, e
 	return b.state, nil
 }
 
+// MarkCallbackInvoked atomically reserves a callback key so retries cannot invoke it twice.
 func (m *memoryStore) MarkCallbackInvoked(_ context.Context, key string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -247,6 +252,7 @@ func (m *memoryStore) MarkCallbackInvoked(_ context.Context, key string) (bool, 
 	return true, nil
 }
 
+// Prune removes only expired terminal workflows and callback markers while mutations are excluded.
 func (m *memoryStore) Prune(_ context.Context, before time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

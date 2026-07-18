@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -140,12 +140,12 @@ func TestCallbackFunctionErrorEmitsFailed(t *testing.T) {
 	tests := []struct {
 		name       string
 		handlerErr error
-		dispatch   func(Bus, error)
+		dispatch   func(Engine, error)
 	}{
 		{
 			name:       "chain catch",
 			handlerErr: errors.New("handler failed"),
-			dispatch: func(b Bus, callbackErr error) {
+			dispatch: func(b Engine, callbackErr error) {
 				_, _ = b.Chain(NewJob("job:callback-error", nil)).
 					Catch(func(context.Context, ChainState, error) error { return callbackErr }).
 					Dispatch(context.Background())
@@ -153,7 +153,7 @@ func TestCallbackFunctionErrorEmitsFailed(t *testing.T) {
 		},
 		{
 			name: "chain finally",
-			dispatch: func(b Bus, callbackErr error) {
+			dispatch: func(b Engine, callbackErr error) {
 				_, _ = b.Chain(NewJob("job:callback-error", nil)).
 					Finally(func(context.Context, ChainState) error { return callbackErr }).
 					Dispatch(context.Background())
@@ -162,7 +162,7 @@ func TestCallbackFunctionErrorEmitsFailed(t *testing.T) {
 		{
 			name:       "batch catch",
 			handlerErr: errors.New("handler failed"),
-			dispatch: func(b Bus, callbackErr error) {
+			dispatch: func(b Engine, callbackErr error) {
 				_, _ = b.Batch(NewJob("job:callback-error", nil)).
 					Catch(func(context.Context, BatchState, error) error { return callbackErr }).
 					Dispatch(context.Background())
@@ -170,7 +170,7 @@ func TestCallbackFunctionErrorEmitsFailed(t *testing.T) {
 		},
 		{
 			name: "batch then",
-			dispatch: func(b Bus, callbackErr error) {
+			dispatch: func(b Engine, callbackErr error) {
 				_, _ = b.Batch(NewJob("job:callback-error", nil)).
 					Then(func(context.Context, BatchState) error { return callbackErr }).
 					Dispatch(context.Background())
@@ -178,7 +178,7 @@ func TestCallbackFunctionErrorEmitsFailed(t *testing.T) {
 		},
 		{
 			name: "batch finally",
-			dispatch: func(b Bus, callbackErr error) {
+			dispatch: func(b Engine, callbackErr error) {
 				_, _ = b.Batch(NewJob("job:callback-error", nil)).
 					Finally(func(context.Context, BatchState) error { return callbackErr }).
 					Dispatch(context.Background())
@@ -294,7 +294,7 @@ func TestDuplicateFailedCallbackDoesNotBecomeSuccessful(t *testing.T) {
 	store := NewMemoryStore()
 	if err := store.CreateBatch(context.Background(), BatchRecord{
 		BatchID: batchID,
-		Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: wireJob{Type: "callback:source"}}},
+		Jobs:    []BatchJob{{JobID: "batch_callback_job", Job: StoredJob{Type: "callback:source"}}},
 	}); err != nil {
 		t.Fatalf("create batch: %v", err)
 	}

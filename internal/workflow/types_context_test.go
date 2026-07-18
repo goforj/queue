@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import "testing"
 
@@ -40,4 +40,3 @@ func TestContextBind(t *testing.T) {
 		}
 	})
 }
-

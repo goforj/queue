@@ -1,4 +1,4 @@
-package bus
+package workflow
 
 import (
 	"context"
@@ -174,8 +174,8 @@ func TestBatchCallbackEnvelopesCompleteInReverseOrder(t *testing.T) {
 		DispatchID:  "dispatch_reverse_callback_envelopes",
 		AllowFailed: true,
 		Jobs: []BatchJob{
-			{JobID: "job_failed", Job: wireJob{Type: "batch:failure"}},
-			{JobID: "job_succeeded", Job: wireJob{Type: "batch:success"}},
+			{JobID: "job_failed", Job: StoredJob{Type: "batch:failure"}},
+			{JobID: "job_succeeded", Job: StoredJob{Type: "batch:success"}},
 		},
 		CreatedAt: time.Now(),
 	}); err != nil {
@@ -226,7 +226,7 @@ func TestBatchCallbackEnvelopesCompleteInReverseOrder(t *testing.T) {
 			DispatchID:    state.DispatchID,
 			JobID:         "callback_" + kind,
 			BatchID:       batchID,
-			Job:           wireJob{Options: JobOptions{Queue: "bulk"}},
+			Job:           StoredJob{Options: JobOptions{Queue: "bulk"}},
 			CallbackKind:  kind,
 			Error:         "allowed failure",
 		}
@@ -275,8 +275,8 @@ func TestConcurrentBatchProgressUsesPerDeliverySnapshot(t *testing.T) {
 	if err := baseStore.CreateBatch(context.Background(), BatchRecord{
 		BatchID: batchID,
 		Jobs: []BatchJob{
-			{JobID: "job_paused", Job: wireJob{Type: "batch:item"}},
-			{JobID: "job_final", Job: wireJob{Type: "batch:item"}},
+			{JobID: "job_paused", Job: StoredJob{Type: "batch:item"}},
+			{JobID: "job_final", Job: StoredJob{Type: "batch:item"}},
 		},
 		CreatedAt: time.Now(),
 	}); err != nil {
@@ -313,7 +313,7 @@ func TestConcurrentBatchProgressUsesPerDeliverySnapshot(t *testing.T) {
 			Kind:          "batch_job",
 			BatchID:       batchID,
 			JobID:         jobID,
-			Job:           wireJob{Type: "batch:item"},
+			Job:           StoredJob{Type: "batch:item"},
 		})
 		if err != nil {
 			t.Fatalf("marshal %s delivery: %v", jobID, err)

@@ -37,8 +37,8 @@ func resolveObservedJobMetadata(rawType string, payload []byte) (ObservedJobMeta
 }
 
 // ResolveObservedJobType returns the effective application job type that should
-// be emitted to observers. External workers may process internal bus wrapper
-// jobs (for example, "bus:job") whose payload embeds the real application job
+// be emitted to observers. External workers may process private workflow delivery
+// envelopes (for example, "bus:job") whose payload embeds the real application job
 // type. When possible, this helper unwraps that payload so dashboards and
 // metrics reflect the user-facing job type instead of the transport wrapper.
 func ResolveObservedJobType(rawType string, payload []byte) string {
