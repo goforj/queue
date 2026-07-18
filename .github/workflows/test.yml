@@ -56,8 +56,8 @@ jobs:
         working-directory: examples
         run: go test ./... -run TestExamplesBuild -count=1
 
-      - name: Run unit tests
-        run: go test ./... -v
+      - name: Run all module unit tests and vet
+        run: FULL=1 VET=1 ./scripts/test-all-modules.sh
 
       - name: Run unit tests with coverage
         run: ./scripts/coverage-codecov.sh
