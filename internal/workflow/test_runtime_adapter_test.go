@@ -25,6 +25,11 @@ type syncTestRuntime struct {
 	dispatchErr error
 }
 
+// directTestRuntime adds canonical direct dispatch to the retained legacy test runtime.
+type directTestRuntime struct {
+	*syncTestRuntime
+}
+
 type syncTestAcceptedError struct {
 	cause error
 }
@@ -40,6 +45,12 @@ func (e syncTestAcceptedError) DispatchAccepted() bool { return true }
 
 func newSyncTestRuntime() *syncTestRuntime {
 	return &syncTestRuntime{handlers: make(map[string]busruntime.Handler)}
+}
+
+// newDirectTestRuntime creates an inline runtime that exercises the optional
+// direct-dispatch capability without changing legacy test fixtures.
+func newDirectTestRuntime() *directTestRuntime {
+	return &directTestRuntime{syncTestRuntime: newSyncTestRuntime()}
 }
 
 func (r *syncTestRuntime) BusRegister(jobType string, handler busruntime.Handler) {
@@ -61,6 +72,12 @@ func (r *syncTestRuntime) BusDispatch(ctx context.Context, jobType string, paylo
 		return syncTestAcceptedError{cause: err}
 	}
 	return nil
+}
+
+// BusDispatchDirect carries direct metadata beside the application payload in
+// the same way a compatible physical runtime presents it to the engine.
+func (r *directTestRuntime) BusDispatchDirect(ctx context.Context, jobType string, payload []byte, metadata busruntime.DeliveryMetadata, opts busruntime.JobOptions) error {
+	return r.BusDispatch(busruntime.WithDeliveryMetadata(ctx, metadata), jobType, payload, opts)
 }
 
 func (r *syncTestRuntime) StartWorkers(context.Context) error { return nil }

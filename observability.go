@@ -936,7 +936,7 @@ func (q *observedQueue) History(ctx context.Context, queueName string, window Qu
 func (q *observedQueue) Dispatch(ctx context.Context, job Job) error {
 	ctx, acceptance := ensureDispatchAcceptance(ctx)
 	opts := job.jobOptions()
-	metadata := ResolveObservedJobMetadata(job.Type, job.PayloadBytes())
+	metadata := ResolveObservedJobMetadataFromJob(job)
 	base := Event{
 		Layer:      EventLayerQueue,
 		Driver:     q.driver,
@@ -1009,7 +1009,7 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 			}
 		}
 		opts := job.jobOptions()
-		metadata := ResolveObservedJobMetadata(jobType, job.PayloadBytes())
+		metadata := ResolveObservedJobMetadataFromJob(job)
 		effectiveQueue := queueName
 		if effectiveQueue == "" {
 			effectiveQueue = jobQueueName(job)

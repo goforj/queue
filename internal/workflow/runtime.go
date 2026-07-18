@@ -34,6 +34,8 @@ type Engine interface {
 
 	// Dispatch submits one logical job through the underlying delivery runtime.
 	Dispatch(ctx context.Context, job Job) (DispatchResult, error)
+	// DispatchDirect submits one frozen ordinary job without the legacy workflow envelope.
+	DispatchDirect(ctx context.Context, job StoredJob) (DispatchResult, error)
 	// Chain creates a sequential workflow builder.
 	Chain(jobs ...Job) ChainBuilder
 	// Batch creates an aggregate workflow builder.
@@ -159,34 +161,61 @@ var _ Engine = (*runtime)(nil)
 // Register binds a job type to a handler.
 func (r *runtime) Register(jobType string, handler Handler) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.handlers[jobType] = handler
+	r.mu.Unlock()
+
+	_, ok := r.q.(busruntime.DirectRuntime)
+	if !ok || IsDeliveryType(jobType) {
+		return
+	}
+	r.q.BusRegister(jobType, func(ctx context.Context, job busruntime.InboundJob) error {
+		return r.handleDirectJob(ctx, jobType, job)
+	})
 }
 
 // Dispatch enqueues one job for execution.
 func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error) {
-	wj, err := toStoredJob(job)
+	stored, err := toStoredJob(job)
 	if err != nil {
 		return DispatchResult{}, err
 	}
+	return r.dispatch(ctx, stored, false)
+}
+
+// DispatchDirect enqueues one ordinary job using its application type and payload.
+func (r *runtime) DispatchDirect(ctx context.Context, job StoredJob) (DispatchResult, error) {
+	if job.Type == "" {
+		return DispatchResult{}, errors.New("bus job type is required")
+	}
+	job.Payload = append([]byte(nil), job.Payload...)
+	return r.dispatch(ctx, job, true)
+}
+
+// dispatch applies one receipt and event contract to both canonical direct
+// delivery and the retained legacy envelope route.
+func (r *runtime) dispatch(ctx context.Context, job StoredJob, direct bool) (DispatchResult, error) {
 	dispatchID := newID("dsp")
 	env := envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    dispatchID,
 		Kind:          "job",
 		JobID:         newID("job"),
-		Job:           wj,
+		Job:           job,
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, JobKey: storedJobEventKey(wj), Queue: wj.Options.Queue, Time: r.now()})
-	if err := r.dispatchEnvelope(ctx, internalJob, env); err != nil {
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
+	dispatch := func() error { return r.dispatchEnvelope(ctx, internalJob, env) }
+	if direct {
+		dispatch = func() error { return r.dispatchDirectEnvelope(ctx, env) }
+	}
+	if err := dispatch(); err != nil {
 		if executionErr, ok := acceptedDispatchExecutionError(err); ok {
-			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, JobKey: storedJobEventKey(wj), Queue: wj.Options.Queue, Time: r.now()})
+			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
 			return DispatchResult{DispatchID: dispatchID}, executionErr
 		}
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, JobKey: storedJobEventKey(wj), Queue: wj.Options.Queue, Time: r.now(), Err: err})
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now(), Err: err})
 		return DispatchResult{DispatchID: dispatchID}, err
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: wj.Type, JobKey: storedJobEventKey(wj), Queue: wj.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
 	return DispatchResult{DispatchID: dispatchID}, nil
 }
 
@@ -243,6 +272,31 @@ func (r *runtime) dispatchEnvelope(ctx context.Context, jobType string, env enve
 		return err
 	}
 	return r.q.BusDispatch(ctx, jobType, payload, busruntime.JobOptions{
+		Queue:     env.Job.Options.Queue,
+		Delay:     env.Job.Options.Delay,
+		Timeout:   env.Job.Options.Timeout,
+		Retry:     env.Job.Options.Retry,
+		Backoff:   env.Job.Options.Backoff,
+		UniqueFor: env.Job.Options.UniqueFor,
+	})
+}
+
+// dispatchDirectEnvelope carries correlation through the driver metadata plane.
+// Runtimes without that capability and reserved legacy names keep the frozen
+// version-one envelope route.
+func (r *runtime) dispatchDirectEnvelope(ctx context.Context, env envelope) error {
+	direct, ok := r.q.(busruntime.DirectRuntime)
+	if !ok || IsDeliveryType(env.Job.Type) {
+		return r.dispatchEnvelope(ctx, internalJob, env)
+	}
+	return direct.BusDispatchDirect(ctx, env.Job.Type, env.Job.Payload, busruntime.DeliveryMetadata{
+		SchemaVersion: busruntime.DeliveryMetadataVersion,
+		DispatchID:    env.DispatchID,
+		JobID:         env.JobID,
+		ChainID:       env.ChainID,
+		BatchID:       env.BatchID,
+		Queue:         env.Job.Options.Queue,
+	}, busruntime.JobOptions{
 		Queue:     env.Job.Options.Queue,
 		Delay:     env.Job.Options.Delay,
 		Timeout:   env.Job.Options.Timeout,
@@ -324,6 +378,30 @@ func (r *runtime) handleInternalJob(ctx context.Context, job busruntime.InboundJ
 		return err
 	}
 	return r.executeStoredJob(ctx, env)
+}
+
+// handleDirectJob reconstructs engine context from driver metadata while
+// leaving the application's type and payload untouched.
+func (r *runtime) handleDirectJob(ctx context.Context, jobType string, job busruntime.InboundJob) error {
+	metadata, _ := busruntime.DeliveryMetadataFromContext(ctx)
+	attempt, _ := busruntime.DeliveryAttemptFromContext(ctx)
+	return r.executeStoredJob(ctx, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    metadata.DispatchID,
+		Kind:          "job",
+		JobID:         metadata.JobID,
+		ChainID:       metadata.ChainID,
+		BatchID:       metadata.BatchID,
+		Attempt:       attempt.Number,
+		Job: StoredJob{
+			Type:    jobType,
+			Payload: job.PayloadBytes(),
+			Options: JobOptions{
+				Queue: metadata.Queue,
+				Retry: attempt.MaxRetry,
+			},
+		},
+	})
 }
 
 // storedJobOutcome carries an attempt result until its owning workflow mutation commits.

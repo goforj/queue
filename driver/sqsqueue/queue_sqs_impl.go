@@ -20,15 +20,16 @@ import (
 )
 
 type sqsMessage struct {
-	Type          string `json:"type"`
-	Payload       []byte `json:"payload,omitempty"`
-	Queue         string `json:"queue"`
-	Attempt       int    `json:"attempt,omitempty"`
-	MaxRetry      int    `json:"max_retry,omitempty"`
-	BackoffMillis int64  `json:"backoff_millis,omitempty"`
-	TimeoutMillis int64  `json:"timeout_millis,omitempty"`
-	AvailableAtMS int64  `json:"available_at_ms,omitempty"`
-	PublishedAtMS int64  `json:"published_at_ms,omitempty"`
+	Type          string          `json:"type"`
+	Payload       []byte          `json:"payload,omitempty"`
+	Queue         string          `json:"queue"`
+	Metadata      json.RawMessage `json:"metadata,omitempty"`
+	Attempt       int             `json:"attempt,omitempty"`
+	MaxRetry      int             `json:"max_retry,omitempty"`
+	BackoffMillis int64           `json:"backoff_millis,omitempty"`
+	TimeoutMillis int64           `json:"timeout_millis,omitempty"`
+	AvailableAtMS int64           `json:"available_at_ms,omitempty"`
+	PublishedAtMS int64           `json:"published_at_ms,omitempty"`
 }
 
 type sqsClient interface {
@@ -135,23 +136,10 @@ func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 		}
 	}
 
-	msg := sqsMessage{
-		Type:          job.Type,
-		Payload:       job.PayloadBytes(),
-		Queue:         parsed.QueueName,
-		PublishedAtMS: time.Now().UnixMilli(),
-	}
-	if parsed.MaxRetry != nil {
-		msg.MaxRetry = *parsed.MaxRetry
-	}
-	if parsed.Backoff != nil && *parsed.Backoff > 0 {
-		msg.BackoffMillis = parsed.Backoff.Milliseconds()
-	}
-	if parsed.Timeout != nil && *parsed.Timeout > 0 {
-		msg.TimeoutMillis = parsed.Timeout.Milliseconds()
-	}
-	if parsed.Delay > 0 {
-		msg.AvailableAtMS = time.Now().Add(parsed.Delay).UnixMilli()
+	msg, err := sqsMessageForJob(job, parsed)
+	if err != nil {
+		q.unique.Release(uniqueKey, uniqueToken)
+		return err
 	}
 	body, err := json.Marshal(msg)
 	if err != nil {
@@ -189,6 +177,38 @@ func (q *sqsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	}
 	// Send failures and missing receipts are ambiguous: the service may have committed before its response was lost.
 	return err
+}
+
+// sqsMessageForJob converts one validated queue job into the stable SQS wire
+// representation while keeping direct-delivery metadata optional.
+func sqsMessageForJob(job queue.Job, options queue.DriverJobOptions) (sqsMessage, error) {
+	message := sqsMessage{
+		Type:          job.Type,
+		Payload:       job.PayloadBytes(),
+		Queue:         options.QueueName,
+		PublishedAtMS: time.Now().UnixMilli(),
+	}
+	metadata := queue.DriverMetadata(job)
+	if metadata.SchemaVersion != 0 {
+		encoded, err := json.Marshal(metadata)
+		if err != nil {
+			return sqsMessage{}, fmt.Errorf("encode SQS driver job metadata: %w", err)
+		}
+		message.Metadata = encoded
+	}
+	if options.MaxRetry != nil {
+		message.MaxRetry = *options.MaxRetry
+	}
+	if options.Backoff != nil && *options.Backoff > 0 {
+		message.BackoffMillis = options.Backoff.Milliseconds()
+	}
+	if options.Timeout != nil && *options.Timeout > 0 {
+		message.TimeoutMillis = options.Timeout.Milliseconds()
+	}
+	if options.Delay > 0 {
+		message.AvailableAtMS = time.Now().Add(options.Delay).UnixMilli()
+	}
+	return message, nil
 }
 
 // sqsSendAccepted requires the service-generated receipt that proves SQS accepted the message.

@@ -212,13 +212,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	}
 	err := handler(
 		runCtx,
-		queuecore.DriverWithAttempt(
-			queue.NewJob(incoming.Type).
-				Payload(incoming.Payload).
-				OnQueue(incoming.Queue).
-				Retry(incoming.MaxRetry),
-			incoming.Attempt,
-		),
+		sqsDeliveryJob(incoming),
 	)
 	switch busruntime.ClassifyAttempt(attempt, err) {
 	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
@@ -300,7 +294,7 @@ func (w *sqsWorker) deleteAndObserve(ctx context.Context, message sqstypes.Messa
 }
 
 func (w *sqsWorker) observeRepublishFailure(ctx context.Context, message sqsMessage, err error) {
-	metadata := queue.ResolveObservedJobMetadata(message.Type, message.Payload)
+	metadata := queue.ResolveObservedJobMetadataFromJob(sqsDeliveryJob(message))
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
 		Kind:       queue.EventRepublishFailed,
 		Driver:     queue.DriverSQS,
@@ -320,7 +314,7 @@ func (w *sqsWorker) observeRepublishFailure(ctx context.Context, message sqsMess
 
 // observeSettlementFailure emits the canonical worker fact for an uncommitted SQS deletion.
 func (w *sqsWorker) observeSettlementFailure(ctx context.Context, message sqsMessage, err error) {
-	metadata := queue.ResolveObservedJobMetadata(message.Type, message.Payload)
+	metadata := queue.ResolveObservedJobMetadataFromJob(sqsDeliveryJob(message))
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
 		Kind:       queue.EventSettlementFailed,
 		Driver:     queue.DriverSQS,
@@ -336,6 +330,25 @@ func (w *sqsWorker) observeSettlementFailure(ctx context.Context, message sqsMes
 		Err:        err,
 		Time:       time.Now(),
 	})
+}
+
+// sqsDeliveryJob reconstructs one SQS delivery while retaining supported
+// direct-delivery metadata separately from the application payload.
+func sqsDeliveryJob(message sqsMessage) queue.Job {
+	job := queuecore.DriverWithAttempt(
+		queue.NewJob(message.Type).
+			Payload(message.Payload).
+			OnQueue(message.Queue).
+			Retry(message.MaxRetry),
+		message.Attempt,
+	)
+	if len(message.Metadata) > 0 {
+		var metadata queue.DriverJobMetadata
+		if err := json.Unmarshal(message.Metadata, &metadata); err == nil {
+			job = queue.DriverWithMetadata(job, metadata)
+		}
+	}
+	return job
 }
 
 // sqsSettlementContext lets in-flight work finish settlement after the receive loop is canceled without waiting forever.

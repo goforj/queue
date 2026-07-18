@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -85,12 +86,25 @@ func (r databaseResultStub) RowsAffected() (int64, error) { return r.rows, r.err
 // TestDatabaseDeliveryJobRestoresAttemptMetadata verifies SQL persistence reaches the shared orchestration context intact.
 func TestDatabaseDeliveryJobRestoresAttemptMetadata(t *testing.T) {
 	wantPayload := []byte(`{"report_id":42}`)
+	wantMetadata := queue.DriverJobMetadata{
+		SchemaVersion: queue.DriverJobMetadataVersion,
+		DispatchID:    "dsp_sql",
+		JobID:         "job_sql",
+		ChainID:       "chn_sql",
+		BatchID:       "bat_sql",
+		Queue:         "critical",
+	}
+	encodedMetadata, err := json.Marshal(wantMetadata)
+	if err != nil {
+		t.Fatalf("marshal metadata fixture: %v", err)
+	}
 	job := databaseDeliveryJob(&dbJob{
-		jobType:   "reports:build",
-		payload:   wantPayload,
-		queueName: "critical",
-		attempt:   2,
-		maxRetry:  4,
+		jobType:      "reports:build",
+		payload:      wantPayload,
+		metadataJSON: sql.NullString{String: string(encodedMetadata), Valid: true},
+		queueName:    "critical",
+		attempt:      2,
+		maxRetry:     4,
 	})
 	opts := queuecore.DriverOptions(job)
 	if job.Type != "reports:build" || !bytes.Equal(job.PayloadBytes(), wantPayload) {
@@ -98,6 +112,87 @@ func TestDatabaseDeliveryJobRestoresAttemptMetadata(t *testing.T) {
 	}
 	if opts.QueueName != "critical" || opts.Attempt != 2 || opts.MaxRetry == nil || *opts.MaxRetry != 4 {
 		t.Fatalf("delivery options = %+v", opts)
+	}
+	if metadata := queue.DriverMetadata(job); metadata != wantMetadata {
+		t.Fatalf("delivery metadata = %+v, want %+v", metadata, wantMetadata)
+	}
+}
+
+// TestDatabaseMetadataJSONPersistsOnlySupportedMetadata verifies legacy jobs
+// store SQL NULL while direct jobs retain the exact root correlation contract.
+func TestDatabaseMetadataJSONPersistsOnlySupportedMetadata(t *testing.T) {
+	if got, err := databaseMetadataJSON(queue.NewJob("reports:legacy")); err != nil || got.Valid {
+		t.Fatalf("legacy metadata JSON = %#v, %v; want SQL NULL", got, err)
+	}
+
+	want := queue.DriverJobMetadata{
+		SchemaVersion: queue.DriverJobMetadataVersion,
+		DispatchID:    "dsp_sql",
+		JobID:         "job_sql",
+		Queue:         "critical",
+	}
+	encoded, err := databaseMetadataJSON(queue.DriverWithMetadata(queue.NewJob("reports:direct"), want))
+	if err != nil {
+		t.Fatalf("encode direct metadata: %v", err)
+	}
+	if !encoded.Valid {
+		t.Fatal("direct metadata unexpectedly encoded as SQL NULL")
+	}
+	var got queue.DriverJobMetadata
+	if err := json.Unmarshal([]byte(encoded.String), &got); err != nil {
+		t.Fatalf("decode direct metadata: %v", err)
+	}
+	if got != want {
+		t.Fatalf("metadata round trip = %+v, want %+v", got, want)
+	}
+}
+
+// TestDatabaseDeliveryJobRejectsUntrustedMetadata verifies nullable, malformed,
+// and unknown-version rows remain deliverable without accepting spoofed IDs.
+func TestDatabaseDeliveryJobRejectsUntrustedMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  sql.NullString
+	}{
+		{name: "null"},
+		{name: "empty", raw: sql.NullString{Valid: true}},
+		{name: "malformed", raw: sql.NullString{String: `{`, Valid: true}},
+		{name: "unknown", raw: sql.NullString{String: `{"schema_version":99,"dispatch_id":"spoofed","job_id":"spoofed"}`, Valid: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := databaseDeliveryJob(&dbJob{
+				jobType:      "reports:build",
+				payload:      []byte(`{"id":7}`),
+				metadataJSON: test.raw,
+				queueName:    "critical",
+			})
+			if metadata := queue.DriverMetadata(job); metadata.SchemaVersion != 0 {
+				t.Fatalf("untrusted driver metadata = %+v", metadata)
+			}
+			observed := queue.ResolveObservedJobMetadataFromJob(job)
+			if observed.DispatchID != "" || observed.JobID != "" || observed.ChainID != "" || observed.BatchID != "" {
+				t.Fatalf("untrusted observed correlation = %+v", observed)
+			}
+			if observed.JobType != "reports:build" || observed.JobKey == "" {
+				t.Fatalf("application identity was not delivered: %+v", observed)
+			}
+		})
+	}
+}
+
+// TestDatabaseDeliveryJobRetainsLegacyEnvelopeFallback verifies NULL metadata
+// does not sever correlation for workflow envelopes already persisted by v1.
+func TestDatabaseDeliveryJobRetainsLegacyEnvelopeFallback(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"dispatch_id":"dsp_legacy","job_id":"job_legacy","chain_id":"chn_legacy","job":{"type":"reports:build","payload":"eyJpZCI6N30="}}`)
+	job := databaseDeliveryJob(&dbJob{
+		jobType:   "bus:chain:node",
+		payload:   payload,
+		queueName: "critical",
+	})
+	metadata := queue.ResolveObservedJobMetadataFromJob(job)
+	if metadata.JobType != "reports:build" || metadata.DispatchID != "dsp_legacy" || metadata.JobID != "job_legacy" || metadata.ChainID != "chn_legacy" {
+		t.Fatalf("legacy metadata fallback = %+v", metadata)
 	}
 }
 
@@ -225,13 +320,17 @@ func TestNewDatabaseProcessingToken(t *testing.T) {
 	}
 }
 
-// TestDatabaseSchemaStatementsIncludeProcessingToken verifies fresh schemas never depend on the additive migration pass.
-func TestDatabaseSchemaStatementsIncludeProcessingToken(t *testing.T) {
+// TestDatabaseSchemaStatementsIncludeAdditiveColumns verifies fresh schemas
+// never depend on either compatibility migration pass.
+func TestDatabaseSchemaStatementsIncludeAdditiveColumns(t *testing.T) {
 	for _, driverName := range []string{"sqlite", "pgx", "mysql"} {
 		t.Run(driverName, func(t *testing.T) {
 			statements := (&databaseQueue{cfg: localDatabaseConfig{DriverName: driverName}}).schemaStatements()
 			if len(statements) == 0 || !strings.Contains(statements[0], "processing_token") {
 				t.Fatalf("fresh %s queue schema does not include processing_token", driverName)
+			}
+			if !strings.Contains(statements[0], "metadata_json TEXT NULL") {
+				t.Fatalf("fresh %s queue schema does not include nullable metadata_json", driverName)
 			}
 		})
 	}

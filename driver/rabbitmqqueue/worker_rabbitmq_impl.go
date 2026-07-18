@@ -221,13 +221,7 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 	}
 	err := handler(
 		runCtx,
-		queuecore.DriverWithAttempt(
-			queue.NewJob(incoming.Type).
-				Payload(incoming.Payload).
-				OnQueue(incoming.Queue).
-				Retry(incoming.MaxRetry),
-			incoming.Attempt,
-		),
+		rabbitMQDeliveryJob(incoming),
 	)
 	switch busruntime.ClassifyAttempt(attempt, err) {
 	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
@@ -274,7 +268,7 @@ func (w *rabbitMQWorker) nack(ctx context.Context, delivery amqp.Delivery, messa
 }
 
 func (w *rabbitMQWorker) observeRepublishFailure(ctx context.Context, message rabbitMQMessage, err error) {
-	metadata := queue.ResolveObservedJobMetadata(message.Type, message.Payload)
+	metadata := queue.ResolveObservedJobMetadataFromJob(rabbitMQDeliveryJob(message))
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
 		Kind:       queue.EventRepublishFailed,
 		Driver:     queue.DriverRabbitMQ,
@@ -294,7 +288,7 @@ func (w *rabbitMQWorker) observeRepublishFailure(ctx context.Context, message ra
 
 // observeSettlementFailure emits the canonical worker fact for an uncommitted RabbitMQ acknowledgement.
 func (w *rabbitMQWorker) observeSettlementFailure(ctx context.Context, message rabbitMQMessage, err error) {
-	metadata := queue.ResolveObservedJobMetadata(message.Type, message.Payload)
+	metadata := queue.ResolveObservedJobMetadataFromJob(rabbitMQDeliveryJob(message))
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
 		Kind:       queue.EventSettlementFailed,
 		Driver:     queue.DriverRabbitMQ,
@@ -310,6 +304,25 @@ func (w *rabbitMQWorker) observeSettlementFailure(ctx context.Context, message r
 		Err:        err,
 		Time:       time.Now(),
 	})
+}
+
+// rabbitMQDeliveryJob reconstructs one RabbitMQ delivery while retaining
+// supported direct-delivery metadata outside the application payload.
+func rabbitMQDeliveryJob(message rabbitMQMessage) queue.Job {
+	job := queuecore.DriverWithAttempt(
+		queue.NewJob(message.Type).
+			Payload(message.Payload).
+			OnQueue(message.Queue).
+			Retry(message.MaxRetry),
+		message.Attempt,
+	)
+	if len(message.Metadata) > 0 {
+		var metadata queue.DriverJobMetadata
+		if err := json.Unmarshal(message.Metadata, &metadata); err == nil {
+			job = queue.DriverWithMetadata(job, metadata)
+		}
+	}
+	return job
 }
 
 // publish declares the destination and waits for broker confirmation before reporting success.

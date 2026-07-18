@@ -5,7 +5,8 @@ import "encoding/json"
 const (
 	// ProtocolSchemaVersion identifies the workflow delivery envelope understood by this version of the library.
 	ProtocolSchemaVersion = 1
-	// DirectDeliveryType identifies an ordinary job carried through the workflow protocol.
+	// DirectDeliveryType identifies the retained version-one envelope for legacy
+	// direct jobs and application types that collide with reserved protocol names.
 	DirectDeliveryType = "bus:job"
 	// ChainNodeDeliveryType identifies one sequential workflow node delivery.
 	ChainNodeDeliveryType = "bus:chain:node"
@@ -15,8 +16,9 @@ const (
 	CallbackDeliveryType = "bus:callback"
 )
 
-// DeliveryMetadata contains the logical application identity and workflow correlation carried by a physical delivery.
-type DeliveryMetadata struct {
+// ResolvedDelivery contains the logical application identity and workflow
+// correlation recovered from a physical workflow delivery.
+type ResolvedDelivery struct {
 	// JobType is the logical application type when a supported envelope provides one, otherwise the physical type.
 	JobType string
 	// Payload is the logical application payload when a supported envelope provides one, otherwise the physical payload.
@@ -31,9 +33,10 @@ type DeliveryMetadata struct {
 	BatchID string
 }
 
-// ResolveDeliveryMetadata decodes the owned protocol while preserving physical identity for unsupported or malformed input.
-func ResolveDeliveryMetadata(deliveryType string, payload []byte) DeliveryMetadata {
-	metadata := DeliveryMetadata{JobType: deliveryType, Payload: payload}
+// ResolveDelivery decodes the owned protocol while preserving physical
+// identity for unsupported or malformed input.
+func ResolveDelivery(deliveryType string, payload []byte) ResolvedDelivery {
+	metadata := ResolvedDelivery{JobType: deliveryType, Payload: payload}
 	if deliveryType == "" || len(payload) == 0 || !IsDeliveryType(deliveryType) {
 		return metadata
 	}

@@ -21,7 +21,7 @@ type Message struct {
 	payload       []byte
 }
 
-// NewMessage creates a logical queue message from an application job type and raw JSON payload.
+// NewMessage creates a logical queue message from an application job type and exact payload bytes.
 // The payload is copied so callers can safely reuse or mutate their input buffer.
 // @group Constructors
 func NewMessage(jobType string, payload []byte) Message {

@@ -46,7 +46,7 @@ func IsPermanent(err error) bool {
 	return busruntime.IsPermanent(err)
 }
 
-// Option configures the high-level workflow runtime.
+// Option configures the high-level queue and workflow runtime.
 // @group Queue
 type Option func(*runtimeOptions)
 
@@ -55,6 +55,7 @@ type runtimeOptions struct {
 	workers                 int
 	observer                Observer
 	handlerContextDecorator func(context.Context) context.Context
+	legacyDirectEnvelope    bool
 }
 
 // apply ignores nil options so optional configuration slices compose safely.
@@ -191,13 +192,27 @@ func WithHandlerContextDecorator(fn func(context.Context) context.Context) Optio
 	}
 }
 
+// WithLegacyDirectEnvelope keeps ordinary dispatches on the version-one
+// `bus:job` wire route during a workers-first migration. Remove this option only
+// after every consumer can process canonical direct deliveries. See the
+// [direct delivery migration guide] for backend-specific rollout and rollback.
+//
+// [direct delivery migration guide]: https://github.com/goforj/queue/blob/main/docs/direct-delivery-migration.md
+// @group Queue
+func WithLegacyDirectEnvelope() Option {
+	return func(o *runtimeOptions) {
+		o.legacyDirectEnvelope = true
+	}
+}
+
 // Queue is the high-level user-facing queue API.
 // It composes the queue runtime with the internal orchestration engine.
 // @group Queue
 type Queue struct {
-	q   queueRuntime
-	b   workflow.Engine
-	ctx context.Context
+	q                    queueRuntime
+	b                    workflow.Engine
+	ctx                  context.Context
+	legacyDirectEnvelope bool
 }
 
 // newHighLevelQueue constructs the selected physical runtime before attaching the canonical workflow engine.
@@ -234,7 +249,7 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Queue{q: q, b: b}, nil
+	return &Queue{q: q, b: b, legacyDirectEnvelope: ro.legacyDirectEnvelope}, nil
 }
 
 // attachRuntimeObserver composes constructor and option observers before the workflow runtime is built so every layer shares one sink.
@@ -404,7 +419,8 @@ func (r *Queue) WithContext(ctx context.Context) *Queue {
 	return &clone
 }
 
-// Dispatch enqueues a high-level job using the queue's bound context.
+// Dispatch enqueues a high-level job using its application type and exact
+// payload bytes together with the queue's bound context.
 // @group Queue
 //
 // Example: dispatch
@@ -424,16 +440,52 @@ func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
 	if r == nil {
 		return DispatchResult{}, fmt.Errorf("runtime is nil")
 	}
-	bj, err := toWorkflowJob(job)
-	if err != nil {
-		return DispatchResult{}, err
-	}
 	ctx := r.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	result, err := r.b.Dispatch(ctx, bj)
+	if r.legacyDirectEnvelope {
+		legacy, legacyErr := toWorkflowJob(job)
+		if legacyErr != nil {
+			return DispatchResult{}, legacyErr
+		}
+		result, dispatchErr := r.b.Dispatch(ctx, legacy)
+		return dispatchResultFromWorkflow(result), dispatchErr
+	}
+	bj, err := toDirectWorkflowJob(job)
+	if err != nil {
+		return DispatchResult{}, err
+	}
+	result, err := r.b.DispatchDirect(ctx, bj)
 	return dispatchResultFromWorkflow(result), err
+}
+
+// toDirectWorkflowJob freezes the canonical root job as exact application
+// bytes, avoiding the legacy workflow payload marshaling boundary.
+func toDirectWorkflowJob(job Job) (workflow.StoredJob, error) {
+	if err := job.validate(); err != nil {
+		return workflow.StoredJob{}, err
+	}
+	var timeout time.Duration
+	if job.options.timeout != nil {
+		timeout = *job.options.timeout
+	}
+	var backoff time.Duration
+	if job.options.backoff != nil {
+		backoff = *job.options.backoff
+	}
+	return workflow.StoredJob{
+		Type:    job.Type,
+		Payload: job.PayloadBytes(),
+		Options: workflow.JobOptions{
+			Queue:     job.options.queueName,
+			Delay:     job.options.delay,
+			Timeout:   timeout,
+			Retry:     optionInt(job.options.maxRetry),
+			Backoff:   backoff,
+			UniqueFor: job.options.uniqueTTL,
+		},
+	}, nil
 }
 
 // Chain creates a chain builder for sequential workflow execution.

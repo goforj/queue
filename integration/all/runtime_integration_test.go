@@ -242,7 +242,7 @@ func testQueueWorkflowDispatchScenario(t *testing.T, q *Queue, queueName string)
 	type payload struct {
 		URL string `json:"url"`
 	}
-	seen := make(chan string, 1)
+	seen := make(chan Message, 1)
 	jobType := uniqueQueueJobType("queue:dispatch")
 
 	q.Register(jobType, func(_ context.Context, j Message) error {
@@ -251,13 +251,13 @@ func testQueueWorkflowDispatchScenario(t *testing.T, q *Queue, queueName string)
 			return err
 		}
 		select {
-		case seen <- p.URL:
+		case seen <- j:
 		default:
 		}
 		return nil
 	})
 
-	_, err := q.Dispatch(NewJob(jobType).Payload(payload{
+	result, err := q.Dispatch(NewJob(jobType).Payload(payload{
 		URL: "https://goforj.dev/health",
 	}).OnQueue(queueName))
 	if err != nil {
@@ -265,9 +265,19 @@ func testQueueWorkflowDispatchScenario(t *testing.T, q *Queue, queueName string)
 	}
 
 	select {
-	case got := <-seen:
-		if got != "https://goforj.dev/health" {
-			t.Fatalf("dispatch scenario: unexpected url %q", got)
+	case message := <-seen:
+		var got payload
+		if err := message.Bind(&got); err != nil {
+			t.Fatalf("dispatch scenario: bind delivered payload: %v", err)
+		}
+		if got.URL != "https://goforj.dev/health" {
+			t.Fatalf("dispatch scenario: unexpected url %q", got.URL)
+		}
+		if message.SchemaVersion == 0 || message.DispatchID != result.DispatchID || message.JobID == "" {
+			t.Fatalf("dispatch scenario: incomplete correlation message=%+v result=%+v", message, result)
+		}
+		if message.JobType != jobType || message.ChainID != "" || message.BatchID != "" {
+			t.Fatalf("dispatch scenario: incorrect direct identity %+v", message)
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("dispatch scenario: timed out waiting for handler")

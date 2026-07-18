@@ -223,15 +223,26 @@ func (d *redisQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	} else {
 		backendOpts = append(backendOpts, backend.Timeout(redisDefaultJobTimeout))
 	}
-	task := backend.NewTask(job.Type, job.PayloadBytes())
+	headers := make(map[string]string, 2)
+	metadata := queue.DriverMetadata(job)
+	if metadata.SchemaVersion != 0 {
+		encoded, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("encode redis driver job metadata: %w", err)
+		}
+		headers[redisDriverJobMetadataHeader] = string(encoded)
+	}
 	if parsed.MaxRetry != nil {
 		if *parsed.MaxRetry > redisMaximumApplicationRetry {
 			return fmt.Errorf("redis retry must be <= %d so its transport reserve fits the Asynq wire format", redisMaximumApplicationRetry)
 		}
 		backendOpts = append(backendOpts, backend.MaxRetry(*parsed.MaxRetry+1))
-		task = backend.NewTaskWithHeaders(job.Type, job.PayloadBytes(), map[string]string{
-			redisApplicationMaxRetryHeader: strconv.Itoa(*parsed.MaxRetry),
-		})
+		headers[redisApplicationMaxRetryHeader] = strconv.Itoa(*parsed.MaxRetry)
+	}
+	payload := job.PayloadBytes()
+	task := backend.NewTask(job.Type, payload)
+	if len(headers) > 0 {
+		task = backend.NewTaskWithHeaders(job.Type, payload, headers)
 	}
 	if parsed.Backoff != nil && *parsed.Backoff > 0 {
 		return queuecore.ErrBackoffUnsupported

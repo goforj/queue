@@ -24,6 +24,35 @@ func TestDeliveryAttemptContext(t *testing.T) {
 	}
 }
 
+// TestDeliveryMetadataContext verifies direct correlation remains typed and
+// independent from the physical attempt context.
+func TestDeliveryMetadataContext(t *testing.T) {
+	if _, ok := DeliveryMetadataFromContext(nil); ok {
+		t.Fatal("nil context unexpectedly contained delivery metadata")
+	}
+	want := DeliveryMetadata{
+		SchemaVersion: DeliveryMetadataVersion,
+		DispatchID:    "dsp_1",
+		JobID:         "job_1",
+		Queue:         "critical",
+	}
+	ctx := WithDeliveryMetadata(nil, want)
+	got, ok := DeliveryMetadataFromContext(ctx)
+	if !ok || got != want {
+		t.Fatalf("delivery metadata = %+v, %t; want %+v, true", got, ok, want)
+	}
+	if _, ok := DeliveryAttemptFromContext(ctx); ok {
+		t.Fatal("delivery metadata unexpectedly invented an attempt")
+	}
+	future := WithDeliveryMetadata(ctx, DeliveryMetadata{
+		SchemaVersion: DeliveryMetadataVersion + 1,
+		DispatchID:    "spoofed",
+	})
+	if metadata, ok := DeliveryMetadataFromContext(future); ok || metadata != (DeliveryMetadata{}) {
+		t.Fatalf("future metadata = %+v, %t; want zero, false", metadata, ok)
+	}
+}
+
 // TestContinuationScope verifies drain permission is runtime-owned, explicit, expiring, and nil-context safe.
 func TestContinuationScope(t *testing.T) {
 	first := NewContinuationScope()

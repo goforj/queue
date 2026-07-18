@@ -70,7 +70,7 @@ Failure/cancel/reject events additionally include:
 
 - `Err`
 
-Every layer includes the applicable `DispatchID`, `JobID`, `ChainID`, and `BatchID` correlation fields when the delivery carries workflow metadata. Queue and worker facts decode the current versioned internal envelope so they can be joined to workflow facts without inspecting payloads in application observers.
+Every layer includes the applicable `DispatchID`, `JobID`, `ChainID`, and `BatchID` correlation fields when the delivery carries supported metadata. Queue and worker facts read the versioned direct-driver sidecar or decode a retained workflow envelope, so they can be joined to workflow facts without inspecting payloads in application observers.
 
 ## Semantics and guarantees
 

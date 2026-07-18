@@ -11,7 +11,8 @@ import (
 )
 
 func main() {
-	// Dispatch enqueues a high-level job using the queue's bound context.
+	// Dispatch enqueues a high-level job using its application type and exact
+	// payload bytes together with the queue's bound context.
 
 	// Example: dispatch
 	q, err := queue.NewSync()

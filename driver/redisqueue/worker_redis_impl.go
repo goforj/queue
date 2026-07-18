@@ -61,10 +61,11 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 				Retry(maxRetry),
 			attempt,
 		)
+		delivery = redisJobWithDriverMetadata(delivery, job.Headers())
 		if w.obs == nil {
 			return redisSettlementError(physicalAttempt, handler(ctx, delivery))
 		}
-		metadata := queue.ResolveObservedJobMetadata(job.Type(), job.Payload())
+		metadata := queue.ResolveObservedJobMetadataFromJob(delivery)
 
 		start := time.Now()
 		base := queue.Event{

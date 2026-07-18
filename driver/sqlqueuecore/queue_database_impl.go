@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -104,6 +105,7 @@ type dbJob struct {
 	queueName       string
 	jobType         string
 	payload         []byte
+	metadataJSON    sql.NullString
 	timeoutSeconds  sql.NullInt64
 	maxRetry        int
 	backoffMillis   int64
@@ -219,6 +221,8 @@ func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 		if err := d.ensureSchema(ctx); err != nil {
 			return err
 		}
+	} else if err := d.requireMetadataJSONColumn(ctx); err != nil {
+		return err
 	}
 	for i := 0; i < d.cfg.Workers; i++ {
 		d.workerWG.Add(1)
@@ -297,16 +301,21 @@ func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
 		}
 		timeoutSeconds = seconds
 	}
+	metadataJSON, err := databaseMetadataJSON(job)
+	if err != nil {
+		return err
+	}
 
 	query := d.rebind(
 		`INSERT INTO queue_jobs
-        (queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt, available_at, state, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?)`,
+        (queue_name, job_type, payload, metadata_json, timeout_seconds, max_retry, backoff_millis, attempt, available_at, state, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?)`,
 	)
 	args := []any{
 		queueName,
 		job.Type,
 		payloadBytes,
+		metadataJSON,
 		timeoutSeconds,
 		maxRetry,
 		backoffMillis,
@@ -653,13 +662,44 @@ func (d *databaseQueue) runHandlerWithContinuationPermit(ctx context.Context, ha
 
 // databaseDeliveryJob restores persisted physical attempt metadata before the root orchestration adapter runs.
 func databaseDeliveryJob(job *dbJob) queue.Job {
-	return queuecore.DriverWithAttempt(
+	delivery := queuecore.DriverWithAttempt(
 		queue.NewJob(job.jobType).
 			Payload(job.payload).
 			OnQueue(job.queueName).
 			Retry(job.maxRetry),
 		job.attempt,
 	)
+	return queue.DriverWithMetadata(delivery, databaseJobMetadata(job.metadataJSON))
+}
+
+// databaseMetadataJSON serializes only metadata versions supported by this
+// root module so unknown producer state cannot become trusted SQL correlation.
+func databaseMetadataJSON(job queue.Job) (sql.NullString, error) {
+	metadata := queue.DriverMetadata(job)
+	if metadata.SchemaVersion == 0 {
+		return sql.NullString{}, nil
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return sql.NullString{}, fmt.Errorf("marshal database job metadata: %w", err)
+	}
+	return sql.NullString{String: string(encoded), Valid: true}, nil
+}
+
+// databaseJobMetadata accepts nullable legacy rows and ignores malformed or
+// unknown-version metadata without changing application delivery.
+func databaseJobMetadata(raw sql.NullString) queue.DriverJobMetadata {
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return queue.DriverJobMetadata{}
+	}
+	var metadata queue.DriverJobMetadata
+	if err := json.Unmarshal([]byte(raw.String), &metadata); err != nil {
+		return queue.DriverJobMetadata{}
+	}
+	if metadata.SchemaVersion != queue.DriverJobMetadataVersion {
+		return queue.DriverJobMetadata{}
+	}
+	return metadata
 }
 
 // markDoneWithRetry bounds each finalization attempt and returns the last error for settlement telemetry.
@@ -799,7 +839,7 @@ WHERE state='processing' AND processing_started_at IS NOT NULL AND (
 }
 
 func (d *databaseQueue) selectPendingJob(ctx context.Context, tx *sql.Tx, now int64) (*dbJob, error) {
-	query := `SELECT id, queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt
+	query := `SELECT id, queue_name, job_type, payload, metadata_json, timeout_seconds, max_retry, backoff_millis, attempt
 FROM queue_jobs
 WHERE queue_name=? AND state='pending' AND available_at <= ?
 ORDER BY id ASC
@@ -815,6 +855,7 @@ LIMIT 1`
 		&job.queueName,
 		&job.jobType,
 		&job.payload,
+		&job.metadataJSON,
 		&job.timeoutSeconds,
 		&job.maxRetry,
 		&job.backoffMillis,
@@ -920,7 +961,7 @@ func (d *databaseQueue) observeSettlementFailure(ctx context.Context, job *dbJob
 	if job == nil {
 		return
 	}
-	metadata := queue.ResolveObservedJobMetadata(job.jobType, job.payload)
+	metadata := queue.ResolveObservedJobMetadataFromJob(databaseDeliveryJob(job))
 	queuecore.SafeObserve(ctx, d.observer, queue.Event{
 		Kind:       queue.EventSettlementFailed,
 		Driver:     queue.DriverDatabase,
@@ -1050,6 +1091,9 @@ func (d *databaseQueue) ensureSchema(ctx context.Context) error {
 	if err := d.ensureProcessingTokenColumn(ctx); err != nil {
 		return err
 	}
+	if err := d.ensureMetadataJSONColumn(ctx); err != nil {
+		return err
+	}
 	if d.cfg.DriverName == "mysql" {
 		if err := d.ensureMySQLUniqueExpiryIndex(ctx); err != nil {
 			return err
@@ -1089,10 +1133,82 @@ func (d *databaseQueue) ensureProcessingTokenColumn(ctx context.Context) error {
 
 // processingTokenColumnExists inspects the active dialect without relying on non-portable ALTER TABLE guards.
 func (d *databaseQueue) processingTokenColumnExists(ctx context.Context) (bool, error) {
+	return d.queueJobColumnExists(ctx, "processing_token")
+}
+
+// ensureMetadataJSONColumn upgrades legacy queue tables before direct jobs can
+// rely on out-of-payload correlation surviving a durable delivery.
+func (d *databaseQueue) ensureMetadataJSONColumn(ctx context.Context) error {
+	exists, err := d.metadataJSONColumnExists(ctx)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := d.db.ExecContext(ctx, `ALTER TABLE queue_jobs ADD COLUMN metadata_json TEXT NULL`); err != nil {
+		// Concurrent startup may observe an already-completed additive migration after its own ALTER loses the race.
+		exists, checkErr := d.metadataJSONColumnExists(ctx)
+		if checkErr == nil && exists {
+			return nil
+		}
+		return fmt.Errorf("ensure database job metadata column: %w", err)
+	}
+	return nil
+}
+
+// requireMetadataJSONColumn fails startup before workers begin polling when a
+// caller-managed schema has not installed the direct-delivery metadata column.
+func (d *databaseQueue) requireMetadataJSONColumn(ctx context.Context) error {
+	tableExists, err := d.queueJobsTableExists(ctx)
+	if err != nil {
+		return fmt.Errorf("validate caller-managed queue_jobs table: %w", err)
+	}
+	if !tableExists {
+		// DisableAutoMigrate historically permits an intentionally empty schema;
+		// polling remains inert until the caller installs its managed tables.
+		return nil
+	}
+	exists, err := d.metadataJSONColumnExists(ctx)
+	if err != nil {
+		return fmt.Errorf("validate caller-managed database job metadata column: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("caller-managed queue_jobs schema is missing required metadata_json column")
+	}
+	return nil
+}
+
+// queueJobsTableExists distinguishes an intentionally empty caller-managed
+// database from an installed legacy schema that needs the additive column.
+func (d *databaseQueue) queueJobsTableExists(ctx context.Context) (bool, error) {
+	var count int
+	switch d.cfg.DriverName {
+	case "sqlite":
+		err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='queue_jobs'`).Scan(&count)
+		return count > 0, err
+	case "pgx", "postgres":
+		err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_class WHERE oid = to_regclass('queue_jobs')`).Scan(&count)
+		return count > 0, err
+	default:
+		err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'queue_jobs'`).Scan(&count)
+		return count > 0, err
+	}
+}
+
+// metadataJSONColumnExists reports whether direct-delivery metadata has an
+// additive persistence slot in the active queue table.
+func (d *databaseQueue) metadataJSONColumnExists(ctx context.Context) (bool, error) {
+	return d.queueJobColumnExists(ctx, "metadata_json")
+}
+
+// queueJobColumnExists inspects one trusted queue_jobs column name through the
+// active dialect without depending on non-portable ALTER TABLE guards.
+func (d *databaseQueue) queueJobColumnExists(ctx context.Context, columnName string) (bool, error) {
 	if d.cfg.DriverName == "sqlite" {
 		rows, err := d.db.QueryContext(ctx, `PRAGMA table_info(queue_jobs)`)
 		if err != nil {
-			return false, fmt.Errorf("inspect sqlite processing token column: %w", err)
+			return false, fmt.Errorf("inspect sqlite queue job column %q: %w", columnName, err)
 		}
 		defer rows.Close()
 		for rows.Next() {
@@ -1107,7 +1223,7 @@ func (d *databaseQueue) processingTokenColumnExists(ctx context.Context) (bool, 
 			if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 				return false, fmt.Errorf("scan sqlite queue column: %w", err)
 			}
-			if name == "processing_token" {
+			if name == columnName {
 				return true, nil
 			}
 		}
@@ -1119,15 +1235,15 @@ func (d *databaseQueue) processingTokenColumnExists(ctx context.Context) (bool, 
 
 	query := `SELECT COUNT(*)
 	FROM information_schema.columns
-	WHERE table_schema = DATABASE() AND table_name = 'queue_jobs' AND column_name = 'processing_token'`
+	WHERE table_schema = DATABASE() AND table_name = 'queue_jobs' AND column_name = ?`
 	if d.cfg.DriverName == "pgx" || d.cfg.DriverName == "postgres" {
 		query = `SELECT COUNT(*)
 			FROM pg_attribute
-			WHERE attrelid = to_regclass('queue_jobs') AND attname = 'processing_token' AND NOT attisdropped`
+			WHERE attrelid = to_regclass('queue_jobs') AND attname = ? AND NOT attisdropped`
 	}
 	var count int
-	if err := d.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
-		return false, fmt.Errorf("inspect database processing token column: %w", err)
+	if err := d.db.QueryRowContext(ctx, d.rebind(query), columnName).Scan(&count); err != nil {
+		return false, fmt.Errorf("inspect database queue job column %q: %w", columnName, err)
 	}
 	return count > 0, nil
 }
@@ -1173,6 +1289,7 @@ func (d *databaseQueue) schemaStatements() []string {
                 queue_name TEXT NOT NULL,
                 job_type TEXT NOT NULL,
                 payload BYTEA NOT NULL,
+                metadata_json TEXT NULL,
                 timeout_seconds BIGINT NULL,
                 max_retry INTEGER NOT NULL DEFAULT 0,
                 backoff_millis BIGINT NOT NULL DEFAULT 0,
@@ -1199,6 +1316,7 @@ func (d *databaseQueue) schemaStatements() []string {
                 queue_name TEXT NOT NULL,
                 job_type TEXT NOT NULL,
                 payload BLOB NOT NULL,
+                metadata_json TEXT NULL,
                 timeout_seconds INTEGER NULL,
                 max_retry INTEGER NOT NULL DEFAULT 0,
                 backoff_millis INTEGER NOT NULL DEFAULT 0,
@@ -1225,6 +1343,7 @@ func (d *databaseQueue) schemaStatements() []string {
                 queue_name VARCHAR(191) NOT NULL,
                 job_type VARCHAR(191) NOT NULL,
                 payload LONGBLOB NOT NULL,
+                metadata_json TEXT NULL,
                 timeout_seconds BIGINT NULL,
                 max_retry INT NOT NULL DEFAULT 0,
                 backoff_millis BIGINT NOT NULL DEFAULT 0,

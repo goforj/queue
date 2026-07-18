@@ -526,7 +526,7 @@ func (q *nativeQueueRuntime) BusRegister(jobType string, handler busruntime.Hand
 	}
 	scope := q.continuationScope()
 	q.Register(jobType, func(ctx context.Context, job Job) error {
-		handlerCtx, release := withBusDeliveryAttempt(ctx, job, scope)
+		handlerCtx, release := withBusDeliveryContext(ctx, job, scope)
 		defer release()
 		return handler(handlerCtx, job)
 	})
@@ -539,19 +539,24 @@ func (q *externalQueueRuntime) BusRegister(jobType string, handler busruntime.Ha
 	}
 	scope := q.continuationScope()
 	q.Register(jobType, func(ctx context.Context, job Job) error {
-		handlerCtx, release := withBusDeliveryAttempt(ctx, job, scope)
+		handlerCtx, release := withBusDeliveryContext(ctx, job, scope)
 		defer release()
 		return handler(handlerCtx, job)
 	})
 }
 
-// withBusDeliveryAttempt keeps physical retry metadata out of the serialized workflow envelope while making it available to orchestration.
-func withBusDeliveryAttempt(ctx context.Context, job Job, scope *busruntime.ContinuationScope) (context.Context, func()) {
+// withBusDeliveryContext attaches physical attempt and correlation metadata to
+// one invocation while keeping both channels out of the application payload.
+func withBusDeliveryContext(ctx context.Context, job Job, scope *busruntime.ContinuationScope) (context.Context, func()) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	opts := job.jobOptions()
 	ctx, release := scope.Permit(ctx)
+	metadata := DriverMetadata(job)
+	// Every physical invocation shadows parent metadata so nested legacy or
+	// low-level jobs cannot inherit correlation from the job that dispatched them.
+	ctx = busruntime.WithDeliveryMetadata(ctx, metadata)
 	return busruntime.WithDeliveryAttempt(ctx, busruntime.DeliveryAttempt{
 		Number:   opts.attempt,
 		MaxRetry: optionInt(opts.maxRetry),
@@ -574,6 +579,26 @@ func (q *externalQueueRuntime) BusDispatch(ctx context.Context, jobType string, 
 	}
 	defer release()
 	return q.common.dispatchBusJob(ctx, jobType, payload, opts)
+}
+
+// BusDispatchDirect submits an ordinary application job without a workflow envelope.
+func (q *nativeQueueRuntime) BusDispatchDirect(ctx context.Context, jobType string, payload []byte, metadata busruntime.DeliveryMetadata, opts busruntime.JobOptions) error {
+	release, err := q.acquireOperation(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return q.common.dispatchDirectJob(ctx, jobType, payload, metadata, opts)
+}
+
+// BusDispatchDirect submits an ordinary application job without a workflow envelope.
+func (q *externalQueueRuntime) BusDispatchDirect(ctx context.Context, jobType string, payload []byte, metadata busruntime.DeliveryMetadata, opts busruntime.JobOptions) error {
+	release, err := q.acquireOperation(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return q.common.dispatchDirectJob(ctx, jobType, payload, metadata, opts)
 }
 
 // acquireOperation leases native backend resources through one complete operation.
@@ -1187,6 +1212,40 @@ func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payloa
 		logical := resolveLogicalJob(jobType, payload)
 		job = job.UniqueFor(opts.UniqueFor).withLogicalIdentity(logical.jobType, logical.payload)
 	}
+	err := q.inner.Dispatch(ctx, q.physicalJob(job))
+	if err == nil {
+		acceptance.markAccepted()
+		return nil
+	}
+	if acceptance.isAccepted() {
+		return acceptedExecutionError{cause: err}
+	}
+	return err
+}
+
+// dispatchDirectJob preserves direct application bytes while attaching
+// correlation through the driver metadata channel instead of a workflow envelope.
+func (q *queueCommon) dispatchDirectJob(ctx context.Context, jobType string, payload []byte, metadata busruntime.DeliveryMetadata, opts busruntime.JobOptions) error {
+	ctx, acceptance := newDispatchAcceptance(ctx)
+	job := NewJob(jobType).Payload(payload)
+	if opts.Queue != "" {
+		job = job.OnQueue(opts.Queue)
+	}
+	if opts.Delay > 0 {
+		job = job.Delay(opts.Delay)
+	}
+	if opts.Timeout > 0 {
+		job = job.Timeout(opts.Timeout)
+	}
+	// Direct workflow policy still owns an explicit zero retry budget.
+	job = job.Retry(opts.Retry)
+	if opts.Backoff > 0 {
+		job = job.Backoff(opts.Backoff)
+	}
+	if opts.UniqueFor > 0 {
+		job = job.UniqueFor(opts.UniqueFor)
+	}
+	job = DriverWithMetadata(job, metadata)
 	err := q.inner.Dispatch(ctx, q.physicalJob(job))
 	if err == nil {
 		acceptance.markAccepted()

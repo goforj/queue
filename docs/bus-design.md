@@ -14,7 +14,7 @@
 - `bus.Job` remains a boundary DTO because its public fields, composite literals, deferred JSON encoding, and raw string/byte semantics cannot alias `queue.Job` compatibly. `bus.JobOptions` is a source-compatible alias of the root persisted-options shape, and the facade converts the job once into the canonical root path.
 - The self-returning `bus.ChainBuilder` and `bus.BatchBuilder` interfaces remain physical deprecated contracts. Keeping them distinct avoids breaking downstream type switches and custom implementations; their adapters still delegate every operation to the canonical engine.
 - The legacy `bus.Event` observer shape remains only at that compatibility boundary. Root `queue.Observer` is the canonical event model and the internal engine has one event producer.
-- Version-one physical names (`bus:job`, `bus:chain:node`, `bus:batch:job`, `bus:callback`), JSON envelopes, and SQL tables remain stable compatibility contracts despite the historical prefix.
+- Version-one physical names and JSON envelopes remain readable compatibility contracts despite the historical prefix. Root direct dispatch now uses the application job type and payload; `bus:job` remains registered for old backlog, reserved-name collisions, the migration option, and the raw-runtime compatibility route. Chain, batch, and callback deliveries retain `bus:chain:node`, `bus:batch:job`, and `bus:callback`.
 
 ## Compatibility Migration
 
@@ -26,7 +26,7 @@ Ordinary source forms remain supported: custom `bus.Bus`, store, middleware, obs
 
 One configuration and runtime-behavior incompatibility is intentional: every option-free `bus.New(existingQueue)` facade now shares the root queue's handler registry, store, observer, middleware, and lifecycle instead of constructing independent state over the same physical runtime. Code that deliberately relied on isolated root and bus state must use distinct queue runtimes; ordinary callers should register and configure one root queue and treat `bus` only as a compatibility view. `bus.New(existingQueue, nonNilOption...)` and `bus.NewWithStore(existingQueue, ...)` now return `bus.ErrQueueOptionsUnsupported` because those options cannot configure only the shared view. Supply `queue.WithObserver`, `queue.WithStore`, `queue.WithClock`, and `queue.WithMiddleware` when constructing the root queue, then call `bus.New(existingQueue)` without options. The retained raw-`busruntime.Runtime` route continues to accept legacy bus options.
 
-The type-identity migration does not otherwise change physical delivery names, JSON payload encoding, SQL table layouts or rows, retry/workflow outcomes, operational rollout, or the minimum Go version. Literal wire and legacy-SQL fixtures guard those contracts.
+The type-identity migration itself did not change wire or persistence contracts. The later direct-delivery cutover deliberately does; see [Direct Delivery Migration](direct-delivery-migration.md) for the exact wire, SQL, runtime, and rollout boundary. Literal legacy-wire and legacy-SQL fixtures continue to guard backward reading.
 
 The remainder of this document describes the superseded proposal. Examples that
 construct or configure `bus` directly should not be treated as current guidance.

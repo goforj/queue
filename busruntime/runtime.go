@@ -202,10 +202,59 @@ type JobOptions struct {
 	UniqueFor time.Duration
 }
 
+// DeliveryMetadataVersion identifies the direct-delivery metadata understood
+// by this version of the runtime and driver integration contract.
+const DeliveryMetadataVersion = 1
+
+// DeliveryMetadata carries correlation for an ordinary direct job without
+// changing its application type or payload. Its JSON representation is the
+// canonical persisted and transported driver metadata record.
+type DeliveryMetadata struct {
+	SchemaVersion int    `json:"schema_version"`
+	DispatchID    string `json:"dispatch_id,omitempty"`
+	JobID         string `json:"job_id,omitempty"`
+	ChainID       string `json:"chain_id,omitempty"`
+	BatchID       string `json:"batch_id,omitempty"`
+	Queue         string `json:"queue,omitempty"`
+}
+
 // Runtime is the queue runtime surface required by the orchestration engine.
 type Runtime interface {
 	BusRegister(jobType string, handler Handler)
 	BusDispatch(ctx context.Context, jobType string, payload []byte, opts JobOptions) error
 	StartWorkers(ctx context.Context) error
 	Shutdown(ctx context.Context) error
+}
+
+// DirectRuntime extends Runtime with canonical direct-job dispatch. Its
+// embedded Runtime registration method handles both application types and
+// retained legacy envelopes.
+type DirectRuntime interface {
+	Runtime
+	// BusDispatchDirect submits application bytes with correlation kept in the metadata channel.
+	BusDispatchDirect(ctx context.Context, jobType string, payload []byte, metadata DeliveryMetadata, opts JobOptions) error
+}
+
+type deliveryMetadataContextKey struct{}
+
+// WithDeliveryMetadata attaches direct-job correlation to one physical handler
+// invocation without exposing transport framing to the application payload.
+func WithDeliveryMetadata(ctx context.Context, metadata DeliveryMetadata) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, deliveryMetadataContextKey{}, metadata)
+}
+
+// DeliveryMetadataFromContext returns supported direct-job correlation supplied
+// by a compatible worker runtime. Missing and unknown versions are untrusted.
+func DeliveryMetadataFromContext(ctx context.Context) (DeliveryMetadata, bool) {
+	if ctx == nil {
+		return DeliveryMetadata{}, false
+	}
+	metadata, ok := ctx.Value(deliveryMetadataContextKey{}).(DeliveryMetadata)
+	if !ok || metadata.SchemaVersion != DeliveryMetadataVersion {
+		return DeliveryMetadata{}, false
+	}
+	return metadata, true
 }

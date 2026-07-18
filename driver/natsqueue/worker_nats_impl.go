@@ -243,13 +243,7 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 	}
 	err := handler(
 		ctx,
-		queuecore.DriverWithAttempt(
-			queue.NewJob(incoming.Type).
-				Payload(incoming.Payload).
-				OnQueue(incoming.Queue).
-				Retry(incoming.MaxRetry),
-			incoming.Attempt,
-		),
+		natsDeliveryJob(incoming),
 	)
 	switch busruntime.ClassifyAttempt(attempt, err) {
 	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
@@ -305,7 +299,7 @@ func (w *natsWorker) republish(message natsMessage) error {
 }
 
 func (w *natsWorker) observeRepublishFailure(ctx context.Context, message natsMessage, err error) {
-	metadata := queue.ResolveObservedJobMetadata(message.Type, message.Payload)
+	metadata := queue.ResolveObservedJobMetadataFromJob(natsDeliveryJob(message))
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
 		Kind:       queue.EventRepublishFailed,
 		Driver:     queue.DriverNATS,
@@ -321,6 +315,25 @@ func (w *natsWorker) observeRepublishFailure(ctx context.Context, message natsMe
 		Err:        err,
 		Time:       time.Now(),
 	})
+}
+
+// natsDeliveryJob reconstructs one NATS delivery without coupling application
+// payload bytes to the optional direct-delivery metadata channel.
+func natsDeliveryJob(message natsMessage) queue.Job {
+	job := queuecore.DriverWithAttempt(
+		queue.NewJob(message.Type).
+			Payload(message.Payload).
+			OnQueue(message.Queue).
+			Retry(message.MaxRetry),
+		message.Attempt,
+	)
+	if len(message.Metadata) > 0 {
+		var metadata queue.DriverJobMetadata
+		if err := json.Unmarshal(message.Metadata, &metadata); err == nil {
+			job = queue.DriverWithMetadata(job, metadata)
+		}
+	}
+	return job
 }
 
 func defaultWorkerCount(n int) int {

@@ -14,7 +14,7 @@ type logicalJob struct {
 
 // resolveLogicalJob decodes only the owned workflow schema so identity and telemetry cannot drift onto separate interpretations.
 func resolveLogicalJob(rawType string, payload []byte) logicalJob {
-	metadata := workflow.ResolveDeliveryMetadata(rawType, payload)
+	metadata := workflow.ResolveDelivery(rawType, payload)
 	return logicalJob{
 		jobType:    metadata.JobType,
 		payload:    metadata.Payload,

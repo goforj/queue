@@ -35,19 +35,19 @@ func TestProtocolConstants(t *testing.T) {
 	}
 }
 
-// TestResolveDeliveryMetadata decodes every version-one delivery shape without constructing production envelopes.
-func TestResolveDeliveryMetadata(t *testing.T) {
+// TestResolveDelivery decodes every version-one delivery shape without constructing production envelopes.
+func TestResolveDelivery(t *testing.T) {
 	tests := []struct {
 		name         string
 		deliveryType string
 		payload      []byte
-		want         DeliveryMetadata
+		want         ResolvedDelivery
 	}{
 		{
 			name:         "direct base64 payload",
 			deliveryType: DirectDeliveryType,
 			payload:      []byte(`{"schema_version":1,"dispatch_id":"dsp_direct","job_id":"job_direct","job":{"type":"reports:build","payload":"eyJpZCI6MX0="}}`),
-			want: DeliveryMetadata{
+			want: ResolvedDelivery{
 				JobType:    "reports:build",
 				Payload:    []byte(`{"id":1}`),
 				DispatchID: "dsp_direct",
@@ -58,7 +58,7 @@ func TestResolveDeliveryMetadata(t *testing.T) {
 			name:         "chain null payload",
 			deliveryType: ChainNodeDeliveryType,
 			payload:      []byte(`{"schema_version":1,"dispatch_id":"dsp_chain","job_id":"job_chain","chain_id":"chn_1","job":{"type":"reports:chain","payload":null}}`),
-			want: DeliveryMetadata{
+			want: ResolvedDelivery{
 				JobType:    "reports:chain",
 				Payload:    nil,
 				DispatchID: "dsp_chain",
@@ -70,7 +70,7 @@ func TestResolveDeliveryMetadata(t *testing.T) {
 			name:         "batch empty payload",
 			deliveryType: BatchJobDeliveryType,
 			payload:      []byte(`{"schema_version":1,"dispatch_id":"dsp_batch","job_id":"job_batch","batch_id":"bat_1","job":{"type":"reports:batch","payload":""}}`),
-			want: DeliveryMetadata{
+			want: ResolvedDelivery{
 				JobType:    "reports:batch",
 				Payload:    []byte{},
 				DispatchID: "dsp_batch",
@@ -82,7 +82,7 @@ func TestResolveDeliveryMetadata(t *testing.T) {
 			name:         "callback omitted payload",
 			deliveryType: CallbackDeliveryType,
 			payload:      []byte(`{"schema_version":1,"dispatch_id":"dsp_callback","job_id":"job_callback","chain_id":"chn_2","job":{"type":"reports:callback"}}`),
-			want: DeliveryMetadata{
+			want: ResolvedDelivery{
 				JobType:    "reports:callback",
 				Payload:    nil,
 				DispatchID: "dsp_callback",
@@ -93,15 +93,15 @@ func TestResolveDeliveryMetadata(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := ResolveDeliveryMetadata(test.deliveryType, test.payload); !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("ResolveDeliveryMetadata() = %#v, want %#v", got, test.want)
+			if got := ResolveDelivery(test.deliveryType, test.payload); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("ResolveDelivery() = %#v, want %#v", got, test.want)
 			}
 		})
 	}
 }
 
-// TestResolveDeliveryMetadataFallbacks pins physical identity whenever the protocol cannot safely unwrap a delivery.
-func TestResolveDeliveryMetadataFallbacks(t *testing.T) {
+// TestResolveDeliveryFallbacks pins physical identity whenever the protocol cannot safely unwrap a delivery.
+func TestResolveDeliveryFallbacks(t *testing.T) {
 	unknownSchema := []byte(`{"schema_version":2,"dispatch_id":"dsp_unknown","job":{"type":"reports:unknown","payload":"e30="}}`)
 	malformed := []byte(`{"schema_version":1`)
 	nonWorkflow := []byte(`{"schema_version":1,"dispatch_id":"dsp_spoofed","job":{"type":"reports:spoofed","payload":"e30="}}`)
@@ -110,36 +110,36 @@ func TestResolveDeliveryMetadataFallbacks(t *testing.T) {
 		name         string
 		deliveryType string
 		payload      []byte
-		want         DeliveryMetadata
+		want         ResolvedDelivery
 	}{
 		{
 			name:         "nil payload",
 			deliveryType: DirectDeliveryType,
-			want:         DeliveryMetadata{JobType: DirectDeliveryType},
+			want:         ResolvedDelivery{JobType: DirectDeliveryType},
 		},
 		{
 			name:         "malformed json",
 			deliveryType: DirectDeliveryType,
 			payload:      malformed,
-			want:         DeliveryMetadata{JobType: DirectDeliveryType, Payload: malformed},
+			want:         ResolvedDelivery{JobType: DirectDeliveryType, Payload: malformed},
 		},
 		{
 			name:         "unknown schema",
 			deliveryType: DirectDeliveryType,
 			payload:      unknownSchema,
-			want:         DeliveryMetadata{JobType: DirectDeliveryType, Payload: unknownSchema},
+			want:         ResolvedDelivery{JobType: DirectDeliveryType, Payload: unknownSchema},
 		},
 		{
 			name:         "non-workflow type",
 			deliveryType: "application:job",
 			payload:      nonWorkflow,
-			want:         DeliveryMetadata{JobType: "application:job", Payload: nonWorkflow},
+			want:         ResolvedDelivery{JobType: "application:job", Payload: nonWorkflow},
 		},
 		{
 			name:         "valid callback without logical type",
 			deliveryType: CallbackDeliveryType,
 			payload:      emptyJob,
-			want: DeliveryMetadata{
+			want: ResolvedDelivery{
 				JobType:    CallbackDeliveryType,
 				Payload:    emptyJob,
 				DispatchID: "dsp_callback",
@@ -150,8 +150,8 @@ func TestResolveDeliveryMetadataFallbacks(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := ResolveDeliveryMetadata(test.deliveryType, test.payload); !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("ResolveDeliveryMetadata() = %#v, want %#v", got, test.want)
+			if got := ResolveDelivery(test.deliveryType, test.payload); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("ResolveDelivery() = %#v, want %#v", got, test.want)
 			}
 		})
 	}
