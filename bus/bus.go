@@ -12,15 +12,20 @@ import (
 
 	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/internal/jobidentity"
+	"github.com/goforj/queue/internal/workflow"
 )
 
 const (
-	schemaVersion = 1
-
-	internalJob          = "bus:job"
-	internalJobChainNode = "bus:chain:node"
-	internalJobBatchJob  = "bus:batch:job"
-	internalJobCallback  = "bus:callback"
+	// schemaVersion keeps the existing private name while the protocol becomes engine-owned.
+	schemaVersion = workflow.ProtocolSchemaVersion
+	// internalJob keeps the existing direct-delivery name stable on the wire.
+	internalJob = workflow.DirectDeliveryType
+	// internalJobChainNode keeps the existing chain-delivery name stable on the wire.
+	internalJobChainNode = workflow.ChainNodeDeliveryType
+	// internalJobBatchJob keeps the existing batch-delivery name stable on the wire.
+	internalJobBatchJob = workflow.BatchJobDeliveryType
+	// internalJobCallback keeps the existing callback-delivery name stable on the wire.
+	internalJobCallback = workflow.CallbackDeliveryType
 )
 
 type Bus interface {

@@ -1,9 +1,8 @@
 package queue
 
-import "encoding/json"
+import "github.com/goforj/queue/internal/workflow"
 
-const logicalJobEnvelopeSchemaVersion = 1
-
+// logicalJob is the root-facing view of identity and correlation resolved from one physical delivery.
 type logicalJob struct {
 	jobType    string
 	payload    []byte
@@ -13,46 +12,15 @@ type logicalJob struct {
 	batchID    string
 }
 
-type logicalJobEnvelope struct {
-	SchemaVersion int    `json:"schema_version"`
-	DispatchID    string `json:"dispatch_id"`
-	JobID         string `json:"job_id"`
-	ChainID       string `json:"chain_id"`
-	BatchID       string `json:"batch_id"`
-	Job           struct {
-		Type    string `json:"type"`
-		Payload []byte `json:"payload"`
-	} `json:"job"`
-}
-
 // resolveLogicalJob decodes only the owned workflow schema so identity and telemetry cannot drift onto separate interpretations.
 func resolveLogicalJob(rawType string, payload []byte) logicalJob {
-	resolved := logicalJob{jobType: rawType, payload: payload}
-	if rawType == "" || len(payload) == 0 || !isLogicalWorkflowDeliveryType(rawType) {
-		return resolved
-	}
-
-	var envelope logicalJobEnvelope
-	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.SchemaVersion != logicalJobEnvelopeSchemaVersion {
-		return resolved
-	}
-	resolved.dispatchID = envelope.DispatchID
-	resolved.jobID = envelope.JobID
-	resolved.chainID = envelope.ChainID
-	resolved.batchID = envelope.BatchID
-	if envelope.Job.Type != "" {
-		resolved.jobType = envelope.Job.Type
-		resolved.payload = envelope.Job.Payload
-	}
-	return resolved
-}
-
-// isLogicalWorkflowDeliveryType restricts envelope decoding to the private delivery namespace owned by this runtime.
-func isLogicalWorkflowDeliveryType(jobType string) bool {
-	switch jobType {
-	case "bus:job", "bus:chain:node", "bus:batch:job", "bus:callback":
-		return true
-	default:
-		return false
+	metadata := workflow.ResolveDeliveryMetadata(rawType, payload)
+	return logicalJob{
+		jobType:    metadata.JobType,
+		payload:    metadata.Payload,
+		dispatchID: metadata.DispatchID,
+		jobID:      metadata.JobID,
+		chainID:    metadata.ChainID,
+		batchID:    metadata.BatchID,
 	}
 }
