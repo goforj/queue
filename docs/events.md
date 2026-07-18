@@ -44,7 +44,7 @@ Workflow lifecycle:
 
 Positive job, chain, batch, and callback facts use the same SQL/SQS/RabbitMQ settlement boundary as `EventProcessSucceeded`. Callback redelivery after an at-most-once marker emits no second success fact; closure callbacks remain explicitly ephemeral and can be lost with their owning process.
 
-An allowed batch item failure emits `EventBatchProgressed` with `Err` and does not emit `EventBatchFailed`. The aggregate can later emit `EventBatchCompleted` after every item reaches an allowed terminal outcome. `EventBatchFailed` is reserved for a non-allowed failure or cancellation path that makes the aggregate fail.
+An allowed batch item failure emits `EventBatchProgressed` with `Err` and does not emit `EventBatchFailed`. The aggregate can later emit `EventBatchCompleted` after every item reaches an allowed terminal outcome. `EventBatchFailed` is reserved for a non-allowed failure or cancellation path that makes the aggregate fail. Batch settlement durably owns the member's success-or-failure category, but the established batch state does not persist a per-member error string; after an ambiguous commit response, a recovered failure fact can therefore carry the redelivered physical attempt's error detail.
 
 ## Required fields
 

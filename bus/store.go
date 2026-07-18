@@ -27,6 +27,22 @@ type ChainState = queue.ChainState
 // Deprecated: use queue.BatchJob.
 type BatchJob = queue.BatchJob
 
+// BatchJobOutcome identifies the durable result that first settled one batch member.
+//
+// Deprecated: use queue.BatchJobOutcome.
+type BatchJobOutcome = queue.BatchJobOutcome
+
+const (
+	// BatchJobSucceeded records successful member settlement.
+	//
+	// Deprecated: use queue.BatchJobSucceeded.
+	BatchJobSucceeded = queue.BatchJobSucceeded
+	// BatchJobFailed records failed member settlement.
+	//
+	// Deprecated: use queue.BatchJobFailed.
+	BatchJobFailed = queue.BatchJobFailed
+)
+
 // BatchRecord is the persisted representation used to create a batch.
 //
 // Deprecated: use queue.BatchRecord.
@@ -41,6 +57,11 @@ type BatchState = queue.BatchState
 //
 // Deprecated: use queue.WorkflowStore.
 type Store = queue.WorkflowStore
+
+// WorkflowOutcomeStore adds first-writer ownership to the compatibility store contract.
+//
+// Deprecated: use queue.WorkflowOutcomeStore.
+type WorkflowOutcomeStore = queue.WorkflowOutcomeStore
 
 // SQLStoreConfig configures the SQL-backed workflow store.
 //

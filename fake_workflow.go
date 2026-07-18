@@ -24,6 +24,10 @@ type fakeWorkflowRecorder struct {
 // cleanup without widening the production workflow.Store contract.
 type fakeWorkflowStateStore interface {
 	workflow.Store
+	// FailChainNode preserves first-writer ownership for duplicate fake deliveries.
+	FailChainNode(context.Context, string, string, error) (workflow.ChainState, bool, error)
+	// SettleBatchJob preserves first-writer ownership for duplicate fake deliveries.
+	SettleBatchJob(context.Context, string, string, workflow.BatchJobOutcome, error) (workflow.BatchState, bool, error)
 	// DiscardChain removes exactly one rejected chain from recording state.
 	DiscardChain(string)
 	// DiscardBatch removes exactly one rejected batch from recording state.
@@ -139,6 +143,13 @@ func (r *fakeWorkflowRecorder) FailChain(ctx context.Context, chainID string, ca
 	return r.store.FailChain(ctx, chainID, cause)
 }
 
+// FailChainNode delegates atomic node failure within the active fake state generation.
+func (r *fakeWorkflowRecorder) FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (workflow.ChainState, bool, error) {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	return r.store.FailChainNode(ctx, chainID, nodeID, cause)
+}
+
 // GetChain returns an isolated engine state so callers cannot mutate recorded
 // payload bytes through a lookup result.
 func (r *fakeWorkflowRecorder) GetChain(ctx context.Context, chainID string) (workflow.ChainState, error) {
@@ -179,6 +190,13 @@ func (r *fakeWorkflowRecorder) MarkBatchJobFailed(ctx context.Context, batchID, 
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
 	return r.store.MarkBatchJobFailed(ctx, batchID, jobID, cause)
+}
+
+// SettleBatchJob delegates atomic member settlement within the active fake state generation.
+func (r *fakeWorkflowRecorder) SettleBatchJob(ctx context.Context, batchID, jobID string, outcome workflow.BatchJobOutcome, cause error) (workflow.BatchState, bool, error) {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	return r.store.SettleBatchJob(ctx, batchID, jobID, outcome, cause)
 }
 
 // CancelBatch delegates aggregate cancellation within the active fake state generation.

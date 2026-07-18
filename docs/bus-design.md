@@ -241,7 +241,7 @@ Event fields (minimum):
 ## State Model and Store
 
 ```go
-type Store interface {
+type WorkflowStore interface {
 	CreateChain(ctx context.Context, rec ChainRecord) error
 	AdvanceChain(ctx context.Context, chainID string, completedNode string) (next *ChainNode, done bool, err error)
 	FailChain(ctx context.Context, chainID string, cause error) error
@@ -253,6 +253,19 @@ type Store interface {
 	MarkBatchJobFailed(ctx context.Context, batchID, jobID string, cause error) (BatchState, done bool, err error)
 	CancelBatch(ctx context.Context, batchID string) error
 	GetBatch(ctx context.Context, batchID string) (BatchState, error)
+
+	MarkCallbackInvoked(ctx context.Context, key string) (bool, error)
+	Prune(ctx context.Context, before time.Time) error
+}
+```
+
+Stores that execute across competing workers can add the compatible outcome capability:
+
+```go
+type WorkflowOutcomeStore interface {
+	WorkflowStore
+	FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (ChainState, bool, error)
+	SettleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (BatchState, bool, error)
 }
 ```
 
@@ -260,6 +273,14 @@ Implementations:
 
 - `MemoryStore` (local/test default)
 - `SQLStore` (recommended production)
+
+Workflow creation requires a non-empty workflow ID, at least one chain node or batch member, and a non-empty unique ID for every node or member. Builders already produce records with those properties; applications that call `WorkflowStore` directly must do the same. The built-in memory store snapshots chain nodes and payload bytes during creation and returns isolated copies, so mutating an input record, successor, or `ChainState` does not mutate persisted state.
+
+Both implementations claim a chain node or batch member before changing its parent state. SQL performs that claim and an arithmetic parent update in one transaction, so duplicate delivery cannot advance twice and concurrent batch members cannot overwrite one another's counters. The same concurrency contract runs against SQLite, MySQL, and PostgreSQL.
+
+Built-in stores also implement the additive `WorkflowOutcomeStore` capability. It gives successful and failed deliveries of one chain node or batch member a single first-writer settlement boundary. A contradictory late delivery is acknowledged without changing the committed outcome or aggregate counters, emitting a different logical job/workflow fact, advancing progress, or invoking callbacks. Chain transitions compare the persisted node order and `NextIndex`; batch transitions return whether the requested outcome category owns the already-claimed member. The established batch schema and `BatchState` do not retain a per-member failure cause, so the `cause` argument remains delivery-local metadata rather than part of first-writer ownership. Persisted chain failures do retain their authoritative cause. The base `WorkflowStore` remains source-compatible for established custom stores, but a custom implementation must add `WorkflowOutcomeStore` to provide the atomic contradictory-category guarantee across processes.
+
+MySQL key validation follows the capacities discovered from the connected schema. Fresh auto-schema therefore enforces its 255-byte workflow-ID and 512-byte callback-key columns, while an existing wider `VARBINARY` schema retains its larger established limits. Caller-managed workflow identity columns must also use `VARBINARY`; `VARCHAR`, `TEXT`, and fixed-width `BINARY` are rejected because they do not provide the same byte-exact round-trip contract. Before upgrading an incompatible managed schema, quiesce workflow writers, audit case- or padding-equivalent keys for collisions, convert all workflow identity columns to `VARBINARY` in one maintenance window, and then restart workers. This does not yet make successor enqueue or batch fan-out recoverable after a process crash; those require the persisted dispatch-intent work tracked in the roadmap.
 
 ## Failure, Idempotency, Retry Ownership
 

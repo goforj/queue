@@ -19,6 +19,28 @@ type workflowAdapterStoreStub struct {
 	cancelBatchErr error
 }
 
+type workflowOutcomeAdapterStoreStub struct {
+	*workflowAdapterStoreStub
+	chainState   queue.ChainState
+	chainOwned   bool
+	chainErr     error
+	batchState   queue.BatchState
+	batchOwned   bool
+	batchErr     error
+	batchOutcome queue.BatchJobOutcome
+}
+
+// FailChainNode returns the configured root outcome for adapter conversion.
+func (s *workflowOutcomeAdapterStoreStub) FailChainNode(context.Context, string, string, error) (queue.ChainState, bool, error) {
+	return s.chainState, s.chainOwned, s.chainErr
+}
+
+// SettleBatchJob records the converted outcome and returns configured state.
+func (s *workflowOutcomeAdapterStoreStub) SettleBatchJob(_ context.Context, _, _ string, outcome queue.BatchJobOutcome, _ error) (queue.BatchState, bool, error) {
+	s.batchOutcome = outcome
+	return s.batchState, s.batchOwned, s.batchErr
+}
+
 // AdvanceChain returns the configured successor and outcome for adapter boundary tests.
 func (s *workflowAdapterStoreStub) AdvanceChain(context.Context, string, string) (*queue.ChainNode, bool, error) {
 	return s.advanceNode, s.advanceDone, s.advanceErr
@@ -232,5 +254,37 @@ func TestWorkflowStoreAdapterCancelBatchPreservesIDAndError(t *testing.T) {
 	}
 	if store.cancelBatchID != "batch-7" {
 		t.Fatalf("cancelled batch = %q, want batch-7", store.cancelBatchID)
+	}
+}
+
+// TestWorkflowOutcomeStoreAdapterPreservesOwnership proves the deprecated raw
+// route forwards the one canonical root capability instead of redefining it.
+func TestWorkflowOutcomeStoreAdapterPreservesOwnership(t *testing.T) {
+	chainErr := errors.New("chain outcome failed")
+	batchErr := errors.New("batch outcome failed")
+	store := &workflowOutcomeAdapterStoreStub{
+		workflowAdapterStoreStub: &workflowAdapterStoreStub{},
+		chainState:               queue.ChainState{ChainID: "chain-outcome", Failed: true},
+		chainOwned:               true,
+		chainErr:                 chainErr,
+		batchState:               queue.BatchState{BatchID: "batch-outcome", Processed: 1},
+		batchOwned:               false,
+		batchErr:                 batchErr,
+	}
+	adapted := toWorkflowStore(store)
+	outcomes, ok := adapted.(interface {
+		FailChainNode(context.Context, string, string, error) (workflow.ChainState, bool, error)
+		SettleBatchJob(context.Context, string, string, workflow.BatchJobOutcome, error) (workflow.BatchState, bool, error)
+	})
+	if !ok {
+		t.Fatalf("capable store adapted as %T without outcome capability", adapted)
+	}
+	chainState, owned, err := outcomes.FailChainNode(context.Background(), "chain-outcome", "node-outcome", chainErr)
+	if err != chainErr || !owned || chainState.ChainID != "chain-outcome" || !chainState.Failed {
+		t.Fatalf("chain outcome = state:%+v owned:%t err:%v", chainState, owned, err)
+	}
+	batchState, owned, err := outcomes.SettleBatchJob(context.Background(), "batch-outcome", "job-outcome", workflow.BatchJobFailed, batchErr)
+	if err != batchErr || owned || batchState.BatchID != "batch-outcome" || store.batchOutcome != queue.BatchJobFailed {
+		t.Fatalf("batch outcome = state:%+v owned:%t err:%v stored:%q", batchState, owned, err, store.batchOutcome)
 	}
 }

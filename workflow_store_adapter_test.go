@@ -68,6 +68,42 @@ type workflowStoreAdapterSpy struct {
 	pruneErr    error
 }
 
+type workflowOutcomeStoreSpy struct {
+	*workflowStoreAdapterSpy
+	failNodeChainID string
+	failNodeID      string
+	failNodeCause   error
+	failNodeState   ChainState
+	failNodeOwned   bool
+	failNodeErr     error
+	settleBatchID   string
+	settleJobID     string
+	settleOutcome   BatchJobOutcome
+	settleCause     error
+	settleState     BatchState
+	settleOwned     bool
+	settleErr       error
+}
+
+// FailChainNode records the additive atomic chain transition.
+func (s *workflowOutcomeStoreSpy) FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (ChainState, bool, error) {
+	s.recordContext(ctx)
+	s.failNodeChainID = chainID
+	s.failNodeID = nodeID
+	s.failNodeCause = cause
+	return s.failNodeState, s.failNodeOwned, s.failNodeErr
+}
+
+// SettleBatchJob records the additive atomic member transition.
+func (s *workflowOutcomeStoreSpy) SettleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (BatchState, bool, error) {
+	s.recordContext(ctx)
+	s.settleBatchID = batchID
+	s.settleJobID = jobID
+	s.settleOutcome = outcome
+	s.settleCause = cause
+	return s.settleState, s.settleOwned, s.settleErr
+}
+
 // recordContext verifies that adapters forward the caller's context without replacement.
 func (s *workflowStoreAdapterSpy) recordContext(ctx context.Context) {
 	s.contextsOK = s.contextsOK && ctx == s.wantContext
@@ -441,5 +477,35 @@ func TestWorkflowStoreFromRootSelectsOneBoundary(t *testing.T) {
 	}
 	if adapter.store != custom {
 		t.Fatalf("custom adapter store = %T, want original %T", adapter.store, custom)
+	}
+
+	ctx := context.WithValue(context.Background(), workflowStoreAdapterContextKey{}, "outcome-adapter")
+	chainCause := errors.New("chain outcome failed")
+	batchCause := errors.New("batch outcome failed")
+	outcomeErr := errors.New("outcome store failed")
+	capable := &workflowOutcomeStoreSpy{
+		workflowStoreAdapterSpy: &workflowStoreAdapterSpy{wantContext: ctx, contextsOK: true},
+		failNodeState:           ChainState{ChainID: "chain-outcome", Failed: true},
+		failNodeOwned:           true,
+		failNodeErr:             outcomeErr,
+		settleState:             BatchState{BatchID: "batch-outcome", Processed: 1},
+		settleOwned:             false,
+		settleErr:               outcomeErr,
+	}
+	adapted := workflowStoreFromRoot(capable)
+	outcomeAdapter, ok := adapted.(rootWorkflowOutcomeStoreAdapter)
+	if !ok {
+		t.Fatalf("capable custom store route = %T, want rootWorkflowOutcomeStoreAdapter", adapted)
+	}
+	chainState, owned, err := outcomeAdapter.FailChainNode(ctx, "chain-outcome", "node-outcome", chainCause)
+	if err != outcomeErr || !owned || chainState.ChainID != "chain-outcome" || capable.failNodeChainID != "chain-outcome" || capable.failNodeID != "node-outcome" || capable.failNodeCause != chainCause {
+		t.Fatalf("FailChainNode result = state:%+v owned:%t err:%v spy:%+v", chainState, owned, err, capable)
+	}
+	batchState, owned, err := outcomeAdapter.SettleBatchJob(ctx, "batch-outcome", "job-outcome", workflow.BatchJobFailed, batchCause)
+	if err != outcomeErr || owned || batchState.BatchID != "batch-outcome" || capable.settleBatchID != "batch-outcome" || capable.settleJobID != "job-outcome" || capable.settleOutcome != BatchJobFailed || capable.settleCause != batchCause {
+		t.Fatalf("SettleBatchJob result = state:%+v owned:%t err:%v spy:%+v", batchState, owned, err, capable)
+	}
+	if !capable.contextsOK {
+		t.Fatal("outcome adapter replaced the caller context")
 	}
 }

@@ -247,6 +247,24 @@ func (r *runtime) dispatchBatchTerminal(ctx context.Context, env envelope, st Ba
 	r.cleanupBatchCallbacks(env.BatchID)
 }
 
+// settleBatchJob uses first-writer outcome ownership when the store supports
+// it and preserves the established compatibility path for custom stores.
+func (r *runtime) settleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (BatchState, bool, error) {
+	if store, ok := r.store.(outcomeStore); ok {
+		return store.SettleBatchJob(ctx, batchID, jobID, outcome, cause)
+	}
+	switch outcome {
+	case BatchJobSucceeded:
+		state, _, err := r.store.MarkBatchJobSucceeded(ctx, batchID, jobID)
+		return state, true, err
+	case BatchJobFailed:
+		state, _, err := r.store.MarkBatchJobFailed(ctx, batchID, jobID, cause)
+		return state, true, err
+	default:
+		return BatchState{}, false, errors.New("unsupported batch job outcome")
+	}
+}
+
 // handleInternalBatchJob records each batch mutation before publishing its corresponding workflow fact.
 func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
@@ -263,9 +281,12 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 	case busruntime.AttemptRetry, busruntime.AttemptRedeliver:
 		return outcome.err
 	case busruntime.AttemptFailed:
-		st, done, markErr := r.store.MarkBatchJobFailed(ctx, env.BatchID, env.JobID, outcome.err)
+		st, owned, markErr := r.settleBatchJob(ctx, env.BatchID, env.JobID, BatchJobFailed, outcome.err)
 		if markErr != nil {
 			return uncommittedMutationError("mark batch job failed", markErr)
+		}
+		if !owned {
+			return nil
 		}
 		r.emitStoredJobOutcome(ctx, outcome)
 		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
@@ -277,19 +298,22 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 			_ = r.dispatchCallback(ctx, env, "batch_catch", outcome.err)
 		}
 		r.invokeBatchProgress(ctx, st, progress)
-		if done {
+		if st.Completed {
 			r.dispatchBatchTerminal(ctx, env, st)
 		}
 		return outcome.err
 	}
-	st, done, markErr := r.store.MarkBatchJobSucceeded(ctx, env.BatchID, env.JobID)
+	st, owned, markErr := r.settleBatchJob(ctx, env.BatchID, env.JobID, BatchJobSucceeded, nil)
 	if markErr != nil {
 		return uncommittedMutationError("mark batch job succeeded", markErr)
+	}
+	if !owned {
+		return nil
 	}
 	r.emitStoredJobOutcome(ctx, outcome)
 	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 	r.invokeBatchProgress(ctx, st, progress)
-	if done {
+	if st.Completed {
 		r.dispatchBatchTerminal(ctx, env, st)
 	}
 	return nil

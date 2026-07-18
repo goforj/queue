@@ -487,6 +487,18 @@ func TestCallbackStateValidationPreservesLegitimateInvocation(t *testing.T) {
 			},
 		},
 		{
+			name: "chain catch completed precedence",
+			configure: func(runtime *runtime, calls *int) {
+				runtime.chainCallbacks["chain_state"] = chainCallbacks{catch: func(context.Context, ChainState, error) error { *calls++; return nil }}
+			},
+			invalid: func(runtime *runtime) error {
+				return runtime.invokeChainCatch(context.Background(), ChainState{ChainID: "chain_state", Completed: true, Failed: true}, context.Canceled)
+			},
+			valid: func(runtime *runtime) error {
+				return runtime.invokeChainCatch(context.Background(), ChainState{ChainID: "chain_state", Failed: true}, context.Canceled)
+			},
+		},
+		{
 			name: "chain finally",
 			configure: func(runtime *runtime, calls *int) {
 				runtime.chainCallbacks["chain_state"] = chainCallbacks{finally: func(context.Context, ChainState) error { *calls++; return nil }}

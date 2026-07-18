@@ -430,7 +430,7 @@ Why:
   - no double-advance / double-terminal transition under concurrent processing in covered scenarios
 - Notes:
   - this is a trust-critical P0 item, not optional polish
-  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration now covers chain + batch duplicate callback suppression, callback replay after callback-dispatch fault (chain final callback), and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress)
+  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration covers chain + batch duplicate callback suppression, callback replay after callback-dispatch fault (chain final callback), and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress). Shared and real-dialect workflow-store contracts now prove concurrent duplicate chain advancement, first-writer chain-node and batch-member outcomes, suppression of contradictory logical facts, and simultaneous batch aggregation without lost state across memory, SQLite, MySQL, and PostgreSQL. MySQL-specific integration separately proves generated and managed `VARBINARY` capacities plus rejection of incompatible identity types.
 
 Extend workflow integration scenarios to cover:
 

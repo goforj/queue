@@ -269,12 +269,33 @@ type workflowStoreAdapter struct {
 
 var _ workflow.Store = workflowStoreAdapter{}
 
+type workflowOutcomeStoreAdapter struct {
+	workflowStoreAdapter
+	atomic queue.WorkflowOutcomeStore
+}
+
+// FailChainNode converts an atomic root-store result back into the engine model.
+func (a workflowOutcomeStoreAdapter) FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (workflow.ChainState, bool, error) {
+	state, owned, err := a.atomic.FailChainNode(ctx, chainID, nodeID, cause)
+	return toWorkflowChainState(state), owned, err
+}
+
+// SettleBatchJob converts an atomic root-store result back into the engine model.
+func (a workflowOutcomeStoreAdapter) SettleBatchJob(ctx context.Context, batchID, jobID string, outcome workflow.BatchJobOutcome, cause error) (workflow.BatchState, bool, error) {
+	state, owned, err := a.atomic.SettleBatchJob(ctx, batchID, jobID, queue.BatchJobOutcome(outcome), cause)
+	return toWorkflowBatchState(state), owned, err
+}
+
 // toWorkflowStore wraps a root-owned store for the retained raw-runtime route.
 func toWorkflowStore(store Store) workflow.Store {
 	if store == nil {
 		return nil
 	}
-	return workflowStoreAdapter{store: store}
+	adapter := workflowStoreAdapter{store: store}
+	if atomic, ok := store.(queue.WorkflowOutcomeStore); ok {
+		return workflowOutcomeStoreAdapter{workflowStoreAdapter: adapter, atomic: atomic}
+	}
+	return adapter
 }
 
 // CreateChain converts the engine record before invoking the root-owned store.

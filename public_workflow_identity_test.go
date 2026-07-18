@@ -29,6 +29,7 @@ func TestPublicWorkflowTypesAreOwnedByQueue(t *testing.T) {
 		{name: "ChainRecord", typeOf: reflectedType[queue.ChainRecord]()},
 		{name: "ChainState", typeOf: reflectedType[queue.ChainState]()},
 		{name: "BatchJob", typeOf: reflectedType[queue.BatchJob]()},
+		{name: "BatchJobOutcome", typeOf: reflectedType[queue.BatchJobOutcome]()},
 		{name: "BatchRecord", typeOf: reflectedType[queue.BatchRecord]()},
 		{name: "BatchState", typeOf: reflectedType[queue.BatchState]()},
 		{name: "SQLStoreConfig", typeOf: reflectedType[queue.SQLStoreConfig]()},
@@ -39,6 +40,7 @@ func TestPublicWorkflowTypesAreOwnedByQueue(t *testing.T) {
 		{name: "RateLimit", typeOf: reflectedType[queue.RateLimit]()},
 		{name: "WithoutOverlapping", typeOf: reflectedType[queue.WithoutOverlapping]()},
 		{name: "WorkflowStore", typeOf: reflectedType[queue.WorkflowStore]()},
+		{name: "WorkflowOutcomeStore", typeOf: reflectedType[queue.WorkflowOutcomeStore]()},
 	}
 
 	for _, contract := range types {
@@ -65,9 +67,11 @@ func TestBusCompatibleAliasesResolveToQueue(t *testing.T) {
 		{name: "ChainRecord", busType: reflectedType[bus.ChainRecord](), queueType: reflectedType[queue.ChainRecord]()},
 		{name: "ChainState", busType: reflectedType[bus.ChainState](), queueType: reflectedType[queue.ChainState]()},
 		{name: "BatchJob", busType: reflectedType[bus.BatchJob](), queueType: reflectedType[queue.BatchJob]()},
+		{name: "BatchJobOutcome", busType: reflectedType[bus.BatchJobOutcome](), queueType: reflectedType[queue.BatchJobOutcome]()},
 		{name: "BatchRecord", busType: reflectedType[bus.BatchRecord](), queueType: reflectedType[queue.BatchRecord]()},
 		{name: "BatchState", busType: reflectedType[bus.BatchState](), queueType: reflectedType[queue.BatchState]()},
 		{name: "Store", busType: reflectedType[bus.Store](), queueType: reflectedType[queue.WorkflowStore]()},
+		{name: "WorkflowOutcomeStore", busType: reflectedType[bus.WorkflowOutcomeStore](), queueType: reflectedType[queue.WorkflowOutcomeStore]()},
 		{name: "SQLStoreConfig", busType: reflectedType[bus.SQLStoreConfig](), queueType: reflectedType[queue.SQLStoreConfig]()},
 		{name: "Next", busType: reflectedType[bus.Next](), queueType: reflectedType[queue.Next]()},
 		{name: "Middleware", busType: reflectedType[bus.Middleware](), queueType: reflectedType[queue.Middleware]()},

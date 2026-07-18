@@ -202,3 +202,28 @@ func TestWorkflowStoreViewConvertsEveryMethod(t *testing.T) {
 		t.Fatal("one or more built-in store view methods replaced the caller context")
 	}
 }
+
+// TestWorkflowStoreViewExposesOutcomeCapability proves built-in stores retain
+// first-writer arbitration through the root-owned physical model.
+func TestWorkflowStoreViewExposesOutcomeCapability(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	outcomes, ok := store.(WorkflowOutcomeStore)
+	if !ok {
+		t.Fatalf("built-in store %T does not implement WorkflowOutcomeStore", store)
+	}
+	if err := store.CreateChain(ctx, ChainRecord{ChainID: "chain-outcome-view", Nodes: []ChainNode{{NodeID: "node-outcome-view"}}}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	chainState, owned, err := outcomes.FailChainNode(ctx, "chain-outcome-view", "node-outcome-view", errors.New("chain failed"))
+	if err != nil || !owned || !chainState.Failed || chainState.ChainID != "chain-outcome-view" {
+		t.Fatalf("chain outcome = state:%+v owned:%t err:%v", chainState, owned, err)
+	}
+	if err := store.CreateBatch(ctx, BatchRecord{BatchID: "batch-outcome-view", Jobs: []BatchJob{{JobID: "job-outcome-view"}}}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	batchState, owned, err := outcomes.SettleBatchJob(ctx, "batch-outcome-view", "job-outcome-view", BatchJobSucceeded, nil)
+	if err != nil || !owned || !batchState.Completed || batchState.Processed != 1 {
+		t.Fatalf("batch outcome = state:%+v owned:%t err:%v", batchState, owned, err)
+	}
+}

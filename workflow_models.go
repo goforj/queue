@@ -108,6 +108,19 @@ type BatchJob struct {
 	Job   StoredJob
 }
 
+// BatchJobOutcome identifies the durable result that first settled one batch member.
+// @group Queue
+type BatchJobOutcome string
+
+const (
+	// BatchJobSucceeded records successful member settlement.
+	// @group Queue
+	BatchJobSucceeded BatchJobOutcome = "succeeded"
+	// BatchJobFailed records failed member settlement.
+	// @group Queue
+	BatchJobFailed BatchJobOutcome = "failed"
+)
+
 // BatchRecord is the persisted representation used to create a batch workflow.
 // @group Queue
 type BatchRecord struct {
@@ -139,24 +152,32 @@ type BatchState struct {
 }
 
 // WorkflowStore persists chain, batch, and callback state for orchestration.
+// Implement WorkflowOutcomeStore as well when a custom store must arbitrate
+// contradictory physical deliveries atomically; built-in stores provide both.
 // @group Queue
 type WorkflowStore interface {
-	// CreateChain persists a newly accepted chain.
+	// CreateChain persists a newly accepted chain. ChainID and every NodeID must
+	// be non-empty, Nodes must contain at least one entry, and NodeIDs must be unique.
 	CreateChain(ctx context.Context, rec ChainRecord) error
-	// AdvanceChain commits one completed node and returns the next node, if any.
+	// AdvanceChain atomically claims completedNode and returns the current successor.
+	// Repeating the same (chainID, completedNode) claim must not advance again.
+	// When done is true, GetChain must immediately expose Completed or Failed state.
 	AdvanceChain(ctx context.Context, chainID string, completedNode string) (next *ChainNode, done bool, err error)
-	// FailChain commits terminal chain failure.
+	// FailChain commits terminal failure without replacing completed state.
 	FailChain(ctx context.Context, chainID string, cause error) error
 	// GetChain returns current chain state.
 	GetChain(ctx context.Context, chainID string) (ChainState, error)
 
-	// CreateBatch persists a newly accepted batch.
+	// CreateBatch persists a newly accepted batch. BatchID and every JobID must
+	// be non-empty, Jobs must contain at least one entry, and JobIDs must be unique.
 	CreateBatch(ctx context.Context, rec BatchRecord) error
 	// MarkBatchJobStarted records that one batch member began execution.
 	MarkBatchJobStarted(ctx context.Context, batchID, jobID string) error
-	// MarkBatchJobSucceeded commits one successful batch member.
+	// MarkBatchJobSucceeded commits the first outcome for (batchID, jobID).
+	// Duplicate outcomes must return current state without changing counters.
 	MarkBatchJobSucceeded(ctx context.Context, batchID, jobID string) (BatchState, bool, error)
-	// MarkBatchJobFailed commits one failed batch member.
+	// MarkBatchJobFailed commits the first outcome for (batchID, jobID).
+	// Duplicate outcomes must return current state without changing counters.
 	MarkBatchJobFailed(ctx context.Context, batchID, jobID string, cause error) (BatchState, bool, error)
 	// CancelBatch commits aggregate batch cancellation.
 	CancelBatch(ctx context.Context, batchID string) error
@@ -167,4 +188,21 @@ type WorkflowStore interface {
 	MarkCallbackInvoked(ctx context.Context, key string) (bool, error)
 	// Prune removes terminal workflow state older than before.
 	Prune(ctx context.Context, before time.Time) error
+}
+
+// WorkflowOutcomeStore strengthens WorkflowStore with first-writer ownership
+// when duplicate physical deliveries disagree about a logical job outcome.
+// Built-in stores implement this additive capability; established custom
+// WorkflowStore implementations remain source-compatible.
+// @group Queue
+type WorkflowOutcomeStore interface {
+	WorkflowStore
+
+	// FailChainNode commits failure only while nodeID is the current unsettled node.
+	// owned remains true on replay while that node's failure owns the chain.
+	FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (state ChainState, owned bool, err error)
+	// SettleBatchJob returns the first committed outcome for one batch member.
+	// owned remains true on same-outcome replay and false when the opposite outcome won.
+	// Ownership covers the outcome category; BatchState does not retain a per-member cause.
+	SettleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (state BatchState, owned bool, err error)
 }

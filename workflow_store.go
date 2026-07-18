@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/goforj/queue/internal/workflow"
@@ -21,7 +22,8 @@ type SQLStoreConfig struct {
 // @group Queue
 var ErrWorkflowNotFound = workflow.ErrNotFound
 
-// NewMemoryStore creates an in-memory workflow state store.
+// NewMemoryStore creates an in-memory workflow state store. It copies chain
+// nodes and payload bytes on creation and return so callers retain independent ownership.
 // @group Constructors
 func NewMemoryStore() WorkflowStore {
 	return &workflowStoreView{store: workflow.NewMemoryStore()}
@@ -53,6 +55,7 @@ type workflowStoreView struct {
 }
 
 var _ WorkflowStore = (*workflowStoreView)(nil)
+var _ WorkflowOutcomeStore = (*workflowStoreView)(nil)
 
 // workflowStore returns the built-in engine store so Queue construction avoids a redundant adapter layer.
 func (s *workflowStoreView) workflowStore() workflow.Store {
@@ -77,6 +80,30 @@ func (s *workflowStoreView) AdvanceChain(ctx context.Context, chainID string, co
 // FailChain commits a terminal chain failure through the built-in store.
 func (s *workflowStoreView) FailChain(ctx context.Context, chainID string, cause error) error {
 	return s.store.FailChain(ctx, chainID, cause)
+}
+
+// FailChainNode exposes the built-in store's atomic per-node failure ownership.
+func (s *workflowStoreView) FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (ChainState, bool, error) {
+	store, ok := s.store.(interface {
+		FailChainNode(context.Context, string, string, error) (workflow.ChainState, bool, error)
+	})
+	if !ok {
+		return ChainState{}, false, errors.New("workflow store does not support atomic chain-node failure")
+	}
+	state, owned, err := store.FailChainNode(ctx, chainID, nodeID, cause)
+	return chainStateFromWorkflow(state), owned, err
+}
+
+// SettleBatchJob exposes the built-in store's first-writer member outcome.
+func (s *workflowStoreView) SettleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (BatchState, bool, error) {
+	store, ok := s.store.(interface {
+		SettleBatchJob(context.Context, string, string, workflow.BatchJobOutcome, error) (workflow.BatchState, bool, error)
+	})
+	if !ok {
+		return BatchState{}, false, errors.New("workflow store does not support atomic batch-job outcomes")
+	}
+	state, owned, err := store.SettleBatchJob(ctx, batchID, jobID, workflow.BatchJobOutcome(outcome), cause)
+	return batchStateFromWorkflow(state), owned, err
 }
 
 // GetChain reads and converts current chain state from the built-in store.
@@ -134,6 +161,23 @@ type rootWorkflowStoreAdapter struct {
 }
 
 var _ workflow.Store = rootWorkflowStoreAdapter{}
+
+type rootWorkflowOutcomeStoreAdapter struct {
+	rootWorkflowStoreAdapter
+	atomic WorkflowOutcomeStore
+}
+
+// FailChainNode converts an atomic custom-store result back into the engine model.
+func (a rootWorkflowOutcomeStoreAdapter) FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (workflow.ChainState, bool, error) {
+	state, owned, err := a.atomic.FailChainNode(ctx, chainID, nodeID, cause)
+	return chainStateToWorkflow(state), owned, err
+}
+
+// SettleBatchJob converts an atomic custom-store result back into the engine model.
+func (a rootWorkflowOutcomeStoreAdapter) SettleBatchJob(ctx context.Context, batchID, jobID string, outcome workflow.BatchJobOutcome, cause error) (workflow.BatchState, bool, error) {
+	state, owned, err := a.atomic.SettleBatchJob(ctx, batchID, jobID, BatchJobOutcome(outcome), cause)
+	return batchStateToWorkflow(state), owned, err
+}
 
 // CreateChain converts the engine record before invoking the application store.
 func (a rootWorkflowStoreAdapter) CreateChain(ctx context.Context, record workflow.ChainRecord) error {
@@ -212,5 +256,9 @@ func workflowStoreFromRoot(store WorkflowStore) workflow.Store {
 	if provider, ok := store.(workflowStoreProvider); ok {
 		return provider.workflowStore()
 	}
-	return rootWorkflowStoreAdapter{store: store}
+	adapter := rootWorkflowStoreAdapter{store: store}
+	if atomic, ok := store.(WorkflowOutcomeStore); ok {
+		return rootWorkflowOutcomeStoreAdapter{rootWorkflowStoreAdapter: adapter, atomic: atomic}
+	}
+	return adapter
 }

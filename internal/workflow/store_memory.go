@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -42,6 +43,9 @@ type memoryBatch struct {
 
 // CreateChain installs the complete chain under one mutex so readers never observe partial state.
 func (m *memoryStore) CreateChain(_ context.Context, rec ChainRecord) error {
+	if err := validateChainRecord(rec); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
@@ -50,7 +54,7 @@ func (m *memoryStore) CreateChain(_ context.Context, rec ChainRecord) error {
 			ChainID:    rec.ChainID,
 			DispatchID: rec.DispatchID,
 			Queue:      rec.Queue,
-			Nodes:      rec.Nodes,
+			Nodes:      cloneChainNodes(rec.Nodes),
 			NextIndex:  0,
 			CreatedAt:  rec.CreatedAt,
 			UpdatedAt:  now,
@@ -68,15 +72,13 @@ func (m *memoryStore) AdvanceChain(_ context.Context, chainID string, completedN
 	if !ok {
 		return nil, false, ErrNotFound
 	}
-	if ch.state.Completed || ch.state.Failed {
-		return nil, true, nil
-	}
-	if ch.completedNode[completedNode] {
-		if ch.state.NextIndex >= len(ch.state.Nodes) {
-			return nil, true, nil
+	next, done, claimable, err := chainNodeAdvanceDisposition(ch.state, completedNode)
+	if err != nil || !claimable {
+		if next != nil {
+			cloned := cloneChainNode(*next)
+			next = &cloned
 		}
-		n := ch.state.Nodes[ch.state.NextIndex]
-		return &n, false, nil
+		return next, done, err
 	}
 	ch.completedNode[completedNode] = true
 	ch.state.NextIndex++
@@ -85,8 +87,33 @@ func (m *memoryStore) AdvanceChain(_ context.Context, chainID string, completedN
 		ch.state.Completed = true
 		return nil, true, nil
 	}
-	n := ch.state.Nodes[ch.state.NextIndex]
+	n := cloneChainNode(ch.state.Nodes[ch.state.NextIndex])
 	return &n, false, nil
+}
+
+// FailChainNode serializes failure against advancement so the first outcome
+// for a sequential node remains authoritative across physical redelivery.
+func (m *memoryStore) FailChainNode(_ context.Context, chainID, nodeID string, cause error) (ChainState, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ch, ok := m.chains[chainID]
+	if !ok {
+		return ChainState{}, false, ErrNotFound
+	}
+	owned, claimable, err := chainNodeFailureDisposition(ch.state, nodeID)
+	if err != nil || !claimable {
+		state := ch.state
+		state.Nodes = cloneChainNodes(state.Nodes)
+		return state, owned, err
+	}
+	ch.state.Failed = true
+	if cause != nil {
+		ch.state.Failure = cause.Error()
+	}
+	ch.state.UpdatedAt = time.Now()
+	state := ch.state
+	state.Nodes = cloneChainNodes(state.Nodes)
+	return state, true, nil
 }
 
 // FailChain leaves completed chains successful while recording a terminal cause for unfinished work.
@@ -115,7 +142,9 @@ func (m *memoryStore) GetChain(_ context.Context, chainID string) (ChainState, e
 	if !ok {
 		return ChainState{}, ErrNotFound
 	}
-	return ch.state, nil
+	state := ch.state
+	state.Nodes = cloneChainNodes(state.Nodes)
+	return state, nil
 }
 
 // DiscardChain removes exactly one transient recording state. It intentionally
@@ -128,6 +157,9 @@ func (m *memoryStore) DiscardChain(chainID string) {
 
 // CreateBatch installs aggregate and per-job state together so readers cannot observe a partial batch.
 func (m *memoryStore) CreateBatch(_ context.Context, rec BatchRecord) error {
+	if err := validateBatchRecord(rec); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
@@ -161,7 +193,10 @@ func (m *memoryStore) MarkBatchJobStarted(_ context.Context, batchID, jobID stri
 	if !ok {
 		return ErrNotFound
 	}
-	js := b.jobs[jobID]
+	js, ok := b.jobs[jobID]
+	if !ok {
+		return ErrNotFound
+	}
 	js.started = true
 	b.jobs[jobID] = js
 	b.state.UpdatedAt = time.Now()
@@ -169,47 +204,47 @@ func (m *memoryStore) MarkBatchJobStarted(_ context.Context, batchID, jobID stri
 }
 
 // MarkBatchJobSucceeded applies completion counters at most once while holding the aggregate lock.
-func (m *memoryStore) MarkBatchJobSucceeded(_ context.Context, batchID, jobID string) (BatchState, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	b, ok := m.batch[batchID]
-	if !ok {
-		return BatchState{}, false, ErrNotFound
-	}
-	js := b.jobs[jobID]
-	if !js.done {
-		js.done = true
-		b.jobs[jobID] = js
-		b.state.Pending--
-		b.state.Processed++
-	}
-	if b.state.Pending <= 0 {
-		b.state.Completed = true
-		b.state.UpdatedAt = time.Now()
-		return b.state, true, nil
-	}
-	b.state.UpdatedAt = time.Now()
-	return b.state, false, nil
+func (m *memoryStore) MarkBatchJobSucceeded(ctx context.Context, batchID, jobID string) (BatchState, bool, error) {
+	state, _, err := m.SettleBatchJob(ctx, batchID, jobID, BatchJobSucceeded, nil)
+	return state, state.Completed, err
 }
 
 // MarkBatchJobFailed counts each failure once and applies fail-fast cancellation atomically.
-func (m *memoryStore) MarkBatchJobFailed(_ context.Context, batchID, jobID string, _ error) (BatchState, bool, error) {
+func (m *memoryStore) MarkBatchJobFailed(ctx context.Context, batchID, jobID string, cause error) (BatchState, bool, error) {
+	state, _, err := m.SettleBatchJob(ctx, batchID, jobID, BatchJobFailed, cause)
+	return state, state.Completed, err
+}
+
+// SettleBatchJob serializes aggregate counters with per-member outcome
+// ownership so inconsistent redelivery cannot publish a different result.
+func (m *memoryStore) SettleBatchJob(_ context.Context, batchID, jobID string, outcome BatchJobOutcome, _ error) (BatchState, bool, error) {
+	if outcome != BatchJobSucceeded && outcome != BatchJobFailed {
+		return BatchState{}, false, fmt.Errorf("unsupported batch job outcome %q", outcome)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.batch[batchID]
 	if !ok {
 		return BatchState{}, false, ErrNotFound
 	}
-	js := b.jobs[jobID]
-	if !js.done {
-		js.done = true
-		js.failed = true
-		b.jobs[jobID] = js
-		b.state.Pending--
-		b.state.Processed++
+	js, ok := b.jobs[jobID]
+	if !ok {
+		return BatchState{}, false, ErrNotFound
+	}
+	requestedFailure := outcome == BatchJobFailed
+	if js.done {
+		b.state.UpdatedAt = time.Now()
+		return b.state, js.failed == requestedFailure, nil
+	}
+	js.done = true
+	js.failed = requestedFailure
+	b.jobs[jobID] = js
+	b.state.Pending--
+	b.state.Processed++
+	if requestedFailure {
 		b.state.Failed++
 	}
-	if !b.state.AllowFailed {
+	if requestedFailure && !b.state.AllowFailed {
 		b.state.Cancelled = true
 		b.state.Completed = true
 		b.state.UpdatedAt = time.Now()
@@ -221,7 +256,7 @@ func (m *memoryStore) MarkBatchJobFailed(_ context.Context, batchID, jobID strin
 		return b.state, true, nil
 	}
 	b.state.UpdatedAt = time.Now()
-	return b.state, false, nil
+	return b.state, true, nil
 }
 
 // CancelBatch marks the batch terminal under the mutation lock so observers see a consistent state.

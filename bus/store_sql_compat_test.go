@@ -36,6 +36,7 @@ func TestSQLStoreV1PersistedDataCompatibility(t *testing.T) {
 		}
 	})
 	loadLegacySQLStoreFixture(t, ctx, db)
+	seedLegacyDualTerminalChain(t, ctx, db)
 
 	store, err := NewSQLStore(SQLStoreConfig{DB: db, DriverName: "sqlite"})
 	if err != nil {
@@ -71,8 +72,15 @@ func TestSQLStoreV1PersistedDataCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read v1 completed chain: %v", err)
 	}
-	if !completedChain.Completed || completedChain.Failed || completedChain.NextIndex != 2 || completedChain.UpdatedAt.UnixMilli() != 1704067205000 {
+	if !completedChain.Completed || completedChain.Failed || completedChain.Failure != "" || completedChain.NextIndex != 2 || completedChain.UpdatedAt.UnixMilli() != 1704067205000 {
 		t.Fatalf("completed chain state changed: %+v", completedChain)
+	}
+	dualTerminalChain, err := store.GetChain(ctx, "compat-chain-dual-terminal-old")
+	if err != nil {
+		t.Fatalf("read injected dual-terminal chain: %v", err)
+	}
+	if !dualTerminalChain.Completed || !dualTerminalChain.Failed || dualTerminalChain.Failure != "late legacy failure" || dualTerminalChain.NextIndex != 2 || dualTerminalChain.UpdatedAt.UnixMilli() != 1704067205000 {
+		t.Fatalf("dual-terminal chain state changed: %+v", dualTerminalChain)
 	}
 	failedChain, err := store.GetChain(ctx, "compat-chain-failed-old")
 	if err != nil {
@@ -186,7 +194,7 @@ func TestSQLStoreV1PersistedDataCompatibility(t *testing.T) {
 	if err := store.Prune(ctx, time.UnixMilli(pruneCutoffMS)); err != nil {
 		t.Fatalf("prune v1 persisted state: %v", err)
 	}
-	for _, chainID := range []string{"compat-chain-completed-old", "compat-chain-failed-old"} {
+	for _, chainID := range []string{"compat-chain-completed-old", "compat-chain-dual-terminal-old", "compat-chain-failed-old"} {
 		if _, findErr := store.GetChain(ctx, chainID); !errors.Is(findErr, ErrNotFound) {
 			t.Fatalf("old terminal chain %q survived prune: %v", chainID, findErr)
 		}
@@ -241,6 +249,47 @@ func loadLegacySQLStoreFixture(t *testing.T, ctx context.Context, db *sql.DB) {
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit compatibility fixture: %v", err)
+	}
+}
+
+// seedLegacyDualTerminalChain adds a post-fixture anomaly without rewriting
+// the frozen v1 compatibility baseline used to detect historical drift.
+func seedLegacyDualTerminalChain(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin dual-terminal chain setup: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `INSERT INTO bus_chains
+		(chain_id, dispatch_id, queue_name, nodes_json, next_index, completed, failed, failure, created_at_ms, updated_at_ms)
+		SELECT 'compat-chain-dual-terminal-old', 'compat-dispatch-dual-terminal-old', queue_name, nodes_json, next_index, completed, 1, 'late legacy failure', created_at_ms, updated_at_ms
+		FROM bus_chains WHERE chain_id='compat-chain-completed-old'`)
+	if err != nil {
+		t.Fatalf("insert dual-terminal chain: %v", err)
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("count inserted dual-terminal chains: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted dual-terminal chains=%d, want 1", inserted)
+	}
+	result, err = tx.ExecContext(ctx, `INSERT INTO bus_chain_completed_nodes (chain_id, node_id, created_at_ms)
+		SELECT 'compat-chain-dual-terminal-old', node_id, created_at_ms
+		FROM bus_chain_completed_nodes WHERE chain_id='compat-chain-completed-old'`)
+	if err != nil {
+		t.Fatalf("insert dual-terminal chain nodes: %v", err)
+	}
+	inserted, err = result.RowsAffected()
+	if err != nil {
+		t.Fatalf("count inserted dual-terminal chain nodes: %v", err)
+	}
+	if inserted != 2 {
+		t.Fatalf("inserted dual-terminal chain nodes=%d, want 2", inserted)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit dual-terminal chain setup: %v", err)
 	}
 }
 

@@ -151,11 +151,12 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 		if executionErr, ok := acceptedDispatchExecutionError(err); ok {
 			return chainID, executionErr
 		}
-		if st, stErr := b.r.store.GetChain(ctx, chainID); stErr == nil && (st.Failed || st.Completed || st.NextIndex > 0) {
-			return chainID, err
-		}
-		if failErr := b.r.store.FailChain(ctx, chainID, err); failErr != nil {
+		_, owned, failErr := b.r.failChainNode(ctx, chainID, first.NodeID, err)
+		if failErr != nil {
 			return chainID, uncommittedMutationError("fail chain after initial dispatch rejection", errors.Join(err, failErr))
+		}
+		if !owned {
+			return chainID, err
 		}
 		base := envelope{DispatchID: dispatchID, ChainID: chainID, Job: first.Job}
 		b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now(), Err: err})
@@ -225,6 +226,50 @@ func nodeID(chainID string, idx int) string {
 	return chainID + "_" + newID("n")
 }
 
+// failChainNode uses the additive atomic capability when available while
+// retaining a state-confirmed fallback for established custom stores.
+func (r *runtime) failChainNode(ctx context.Context, chainID, nodeID string, cause error) (ChainState, bool, error) {
+	if store, ok := r.store.(outcomeStore); ok {
+		return store.FailChainNode(ctx, chainID, nodeID, cause)
+	}
+	state, err := r.store.GetChain(ctx, chainID)
+	if err != nil {
+		return ChainState{}, false, err
+	}
+	owned, claimable, err := chainNodeFailureDisposition(state, nodeID)
+	if err != nil || !claimable {
+		return state, owned, err
+	}
+	if err := r.store.FailChain(ctx, chainID, cause); err != nil {
+		return ChainState{}, false, err
+	}
+	state, err = r.store.GetChain(ctx, chainID)
+	if err != nil {
+		return ChainState{}, false, err
+	}
+	owned, claimable, err = chainNodeFailureDisposition(state, nodeID)
+	if err != nil {
+		return ChainState{}, false, err
+	}
+	if claimable {
+		return ChainState{}, false, errors.New("chain store accepted failure without terminal state")
+	}
+	return state, owned, nil
+}
+
+// observedChainFailure preserves the committed cause across redelivery while
+// retaining permanent classification without exposing a replayed cause.
+func observedChainFailure(state ChainState, current error) error {
+	if state.Failure == "" || (current != nil && current.Error() == state.Failure) {
+		return current
+	}
+	committed := errors.New(state.Failure)
+	if busruntime.IsPermanent(current) {
+		return busruntime.Permanent(committed)
+	}
+	return committed
+}
+
 // handleInternalChainNode advances or fails a chain only after its application attempt reaches a committable outcome.
 func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
@@ -236,12 +281,22 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 	case busruntime.AttemptRetry, busruntime.AttemptRedeliver:
 		return outcome.err
 	case busruntime.AttemptFailed:
-		if markErr := r.store.FailChain(ctx, env.ChainID, outcome.err); markErr != nil {
+		state, owned, markErr := r.failChainNode(ctx, env.ChainID, env.NodeID, outcome.err)
+		if markErr != nil {
 			return uncommittedMutationError("fail chain", markErr)
 		}
-		r.emitStoredJobOutcome(ctx, outcome)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
-		_ = r.dispatchCallback(ctx, env, "chain_catch", outcome.err)
+		if !owned || state.Completed {
+			return nil
+		}
+		if !state.Failed {
+			return uncommittedMutationError("confirm chain failure", errors.New("chain store accepted failure without terminal state"))
+		}
+		observedErr := observedChainFailure(state, outcome.err)
+		observedOutcome := outcome
+		observedOutcome.err = observedErr
+		r.emitStoredJobOutcome(ctx, observedOutcome)
+		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: observedErr})
+		_ = r.dispatchCallback(ctx, env, "chain_catch", observedErr)
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		r.cleanupChainCallbacks(env.ChainID)
 		return outcome.err
@@ -250,14 +305,34 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 	if advErr != nil {
 		return uncommittedMutationError("advance chain", advErr)
 	}
-	r.emitStoredJobOutcome(ctx, outcome)
 	if done {
+		state, stateErr := r.store.GetChain(ctx, env.ChainID)
+		if stateErr != nil {
+			return uncommittedMutationError("confirm chain completion", stateErr)
+		}
+		// Old SQL stores could record failure after completion, so completion
+		// retains precedence for those otherwise-unreachable dual-terminal rows.
+		if !state.Completed && state.Failed {
+			return nil
+		}
+		if !state.Completed {
+			return uncommittedMutationError("confirm chain completion", errors.New("chain store returned done without terminal state"))
+		}
+		index, known := chainNodePosition(state.Nodes, env.NodeID)
+		if !known {
+			return uncommittedMutationError("confirm chain completion", errors.New("chain store returned done for an unknown node"))
+		}
+		if index != len(state.Nodes)-1 {
+			return nil
+		}
+		r.emitStoredJobOutcome(ctx, outcome)
 		r.prepareChainSuccessCallbacks(env.ChainID)
 		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		r.cleanupChainCallbacks(env.ChainID)
 		return nil
 	}
+	r.emitStoredJobOutcome(ctx, outcome)
 	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 	dispatchErr := r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
@@ -285,7 +360,7 @@ func (r *runtime) invokeChainCatch(ctx context.Context, st ChainState, err error
 
 // invokeChainCatchObserved emits lifecycle start only after state validation and idempotency claim succeed.
 func (r *runtime) invokeChainCatchObserved(ctx context.Context, st ChainState, err error, onClaimed func()) error {
-	if !st.Failed {
+	if !st.Failed || st.Completed {
 		return errCallbackNotReady
 	}
 	key := "chain_catch:" + st.ChainID

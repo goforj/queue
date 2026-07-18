@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -55,6 +56,16 @@ type BatchJob struct {
 	Job   StoredJob
 }
 
+// BatchJobOutcome identifies the durable result that first settled one member.
+type BatchJobOutcome string
+
+const (
+	// BatchJobSucceeded records successful member settlement.
+	BatchJobSucceeded BatchJobOutcome = "succeeded"
+	// BatchJobFailed records failed member settlement.
+	BatchJobFailed BatchJobOutcome = "failed"
+)
+
 // BatchState is the persisted aggregate execution view of a batch.
 type BatchState struct {
 	BatchID     string
@@ -72,13 +83,16 @@ type BatchState struct {
 	UpdatedAt   time.Time
 }
 
-// Store defines the durable state transitions required by chain, batch, and callback orchestration.
+// Store defines the compatibility state transitions required by chain, batch,
+// and callback orchestration; built-ins also implement outcomeStore.
 type Store interface {
 	// CreateChain persists a newly accepted chain.
 	CreateChain(ctx context.Context, rec ChainRecord) error
-	// AdvanceChain commits one completed node and returns the next node, if any.
+	// AdvanceChain atomically claims completedNode and returns the current successor.
+	// Repeating the same (chainID, completedNode) claim must not advance again.
+	// When done is true, GetChain must immediately expose Completed or Failed state.
 	AdvanceChain(ctx context.Context, chainID string, completedNode string) (next *ChainNode, done bool, err error)
-	// FailChain commits terminal chain failure.
+	// FailChain commits terminal failure without replacing completed state.
 	FailChain(ctx context.Context, chainID string, cause error) error
 	// GetChain returns current chain state.
 	GetChain(ctx context.Context, chainID string) (ChainState, error)
@@ -87,9 +101,11 @@ type Store interface {
 	CreateBatch(ctx context.Context, rec BatchRecord) error
 	// MarkBatchJobStarted records that one batch member began execution.
 	MarkBatchJobStarted(ctx context.Context, batchID, jobID string) error
-	// MarkBatchJobSucceeded commits one successful batch member.
+	// MarkBatchJobSucceeded commits the first outcome for (batchID, jobID).
+	// Duplicate outcomes must return current state without changing counters.
 	MarkBatchJobSucceeded(ctx context.Context, batchID, jobID string) (BatchState, bool, error)
-	// MarkBatchJobFailed commits one failed batch member.
+	// MarkBatchJobFailed commits the first outcome for (batchID, jobID).
+	// Duplicate outcomes must return current state without changing counters.
 	MarkBatchJobFailed(ctx context.Context, batchID, jobID string, cause error) (BatchState, bool, error)
 	// CancelBatch commits aggregate batch cancellation.
 	CancelBatch(ctx context.Context, batchID string) error
@@ -100,4 +116,147 @@ type Store interface {
 	MarkCallbackInvoked(ctx context.Context, key string) (bool, error)
 	// Prune removes terminal workflow state older than before.
 	Prune(ctx context.Context, before time.Time) error
+}
+
+// outcomeStore exposes first-writer outcome arbitration without expanding the
+// compatibility-critical Store interface implemented by existing consumers.
+type outcomeStore interface {
+	FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (ChainState, bool, error)
+	// SettleBatchJob arbitrates the durable category while the established batch
+	// model keeps failure detail local to the physical delivery that reports it.
+	SettleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (BatchState, bool, error)
+}
+
+// chainNodePosition resolves persisted order so stale and future deliveries
+// cannot mutate the aggregate merely because they carry a valid chain ID.
+func chainNodePosition(nodes []ChainNode, nodeID string) (int, bool) {
+	for index := range nodes {
+		if nodes[index].NodeID == nodeID {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+// validateChainRecord rejects ambiguous order because duplicate or empty node
+// IDs make physical redelivery indistinguishable from a different chain step.
+func validateChainRecord(record ChainRecord) error {
+	if record.ChainID == "" {
+		return errors.New("chain id is required")
+	}
+	if len(record.Nodes) == 0 {
+		return errors.New("chain requires at least one node")
+	}
+	seen := make(map[string]struct{}, len(record.Nodes))
+	for _, node := range record.Nodes {
+		if node.NodeID == "" {
+			return errors.New("chain node id is required")
+		}
+		if _, exists := seen[node.NodeID]; exists {
+			return fmt.Errorf("chain contains duplicate node id %q", node.NodeID)
+		}
+		seen[node.NodeID] = struct{}{}
+	}
+	return nil
+}
+
+// validateBatchRecord rejects ambiguous member identity because first-writer
+// outcome ownership is keyed by the stable (batchID, jobID) pair.
+func validateBatchRecord(record BatchRecord) error {
+	if record.BatchID == "" {
+		return errors.New("batch id is required")
+	}
+	if len(record.Jobs) == 0 {
+		return errors.New("batch requires at least one job")
+	}
+	seen := make(map[string]struct{}, len(record.Jobs))
+	for _, job := range record.Jobs {
+		if job.JobID == "" {
+			return errors.New("batch job id is required")
+		}
+		if _, exists := seen[job.JobID]; exists {
+			return fmt.Errorf("batch contains duplicate job id %q", job.JobID)
+		}
+		seen[job.JobID] = struct{}{}
+	}
+	return nil
+}
+
+// cloneChainNodes isolates immutable order and payload bytes from callers that
+// retain either a creation record or a state returned by the memory store.
+func cloneChainNodes(nodes []ChainNode) []ChainNode {
+	if nodes == nil {
+		return nil
+	}
+	cloned := make([]ChainNode, len(nodes))
+	for index := range nodes {
+		cloned[index] = cloneChainNode(nodes[index])
+	}
+	return cloned
+}
+
+// cloneChainNode copies the only reference-bearing field in a persisted node.
+func cloneChainNode(node ChainNode) ChainNode {
+	cloned := node
+	cloned.Job.Payload = append([]byte(nil), node.Job.Payload...)
+	return cloned
+}
+
+// chainNodeAdvanceDisposition separates immutable order validation from the
+// store-specific compare-and-swap that owns the current node's success.
+func chainNodeAdvanceDisposition(state ChainState, nodeID string) (next *ChainNode, done, claimable bool, err error) {
+	index, ok := chainNodePosition(state.Nodes, nodeID)
+	if !ok {
+		return nil, false, false, fmt.Errorf("chain %q does not contain node %q", state.ChainID, nodeID)
+	}
+	if state.Completed {
+		return nil, true, false, nil
+	}
+	if state.NextIndex < 0 || state.NextIndex >= len(state.Nodes) {
+		return nil, false, false, fmt.Errorf("chain %q has invalid next index %d", state.ChainID, state.NextIndex)
+	}
+	if state.Failed {
+		if index > state.NextIndex {
+			return nil, false, false, fmt.Errorf("chain %q received node %q after failure at node %q", state.ChainID, nodeID, state.Nodes[state.NextIndex].NodeID)
+		}
+		return nil, true, false, nil
+	}
+	if index > state.NextIndex {
+		return nil, false, false, fmt.Errorf("chain %q received node %q before node %q", state.ChainID, nodeID, state.Nodes[state.NextIndex].NodeID)
+	}
+	if index == state.NextIndex {
+		return nil, false, true, nil
+	}
+	node := state.Nodes[state.NextIndex]
+	return &node, false, false, nil
+}
+
+// chainNodeFailureDisposition classifies whether failure already owns a node,
+// can still claim it, or lost to an earlier successful transition.
+func chainNodeFailureDisposition(state ChainState, nodeID string) (owned, claimable bool, err error) {
+	index, ok := chainNodePosition(state.Nodes, nodeID)
+	if !ok {
+		return false, false, fmt.Errorf("chain %q does not contain node %q", state.ChainID, nodeID)
+	}
+	// Legacy SQL rows can contain both flags only when completion happened
+	// first, because the old advancement path never completed a failed chain.
+	if state.Completed {
+		return false, false, nil
+	}
+	if state.NextIndex < 0 || state.NextIndex >= len(state.Nodes) {
+		return false, false, fmt.Errorf("chain %q has invalid next index %d", state.ChainID, state.NextIndex)
+	}
+	if state.Failed {
+		if index > state.NextIndex {
+			return false, false, fmt.Errorf("chain %q received node %q after failure at node %q", state.ChainID, nodeID, state.Nodes[state.NextIndex].NodeID)
+		}
+		return index == state.NextIndex, false, nil
+	}
+	if index < state.NextIndex {
+		return false, false, nil
+	}
+	if index > state.NextIndex {
+		return false, false, fmt.Errorf("chain %q received node %q before node %q", state.ChainID, nodeID, state.Nodes[state.NextIndex].NodeID)
+	}
+	return false, true, nil
 }

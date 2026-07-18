@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/goforj/queue/busruntime"
@@ -11,21 +12,44 @@ import (
 
 type workflowMutationFaultStore struct {
 	Store
-	advanceChainErr       error
-	failChainErr          error
-	markBatchStartedErr   error
-	markBatchSucceededErr error
-	markBatchFailedErr    error
-	cancelBatchErr        error
-	getChainErr           error
-	getBatchErr           error
-	markCallbackErr       error
+	advanceChainErr         error
+	failChainErr            error
+	markBatchStartedErr     error
+	markBatchSucceededErr   error
+	markBatchFailedErr      error
+	cancelBatchErr          error
+	getChainErr             error
+	getChainErrOnCall       int
+	getChainCalls           int
+	getChainState           *ChainState
+	getBatchErr             error
+	markCallbackErr         error
+	advanceDoneWithoutState bool
+	failChainWithoutState   bool
+}
+
+type nonterminalWorkflowOutcomeStore struct {
+	Store
+}
+
+// FailChainNode claims failure without committing terminal state to exercise runtime confirmation.
+func (s nonterminalWorkflowOutcomeStore) FailChainNode(ctx context.Context, chainID, _ string, _ error) (ChainState, bool, error) {
+	state, err := s.Store.GetChain(ctx, chainID)
+	return state, true, err
+}
+
+// SettleBatchJob is unused by the chain-focused fault but completes the atomic capability contract.
+func (s nonterminalWorkflowOutcomeStore) SettleBatchJob(context.Context, string, string, BatchJobOutcome, error) (BatchState, bool, error) {
+	return BatchState{}, false, errors.New("unexpected batch settlement")
 }
 
 // AdvanceChain injects a chain progression persistence failure when configured.
 func (s *workflowMutationFaultStore) AdvanceChain(ctx context.Context, chainID, completedNode string) (*ChainNode, bool, error) {
 	if s.advanceChainErr != nil {
 		return nil, false, s.advanceChainErr
+	}
+	if s.advanceDoneWithoutState {
+		return nil, true, nil
 	}
 	return s.Store.AdvanceChain(ctx, chainID, completedNode)
 }
@@ -34,6 +58,9 @@ func (s *workflowMutationFaultStore) AdvanceChain(ctx context.Context, chainID, 
 func (s *workflowMutationFaultStore) FailChain(ctx context.Context, chainID string, cause error) error {
 	if s.failChainErr != nil {
 		return s.failChainErr
+	}
+	if s.failChainWithoutState {
+		return nil
 	}
 	return s.Store.FailChain(ctx, chainID, cause)
 }
@@ -72,8 +99,15 @@ func (s *workflowMutationFaultStore) CancelBatch(ctx context.Context, batchID st
 
 // GetChain injects a callback chain-state read failure when configured.
 func (s *workflowMutationFaultStore) GetChain(ctx context.Context, chainID string) (ChainState, error) {
+	s.getChainCalls++
 	if s.getChainErr != nil {
 		return ChainState{}, s.getChainErr
+	}
+	if s.getChainErrOnCall > 0 && s.getChainCalls == s.getChainErrOnCall {
+		return ChainState{}, errors.New("injected chain read failure")
+	}
+	if s.getChainState != nil {
+		return *s.getChainState, nil
 	}
 	return s.Store.GetChain(ctx, chainID)
 }
@@ -403,6 +437,802 @@ func TestChainDispatchDoesNotTerminalizeAcceptedMutationFailure(t *testing.T) {
 		t.Fatalf("chain terminalized after uncommitted mutation: %+v", state)
 	}
 	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted, EventChainFailed)
+}
+
+// TestSuccessfulDuplicateCannotCompleteFailedChain proves a competing failure
+// remains authoritative when the same physical node also returns success.
+func TestSuccessfulDuplicateCannotCompleteFailedChain(t *testing.T) {
+	const (
+		chainID = "chain-concurrent-terminal-outcome"
+		nodeID  = "node-concurrent-terminal-outcome"
+		jobType = "workflow:chain:concurrent-terminal-outcome"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateChain(context.Background(), ChainRecord{
+		ChainID: chainID,
+		Nodes: []ChainNode{{
+			NodeID: nodeID,
+			Job:    StoredJob{Type: jobType},
+		}},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	if err := store.FailChain(context.Background(), chainID, errors.New("competing delivery failed")); err != nil {
+		t.Fatalf("fail chain: %v", err)
+	}
+	runtime, _, recorder := newWorkflowMutationRuntime(t, store)
+	var handlerCalls, callbackCalls int
+	runtime.Register(jobType, func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+	runtime.chainCallbacks[chainID] = chainCallbacks{
+		finally: func(context.Context, ChainState) error {
+			callbackCalls++
+			return nil
+		},
+	}
+	payload, err := json.Marshal(envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-concurrent-terminal-outcome",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        nodeID,
+		JobID:         "job-concurrent-terminal-outcome",
+		Job:           StoredJob{Type: jobType},
+	})
+	if err != nil {
+		t.Fatalf("marshal duplicate node: %v", err)
+	}
+	if err := runtime.handleInternalChainNode(context.Background(), testInboundJob{payload: payload}); err != nil {
+		t.Fatalf("handle successful duplicate: %v", err)
+	}
+	if handlerCalls != 1 || callbackCalls != 0 {
+		t.Fatalf("handler/callback calls = %d/%d, want 1/0", handlerCalls, callbackCalls)
+	}
+	state, err := store.GetChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("get chain: %v", err)
+	}
+	if !state.Failed || state.Completed {
+		t.Fatalf("chain state = %+v, want failed only", state)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted)
+}
+
+// TestCompletedChainPublishesOnlyFinalNodeReplay preserves post-commit
+// recovery without letting an earlier node impersonate terminal completion.
+func TestCompletedChainPublishesOnlyFinalNodeReplay(t *testing.T) {
+	const (
+		chainID      = "chain-completed-node-replay"
+		firstNodeID  = "node-completed-first"
+		finalNodeID  = "node-completed-final"
+		firstJobType = "workflow:chain:completed-first"
+		finalJobType = "workflow:chain:completed-final"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateChain(context.Background(), ChainRecord{
+		ChainID: chainID,
+		Nodes: []ChainNode{
+			{NodeID: firstNodeID, Job: StoredJob{Type: firstJobType}},
+			{NodeID: finalNodeID, Job: StoredJob{Type: finalJobType}},
+		},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	if _, _, err := store.AdvanceChain(context.Background(), chainID, firstNodeID); err != nil {
+		t.Fatalf("advance first node: %v", err)
+	}
+	if _, done, err := store.AdvanceChain(context.Background(), chainID, finalNodeID); err != nil || !done {
+		t.Fatalf("complete final node = done:%t err:%v", done, err)
+	}
+
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var firstCalls, finalCalls, finallyCalls int
+	runtime.Register(firstJobType, func(context.Context, Context) error {
+		firstCalls++
+		return nil
+	})
+	runtime.Register(finalJobType, func(context.Context, Context) error {
+		finalCalls++
+		return nil
+	})
+	runtime.chainCallbacks[chainID] = chainCallbacks{
+		finally: func(context.Context, ChainState) error {
+			finallyCalls++
+			return nil
+		},
+	}
+	if err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-completed-node-replay",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        firstNodeID,
+		JobID:         "job-completed-first-replay",
+		Job:           StoredJob{Type: firstJobType},
+	}); err != nil {
+		t.Fatalf("replay stale first node: %v", err)
+	}
+	if firstCalls != 1 || finalCalls != 0 || finallyCalls != 0 {
+		t.Fatalf("calls after stale replay = first:%d final:%d finally:%d, want 1/0/0", firstCalls, finalCalls, finallyCalls)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed)
+
+	if err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-completed-node-replay",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        finalNodeID,
+		JobID:         "job-completed-final-replay",
+		Job:           StoredJob{Type: finalJobType},
+	}); err != nil {
+		t.Fatalf("replay final node: %v", err)
+	}
+	if firstCalls != 1 || finalCalls != 1 || finallyCalls != 1 {
+		t.Fatalf("calls after final replay = first:%d final:%d finally:%d, want 1/1/1", firstCalls, finalCalls, finallyCalls)
+	}
+	var succeeded, completed, callbackSucceeded int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			succeeded++
+		case EventChainCompleted:
+			completed++
+		case EventCallbackSucceeded:
+			callbackSucceeded++
+		}
+	}
+	if succeeded != 1 || completed != 1 || callbackSucceeded != 1 {
+		t.Fatalf("final replay events = job:%d chain:%d callback:%d, want 1/1/1", succeeded, completed, callbackSucceeded)
+	}
+}
+
+// TestTerminalChainUnknownNodeCannotPublishFacts prevents a malformed
+// delivery from borrowing either terminal outcome or its pending callback.
+func TestTerminalChainUnknownNodeCannotPublishFacts(t *testing.T) {
+	for _, terminal := range []string{"completed", "failed"} {
+		t.Run(terminal, func(t *testing.T) {
+			chainID := "chain-runtime-unknown-" + terminal
+			store := NewMemoryStore()
+			if err := store.CreateChain(context.Background(), ChainRecord{
+				ChainID: chainID,
+				Nodes: []ChainNode{
+					{NodeID: "node-0", Job: StoredJob{Type: "workflow:chain:known-0"}},
+					{NodeID: "node-1", Job: StoredJob{Type: "workflow:chain:known-1"}},
+				},
+			}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			if _, _, err := store.AdvanceChain(context.Background(), chainID, "node-0"); err != nil {
+				t.Fatalf("advance first node: %v", err)
+			}
+			if terminal == "completed" {
+				if _, done, err := store.AdvanceChain(context.Background(), chainID, "node-1"); err != nil || !done {
+					t.Fatalf("complete chain = done:%t err:%v", done, err)
+				}
+			} else {
+				outcomes := requireOutcomeStore(t, store)
+				if _, owned, err := outcomes.FailChainNode(context.Background(), chainID, "node-1", errors.New("known failure")); err != nil || !owned {
+					t.Fatalf("fail chain = owned:%t err:%v", owned, err)
+				}
+			}
+
+			runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+			var handlerCalls, callbackCalls int
+			runtime.Register("workflow:chain:unknown", func(context.Context, Context) error {
+				handlerCalls++
+				return nil
+			})
+			runtime.chainCallbacks[chainID] = chainCallbacks{
+				finally: func(context.Context, ChainState) error {
+					callbackCalls++
+					return nil
+				},
+			}
+			err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, envelope{
+				SchemaVersion: schemaVersion,
+				DispatchID:    "dispatch-runtime-unknown",
+				Kind:          "chain_node",
+				ChainID:       chainID,
+				NodeID:        "node-missing",
+				JobID:         "job-runtime-unknown",
+				Job:           StoredJob{Type: "workflow:chain:unknown"},
+			})
+			if !busruntime.IsUncommitted(err) || !strings.Contains(err.Error(), "does not contain node") {
+				t.Fatalf("unknown-node error = %v, want uncommitted membership rejection", err)
+			}
+			if handlerCalls != 1 || callbackCalls != 0 {
+				t.Fatalf("handler/callback calls = %d/%d, want 1/0", handlerCalls, callbackCalls)
+			}
+			assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed)
+		})
+	}
+}
+
+// TestLegacyDualTerminalChainPreservesCompletion pins completion precedence
+// for rows written before FailChain began protecting completed state.
+func TestLegacyDualTerminalChainPreservesCompletion(t *testing.T) {
+	const (
+		chainID = "chain-legacy-dual-terminal"
+		nodeID  = "node-legacy-dual-terminal"
+		jobType = "workflow:chain:legacy-dual-terminal"
+	)
+	baseStore := NewMemoryStore()
+	if err := baseStore.CreateChain(context.Background(), ChainRecord{ChainID: chainID, Nodes: []ChainNode{{NodeID: nodeID, Job: StoredJob{Type: jobType}}}}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	legacyState := ChainState{
+		ChainID:   chainID,
+		Nodes:     []ChainNode{{NodeID: nodeID, Job: StoredJob{Type: jobType}}},
+		NextIndex: 1,
+		Completed: true,
+		Failed:    true,
+		Failure:   "late legacy failure",
+	}
+	faultStore := &workflowMutationFaultStore{Store: baseStore, advanceDoneWithoutState: true, getChainState: &legacyState}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, faultStore)
+	var handlerCalls, catchCalls, finallyCalls int
+	runtime.Register(jobType, func(context.Context, Context) error { handlerCalls++; return nil })
+	runtime.chainCallbacks[chainID] = chainCallbacks{
+		catch:   func(context.Context, ChainState, error) error { catchCalls++; return nil },
+		finally: func(context.Context, ChainState) error { finallyCalls++; return nil },
+	}
+	if err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-legacy-dual-terminal",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        nodeID,
+		JobID:         "job-legacy-dual-terminal",
+		Job:           StoredJob{Type: jobType},
+	}); err != nil {
+		t.Fatalf("handle legacy dual-terminal chain: %v", err)
+	}
+	if handlerCalls != 1 || catchCalls != 0 || finallyCalls != 1 {
+		t.Fatalf("handler/catch/finally calls = %d/%d/%d, want 1/0/1", handlerCalls, catchCalls, finallyCalls)
+	}
+	var succeeded, completed int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			succeeded++
+		case EventChainCompleted:
+			completed++
+		}
+	}
+	if succeeded != 1 || completed != 1 {
+		t.Fatalf("success/completion events = %d/%d, want 1/1", succeeded, completed)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobFailed, EventChainFailed)
+}
+
+// TestFailedDuplicateCannotReplaceSuccessfulChainNode proves completion or
+// advancement remains authoritative when the same physical node later fails.
+func TestFailedDuplicateCannotReplaceSuccessfulChainNode(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		nodes         []ChainNode
+		wantCompleted bool
+		wantNextIndex int
+	}{
+		{
+			name:          "completed chain",
+			nodes:         []ChainNode{{NodeID: "node-completed", Job: StoredJob{Type: "workflow:chain:late-failure"}}},
+			wantCompleted: true,
+			wantNextIndex: 1,
+		},
+		{
+			name: "advanced chain",
+			nodes: []ChainNode{
+				{NodeID: "node-advanced", Job: StoredJob{Type: "workflow:chain:late-failure"}},
+				{NodeID: "node-pending", Job: StoredJob{Type: "workflow:chain:pending"}},
+			},
+			wantNextIndex: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const chainID = "chain-late-failure"
+			applicationErr := errors.New("late duplicate failed")
+			store := NewMemoryStore()
+			if err := store.CreateChain(context.Background(), ChainRecord{ChainID: chainID, Nodes: test.nodes}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			if _, _, err := store.AdvanceChain(context.Background(), chainID, test.nodes[0].NodeID); err != nil {
+				t.Fatalf("commit successful node: %v", err)
+			}
+			runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+			var handlerCalls, catchCalls, finallyCalls int
+			runtime.Register(test.nodes[0].Job.Type, func(context.Context, Context) error {
+				handlerCalls++
+				return applicationErr
+			})
+			runtime.chainCallbacks[chainID] = chainCallbacks{
+				catch: func(context.Context, ChainState, error) error {
+					catchCalls++
+					return nil
+				},
+				finally: func(context.Context, ChainState) error {
+					finallyCalls++
+					return nil
+				},
+			}
+			err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, envelope{
+				SchemaVersion: schemaVersion,
+				DispatchID:    "dispatch-late-failure",
+				Kind:          "chain_node",
+				ChainID:       chainID,
+				NodeID:        test.nodes[0].NodeID,
+				JobID:         "job-late-failure",
+				Job:           test.nodes[0].Job,
+			})
+			if err != nil {
+				t.Fatalf("late failed duplicate: %v", err)
+			}
+			if handlerCalls != 1 || catchCalls != 0 || finallyCalls != 0 {
+				t.Fatalf("handler/catch/finally calls = %d/%d/%d, want 1/0/0", handlerCalls, catchCalls, finallyCalls)
+			}
+			state, err := store.GetChain(context.Background(), chainID)
+			if err != nil {
+				t.Fatalf("get chain: %v", err)
+			}
+			if state.NextIndex != test.wantNextIndex || state.Completed != test.wantCompleted || state.Failed {
+				t.Fatalf("chain state = %+v, want next=%d completed=%t failed=false", state, test.wantNextIndex, test.wantCompleted)
+			}
+			assertNoCommittedEvents(t, recorder.events, EventJobFailed, EventChainFailed, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed)
+		})
+	}
+}
+
+// TestBatchDuplicateCannotPublishContradictoryOutcome proves a losing physical
+// result cannot emit facts, progress, or callbacks against the stored winner.
+func TestBatchDuplicateCannotPublishContradictoryOutcome(t *testing.T) {
+	for _, first := range []BatchJobOutcome{BatchJobSucceeded, BatchJobFailed} {
+		t.Run(string(first), func(t *testing.T) {
+			const (
+				batchID = "batch-contradictory-outcome"
+				jobID   = "job-contradictory-outcome"
+				jobType = "workflow:batch:contradictory-outcome"
+			)
+			applicationErr := errors.New("contradictory physical failure")
+			store := NewMemoryStore()
+			if err := store.CreateBatch(context.Background(), BatchRecord{
+				BatchID:     batchID,
+				AllowFailed: true,
+				Jobs:        []BatchJob{{JobID: jobID, Job: StoredJob{Type: jobType}}},
+			}); err != nil {
+				t.Fatalf("create batch: %v", err)
+			}
+			outcomes := requireOutcomeStore(t, store)
+			before, owned, err := outcomes.SettleBatchJob(context.Background(), batchID, jobID, first, applicationErr)
+			if err != nil || !owned {
+				t.Fatalf("commit first outcome = owned:%t err:%v", owned, err)
+			}
+
+			runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+			var handlerCalls, progressCalls, thenCalls, catchCalls, finallyCalls int
+			runtime.Register(jobType, func(context.Context, Context) error {
+				handlerCalls++
+				if first == BatchJobSucceeded {
+					return applicationErr
+				}
+				return nil
+			})
+			runtime.batchCallbacks[batchID] = batchCallbacks{
+				progress: func(context.Context, BatchState) error { progressCalls++; return nil },
+				then:     func(context.Context, BatchState) error { thenCalls++; return nil },
+				catch:    func(context.Context, BatchState, error) error { catchCalls++; return nil },
+				finally:  func(context.Context, BatchState) error { finallyCalls++; return nil },
+			}
+			err = queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobBatchJob, envelope{
+				SchemaVersion: schemaVersion,
+				DispatchID:    "dispatch-contradictory-outcome",
+				Kind:          "batch_job",
+				BatchID:       batchID,
+				JobID:         jobID,
+				Job:           StoredJob{Type: jobType},
+			})
+			if err != nil {
+				t.Fatalf("contradictory duplicate: %v", err)
+			}
+			if handlerCalls != 1 || progressCalls != 0 || thenCalls != 0 || catchCalls != 0 || finallyCalls != 0 {
+				t.Fatalf("handler/progress/then/catch/finally calls = %d/%d/%d/%d/%d, want 1/0/0/0/0", handlerCalls, progressCalls, thenCalls, catchCalls, finallyCalls)
+			}
+			after, err := store.GetBatch(context.Background(), batchID)
+			if err != nil {
+				t.Fatalf("get batch: %v", err)
+			}
+			if after.Pending != before.Pending || after.Processed != before.Processed || after.Failed != before.Failed || after.Cancelled != before.Cancelled || after.Completed != before.Completed {
+				t.Fatalf("batch state changed: before=%+v after=%+v", before, after)
+			}
+			assertNoCommittedEvents(t, recorder.events,
+				EventJobSucceeded,
+				EventJobFailed,
+				EventBatchProgressed,
+				EventBatchCompleted,
+				EventBatchFailed,
+				EventBatchCancelled,
+				EventCallbackStarted,
+				EventCallbackSucceeded,
+				EventCallbackFailed,
+			)
+		})
+	}
+}
+
+// TestUnknownBatchMemberStopsBeforeExecution prevents malformed workflow
+// correlation from running a handler or mutating the real aggregate.
+func TestUnknownBatchMemberStopsBeforeExecution(t *testing.T) {
+	const (
+		batchID = "batch-unknown-member"
+		jobType = "workflow:batch:unknown-member"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateBatch(context.Background(), BatchRecord{
+		BatchID: batchID,
+		Jobs:    []BatchJob{{JobID: "job-known"}},
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var handlerCalls, progressCalls, finallyCalls int
+	runtime.Register(jobType, func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+	runtime.batchCallbacks[batchID] = batchCallbacks{
+		progress: func(context.Context, BatchState) error { progressCalls++; return nil },
+		finally:  func(context.Context, BatchState) error { finallyCalls++; return nil },
+	}
+	err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobBatchJob, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-unknown-member",
+		Kind:          "batch_job",
+		BatchID:       batchID,
+		JobID:         "job-missing",
+		Job:           StoredJob{Type: jobType},
+	})
+	if !busruntime.IsUncommitted(err) || !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown member error = %v, want uncommitted ErrNotFound", err)
+	}
+	if handlerCalls != 0 || progressCalls != 0 || finallyCalls != 0 {
+		t.Fatalf("handler/progress/finally calls = %d/%d/%d, want 0/0/0", handlerCalls, progressCalls, finallyCalls)
+	}
+	state, stateErr := store.GetBatch(context.Background(), batchID)
+	if stateErr != nil {
+		t.Fatalf("get batch: %v", stateErr)
+	}
+	if state.Pending != 1 || state.Processed != 0 || state.Failed != 0 || state.Completed || state.Cancelled {
+		t.Fatalf("unknown member changed batch: %+v", state)
+	}
+	assertNoCommittedEvents(t, recorder.events,
+		EventJobStarted,
+		EventJobSucceeded,
+		EventJobFailed,
+		EventBatchProgressed,
+		EventBatchCompleted,
+		EventBatchFailed,
+		EventBatchCancelled,
+		EventCallbackStarted,
+		EventCallbackSucceeded,
+		EventCallbackFailed,
+	)
+}
+
+// TestChainCompletionReadFailureRedeliversWithoutFacts proves a committed
+// terminal mutation is replayed until its state can be confirmed for events.
+func TestChainCompletionReadFailureRedeliversWithoutFacts(t *testing.T) {
+	storeErr := errors.New("chain completion read unavailable")
+	const (
+		chainID = "chain-completion-read-failure"
+		nodeID  = "node-completion-read-failure"
+		jobType = "workflow:chain:completion-read-failure"
+	)
+	baseStore := NewMemoryStore()
+	if err := baseStore.CreateChain(context.Background(), ChainRecord{
+		ChainID: chainID,
+		Nodes:   []ChainNode{{NodeID: nodeID, Job: StoredJob{Type: jobType}}},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	faultStore := &workflowMutationFaultStore{Store: baseStore, getChainErr: storeErr}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, faultStore)
+	var handlerCalls, finallyCalls int
+	runtime.Register(jobType, func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+	runtime.chainCallbacks[chainID] = chainCallbacks{
+		finally: func(context.Context, ChainState) error {
+			finallyCalls++
+			return nil
+		},
+	}
+	delivery := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-completion-read-failure",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        nodeID,
+		JobID:         "job-completion-read-failure",
+		Job:           StoredJob{Type: jobType},
+	}
+	err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, delivery)
+	assertUncommittedMutation(t, err, storeErr)
+	if handlerCalls != 1 || finallyCalls != 0 {
+		t.Fatalf("handler/finally calls before recovery = %d/%d, want 1/0", handlerCalls, finallyCalls)
+	}
+	state, err := baseStore.GetChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("get committed chain: %v", err)
+	}
+	if !state.Completed || state.Failed {
+		t.Fatalf("committed chain state = %+v, want completed only", state)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainCompleted, EventCallbackStarted, EventCallbackSucceeded)
+
+	faultStore.getChainErr = nil
+	if err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, delivery); err != nil {
+		t.Fatalf("redeliver after store recovery: %v", err)
+	}
+	if handlerCalls != 2 || finallyCalls != 1 {
+		t.Fatalf("handler/finally calls after recovery = %d/%d, want 2/1", handlerCalls, finallyCalls)
+	}
+	var succeeded, completed, callbackSucceeded int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			succeeded++
+		case EventChainCompleted:
+			completed++
+		case EventCallbackSucceeded:
+			callbackSucceeded++
+		}
+	}
+	if succeeded != 1 || completed != 1 || callbackSucceeded != 1 {
+		t.Fatalf("job/chain/callback success events = %d/%d/%d, want 1/1/1", succeeded, completed, callbackSucceeded)
+	}
+}
+
+// TestChainFailureReadFailureRedeliversWithoutFacts proves a committed failure
+// is replayed until compatibility stores can expose its authoritative state.
+func TestChainFailureReadFailureRedeliversWithoutFacts(t *testing.T) {
+	committedCause := errors.New("first application failure")
+	replayedCause := errors.New("different replayed failure")
+	committedErr := busruntime.Permanent(committedCause)
+	replayedErr := busruntime.Permanent(replayedCause)
+	const (
+		chainID = "chain-failure-read-failure"
+		nodeID  = "node-failure-read-failure"
+		jobType = "workflow:chain:failure-read-failure"
+	)
+	baseStore := NewMemoryStore()
+	if err := baseStore.CreateChain(context.Background(), ChainRecord{
+		ChainID: chainID,
+		Nodes:   []ChainNode{{NodeID: nodeID, Job: StoredJob{Type: jobType}}},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	faultStore := &workflowMutationFaultStore{Store: baseStore, getChainErrOnCall: 2}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, faultStore)
+	var handlerCalls, catchCalls, finallyCalls int
+	runtime.Register(jobType, func(context.Context, Context) error {
+		handlerCalls++
+		if handlerCalls == 1 {
+			return committedErr
+		}
+		return replayedErr
+	})
+	var observedCatchErr error
+	runtime.chainCallbacks[chainID] = chainCallbacks{
+		catch: func(_ context.Context, _ ChainState, err error) error {
+			catchCalls++
+			observedCatchErr = err
+			return nil
+		},
+		finally: func(context.Context, ChainState) error {
+			finallyCalls++
+			return nil
+		},
+	}
+	delivery := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-failure-read-failure",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        nodeID,
+		JobID:         "job-failure-read-failure",
+		Job:           StoredJob{Type: jobType},
+	}
+	deliveryContext := busruntime.WithDeliveryAttempt(context.Background(), busruntime.DeliveryAttempt{Number: 0, MaxRetry: 2})
+	err := queueRuntime.DispatchJSON(deliveryContext, internalJobChainNode, delivery)
+	if !busruntime.IsUncommitted(err) || !strings.Contains(err.Error(), "injected chain read failure") {
+		t.Fatalf("failure confirmation error = %v, want uncommitted injected read failure", err)
+	}
+	if handlerCalls != 1 || catchCalls != 0 || finallyCalls != 0 {
+		t.Fatalf("handler/catch/finally calls before recovery = %d/%d/%d, want 1/0/0", handlerCalls, catchCalls, finallyCalls)
+	}
+	state, err := baseStore.GetChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("get committed chain: %v", err)
+	}
+	if state.Completed || !state.Failed || state.Failure != committedErr.Error() {
+		t.Fatalf("committed chain state = %+v, want failed only", state)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobFailed, EventChainFailed, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed)
+
+	if err := queueRuntime.DispatchJSON(deliveryContext, internalJobChainNode, delivery); !errors.Is(err, replayedCause) || !busruntime.IsPermanent(err) {
+		t.Fatalf("redeliver after store recovery: %v", err)
+	}
+	if handlerCalls != 2 || catchCalls != 1 || finallyCalls != 1 {
+		t.Fatalf("handler/catch/finally calls after recovery = %d/%d/%d, want 2/1/1", handlerCalls, catchCalls, finallyCalls)
+	}
+	if observedCatchErr == nil || observedCatchErr.Error() != committedErr.Error() {
+		t.Fatalf("catch error = %v, want committed cause %v", observedCatchErr, committedErr)
+	}
+	if errors.Is(observedCatchErr, replayedCause) {
+		t.Fatalf("catch error retained replayed cause: %v", observedCatchErr)
+	}
+	var failed, chainFailed, callbackSucceeded int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobFailed:
+			failed++
+			if event.Err == nil || event.Err.Error() != committedErr.Error() || !busruntime.IsPermanent(event.Err) || errors.Is(event.Err, replayedCause) {
+				t.Fatalf("job failure cause = %v, want %v", event.Err, committedErr)
+			}
+		case EventChainFailed:
+			chainFailed++
+			if event.Err == nil || event.Err.Error() != committedErr.Error() || !busruntime.IsPermanent(event.Err) || errors.Is(event.Err, replayedCause) {
+				t.Fatalf("chain failure cause = %v, want %v", event.Err, committedErr)
+			}
+		case EventCallbackSucceeded:
+			callbackSucceeded++
+		}
+	}
+	if failed != 1 || chainFailed != 1 || callbackSucceeded != 2 {
+		t.Fatalf("job/chain/callback failure events = %d/%d/%d, want 1/1/2", failed, chainFailed, callbackSucceeded)
+	}
+}
+
+// TestChainDoneRequiresTerminalState rejects custom stores that report a
+// terminal transition while their readable state remains active.
+func TestChainDoneRequiresTerminalState(t *testing.T) {
+	const (
+		chainID = "chain-inconsistent-done"
+		nodeID  = "node-inconsistent-done"
+		jobType = "workflow:chain:inconsistent-done"
+	)
+	baseStore := NewMemoryStore()
+	if err := baseStore.CreateChain(context.Background(), ChainRecord{
+		ChainID: chainID,
+		Nodes:   []ChainNode{{NodeID: nodeID, Job: StoredJob{Type: jobType}}},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	faultStore := &workflowMutationFaultStore{Store: baseStore, advanceDoneWithoutState: true}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, faultStore)
+	runtime.Register(jobType, func(context.Context, Context) error { return nil })
+	err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-inconsistent-done",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        nodeID,
+		JobID:         "job-inconsistent-done",
+		Job:           StoredJob{Type: jobType},
+	})
+	if !busruntime.IsUncommitted(err) || !strings.Contains(err.Error(), "done without terminal state") {
+		t.Fatalf("inconsistent store error = %v, want uncommitted terminal-state validation", err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted)
+	state, stateErr := baseStore.GetChain(context.Background(), chainID)
+	if stateErr != nil {
+		t.Fatalf("get active chain: %v", stateErr)
+	}
+	if state.NextIndex != 0 || state.Completed || state.Failed {
+		t.Fatalf("inconsistent store changed chain state: %+v", state)
+	}
+}
+
+// TestChainFailureRequiresTerminalState rejects compatibility stores that
+// acknowledge failure while leaving the chain active and readable.
+func TestChainFailureRequiresTerminalState(t *testing.T) {
+	const (
+		chainID = "chain-inconsistent-failure"
+		nodeID  = "node-inconsistent-failure"
+		jobType = "workflow:chain:inconsistent-failure"
+	)
+	baseStore := NewMemoryStore()
+	if err := baseStore.CreateChain(context.Background(), ChainRecord{
+		ChainID: chainID,
+		Nodes:   []ChainNode{{NodeID: nodeID, Job: StoredJob{Type: jobType}}},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	faultStore := &workflowMutationFaultStore{Store: baseStore, failChainWithoutState: true}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, faultStore)
+	runtime.Register(jobType, func(context.Context, Context) error { return errors.New("application failed") })
+	err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-inconsistent-failure",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        nodeID,
+		JobID:         "job-inconsistent-failure",
+		Job:           StoredJob{Type: jobType},
+	})
+	if !busruntime.IsUncommitted(err) || !strings.Contains(err.Error(), "accepted failure without terminal state") {
+		t.Fatalf("inconsistent store error = %v, want uncommitted terminal-state validation", err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobFailed, EventChainFailed, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed)
+	state, stateErr := baseStore.GetChain(context.Background(), chainID)
+	if stateErr != nil {
+		t.Fatalf("get active chain: %v", stateErr)
+	}
+	if state.NextIndex != 0 || state.Completed || state.Failed {
+		t.Fatalf("inconsistent store changed chain state: %+v", state)
+	}
+}
+
+// TestChainFailureFallbackCommitsAndConfirmsState covers established custom
+// stores that have not added the first-writer outcome capability.
+func TestChainFailureFallbackCommitsAndConfirmsState(t *testing.T) {
+	const (
+		chainID = "chain-compatibility-failure-fallback"
+		nodeID  = "node-compatibility-failure-fallback"
+	)
+	baseStore := NewMemoryStore()
+	if err := baseStore.CreateChain(context.Background(), ChainRecord{
+		ChainID: chainID,
+		Nodes:   []ChainNode{{NodeID: nodeID}},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	compatibilityStore := &workflowMutationFaultStore{Store: baseStore}
+	runtime, _, _ := newWorkflowMutationRuntime(t, compatibilityStore)
+	cause := errors.New("compatibility failure")
+	state, owned, err := runtime.failChainNode(context.Background(), chainID, nodeID, cause)
+	if err != nil || !owned || !state.Failed || state.Completed || state.Failure != cause.Error() {
+		t.Fatalf("fallback failure = state:%+v owned:%t err:%v", state, owned, err)
+	}
+	state, owned, err = runtime.failChainNode(context.Background(), chainID, nodeID, errors.New("replacement failure"))
+	if err != nil || !owned || state.Failure != cause.Error() {
+		t.Fatalf("fallback replay = state:%+v owned:%t err:%v", state, owned, err)
+	}
+}
+
+// TestAtomicChainFailureRequiresTerminalState rejects a capable custom store
+// that claims ownership without exposing the committed terminal transition.
+func TestAtomicChainFailureRequiresTerminalState(t *testing.T) {
+	const (
+		chainID = "chain-inconsistent-atomic-failure"
+		nodeID  = "node-inconsistent-atomic-failure"
+		jobType = "workflow:chain:inconsistent-atomic-failure"
+	)
+	baseStore := NewMemoryStore()
+	if err := baseStore.CreateChain(context.Background(), ChainRecord{
+		ChainID: chainID,
+		Nodes:   []ChainNode{{NodeID: nodeID, Job: StoredJob{Type: jobType}}},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, nonterminalWorkflowOutcomeStore{Store: baseStore})
+	runtime.Register(jobType, func(context.Context, Context) error { return errors.New("application failed") })
+	err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobChainNode, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-inconsistent-atomic-failure",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        nodeID,
+		JobID:         "job-inconsistent-atomic-failure",
+		Job:           StoredJob{Type: jobType},
+	})
+	if !busruntime.IsUncommitted(err) || !strings.Contains(err.Error(), "accepted failure without terminal state") {
+		t.Fatalf("inconsistent atomic store error = %v, want uncommitted terminal-state validation", err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobFailed, EventChainFailed, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed)
 }
 
 // TestChainMutationFailuresRedeliverExhaustedAttempt verifies store outages cannot terminally settle a chain.

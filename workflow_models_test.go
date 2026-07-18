@@ -21,6 +21,7 @@ func TestWorkflowPublicModelsAreRootOwned(t *testing.T) {
 		reflect.TypeOf(ChainRecord{}),
 		reflect.TypeOf(ChainState{}),
 		reflect.TypeOf(BatchJob{}),
+		reflect.TypeOf(BatchJobOutcome("")),
 		reflect.TypeOf(BatchRecord{}),
 		reflect.TypeOf(BatchState{}),
 		reflect.TypeOf(SQLStoreConfig{}),
@@ -36,6 +37,7 @@ func TestWorkflowPublicModelsAreRootOwned(t *testing.T) {
 		reflect.TypeOf((*Lock)(nil)).Elem(),
 		reflect.TypeOf((*Locker)(nil)).Elem(),
 		reflect.TypeOf((*WorkflowStore)(nil)).Elem(),
+		reflect.TypeOf((*WorkflowOutcomeStore)(nil)).Elem(),
 	}
 	for _, modelType := range types {
 		if got := modelType.PkgPath(); got != "github.com/goforj/queue" {
