@@ -445,6 +445,46 @@ func TestRedisQueue_DispatchBranches(t *testing.T) {
 	})
 }
 
+// TestRedisQueueDispatchInputAndClaimFailures verifies context normalization,
+// Redis-specific type validation, and claim-store failures stop at the expected boundary.
+func TestRedisQueueDispatchInputAndClaimFailures(t *testing.T) {
+	t.Run("nil context", func(t *testing.T) {
+		client := &redisEnqueueClientStub{}
+		r := &redisQueue{client: client}
+		if err := r.Dispatch(nil, queue.NewJob("job:nil-context").OnQueue("default")); err != nil {
+			t.Fatalf("dispatch with nil context: %v", err)
+		}
+		if client.enqueueN != 1 {
+			t.Fatalf("enqueue calls = %d, want 1", client.enqueueN)
+		}
+	})
+
+	t.Run("whitespace type", func(t *testing.T) {
+		client := &redisEnqueueClientStub{}
+		r := &redisQueue{client: client}
+		if err := r.Dispatch(context.Background(), queue.NewJob(" \t").OnQueue("default")); err == nil {
+			t.Fatal("expected whitespace-only Redis type rejection")
+		}
+		if client.enqueueN != 0 {
+			t.Fatalf("invalid type reached enqueue %d times", client.enqueueN)
+		}
+	})
+
+	t.Run("claim store failure", func(t *testing.T) {
+		acquireErr := errors.New("claim store unavailable")
+		client := &redisEnqueueClientStub{}
+		claims := &redisUniqueStoreStub{acquireErr: acquireErr}
+		r := &redisQueue{client: client, unique: claims}
+		err := r.Dispatch(context.Background(), queue.NewJob("job:claim").OnQueue("default").UniqueFor(time.Minute))
+		if !errors.Is(err, acquireErr) {
+			t.Fatalf("dispatch error = %v, want %v", err, acquireErr)
+		}
+		if claims.acquireKey == "" || claims.acquireToken == "" || client.enqueueN != 0 {
+			t.Fatalf("claim failure state = key:%q token:%q enqueues:%d", claims.acquireKey, claims.acquireToken, client.enqueueN)
+		}
+	})
+}
+
 // TestRedisQueueLogicalUniqueFailureBoundaries verifies ambiguous failures retain claims while definite physical duplicates compensate them.
 func TestRedisQueueLogicalUniqueFailureBoundaries(t *testing.T) {
 	payload := []byte(`{"schema_version":1,"dispatch_id":"volatile","job_id":"job_1","job":{"type":"reports:build","payload":"eyJpZCI6MX0="}}`)

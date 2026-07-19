@@ -18,6 +18,8 @@ import (
 type sqsWorkerClientStub struct {
 	sendInputs   []*sqs.SendMessageInput
 	deleteInputs []*sqs.DeleteMessageInput
+	queueURL     string
+	queueURLHook func()
 	sendErr      error
 	deleteErr    error
 	sendNil      bool
@@ -25,6 +27,12 @@ type sqsWorkerClientStub struct {
 }
 
 func (s *sqsWorkerClientStub) GetQueueUrl(context.Context, *sqs.GetQueueUrlInput, ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error) {
+	if s.queueURLHook != nil {
+		s.queueURLHook()
+	}
+	if s.queueURL != "" {
+		return &sqs.GetQueueUrlOutput{QueueUrl: aws.String(s.queueURL)}, nil
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -620,5 +628,30 @@ func TestSQSWorkerDeleteRejectsNilReceiptHandle(t *testing.T) {
 	}
 	if len(stub.deleteInputs) != 0 {
 		t.Fatalf("expected no delete call for nil receipt handle, got %d", len(stub.deleteInputs))
+	}
+}
+
+// TestSQSWorkerMalformedMessagesAreDeleted verifies poison deliveries without a
+// usable envelope are settled without entering application handlers.
+func TestSQSWorkerMalformedMessagesAreDeleted(t *testing.T) {
+	stub := &sqsWorkerClientStub{}
+	w := &sqsWorker{client: stub, queueURL: "https://example.local/queue/default"}
+
+	w.process(context.Background(), sqstypes.Message{ReceiptHandle: aws.String("rh-empty")})
+	w.process(context.Background(), sqstypes.Message{
+		Body:          aws.String("not-json"),
+		ReceiptHandle: aws.String("rh-invalid"),
+	})
+	if len(stub.deleteInputs) != 2 {
+		t.Fatalf("poison-message deletes = %d, want 2", len(stub.deleteInputs))
+	}
+}
+
+// TestSQSWorkerNilShutdownNormalizesContext verifies a stopped worker accepts
+// the optional lifecycle context without starting network work.
+func TestSQSWorkerNilShutdownNormalizesContext(t *testing.T) {
+	w := &sqsWorker{}
+	if err := w.Shutdown(nil); err != nil {
+		t.Fatalf("nil-context shutdown: %v", err)
 	}
 }

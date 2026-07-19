@@ -18,11 +18,15 @@ type natsWorkerSubscriptionStub struct {
 	drained  chan struct{}
 	once     sync.Once
 	drainErr error
+	release  chan struct{}
 }
 
 // Drain records that intake stopped before worker settlement resources closed.
 func (s *natsWorkerSubscriptionStub) Drain() error {
 	s.once.Do(func() { close(s.drained) })
+	if s.release != nil {
+		<-s.release
+	}
 	return s.drainErr
 }
 
@@ -116,6 +120,54 @@ func TestNATSWorker_StartWorkersCanceledContext(t *testing.T) {
 	}
 }
 
+// TestNATSWorkerNilContextAndIdempotentStart verifies a nil startup context is
+// normalized and an already-started worker does not reconnect.
+func TestNATSWorkerNilContextAndIdempotentStart(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	var calls int
+	w.connect = func(string, string, nats.MsgHandler) (natsConnection, natsWorkerSubscription, error) {
+		calls++
+		return connection, subscription, nil
+	}
+	if err := w.StartWorkers(nil); err != nil {
+		t.Fatalf("start workers with nil context: %v", err)
+	}
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("idempotent start workers: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("connector calls = %d, want 1", calls)
+	}
+	if err := w.Shutdown(nil); err != nil {
+		t.Fatalf("shutdown with nil context: %v", err)
+	}
+}
+
+// TestNATSWorkerRejectsStartDuringShutdown verifies callers can retry a timed
+// out drain while worker restart remains blocked.
+func TestNATSWorkerRejectsStartDuringShutdown(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	subscription.release = make(chan struct{})
+	w.conn = connection
+	w.sub = subscription
+	w.started = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.Shutdown(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown error = %v, want context.Canceled", err)
+	}
+	if err := w.StartWorkers(context.Background()); !errors.Is(err, queue.ErrQueuerShuttingDown) {
+		t.Fatalf("start during shutdown error = %v, want ErrQueuerShuttingDown", err)
+	}
+	close(subscription.release)
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown: %v", err)
+	}
+}
+
 // TestNATSWorkerStartRetriesAfterConnectionFailure verifies one transient connect error cannot poison worker startup.
 func TestNATSWorkerStartRetriesAfterConnectionFailure(t *testing.T) {
 	w := newNATSWorker("nats://example:4222")
@@ -171,6 +223,62 @@ func TestNATSWorkerStartRetriesAfterSubscriptionFlushFailure(t *testing.T) {
 	}
 	if err := w.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown: %v", err)
+	}
+}
+
+// TestNATSWorkerFlushFailureRejectsPendingCallbacks verifies a callback that
+// arrives during startup cannot escape after readiness fails.
+func TestNATSWorkerFlushFailureRejectsPendingCallbacks(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	connection.flushErr = errors.New("subscription flush failed")
+	var handled int
+	w.Register("job:pending", func(context.Context, queue.Job) error {
+		handled++
+		return nil
+	})
+	callbackStarted := make(chan struct{})
+	callbackDone := make(chan struct{})
+	w.connect = func(_ string, _ string, callback nats.MsgHandler) (natsConnection, natsWorkerSubscription, error) {
+		go func() {
+			close(callbackStarted)
+			callback(&nats.Msg{Data: []byte(`{"type":"job:pending","queue":"default"}`)})
+			close(callbackDone)
+		}()
+		<-callbackStarted
+		return connection, subscription, nil
+	}
+
+	if err := w.StartWorkers(context.Background()); !errors.Is(err, connection.flushErr) {
+		t.Fatalf("start error = %v, want %v", err, connection.flushErr)
+	}
+	<-callbackDone
+	w.running.Wait()
+	if handled != 0 {
+		t.Fatalf("failed startup accepted %d callbacks", handled)
+	}
+}
+
+// TestConnectNATSWorkerRejectsInvalidURL verifies the production connector
+// returns parse failures before attempting subscription setup.
+func TestConnectNATSWorkerRejectsInvalidURL(t *testing.T) {
+	nc, sub, err := connectNATSWorker("://bad-url", "queue.default", func(*nats.Msg) {})
+	if err == nil || nc != nil || sub != nil {
+		t.Fatalf("invalid connector result = conn:%T sub:%T err:%v", nc, sub, err)
+	}
+}
+
+// TestNATSWorkerRepublishRejected verifies a publish rejection is returned
+// directly and never followed by a flush.
+func TestNATSWorkerRepublishRejected(t *testing.T) {
+	publishErr := errors.New("retry publish rejected")
+	connection := &natsConnectionStub{publishErr: publishErr}
+	w := &natsWorker{conn: connection}
+	if err := w.republish(natsMessage{Type: "job:retry", Queue: "default"}); !errors.Is(err, publishErr) {
+		t.Fatalf("republish error = %v, want %v", err, publishErr)
+	}
+	if connection.publishN != 1 || connection.flushN != 0 {
+		t.Fatalf("publish/flush calls = %d/%d, want 1/0", connection.publishN, connection.flushN)
 	}
 }
 

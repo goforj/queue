@@ -245,6 +245,44 @@ func TestNATSQueue_EnsureConnFailure(t *testing.T) {
 	}
 }
 
+// TestNATSQueuePreflightBoundaries verifies readiness reports both connection
+// and server-roundtrip failures without requiring a live NATS server.
+func TestNATSQueuePreflightBoundaries(t *testing.T) {
+	t.Run("connection failure", func(t *testing.T) {
+		q := newNATSQueue("://bad-url")
+		if err := q.Preflight(context.Background()); err == nil {
+			t.Fatal("expected preflight connection failure")
+		}
+	})
+
+	t.Run("flush result", func(t *testing.T) {
+		flushErr := errors.New("readiness flush failed")
+		connection := &natsConnectionStub{flushErr: flushErr}
+		q := newNATSQueue("nats://example")
+		q.nc = connection
+		if err := q.Preflight(nil); !errors.Is(err, flushErr) {
+			t.Fatalf("preflight error = %v, want %v", err, flushErr)
+		}
+		if connection.flushN != 1 {
+			t.Fatalf("preflight flush calls = %d, want 1", connection.flushN)
+		}
+	})
+}
+
+// TestNATSQueueNilDispatchContext verifies a nil caller context still reaches
+// the bounded server acceptance roundtrip.
+func TestNATSQueueNilDispatchContext(t *testing.T) {
+	connection := &natsConnectionStub{}
+	q := newNATSQueue("nats://example")
+	q.nc = connection
+	if err := q.Dispatch(nil, queue.NewJob("reports:nil-context").OnQueue("default")); err != nil {
+		t.Fatalf("dispatch with nil context: %v", err)
+	}
+	if connection.publishN != 1 || connection.flushN != 1 {
+		t.Fatalf("publish/flush calls = %d/%d, want 1/1", connection.publishN, connection.flushN)
+	}
+}
+
 func TestNATSQueue_Driver(t *testing.T) {
 	q := newNATSQueue("nats://127.0.0.1:1")
 	if q.Driver() != queue.DriverNATS {

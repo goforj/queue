@@ -3,6 +3,7 @@ package redisqueue
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/goforj/queue"
@@ -59,7 +60,7 @@ func TestRedisWorker_RegisterStartShutdownBranches(t *testing.T) {
 		t.Fatalf("expected one start call, got %d", server.startCalls)
 	}
 
-	if err := w.Shutdown(context.Background()); err != nil {
+	if err := w.Shutdown(nil); err != nil {
 		t.Fatalf("shutdown failed: %v", err)
 	}
 	if err := w.Shutdown(context.Background()); err != nil {
@@ -233,6 +234,14 @@ func TestRedisSettlementErrorDecisions(t *testing.T) {
 	if !errors.Is(uncommittedErr, cause) || errors.Is(uncommittedErr, backend.SkipRetry) {
 		t.Fatalf("uncommitted settlement = %v", uncommittedErr)
 	}
+
+	skipRetryErr := redisSettlementError(
+		busruntime.DeliveryAttempt{Number: 2, MaxRetry: 2},
+		errors.Join(cause, backend.SkipRetry),
+	)
+	if !errors.Is(skipRetryErr, cause) || !errors.Is(skipRetryErr, backend.SkipRetry) {
+		t.Fatalf("existing skip-retry settlement = %v", skipRetryErr)
+	}
 }
 
 // TestRedisApplicationMaxRetry verifies only a valid reserve header changes the handler-visible retry budget.
@@ -247,6 +256,8 @@ func TestRedisApplicationMaxRetry(t *testing.T) {
 		{name: "reserved task", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "2"}), transportMax: 3, want: 2},
 		{name: "mismatched reserve", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "2"}), transportMax: 4, want: 4},
 		{name: "malformed reserve", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "bad"}), transportMax: 3, want: 3},
+		{name: "negative reserve", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "-1"}), transportMax: 0, want: 0},
+		{name: "overflow reserve", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: strconv.Itoa(int(^uint(0) >> 1))}), transportMax: int(^uint(0) >> 1), want: int(^uint(0) >> 1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

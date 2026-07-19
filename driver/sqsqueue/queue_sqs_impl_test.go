@@ -195,3 +195,55 @@ func TestSQSQueueCanceledDispatchStopsBeforeClaim(t *testing.T) {
 		t.Fatalf("canceled dispatch sent %d messages", len(client.sendInputs))
 	}
 }
+
+// TestSQSQueueEnsureQueueRejectsMissingClient verifies shutdown races fail with
+// a diagnostic instead of dereferencing an unavailable client.
+func TestSQSQueueEnsureQueueRejectsMissingClient(t *testing.T) {
+	q := newSQSQueue(Config{})
+	if _, err := q.ensureQueue(context.Background(), "default"); err == nil {
+		t.Fatal("queue resolution without a client unexpectedly succeeded")
+	}
+}
+
+// TestSQSQueueRejectedResolutionReleasesUniqueClaim verifies a failure before
+// send does not retain uniqueness state for a message SQS never accepted.
+func TestSQSQueueRejectedResolutionReleasesUniqueClaim(t *testing.T) {
+	q := newSQSQueue(Config{})
+	q.client = &sqsWorkerClientStub{}
+	job := queue.NewJob("reports:resolve").OnQueue("default").UniqueFor(time.Minute)
+
+	if err := q.Dispatch(context.Background(), job); err == nil || errors.Is(err, queue.ErrDuplicate) {
+		t.Fatalf("queue resolution error = %v, want a pre-send rejection", err)
+	}
+	key, token, acquired := q.claimUnique(job, "default", time.Minute)
+	if !acquired {
+		t.Fatal("pre-send queue resolution failure retained the uniqueness claim")
+	}
+	q.unique.Release(key, token)
+}
+
+// TestSQSQueueShutdownRaceBeforeSendReleasesUniqueClaim verifies a concurrent
+// shutdown after queue resolution cannot retain a claim for an unsent message.
+func TestSQSQueueShutdownRaceBeforeSendReleasesUniqueClaim(t *testing.T) {
+	q := newSQSQueue(Config{})
+	client := &sqsWorkerClientStub{queueURL: "https://example.local/queue/default"}
+	client.queueURLHook = func() {
+		if err := q.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown during queue resolution: %v", err)
+		}
+	}
+	q.client = client
+	job := queue.NewJob("reports:shutdown-race").OnQueue("default").UniqueFor(time.Minute)
+
+	if err := q.Dispatch(context.Background(), job); err == nil || errors.Is(err, queue.ErrDuplicate) {
+		t.Fatalf("shutdown-race dispatch error = %v, want an unavailable-client rejection", err)
+	}
+	if len(client.sendInputs) != 0 {
+		t.Fatalf("shutdown-race sends = %d, want 0", len(client.sendInputs))
+	}
+	key, token, acquired := q.claimUnique(job, "default", time.Minute)
+	if !acquired {
+		t.Fatal("shutdown before send retained the uniqueness claim")
+	}
+	q.unique.Release(key, token)
+}

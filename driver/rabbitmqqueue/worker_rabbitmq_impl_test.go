@@ -598,3 +598,18 @@ func TestRabbitPublishAmbiguityClassification(t *testing.T) {
 		t.Fatal("pre-publish failure classified as ambiguous")
 	}
 }
+
+// TestRabbitMQWorkerNilShutdownAndCanceledPublish verifies lifecycle context
+// normalization and pre-publish cancellation without opening broker resources.
+func TestRabbitMQWorkerNilShutdownAndCanceledPublish(t *testing.T) {
+	w := &rabbitMQWorker{}
+	if err := w.Shutdown(nil); err != nil {
+		t.Fatalf("nil-context shutdown: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.publish(ctx, rabbitMQMessage{Type: "job:canceled", Queue: "default"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled worker publish error = %v, want context.Canceled", err)
+	}
+}

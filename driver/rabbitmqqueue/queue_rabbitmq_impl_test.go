@@ -256,3 +256,26 @@ func TestRabbitPhysicalQueueName(t *testing.T) {
 		t.Fatalf("expected hard default fallback, got %q", got)
 	}
 }
+
+// TestRabbitPublishHelpersNormalizeNilContexts verifies optional caller contexts
+// still reach deterministic pre-publish validation.
+func TestRabbitPublishHelpersNormalizeNilContexts(t *testing.T) {
+	if err := publishRabbitConfirmed(nil, nil, "", "default", amqp.Publishing{}); !errors.Is(err, amqp.ErrClosed) {
+		t.Fatalf("nil-channel publish error = %v, want amqp.ErrClosed", err)
+	}
+
+	ctx, cancel, err := rabbitPublishContext(nil)
+	if err != nil {
+		t.Fatalf("nil-context publish boundary: %v", err)
+	}
+	cancel()
+	if ctx == nil {
+		t.Fatal("nil caller context produced a nil bounded context")
+	}
+
+	cause := errors.New("confirmation lost")
+	ambiguous := rabbitPublishAmbiguousError{cause: cause}
+	if got := ambiguous.Error(); got != cause.Error() {
+		t.Fatalf("ambiguous error text = %q, want %q", got, cause.Error())
+	}
+}
