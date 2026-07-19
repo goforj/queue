@@ -175,6 +175,9 @@ var _ Engine = (*runtime)(nil)
 
 // Register binds a job type to a handler.
 func (r *runtime) Register(jobType string, handler Handler) {
+	if handler == nil {
+		return
+	}
 	r.mu.Lock()
 	r.handlers[jobType] = handler
 	r.mu.Unlock()

@@ -3,6 +3,7 @@ package queue_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,55 @@ import (
 
 	"github.com/goforj/queue"
 )
+
+// TestPublicQueueContractNilRegistrationIsNoop verifies nil handlers neither create a delivery target nor replace an established handler.
+func TestPublicQueueContractNilRegistrationIsNoop(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []queue.Option
+	}{
+		{name: "direct delivery"},
+		{name: "legacy envelope", opts: []queue.Option{queue.WithLegacyDirectEnvelope()}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			q, err := queue.NewSync(test.opts...)
+			if err != nil {
+				t.Fatalf("new sync queue: %v", err)
+			}
+			t.Cleanup(func() {
+				if shutdownErr := q.Shutdown(context.Background()); shutdownErr != nil {
+					t.Errorf("shutdown: %v", shutdownErr)
+				}
+			})
+
+			const jobType = "contract:nil-registration"
+			q.Register(jobType, nil)
+			if err := q.StartWorkers(context.Background()); err != nil {
+				t.Fatalf("start workers: %v", err)
+			}
+			if _, err := q.Dispatch(queue.NewJob(jobType)); err == nil {
+				t.Fatal("nil registration created a delivery target")
+			} else if message := err.Error(); !strings.Contains(message, "handler") || !strings.Contains(message, "registered") {
+				t.Fatalf("nil registration dispatch error = %v, want missing handler", err)
+			}
+
+			var calls atomic.Int32
+			q.Register(jobType, func(context.Context, queue.Message) error {
+				calls.Add(1)
+				return nil
+			})
+			q.Register(jobType, nil)
+			if _, err := q.Dispatch(queue.NewJob(jobType)); err != nil {
+				t.Fatalf("dispatch after nil replacement: %v", err)
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("handler calls = %d, want 1", calls.Load())
+			}
+		})
+	}
+}
 
 // TestPublicQueueContractDirectDispatchPreservesMessageIdentity verifies that the normal facade exposes one application job identity rather than its internal workflow envelope.
 func TestPublicQueueContractDirectDispatchPreservesMessageIdentity(t *testing.T) {

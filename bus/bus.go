@@ -233,7 +233,6 @@ var _ Bus = (*runtimeAdapter)(nil)
 // Register adapts a legacy handler to the internal engine message contract.
 func (a *runtimeAdapter) Register(jobType string, handler Handler) {
 	if handler == nil {
-		a.engine.Register(jobType, nil)
 		return
 	}
 	a.engine.Register(jobType, func(ctx context.Context, message workflow.Context) error {

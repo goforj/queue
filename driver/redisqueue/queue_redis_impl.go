@@ -57,7 +57,6 @@ type redisQueue struct {
 
 	ownsClient bool
 	closeOnce  sync.Once
-	closeErr   error
 }
 
 type redisTimelineStore interface {
@@ -172,24 +171,26 @@ func (d *redisQueue) Preflight(ctx context.Context) error {
 	return err
 }
 
-// Shutdown closes every Redis resource owned by this producer exactly once.
+// Shutdown closes every owned Redis resource once and reports cleanup failures only to the caller that performed the close.
 func (d *redisQueue) Shutdown(_ context.Context) error {
-	if d.ownsClient {
-		d.closeOnce.Do(func() {
-			var closeErrs []error
-			if d.client != nil {
-				closeErrs = append(closeErrs, d.client.Close())
-			}
-			if d.inspector != nil {
-				closeErrs = append(closeErrs, d.inspector.Close())
-			}
-			if d.state != nil {
-				closeErrs = append(closeErrs, d.state.Close())
-			}
-			d.closeErr = errors.Join(closeErrs...)
-		})
+	if !d.ownsClient {
+		return nil
 	}
-	return d.closeErr
+	var closeErr error
+	d.closeOnce.Do(func() {
+		var closeErrs []error
+		if d.client != nil {
+			closeErrs = append(closeErrs, d.client.Close())
+		}
+		if d.inspector != nil {
+			closeErrs = append(closeErrs, d.inspector.Close())
+		}
+		if d.state != nil {
+			closeErrs = append(closeErrs, d.state.Close())
+		}
+		closeErr = errors.Join(closeErrs...)
+	})
+	return closeErr
 }
 
 // Dispatch validates Asynq options before acquiring the canonical logical claim.

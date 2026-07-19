@@ -360,11 +360,7 @@ func NewWorkerpool(opts ...Option) (*Queue, error) {
 //		return nil
 //	})
 func (r *Queue) Register(jobType string, handler func(context.Context, Message) error) {
-	if r == nil {
-		return
-	}
-	if handler == nil {
-		r.b.Register(jobType, nil)
+	if r == nil || handler == nil {
 		return
 	}
 	r.b.Register(jobType, func(ctx context.Context, message workflow.Context) error {

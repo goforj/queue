@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -320,6 +321,11 @@ func TestRawRuntimeFacadeForwardsNilCallbacksAndShutdown(t *testing.T) {
 	compatibility.Register("compat:raw-success", func(context.Context, bus.Context) error { return nil })
 	if err := compatibility.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start raw compatibility workers: %v", err)
+	}
+	if _, err := compatibility.Dispatch(context.Background(), bus.NewJob("compat:nil-handler", nil)); err == nil {
+		t.Fatal("nil compatibility registration accepted a delivery")
+	} else if !strings.Contains(err.Error(), "handler not registered") {
+		t.Fatalf("nil compatibility dispatch error = %v, want missing handler", err)
 	}
 
 	chainID, err := compatibility.Chain(bus.NewJob("compat:raw-success", nil)).

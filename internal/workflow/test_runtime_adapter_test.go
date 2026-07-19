@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"testing"
 
 	"github.com/goforj/queue/busruntime"
 )
@@ -89,4 +91,37 @@ func (r *syncTestRuntime) DispatchJSON(ctx context.Context, jobType string, payl
 		return err
 	}
 	return r.BusDispatch(ctx, jobType, b, busruntime.JobOptions{})
+}
+
+// TestRuntimeNilHandlerRegistrationIsNoop verifies direct runtimes never receive an executable target for a nil application handler.
+func TestRuntimeNilHandlerRegistrationIsNoop(t *testing.T) {
+	transport := newDirectTestRuntime()
+	engine, err := New(transport)
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+
+	const jobType = "workflow:nil-registration"
+	engine.Register(jobType, nil)
+	if _, registered := transport.handlers[jobType]; registered {
+		t.Fatal("nil handler created a physical direct-delivery registration")
+	}
+	if _, err := engine.DispatchDirect(context.Background(), StoredJob{Type: jobType}); err == nil {
+		t.Fatal("nil registration accepted a direct delivery")
+	} else if !strings.Contains(err.Error(), "handler not registered") {
+		t.Fatalf("direct dispatch error = %v, want missing handler", err)
+	}
+
+	handlerCalls := 0
+	engine.Register(jobType, func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+	engine.Register(jobType, nil)
+	if _, err := engine.DispatchDirect(context.Background(), StoredJob{Type: jobType}); err != nil {
+		t.Fatalf("dispatch after nil replacement: %v", err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls = %d, want 1", handlerCalls)
+	}
 }

@@ -3,10 +3,12 @@ package redisqueue
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/driverbridge"
 	backend "github.com/hibiken/asynq"
 )
 
@@ -655,7 +657,7 @@ func TestRedisQueueLogicalUniqueFailureBoundaries(t *testing.T) {
 	}
 }
 
-// TestRedisQueue_ShutdownOwnsClientCloseOnce verifies every owned producer resource closes once and all failures survive joining.
+// TestRedisQueue_ShutdownOwnsClientCloseOnce verifies owned cleanup reports every failure once before later retries converge.
 func TestRedisQueue_ShutdownOwnsClientCloseOnce(t *testing.T) {
 	clientErr := errors.New("close enqueue client")
 	inspectorErr := errors.New("close inspector")
@@ -665,11 +667,12 @@ func TestRedisQueue_ShutdownOwnsClientCloseOnce(t *testing.T) {
 	state := &redisStateStoreStub{closeErr: stateErr}
 	r := newRedisQueue(client, inspector, state, true)
 
-	for call := 1; call <= 2; call++ {
-		err := r.Shutdown(context.Background())
-		if !errors.Is(err, clientErr) || !errors.Is(err, inspectorErr) || !errors.Is(err, stateErr) {
-			t.Fatalf("shutdown call %d = %v, want all close failures", call, err)
-		}
+	err := r.Shutdown(context.Background())
+	if !errors.Is(err, clientErr) || !errors.Is(err, inspectorErr) || !errors.Is(err, stateErr) {
+		t.Fatalf("first shutdown = %v, want all close failures", err)
+	}
+	if err := r.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown = %v, want completed cleanup", err)
 	}
 	if client.closeN != 1 || inspector.closeN != 1 || state.closeN != 1 {
 		t.Fatalf("close counts = client:%d inspector:%d state:%d, want one each", client.closeN, inspector.closeN, state.closeN)
@@ -684,5 +687,82 @@ func TestRedisQueue_ShutdownOwnsClientCloseOnce(t *testing.T) {
 	}
 	if notOwnedClient.closeN != 0 || notOwnedInspector.closeN != 0 || notOwnedState.closeN != 0 {
 		t.Fatalf("unowned resources closed = client:%d inspector:%d state:%d", notOwnedClient.closeN, notOwnedInspector.closeN, notOwnedState.closeN)
+	}
+}
+
+// TestRedisQueue_ShutdownConcurrentCallersCloseResourcesOnce verifies one caller owns diagnostics while concurrent followers observe completed cleanup.
+func TestRedisQueue_ShutdownConcurrentCallersCloseResourcesOnce(t *testing.T) {
+	clientErr := errors.New("close enqueue client")
+	inspectorErr := errors.New("close inspector")
+	stateErr := errors.New("close state")
+	client := &redisEnqueueClientStub{closeErr: clientErr}
+	inspector := &redisInspectorStub{closeErr: inspectorErr}
+	state := &redisStateStoreStub{closeErr: stateErr}
+	r := newRedisQueue(client, inspector, state, true)
+
+	const callers = 32
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	var callersDone sync.WaitGroup
+	callersDone.Add(callers)
+	for range callers {
+		go func() {
+			defer callersDone.Done()
+			<-start
+			results <- r.Shutdown(context.Background())
+		}()
+	}
+	close(start)
+	callersDone.Wait()
+	close(results)
+
+	diagnosticCalls := 0
+	for err := range results {
+		if err == nil {
+			continue
+		}
+		diagnosticCalls++
+		if !errors.Is(err, clientErr) || !errors.Is(err, inspectorErr) || !errors.Is(err, stateErr) {
+			t.Fatalf("concurrent shutdown = %v, want all close failures", err)
+		}
+	}
+	if diagnosticCalls != 1 {
+		t.Fatalf("shutdown diagnostic calls = %d, want 1", diagnosticCalls)
+	}
+	if client.closeN != 1 || inspector.closeN != 1 || state.closeN != 1 {
+		t.Fatalf("close counts = client:%d inspector:%d state:%d, want one each", client.closeN, inspector.closeN, state.closeN)
+	}
+}
+
+// TestRedisQueue_ShutdownRetryClosesRootRuntime verifies a producer close diagnostic does not leave the public queue permanently draining.
+func TestRedisQueue_ShutdownRetryClosesRootRuntime(t *testing.T) {
+	clientErr := errors.New("close enqueue client")
+	inspectorErr := errors.New("close inspector")
+	stateErr := errors.New("close state")
+	client := &redisEnqueueClientStub{closeErr: clientErr}
+	inspector := &redisInspectorStub{closeErr: inspectorErr}
+	state := &redisStateStoreStub{closeErr: stateErr}
+	producer := newRedisQueue(client, inspector, state, true)
+	q, err := driverbridge.NewQueueFromDriver(
+		queue.Config{Driver: queue.DriverRedis, DefaultQueue: "default"},
+		producer,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("construct queue: %v", err)
+	}
+
+	err = q.Shutdown(context.Background())
+	if !errors.Is(err, clientErr) || !errors.Is(err, inspectorErr) || !errors.Is(err, stateErr) {
+		t.Fatalf("first root shutdown = %v, want all close failures", err)
+	}
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry root shutdown = %v, want terminal cleanup", err)
+	}
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("closed root shutdown = %v, want idempotent success", err)
+	}
+	if client.closeN != 1 || inspector.closeN != 1 || state.closeN != 1 {
+		t.Fatalf("close counts = client:%d inspector:%d state:%d, want one each", client.closeN, inspector.closeN, state.closeN)
 	}
 }
