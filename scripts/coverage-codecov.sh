@@ -145,6 +145,19 @@ collect_unit() {
       fail "could not list packages in $relative_dir"
     fi
     if [[ -z "$package_list" ]]; then
+      if [[ "$relative_dir" == "docs" ]]; then
+        local tagged_profile="$TMP_ROOT/unit-docs-testcounts-tag.out"
+        echo "==> unit coverage: docs tagged test-count evidence"
+        (
+          cd "$module_dir"
+          GOWORK=off GOCACHE="$GOCACHE_DIR" GOMODCACHE="$GOMODCACHE_DIR" \
+            go test -count=1 -tags=testcounts -covermode=atomic -coverpkg=./readme/testcounts \
+              -coverprofile="$tagged_profile" ./readme/testcounts
+        )
+        raw_profiles+=("$tagged_profile")
+        printf '%s\t%s\n' "$relative_dir" "$module_path" >>"$manifest_tmp"
+        continue
+      fi
       echo "==> $relative_dir has no buildable packages; skipping coverage"
       continue
     fi

@@ -2,7 +2,7 @@
 
 Status: Active
 
-Last updated: 2026-07-18
+Last updated: 2026-07-19
 
 Baseline: `origin/main` at `18a7647`
 
@@ -315,14 +315,14 @@ Objective: repair behavior already promised by the public API without first requ
 - [ ] **M1-09 — Make worker targeting explicit.** Implement D-005 and test that every accepted target is consumed by the intended runtime configuration.
 - [ ] **M1-10 — Make `WithWorkers` effective.** Workerpool now applies the configured count to execution concurrency and derives its default buffer from that count. Verify the same end-to-end behavior for SQL, Redis, NATS, SQS, and RabbitMQ rather than wrapper state; Core NATS plain subscriptions currently make higher counts duplicate broadcast consumers rather than queue workers.
 - [ ] **M1-11 — Clarify sync startup semantics.** Either register bus handlers immediately for synchronous dispatch or consistently require startup and correct every example and contract.
-- [ ] **M1-12 — Validate registrations and options.** Reject nil handlers and nil options deterministically; preserve explicit zero versus unset retry, timeout, and backoff values.
+- [ ] **M1-12 — Validate registrations and options.** Nil handler registration is now a consistent no-op across root, workflow-engine, and deprecated bus boundaries, including after a valid registration. Reject nil options deterministically; preserve explicit zero versus unset retry, timeout, and backoff values.
 - [ ] **M1-13 — Normalize payload contracts.** Give `Payload` and `PayloadJSON` distinct, documented behavior and consistent binding errors.
 
 ### Readiness, capabilities, and shutdown
 
 - [ ] **M1-14 — Restore backend readiness.** Forward readiness through every bridge and add negative unreachable-backend tests.
 - [ ] **M1-15 — Replace wrapper-inflated capability checks.** Report actual capabilities independently of observers and adapters.
-- [ ] **M1-16 — Make shutdown retryable and context-aware.** Root native/external lifecycles serialize startup with shutdown, latch drain intent before waiting on startup, retain partially started workers for cleanup or retry, keep one replaceable handler slot per backend registration, lease dispatch/readiness/control/admin operations before resources can close, retain state after failed cleanup, reject restart while draining, and close successfully exactly once. Scoped continuation permits expire when their handler returns, while Sync and Workerpool reserve accepted delayed descendants and drain them within the caller's shutdown deadline. Context-unaware broker dialing and RabbitMQ resource closure, plus real broker deadline evidence, remain.
+- [ ] **M1-16 — Make shutdown retryable and context-aware.** Root native/external lifecycles serialize startup with shutdown, latch drain intent before waiting on startup, retain partially started workers for cleanup or retry, keep one replaceable handler slot per backend registration, lease dispatch/readiness/control/admin operations before resources can close, retain state after failed cleanup, reject restart while draining, and close successfully exactly once. Redis owned resources close at most once, report joined close diagnostics to the caller that performs cleanup, and let a later root shutdown converge to terminal success instead of remaining permanently draining. Scoped continuation permits expire when their handler returns, while Sync and Workerpool reserve accepted delayed descendants and drain them within the caller's shutdown deadline. Context-unaware broker dialing and RabbitMQ resource closure, plus real broker deadline evidence, remain.
 - [x] **M1-17 — Close producer-owned resources without worker startup.** Native and external shutdown now reach producer cleanup without worker startup, Redis closes every owned producer client exactly once, SQL closes only internally opened handles, and a real SQLite test proves caller-owned handles remain usable.
 - [ ] **M1-18 — Drain before broker settlement resources close.** Root operation leases prevent producer closure during admitted public work; SQS and RabbitMQ workers wait for active delivery loops before closing settlement resources; and NATS startup/drain coordination waits for admitted callbacks. Real in-flight delete, acknowledgement, replacement-publication, and connection-close shutdown scenarios remain. Core NATS can still accept a replacement after its own ephemeral subscription has drained, so D-004 remains a correctness boundary rather than a shutdown guarantee.
 
@@ -526,6 +526,12 @@ Record accepted decisions here using the next stable ID.
 
 ### 2026-07-19
 
+- Fixed all six findings from the second fresh-context PR review. Nil handler registration is a no-op at every root, workflow, and deprecated facade boundary; direct, legacy-envelope, and raw compatibility paths return the normal missing-handler error instead of panicking, and nil cannot replace a valid handler.
+- Made Redis owned-resource shutdown converge after a close diagnostic. The first cleanup caller receives every joined resource error, later calls return success without closing anything twice, concurrent callers remain race-safe, and the public queue leaves draining on retry.
+- Corrected observer migration guidance so legacy workflow sinks retain the three queue-layer dispatch facts, and aligned the metrics taxonomy with the runtime's deliberate event-layer mapping.
+- Added an executable generated-documentation guard that runs every deterministic generator, verifies checked-in README, examples, test-count badges, and benchmark dashboards, and proves second-run idempotency in both CI and the all-module gate. Unit counts come from the current executed suite; integration counts combine the all-backend integration module with root integration-tagged tests. Their full-run manifest hashes every Go and module input in the integration module plus root tagged sources and module inputs. Full regeneration rejects partial backend selection and disables optional chaos/soak modes, so unit CI cannot silently preserve stale, reduced, or out-of-module integration evidence.
+- Replaced the duplicate-idempotency scenario's two independent dispatches with one job whose first handler attempt commits its keyed side effect and forces a real driver retry. Redis advances its isolated real retry entry deterministically instead of sleeping through randomized production backoff.
+- Made chaos and flake-repeat jobs actually run on the weekly schedule. The repeat harness now requires one named backend and validates the exact scenario's `go test -json` terminal event, records capability skips separately, and fails missing execution instead of reporting a false pass. The Redis chaos test stops the broker while a handler is active, proves its successful result cannot be acknowledged, retains the same active task, exercises Asynq's real lease-expiration recovery, preserves the zero application retry budget, redelivers exactly once, and settles with one side effect. The exact scheduled Redis subset and three repeated lost-ack runs pass locally.
 - Completed three independent fresh-context reviews of public compatibility, runtime correctness, and test/CI evidence. No new runtime correctness defect survived validation.
 - Corrected the README-linked direct-delivery guide so managed SQL schemas add both queue columns and old/new SQL worker generations never overlap during upgrade or rollback.
 - Replaced root-only Codecov input with deterministic coverage from every buildable module and all ten parallel backend jobs. The fan-in guard now proves exact artifacts, normalized unique ranges, complete module inventory, and backend-specific executed functions before upload.

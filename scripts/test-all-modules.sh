@@ -54,6 +54,7 @@ run_tooling_module() {
 }
 
 "$ROOT_DIR/scripts/check-module-inventory.sh"
+"$ROOT_DIR/scripts/check-generated-docs.sh"
 run_root
 run_module "driver/redisqueue"
 run_module "driver/natsqueue"
@@ -65,7 +66,7 @@ run_module "driver/postgresqueue"
 run_module "driver/sqlitequeue"
 run_module "examples"
 run_module "integration"
-# The documentation module owns generators but currently contains no buildable packages.
+# The generated-doc check compiles the build-ignored tools; module verification covers their dependency graph.
 run_tooling_module "docs"
 
 echo "==> all module tests completed"

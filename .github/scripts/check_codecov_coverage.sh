@@ -61,6 +61,7 @@ manifest="$ARTIFACTS_DIR/coverage-unit/coverage-unit-modules.tsv"
 
 expected_manifest="$({
   printf '.\t%s\n' "$ROOT_MODULE"
+  printf 'docs\t%s/docs\n' "$ROOT_MODULE"
   for driver in "${driver_modules[@]}"; do
     printf 'driver/%s\t%s/driver/%s\n' "$driver" "$ROOT_MODULE" "$driver"
   done
@@ -119,9 +120,11 @@ for driver in "${driver_modules[@]}"; do
   require_path "$unit_profile" "^${ROOT_MODULE//./[.]}/driver/$driver/.*[.]go:" "driver/$driver source"
 done
 require_path "$unit_profile" "^${ROOT_MODULE//./[.]}/integration/.*[.]go:" "integration-module source"
+require_path "$unit_profile" "^${ROOT_MODULE//./[.]}/docs/readme/testcounts/.*[.]go:" "tagged documentation tooling source"
 
 require_covered_path "^${ROOT_MODULE//./[.]}/queue[.]go:" "representative root source" "${expected_profiles[@]}"
 require_covered_path "^${ROOT_MODULE//./[.]}/bus/testhooks_integration[.]go:" "root integration-tagged bus fixture" "$unit_profile"
+require_covered_function "$unit_profile" "docs/readme/testcounts/main.go" "loadIntegrationCountManifest" "generated test-count evidence validation"
 for driver in "${driver_modules[@]}"; do
   require_covered_path "^${ROOT_MODULE//./[.]}/driver/$driver/.*[.]go:" "driver/$driver source" "${expected_profiles[@]}"
 done
