@@ -3,6 +3,8 @@ package workflow
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,11 +14,15 @@ import (
 
 	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/internal/jobidentity"
+	"github.com/goforj/queue/internal/observation"
 )
 
 const (
 	// schemaVersion keeps the existing private name while the protocol becomes engine-owned.
 	schemaVersion = ProtocolSchemaVersion
+	// eventSchemaVersion follows the shared observer envelope independently of
+	// the workflow delivery protocol used to decode queued messages.
+	eventSchemaVersion = observation.EventSchemaVersion
 	// internalJob keeps the existing direct-delivery name stable on the wire.
 	internalJob = DirectDeliveryType
 	// internalJobChainNode keeps the existing chain-delivery name stable on the wire.
@@ -211,20 +217,20 @@ func (r *runtime) dispatch(ctx context.Context, job StoredJob, direct bool) (Dis
 		JobID:         newID("job"),
 		Job:           job,
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
 	dispatch := func() error { return r.dispatchEnvelope(ctx, internalJob, env) }
 	if direct {
 		dispatch = func() error { return r.dispatchDirectEnvelope(ctx, env) }
 	}
 	if err := dispatch(); err != nil {
 		if executionErr, ok := acceptedDispatchExecutionError(err); ok {
-			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
+			r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
 			return DispatchResult{DispatchID: dispatchID}, executionErr
 		}
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now(), Err: err})
+		r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now(), Err: err})
 		return DispatchResult{DispatchID: dispatchID}, err
 	}
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
+	r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
 	return DispatchResult{DispatchID: dispatchID}, nil
 }
 
@@ -434,7 +440,7 @@ func (r *runtime) executeStoredJobAttempt(ctx context.Context, env envelope) sto
 	attempt := applyDeliveryAttempt(ctx, &env)
 	started := r.now()
 	r.emit(ctx, Event{
-		SchemaVersion: schemaVersion,
+		SchemaVersion: eventSchemaVersion,
 		EventID:       newID("evt"),
 		Kind:          EventJobStarted,
 		DispatchID:    env.DispatchID,
@@ -478,8 +484,8 @@ func (r *runtime) emitStoredJobOutcome(ctx context.Context, outcome storedJobOut
 		kind = EventJobFailed
 	}
 	r.emit(ctx, Event{
-		SchemaVersion: schemaVersion,
-		EventID:       newID("evt"),
+		SchemaVersion: eventSchemaVersion,
+		EventID:       storedJobOutcomeFactID(kind, outcome),
 		Kind:          kind,
 		DispatchID:    outcome.env.DispatchID,
 		JobID:         outcome.env.JobID,
@@ -493,6 +499,159 @@ func (r *runtime) emitStoredJobOutcome(ctx context.Context, outcome storedJobOut
 		Time:          outcome.finished,
 		Err:           outcome.err,
 	})
+}
+
+// recoveredStoredJobSuccess reconstructs only the success identity persisted
+// by an immutable transition receipt, never from queue recovery evidence alone.
+func recoveredStoredJobSuccess(outcome storedJobOutcome, receipt transitionReceipt, observed time.Time) (storedJobOutcome, error) {
+	if receipt.outcome != BatchJobSucceeded {
+		return storedJobOutcome{}, errors.New("transition receipt does not own success")
+	}
+	if err := validateRecoveredTransitionFactIdentity(outcome.env, receipt); err != nil {
+		return storedJobOutcome{}, err
+	}
+	outcome.attempt.Number = receipt.owner.attempt
+	outcome.started = observed
+	outcome.finished = observed
+	outcome.err = nil
+	return outcome, nil
+}
+
+// validateRecoveredTransitionReceipt proves durable logical identity without
+// requiring this physical delivery to own reconstructed observer facts.
+func validateRecoveredTransitionReceipt(env envelope, receipt transitionReceipt, requireOwnerJobID bool) error {
+	if err := validateTransitionReceiptSupport(receipt); err != nil {
+		return err
+	}
+	if !receipt.owner.valid() {
+		return errors.New("transition receipt has incomplete owner identity")
+	}
+	if env.DispatchID == "" {
+		return errors.New("delivery dispatch id is required")
+	}
+	if env.JobID == "" {
+		return errors.New("delivery job id is required")
+	}
+	if receipt.owner.dispatchID != env.DispatchID {
+		return errors.New("transition receipt dispatch does not match delivery")
+	}
+	if receipt.owner.jobFingerprint != storedJobReceiptFingerprint(env.Job) {
+		return errors.New("transition receipt job fingerprint does not match delivery")
+	}
+	if requireOwnerJobID && receipt.owner.jobID != env.JobID {
+		return errors.New("transition receipt member job id does not match delivery")
+	}
+	return nil
+}
+
+// validateRecoveredTransitionFactIdentity requires the exact attempt and
+// physical job that originally committed a receipt-backed observer fact.
+func validateRecoveredTransitionFactIdentity(env envelope, receipt transitionReceipt) error {
+	if err := validateRecoveredTransitionReceipt(env, receipt, true); err != nil {
+		return err
+	}
+	if receipt.owner.attempt != env.Attempt {
+		return fmt.Errorf("transition receipt attempt %d does not match delivery attempt %d", receipt.owner.attempt, env.Attempt)
+	}
+	return nil
+}
+
+// transitionReceiptOwnsRecoveredFacts reports whether the recovered physical
+// generation, attempt, and job all match the receipt's immutable fact owner.
+func transitionReceiptOwnsRecoveredFacts(env envelope, receipt transitionReceipt, provenance busruntime.DeliveryProvenance) bool {
+	return provenance.RecoveredGenerationID != "" &&
+		receipt.owner.deliveryID == provenance.RecoveredGenerationID &&
+		receipt.owner.attempt == env.Attempt &&
+		receipt.owner.jobID == env.JobID
+}
+
+// transitionClaimFromOutcome binds workflow mutation provenance to the exact
+// physical settlement generation currently executing the logical attempt.
+func transitionClaimFromOutcome(ctx context.Context, outcome storedJobOutcome) transitionClaim {
+	provenance, _ := busruntime.DeliveryProvenanceFromContext(ctx)
+	return transitionClaim{
+		deliveryID:     provenance.GenerationID,
+		attempt:        outcome.env.Attempt,
+		dispatchID:     outcome.env.DispatchID,
+		jobID:          outcome.env.JobID,
+		jobFingerprint: storedJobReceiptFingerprint(outcome.env.Job),
+	}
+}
+
+// recoveredDeliveryProvenance reports stale-generation evidence without
+// confusing it with proof that the earlier generation changed workflow state.
+func recoveredDeliveryProvenance(ctx context.Context) (busruntime.DeliveryProvenance, bool) {
+	provenance, ok := busruntime.DeliveryProvenanceFromContext(ctx)
+	return provenance, ok && provenance.Recovered
+}
+
+// markDeliveryTransitionCommitted lets a retaining transport preserve the
+// current receipt owner if later workflow infrastructure still needs same-attempt redelivery.
+func markDeliveryTransitionCommitted(ctx context.Context, claimedNow, receiptKnown bool) {
+	if claimedNow && receiptKnown {
+		busruntime.MarkDeliveryApplicationStateCommitted(ctx)
+	}
+}
+
+// storedJobReceiptFingerprint hashes every immutable job field needed to
+// reject a retained row whose observable payload or delivery policy differs.
+func storedJobReceiptFingerprint(job StoredJob) string {
+	hash := sha256.New()
+	values := []string{
+		job.Type,
+		string(job.Payload),
+		job.Options.Queue,
+		fmt.Sprintf("%d", job.Options.Delay),
+		fmt.Sprintf("%d", job.Options.Timeout),
+		fmt.Sprintf("%d", job.Options.Retry),
+		fmt.Sprintf("%d", job.Options.Backoff),
+		fmt.Sprintf("%d", job.Options.UniqueFor),
+	}
+	var size [8]byte
+	for _, value := range values {
+		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+		_, _ = hash.Write(size[:])
+		_, _ = hash.Write([]byte(value))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// storedJobOutcomeFactID uses deterministic identity only when canonical
+// correlation distinguishes this logical delivery from unrelated legacy or
+// malformed inputs that carry the same type and attempt number.
+func storedJobOutcomeFactID(kind EventKind, outcome storedJobOutcome) string {
+	if kind != EventJobSucceeded || outcome.env.DispatchID == "" || outcome.env.JobID == "" {
+		return newID("evt")
+	}
+	return stableWorkflowFactID(
+		kind,
+		outcome.env.DispatchID,
+		outcome.env.JobID,
+		outcome.env.ChainID,
+		outcome.env.BatchID,
+		outcome.env.Job.Type,
+		storedJobEventKey(outcome.env.Job),
+		outcome.env.Job.Options.Queue,
+		fmt.Sprintf("%d", outcome.env.Attempt),
+	)
+}
+
+// stableWorkflowFactID length-frames logical identity before hashing so a
+// redelivery can republish the same truthful fact without inventing an
+// unrelated identifier or conflating differently partitioned values.
+func stableWorkflowFactID(kind EventKind, identity ...string) string {
+	hash := sha256.New()
+	values := make([]string, 0, len(identity)+2)
+	values = append(values, fmt.Sprintf("%d", eventSchemaVersion), string(kind))
+	values = append(values, identity...)
+	var size [8]byte
+	for _, value := range values {
+		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+		_, _ = hash.Write(size[:])
+		_, _ = hash.Write([]byte(value))
+	}
+	sum := hash.Sum(nil)
+	return "evt_" + hex.EncodeToString(sum[:16])
 }
 
 // storedJobEventKey keeps workflow facts on the same logical type-and-payload correlation as queue and worker facts.

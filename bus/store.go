@@ -86,3 +86,11 @@ func NewMemoryStore() Store {
 func NewSQLStore(cfg SQLStoreConfig) (Store, error) {
 	return queue.NewSQLStore(cfg)
 }
+
+// NewSQLStoreWithManagedSchema creates a SQL-backed workflow state store
+// without executing schema DDL.
+//
+// Deprecated: use queue.NewSQLStoreWithManagedSchema.
+func NewSQLStoreWithManagedSchema(cfg SQLStoreConfig) (Store, error) {
+	return queue.NewSQLStoreWithManagedSchema(cfg)
+}

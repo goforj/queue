@@ -526,6 +526,194 @@ func TestWorkflowStoreIntegration_MySQL(t *testing.T) {
 	runWorkflowStoreConcurrencyContract(t, testenv.BackendMySQL, dsn)
 }
 
+// TestWorkflowStoreIntegration_MySQLAutoMigratesMissingReceiptAtLegacyWidths
+// proves ordinary startup preserves wide legacy state when introducing receipts.
+func TestWorkflowStoreIntegration_MySQLAutoMigratesMissingReceiptAtLegacyWidths(t *testing.T) {
+	if !integrationBackendEnabled(testenv.BackendMySQL) {
+		t.Skip("mysql integration backend not selected")
+	}
+	ensureMySQLDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	dsn := fmt.Sprintf("queue:queue@tcp(%s)/queue_test?parseTime=true", integrationMySQL.addr)
+	db, err := sql.Open(testenv.BackendMySQL, dsn)
+	if err != nil {
+		t.Fatalf("open MySQL workflow database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	bootstrap, err := queue.NewSQLStore(queue.SQLStoreConfig{DB: db, DriverName: testenv.BackendMySQL})
+	if err != nil {
+		t.Fatalf("bootstrap workflow store: %v", err)
+	}
+	bootstrapKey := fmt.Sprintf("workflow-receipt-upgrade-bootstrap-%d", time.Now().UnixNano())
+	if _, err := bootstrap.MarkCallbackInvoked(ctx, bootstrapKey); err != nil {
+		t.Fatalf("bootstrap legacy workflow schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM bus_callback_invocations WHERE callback_key=?`, bootstrapKey); err != nil {
+		t.Fatalf("remove bootstrap callback: %v", err)
+	}
+
+	chainID := strings.Repeat("c", 320)
+	nodeID := strings.Repeat("n", 321)
+	batchID := strings.Repeat("b", 322)
+	jobID := strings.Repeat("j", 323)
+	callbackKey := strings.Repeat("k", 700)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{query: `DELETE FROM bus_chain_completed_nodes WHERE chain_id=?`, args: []any{chainID}},
+			{query: `DELETE FROM bus_chains WHERE chain_id=?`, args: []any{chainID}},
+			{query: `DELETE FROM bus_batch_jobs WHERE batch_id=?`, args: []any{batchID}},
+			{query: `DELETE FROM bus_batches WHERE batch_id=?`, args: []any{batchID}},
+			{query: `DELETE FROM bus_callback_invocations WHERE callback_key=?`, args: []any{callbackKey}},
+		} {
+			if _, cleanupErr := db.ExecContext(cleanupCtx, statement.query, statement.args...); cleanupErr != nil {
+				t.Errorf("clean upgraded workflow rows: %v", cleanupErr)
+			}
+		}
+		if _, cleanupErr := db.ExecContext(cleanupCtx, `DROP TABLE IF EXISTS bus_workflow_transition_receipts`); cleanupErr != nil {
+			t.Errorf("drop derived workflow receipt table: %v", cleanupErr)
+		}
+		for _, statement := range []string{
+			`ALTER TABLE bus_chains MODIFY chain_id VARBINARY(255) NOT NULL`,
+			`ALTER TABLE bus_chain_completed_nodes MODIFY chain_id VARBINARY(255) NOT NULL, MODIFY node_id VARBINARY(255) NOT NULL`,
+			`ALTER TABLE bus_batches MODIFY batch_id VARBINARY(255) NOT NULL`,
+			`ALTER TABLE bus_batch_jobs MODIFY batch_id VARBINARY(255) NOT NULL, MODIFY job_id VARBINARY(255) NOT NULL`,
+			`ALTER TABLE bus_callback_invocations MODIFY callback_key VARBINARY(512) NOT NULL`,
+		} {
+			if _, cleanupErr := db.ExecContext(cleanupCtx, statement); cleanupErr != nil {
+				t.Errorf("restore legacy workflow schema width: %v", cleanupErr)
+			}
+		}
+		restored, restoreErr := queue.NewSQLStore(queue.SQLStoreConfig{DB: db, DriverName: testenv.BackendMySQL})
+		if restoreErr != nil {
+			t.Errorf("new workflow store for receipt restoration: %v", restoreErr)
+			return
+		}
+		restoreKey := fmt.Sprintf("workflow-receipt-upgrade-restore-%d", time.Now().UnixNano())
+		if _, restoreErr := restored.MarkCallbackInvoked(cleanupCtx, restoreKey); restoreErr != nil {
+			t.Errorf("restore default workflow receipt table: %v", restoreErr)
+			return
+		}
+		if _, restoreErr := db.ExecContext(cleanupCtx, `DELETE FROM bus_callback_invocations WHERE callback_key=?`, restoreKey); restoreErr != nil {
+			t.Errorf("remove receipt restoration callback: %v", restoreErr)
+		}
+	})
+
+	if _, err := db.ExecContext(ctx, `DROP TABLE bus_workflow_transition_receipts`); err != nil {
+		t.Fatalf("remove receipt table from legacy schema: %v", err)
+	}
+	for _, statement := range []string{
+		`ALTER TABLE bus_chains MODIFY chain_id VARBINARY(512) NOT NULL`,
+		`ALTER TABLE bus_chain_completed_nodes MODIFY chain_id VARBINARY(512) NOT NULL, MODIFY node_id VARBINARY(512) NOT NULL`,
+		`ALTER TABLE bus_batches MODIFY batch_id VARBINARY(512) NOT NULL`,
+		`ALTER TABLE bus_batch_jobs MODIFY batch_id VARBINARY(512) NOT NULL, MODIFY job_id VARBINARY(512) NOT NULL`,
+		`ALTER TABLE bus_callback_invocations MODIFY callback_key VARBINARY(1024) NOT NULL`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("widen legacy workflow schema: %v", err)
+		}
+	}
+
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{DB: db, DriverName: testenv.BackendMySQL})
+	if err != nil {
+		t.Fatalf("new auto-migrating store over legacy schema: %v", err)
+	}
+	if err := store.CreateChain(ctx, queue.ChainRecord{
+		ChainID:    chainID,
+		DispatchID: "legacy-wide-chain-dispatch",
+		Nodes:      []queue.ChainNode{{NodeID: nodeID}},
+		CreatedAt:  time.Now(),
+	}); err != nil {
+		t.Fatalf("create chain through upgraded schema: %v", err)
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT column_name, data_type, character_maximum_length
+		FROM information_schema.columns
+		WHERE table_schema=DATABASE() AND table_name='bus_workflow_transition_receipts'
+		AND column_name IN ('workflow_id', 'member_id')`)
+	if err != nil {
+		t.Fatalf("read derived receipt widths: %v", err)
+	}
+	derivedWidths := make(map[string]int64, 2)
+	for rows.Next() {
+		var columnName, dataType string
+		var width int64
+		if err := rows.Scan(&columnName, &dataType, &width); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan derived receipt width: %v", err)
+		}
+		if !strings.EqualFold(dataType, "varbinary") {
+			_ = rows.Close()
+			t.Fatalf("derived receipt column %s type = %s, want VARBINARY", columnName, dataType)
+		}
+		derivedWidths[columnName] = width
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate derived receipt widths: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close derived receipt width rows: %v", err)
+	}
+	if derivedWidths["workflow_id"] != 512 || derivedWidths["member_id"] != 512 {
+		t.Fatalf("derived receipt widths = %+v, want workflow_id:512 member_id:512", derivedWidths)
+	}
+
+	if next, done, err := store.AdvanceChain(ctx, chainID, nodeID); err != nil || !done || next != nil {
+		t.Fatalf("complete chain through upgraded schema = next:%+v done:%t err:%v", next, done, err)
+	}
+	if err := store.CreateBatch(ctx, queue.BatchRecord{
+		BatchID:    batchID,
+		DispatchID: "legacy-wide-batch-dispatch",
+		Jobs:       []queue.BatchJob{{JobID: jobID}},
+		CreatedAt:  time.Now(),
+	}); err != nil {
+		t.Fatalf("create batch through upgraded schema: %v", err)
+	}
+	outcomes, ok := store.(queue.WorkflowOutcomeStore)
+	if !ok {
+		t.Fatalf("upgraded SQL store %T does not implement WorkflowOutcomeStore", store)
+	}
+	if state, owned, err := outcomes.SettleBatchJob(ctx, batchID, jobID, queue.BatchJobSucceeded, nil); err != nil || !owned || !state.Completed {
+		t.Fatalf("settle batch through upgraded schema = state:%+v owned:%t err:%v", state, owned, err)
+	}
+	if claimed, err := store.MarkCallbackInvoked(ctx, callbackKey); err != nil || !claimed {
+		t.Fatalf("claim wide callback through upgraded schema = claimed:%t err:%v", claimed, err)
+	}
+	if claimed, err := store.MarkCallbackInvoked(ctx, callbackKey); err != nil || claimed {
+		t.Fatalf("reclaim wide callback through upgraded schema = claimed:%t err:%v", claimed, err)
+	}
+
+	receiptWorkflowID := strings.Repeat("r", 324)
+	receiptMemberID := strings.Repeat("m", 325)
+	result, err := db.ExecContext(ctx, `INSERT INTO bus_workflow_transition_receipts
+		(workflow_kind, receipt_version, event_schema_version, workflow_id, member_id, workflow_dispatch_id,
+		workflow_created_at_ms, outcome, owner_delivery_id, owner_attempt, job_dispatch_id, job_id,
+		job_fingerprint, aggregate_completed, aggregate_cancelled, created_at_ms)
+		VALUES ('chain', 1, 1, ?, ?, 'legacy-wide-receipt-dispatch', ?, 'succeeded',
+		'legacy-wide-receipt-owner', 1, 'legacy-wide-job-dispatch', 'legacy-wide-job',
+		'legacy-wide-job-fingerprint', 0, 0, ?)`, receiptWorkflowID, receiptMemberID, time.Now().UnixMilli(), time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("insert wide transition receipt: %v", err)
+	}
+	if inserted, err := result.RowsAffected(); err != nil || inserted != 1 {
+		t.Fatalf("wide transition receipt rows = %d err:%v", inserted, err)
+	}
+	result, err = db.ExecContext(ctx, `DELETE FROM bus_workflow_transition_receipts WHERE workflow_kind='chain' AND workflow_id=? AND member_id=?`, receiptWorkflowID, receiptMemberID)
+	if err != nil {
+		t.Fatalf("delete wide transition receipt: %v", err)
+	}
+	if deleted, err := result.RowsAffected(); err != nil || deleted != 1 {
+		t.Fatalf("deleted wide transition receipt rows = %d err:%v", deleted, err)
+	}
+}
+
 // TestWorkflowStoreIntegration_MySQLManagedWideKeys proves validation follows
 // an existing wider binary schema instead of imposing fresh-schema defaults.
 func TestWorkflowStoreIntegration_MySQLManagedWideKeys(t *testing.T) {
@@ -567,6 +755,7 @@ func TestWorkflowStoreIntegration_MySQLManagedWideKeys(t *testing.T) {
 		`ALTER TABLE bus_batches MODIFY batch_id VARBINARY(512) NOT NULL`,
 		`ALTER TABLE bus_batch_jobs MODIFY batch_id VARBINARY(512) NOT NULL, MODIFY job_id VARBINARY(512) NOT NULL`,
 		`ALTER TABLE bus_callback_invocations MODIFY callback_key VARBINARY(1024) NOT NULL`,
+		`ALTER TABLE bus_workflow_transition_receipts MODIFY workflow_id VARBINARY(512) NOT NULL, MODIFY member_id VARBINARY(512) NOT NULL`,
 	}
 	chainPrefix := strings.Repeat("chain", 59)
 	chainIDs := []string{chainPrefix + "A", chainPrefix + "B"}
@@ -599,6 +788,7 @@ func TestWorkflowStoreIntegration_MySQLManagedWideKeys(t *testing.T) {
 			`ALTER TABLE bus_batches MODIFY batch_id VARBINARY(255) NOT NULL`,
 			`ALTER TABLE bus_batch_jobs MODIFY batch_id VARBINARY(255) NOT NULL, MODIFY job_id VARBINARY(255) NOT NULL`,
 			`ALTER TABLE bus_callback_invocations MODIFY callback_key VARBINARY(512) NOT NULL`,
+			`ALTER TABLE bus_workflow_transition_receipts MODIFY workflow_id VARBINARY(255) NOT NULL, MODIFY member_id VARBINARY(255) NOT NULL`,
 		} {
 			if _, err := db.ExecContext(cleanupCtx, statement); err != nil {
 				t.Errorf("restore generated workflow schema width: %v", err)
@@ -611,7 +801,7 @@ func TestWorkflowStoreIntegration_MySQLManagedWideKeys(t *testing.T) {
 		}
 	}
 
-	store, err := queue.NewSQLStore(queue.SQLStoreConfig{DB: db, DriverName: testenv.BackendMySQL})
+	store, err := queue.NewSQLStoreWithManagedSchema(queue.SQLStoreConfig{DB: db, DriverName: testenv.BackendMySQL})
 	if err != nil {
 		t.Fatalf("new store over managed schema: %v", err)
 	}
@@ -683,7 +873,7 @@ func TestWorkflowStoreIntegration_MySQLRejectsNonVARBINARYKeys(t *testing.T) {
 		}
 	})
 
-	store, err := queue.NewSQLStore(queue.SQLStoreConfig{DB: db, DriverName: testenv.BackendMySQL})
+	store, err := queue.NewSQLStoreWithManagedSchema(queue.SQLStoreConfig{DB: db, DriverName: testenv.BackendMySQL})
 	if err != nil {
 		t.Fatalf("new store over managed schema: %v", err)
 	}

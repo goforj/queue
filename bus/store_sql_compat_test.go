@@ -293,7 +293,8 @@ func seedLegacyDualTerminalChain(t *testing.T, ctx context.Context, db *sql.DB) 
 	}
 }
 
-// assertLegacySQLStoreSchema verifies the compatibility database still exposes exactly the five v1 store tables and columns.
+// assertLegacySQLStoreSchema verifies v1 columns remain unchanged while the
+// additive transition-receipt table is installed alongside them.
 func assertLegacySQLStoreSchema(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	wantTables := []string{
@@ -302,13 +303,15 @@ func assertLegacySQLStoreSchema(t *testing.T, ctx context.Context, db *sql.DB) {
 		"bus_callback_invocations",
 		"bus_chain_completed_nodes",
 		"bus_chains",
+		"bus_workflow_transition_receipts",
 	}
 	wantColumns := map[string][]string{
-		"bus_batch_jobs":            {"batch_id", "job_id", "started", "done", "failed"},
-		"bus_batches":               {"batch_id", "dispatch_id", "name", "queue_name", "allow_failed", "total_jobs", "pending_jobs", "processed_jobs", "failed_jobs", "cancelled", "completed", "created_at_ms", "updated_at_ms"},
-		"bus_callback_invocations":  {"callback_key", "created_at_ms"},
-		"bus_chain_completed_nodes": {"chain_id", "node_id", "created_at_ms"},
-		"bus_chains":                {"chain_id", "dispatch_id", "queue_name", "nodes_json", "next_index", "completed", "failed", "failure", "created_at_ms", "updated_at_ms"},
+		"bus_batch_jobs":                   {"batch_id", "job_id", "started", "done", "failed"},
+		"bus_batches":                      {"batch_id", "dispatch_id", "name", "queue_name", "allow_failed", "total_jobs", "pending_jobs", "processed_jobs", "failed_jobs", "cancelled", "completed", "created_at_ms", "updated_at_ms"},
+		"bus_callback_invocations":         {"callback_key", "created_at_ms"},
+		"bus_chain_completed_nodes":        {"chain_id", "node_id", "created_at_ms"},
+		"bus_chains":                       {"chain_id", "dispatch_id", "queue_name", "nodes_json", "next_index", "completed", "failed", "failure", "created_at_ms", "updated_at_ms"},
+		"bus_workflow_transition_receipts": {"workflow_kind", "receipt_version", "event_schema_version", "workflow_id", "member_id", "workflow_dispatch_id", "workflow_created_at_ms", "outcome", "owner_delivery_id", "owner_attempt", "job_dispatch_id", "job_id", "job_fingerprint", "aggregate_completed", "aggregate_cancelled", "created_at_ms"},
 	}
 
 	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'bus_%' ORDER BY name`)

@@ -14,7 +14,7 @@ import (
 	"github.com/goforj/queue/internal/observation"
 )
 
-const eventSchemaVersion = 1
+const eventSchemaVersion = observation.EventSchemaVersion
 
 // EventLayer identifies the subsystem that committed an observed fact.
 // @group Observability

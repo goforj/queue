@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +61,599 @@ func requireOutcomeStore(t *testing.T, store Store) outcomeStore {
 		t.Fatalf("built-in store %T does not implement outcomeStore", store)
 	}
 	return outcomes
+}
+
+// requireChainAdvanceStore verifies every built-in can distinguish transition
+// ownership without changing the public compatibility contract.
+func requireChainAdvanceStore(t *testing.T, store Store) chainAdvanceStore {
+	t.Helper()
+	atomic, ok := store.(chainAdvanceStore)
+	if !ok {
+		t.Fatalf("built-in store %T does not implement chainAdvanceStore", store)
+	}
+	return atomic
+}
+
+// requireChainFailureStore verifies every built-in can persist terminal
+// failure provenance without changing the public compatibility contract.
+func requireChainFailureStore(t *testing.T, store Store) chainFailureStore {
+	t.Helper()
+	atomic, ok := store.(chainFailureStore)
+	if !ok {
+		t.Fatalf("built-in store %T does not implement chainFailureStore", store)
+	}
+	return atomic
+}
+
+// requireBatchSettlementStore verifies every built-in exposes its exact
+// member counter claim for recovery decisions.
+func requireBatchSettlementStore(t *testing.T, store Store) batchSettlementStore {
+	t.Helper()
+	atomic, ok := store.(batchSettlementStore)
+	if !ok {
+		t.Fatalf("built-in store %T does not implement batchSettlementStore", store)
+	}
+	return atomic
+}
+
+// requireTransitionReceiptStore verifies built-ins expose durable ownership
+// without adding receipt methods to the compatibility-critical public store.
+func requireTransitionReceiptStore(t *testing.T, store Store) transitionReceiptStore {
+	t.Helper()
+	receipts, ok := store.(transitionReceiptStore)
+	if !ok {
+		t.Fatalf("built-in store %T does not implement transitionReceiptStore", store)
+	}
+	return receipts
+}
+
+// TestStoreContract_TransitionOwnership distinguishes first claims from
+// same-category and contradictory physical replays across every built-in store.
+func TestStoreContract_TransitionOwnership(t *testing.T) {
+	for name, factory := range testStoreFactories(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store := factory(t)
+			chainStore := requireChainAdvanceStore(t, store)
+			chainClaim := transitionClaim{deliveryID: "generation-chain", attempt: 0, dispatchID: "dispatch-chain", jobID: "job-chain", jobFingerprint: "fingerprint-chain"}
+			if err := store.CreateChain(ctx, ChainRecord{
+				ChainID:    "chain-transition-ownership",
+				DispatchID: chainClaim.dispatchID,
+				Nodes: []ChainNode{
+					{NodeID: "node-first"},
+					{NodeID: "node-final"},
+				},
+			}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			first, err := chainStore.advanceChainOutcome(ctx, "chain-transition-ownership", "node-first", chainClaim)
+			if err != nil || !first.claimedNow || !first.successOwned || !first.receiptKnown || first.receipt.owner != chainClaim || first.next == nil || first.next.NodeID != "node-final" {
+				t.Fatalf("first chain claim = %+v err:%v", first, err)
+			}
+			replay, err := chainStore.advanceChainOutcome(ctx, "chain-transition-ownership", "node-first", transitionClaim{deliveryID: "generation-chain-replay", attempt: 0, dispatchID: chainClaim.dispatchID, jobID: chainClaim.jobID, jobFingerprint: chainClaim.jobFingerprint})
+			if err != nil || replay.claimedNow || !replay.successOwned || !replay.receiptKnown || replay.receipt.owner != chainClaim || replay.next == nil || replay.next.NodeID != "node-final" {
+				t.Fatalf("chain replay = %+v err:%v", replay, err)
+			}
+
+			failureClaim := transitionClaim{deliveryID: "generation-chain-failure", attempt: 1, dispatchID: "dispatch-chain-failure", jobID: "job-chain-failure", jobFingerprint: "fingerprint-chain-failure"}
+			if err := store.CreateChain(ctx, ChainRecord{
+				ChainID:    "chain-failure-transition-ownership",
+				DispatchID: failureClaim.dispatchID,
+				Nodes:      []ChainNode{{NodeID: "node-failure"}},
+			}); err != nil {
+				t.Fatalf("create failure chain: %v", err)
+			}
+			failureStore := requireChainFailureStore(t, store)
+			failed, err := failureStore.failChainOutcome(ctx, "chain-failure-transition-ownership", "node-failure", errors.New("committed failure"), failureClaim)
+			if err != nil || !failed.claimedNow || !failed.owned || !failed.receiptKnown || failed.receipt.owner != failureClaim || failed.receipt.outcome != BatchJobFailed || failed.receipt.aggregateCompleted || failed.receipt.aggregateCancelled || !failed.state.Failed || failed.state.Completed {
+				t.Fatalf("first chain failure claim = %+v err:%v", failed, err)
+			}
+			failedReplay, err := failureStore.failChainOutcome(ctx, "chain-failure-transition-ownership", "node-failure", errors.New("replacement failure"), transitionClaim{deliveryID: "generation-chain-failure-replay", attempt: 1, dispatchID: failureClaim.dispatchID, jobID: failureClaim.jobID, jobFingerprint: failureClaim.jobFingerprint})
+			if err != nil || failedReplay.claimedNow || !failedReplay.owned || !failedReplay.receiptKnown || failedReplay.receipt.owner != failureClaim || failedReplay.state.Failure != "committed failure" {
+				t.Fatalf("chain failure replay = %+v err:%v", failedReplay, err)
+			}
+
+			batchStore := requireBatchSettlementStore(t, store)
+			batchClaim := transitionClaim{deliveryID: "generation-batch", attempt: 0, dispatchID: "dispatch-batch", jobID: "job-first", jobFingerprint: "fingerprint-batch"}
+			if err := store.CreateBatch(ctx, BatchRecord{
+				BatchID:    "batch-transition-ownership",
+				DispatchID: batchClaim.dispatchID,
+				Jobs:       []BatchJob{{JobID: "job-first"}, {JobID: "job-final"}},
+			}); err != nil {
+				t.Fatalf("create batch: %v", err)
+			}
+			settled, err := batchStore.settleBatchOutcome(ctx, "batch-transition-ownership", "job-first", BatchJobSucceeded, nil, batchClaim)
+			if err != nil || !settled.claimedNow || !settled.owned || !settled.receiptKnown || settled.receipt.owner != batchClaim || settled.state.Processed != 1 {
+				t.Fatalf("first batch claim = %+v err:%v", settled, err)
+			}
+			replayed, err := batchStore.settleBatchOutcome(ctx, "batch-transition-ownership", "job-first", BatchJobSucceeded, nil, transitionClaim{deliveryID: "generation-batch-replay", attempt: 0, dispatchID: batchClaim.dispatchID, jobID: batchClaim.jobID, jobFingerprint: batchClaim.jobFingerprint})
+			if err != nil || replayed.claimedNow || !replayed.owned || !replayed.receiptKnown || replayed.receipt.owner != batchClaim || replayed.state.Processed != 1 {
+				t.Fatalf("same batch replay = %+v err:%v", replayed, err)
+			}
+			contradictory, err := batchStore.settleBatchOutcome(ctx, "batch-transition-ownership", "job-first", BatchJobFailed, errors.New("contradictory"), transitionClaim{})
+			if err != nil || contradictory.claimedNow || contradictory.owned || contradictory.state.Processed != 1 {
+				t.Fatalf("contradictory batch replay = %+v err:%v", contradictory, err)
+			}
+		})
+	}
+}
+
+// TestStoreContract_TransitionClaimDispatchMismatch proves built-ins reject a
+// complete or transport-only claim for another workflow incarnation without mutation.
+func TestStoreContract_TransitionClaimDispatchMismatch(t *testing.T) {
+	for name, factory := range testStoreFactories(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store := factory(t)
+			const (
+				chainID = "chain-claim-dispatch-mismatch"
+				nodeID  = "node-claim-dispatch-mismatch"
+				batchID = "batch-claim-dispatch-mismatch"
+				jobID   = "job-claim-dispatch-mismatch"
+			)
+			if err := store.CreateChain(ctx, ChainRecord{ChainID: chainID, DispatchID: "dispatch-current-chain", Nodes: []ChainNode{{NodeID: nodeID}}}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			mismatches := []transitionClaim{
+				{deliveryID: "generation-mismatch", attempt: 0, dispatchID: "dispatch-other", jobID: "job-mismatch", jobFingerprint: "fingerprint-mismatch"},
+				{dispatchID: "dispatch-other", jobID: "job-mismatch", jobFingerprint: "fingerprint-mismatch"},
+			}
+			for index, mismatch := range mismatches {
+				if _, err := requireChainAdvanceStore(t, store).advanceChainOutcome(ctx, chainID, nodeID, mismatch); err == nil || !strings.Contains(err.Error(), "dispatch mismatch") {
+					t.Fatalf("advance mismatch %d error = %v", index, err)
+				}
+				if _, err := requireChainFailureStore(t, store).failChainOutcome(ctx, chainID, nodeID, errors.New("must not commit"), mismatch); err == nil || !strings.Contains(err.Error(), "dispatch mismatch") {
+					t.Fatalf("failure mismatch %d error = %v", index, err)
+				}
+			}
+			chain, err := store.GetChain(ctx, chainID)
+			if err != nil || chain.NextIndex != 0 || chain.Completed || chain.Failed {
+				t.Fatalf("chain after mismatches = %+v err:%v", chain, err)
+			}
+			if receipt, known, err := requireTransitionReceiptStore(t, store).chainTransitionReceipt(ctx, chainID, nodeID); err != nil || known {
+				t.Fatalf("chain mismatch receipt = known:%t receipt:%+v err:%v", known, receipt, err)
+			}
+			if _, done, err := store.AdvanceChain(ctx, chainID, nodeID); err != nil || !done {
+				t.Fatalf("complete current chain = done:%t err:%v", done, err)
+			}
+			staleSuccess, err := requireChainAdvanceStore(t, store).advanceChainOutcome(ctx, chainID, nodeID, mismatches[1])
+			if err != nil || staleSuccess.successOwned || staleSuccess.claimedNow || staleSuccess.receiptKnown || staleSuccess.next != nil || staleSuccess.done {
+				t.Fatalf("terminal stale chain success = %+v err:%v, want pure non-owner no-op", staleSuccess, err)
+			}
+			if err := store.CreateChain(ctx, ChainRecord{ChainID: "chain-failure-terminal-dispatch-mismatch", DispatchID: "dispatch-current-chain", Nodes: []ChainNode{{NodeID: nodeID}}}); err != nil {
+				t.Fatalf("create terminal failure chain: %v", err)
+			}
+			if _, owned, err := requireOutcomeStore(t, store).FailChainNode(ctx, "chain-failure-terminal-dispatch-mismatch", nodeID, errors.New("current failure")); err != nil || !owned {
+				t.Fatalf("fail current chain = owned:%t err:%v", owned, err)
+			}
+			staleFailure, err := requireChainFailureStore(t, store).failChainOutcome(ctx, "chain-failure-terminal-dispatch-mismatch", nodeID, errors.New("stale failure"), mismatches[1])
+			if err != nil || staleFailure.owned || staleFailure.claimedNow || staleFailure.receiptKnown {
+				t.Fatalf("terminal stale chain failure = %+v err:%v, want pure non-owner no-op", staleFailure, err)
+			}
+
+			if err := store.CreateBatch(ctx, BatchRecord{BatchID: batchID, DispatchID: "dispatch-current-batch", Jobs: []BatchJob{{JobID: jobID}}}); err != nil {
+				t.Fatalf("create batch: %v", err)
+			}
+			for index, mismatch := range mismatches {
+				if _, err := requireBatchSettlementStore(t, store).settleBatchOutcome(ctx, batchID, jobID, BatchJobSucceeded, nil, mismatch); err == nil || !strings.Contains(err.Error(), "dispatch mismatch") {
+					t.Fatalf("batch mismatch %d error = %v", index, err)
+				}
+			}
+			batch, err := store.GetBatch(ctx, batchID)
+			if err != nil || batch.Processed != 0 || batch.Pending != 1 || batch.Completed || batch.Cancelled {
+				t.Fatalf("batch after mismatch = %+v err:%v", batch, err)
+			}
+			if receipt, known, err := requireTransitionReceiptStore(t, store).batchTransitionReceipt(ctx, batchID, jobID); err != nil || known {
+				t.Fatalf("batch mismatch receipt = known:%t receipt:%+v err:%v", known, receipt, err)
+			}
+			if state, done, err := store.MarkBatchJobSucceeded(ctx, batchID, jobID); err != nil || !done || !state.Completed {
+				t.Fatalf("complete current batch = %+v done:%t err:%v", state, done, err)
+			}
+			staleBatch, err := requireBatchSettlementStore(t, store).settleBatchOutcome(ctx, batchID, jobID, BatchJobSucceeded, nil, mismatches[1])
+			if err != nil || staleBatch.owned || staleBatch.claimedNow || staleBatch.receiptKnown {
+				t.Fatalf("terminal stale batch settlement = %+v err:%v, want pure non-owner no-op", staleBatch, err)
+			}
+
+			legacyClaim := transitionClaim{deliveryID: "generation-legacy-dispatch", attempt: 0, dispatchID: "dispatch-transport-only", jobID: "job-legacy-dispatch", jobFingerprint: "fingerprint-legacy-dispatch"}
+			if err := store.CreateChain(ctx, ChainRecord{ChainID: "chain-legacy-empty-dispatch", Nodes: []ChainNode{{NodeID: "node-legacy-empty-dispatch"}}}); err != nil {
+				t.Fatalf("create legacy chain: %v", err)
+			}
+			legacyChain, err := requireChainAdvanceStore(t, store).advanceChainOutcome(ctx, "chain-legacy-empty-dispatch", "node-legacy-empty-dispatch", legacyClaim)
+			if err != nil || !legacyChain.claimedNow || !legacyChain.receiptKnown || legacyChain.receipt.workflowDispatchID != "" || legacyChain.receipt.owner.dispatchID != legacyClaim.dispatchID {
+				t.Fatalf("legacy chain claim = %+v err:%v", legacyChain, err)
+			}
+			if err := store.CreateChain(ctx, ChainRecord{ChainID: "chain-failure-legacy-empty-dispatch", Nodes: []ChainNode{{NodeID: "node-failure-legacy-empty-dispatch"}}}); err != nil {
+				t.Fatalf("create legacy failure chain: %v", err)
+			}
+			legacyFailure, err := requireChainFailureStore(t, store).failChainOutcome(ctx, "chain-failure-legacy-empty-dispatch", "node-failure-legacy-empty-dispatch", errors.New("legacy failure"), legacyClaim)
+			if err != nil || !legacyFailure.claimedNow || !legacyFailure.receiptKnown || legacyFailure.receipt.workflowDispatchID != "" || legacyFailure.receipt.owner.dispatchID != legacyClaim.dispatchID {
+				t.Fatalf("legacy chain failure claim = %+v err:%v", legacyFailure, err)
+			}
+			if err := store.CreateBatch(ctx, BatchRecord{BatchID: "batch-legacy-empty-dispatch", Jobs: []BatchJob{{JobID: "job-legacy-empty-dispatch"}}}); err != nil {
+				t.Fatalf("create legacy batch: %v", err)
+			}
+			legacyBatchClaim := legacyClaim
+			legacyBatchClaim.jobID = "job-legacy-empty-dispatch"
+			legacyBatch, err := requireBatchSettlementStore(t, store).settleBatchOutcome(ctx, "batch-legacy-empty-dispatch", "job-legacy-empty-dispatch", BatchJobSucceeded, nil, legacyBatchClaim)
+			if err != nil || !legacyBatch.claimedNow || !legacyBatch.receiptKnown || legacyBatch.receipt.workflowDispatchID != "" || legacyBatch.receipt.owner.dispatchID != legacyClaim.dispatchID {
+				t.Fatalf("legacy batch claim = %+v err:%v", legacyBatch, err)
+			}
+		})
+	}
+}
+
+// TestStoreContract_FailChainPreservesReceiptBackedCause proves the legacy
+// terminal method cannot replace the cause bound to an immutable failed receipt.
+func TestStoreContract_FailChainPreservesReceiptBackedCause(t *testing.T) {
+	for name, factory := range testStoreFactories(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store := factory(t)
+			const (
+				chainID    = "chain-receipt-backed-first-cause"
+				nodeID     = "node-receipt-backed-first-cause"
+				dispatchID = "dispatch-receipt-backed-first-cause"
+			)
+			if err := store.CreateChain(ctx, ChainRecord{ChainID: chainID, DispatchID: dispatchID, Nodes: []ChainNode{{NodeID: nodeID}}}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			claim := transitionClaim{deliveryID: "generation-receipt-backed-first-cause", attempt: 2, dispatchID: dispatchID, jobID: "job-receipt-backed-first-cause", jobFingerprint: "fingerprint-receipt-backed-first-cause"}
+			result, err := requireChainFailureStore(t, store).failChainOutcome(ctx, chainID, nodeID, errors.New("authoritative first cause"), claim)
+			if err != nil || !result.claimedNow || !result.receiptKnown {
+				t.Fatalf("commit receipt-backed failure = %+v err:%v", result, err)
+			}
+			if err := store.FailChain(ctx, chainID, errors.New("replacement cause")); err != nil {
+				t.Fatalf("repeat legacy failure: %v", err)
+			}
+			state, err := store.GetChain(ctx, chainID)
+			if err != nil || !state.Failed || state.Completed || state.Failure != "authoritative first cause" {
+				t.Fatalf("chain after replacement attempt = %+v err:%v", state, err)
+			}
+			receipt, known, err := requireTransitionReceiptStore(t, store).chainTransitionReceipt(ctx, chainID, nodeID)
+			if err != nil || !known || receipt.owner != claim || receipt.outcome != BatchJobFailed {
+				t.Fatalf("receipt after replacement attempt = known:%t receipt:%+v err:%v", known, receipt, err)
+			}
+		})
+	}
+}
+
+// TestStoreContract_TransitionReceiptIncarnationMismatchFailsClosed proves a
+// persisted row for another parent incarnation is never collapsed into absence.
+func TestStoreContract_TransitionReceiptIncarnationMismatchFailsClosed(t *testing.T) {
+	for name, factory := range testStoreFactories(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store := factory(t)
+			const (
+				chainID = "chain-receipt-incarnation-mismatch"
+				nodeID  = "node-receipt-incarnation-mismatch"
+				batchID = "batch-receipt-incarnation-mismatch"
+				jobID   = "job-receipt-incarnation-mismatch"
+			)
+			chainClaim := transitionClaim{deliveryID: "generation-chain-incarnation", attempt: 0, dispatchID: "dispatch-chain-incarnation", jobID: "job-chain-incarnation", jobFingerprint: "fingerprint-chain-incarnation"}
+			if err := store.CreateChain(ctx, ChainRecord{ChainID: chainID, DispatchID: chainClaim.dispatchID, Nodes: []ChainNode{{NodeID: nodeID}}}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			if result, err := requireChainAdvanceStore(t, store).advanceChainOutcome(ctx, chainID, nodeID, chainClaim); err != nil || !result.receiptKnown {
+				t.Fatalf("commit chain receipt = %+v err:%v", result, err)
+			}
+			corruptTransitionReceiptDispatch(t, store, chainTransitionKind, chainID, nodeID)
+			if receipt, known, err := requireTransitionReceiptStore(t, store).chainTransitionReceipt(ctx, chainID, nodeID); err == nil || known || !strings.Contains(err.Error(), "incarnation") {
+				t.Fatalf("mismatched chain receipt = known:%t receipt:%+v err:%v", known, receipt, err)
+			}
+
+			batchClaim := transitionClaim{deliveryID: "generation-batch-incarnation", attempt: 0, dispatchID: "dispatch-batch-incarnation", jobID: jobID, jobFingerprint: "fingerprint-batch-incarnation"}
+			if err := store.CreateBatch(ctx, BatchRecord{BatchID: batchID, DispatchID: batchClaim.dispatchID, Jobs: []BatchJob{{JobID: jobID}}}); err != nil {
+				t.Fatalf("create batch: %v", err)
+			}
+			if result, err := requireBatchSettlementStore(t, store).settleBatchOutcome(ctx, batchID, jobID, BatchJobSucceeded, nil, batchClaim); err != nil || !result.receiptKnown {
+				t.Fatalf("commit batch receipt = %+v err:%v", result, err)
+			}
+			corruptTransitionReceiptDispatch(t, store, batchTransitionKind, batchID, jobID)
+			if receipt, known, err := requireTransitionReceiptStore(t, store).batchTransitionReceipt(ctx, batchID, jobID); err == nil || known || !strings.Contains(err.Error(), "incarnation") {
+				t.Fatalf("mismatched batch receipt = known:%t receipt:%+v err:%v", known, receipt, err)
+			}
+		})
+	}
+}
+
+// corruptTransitionReceiptDispatch simulates a retained row whose parent
+// identity no longer matches without depending on one store's internals in callers.
+func corruptTransitionReceiptDispatch(t *testing.T, store Store, kind, workflowID, memberID string) {
+	t.Helper()
+	switch concrete := store.(type) {
+	case *memoryStore:
+		concrete.mu.Lock()
+		key := transitionReceiptKey{workflowKind: kind, workflowID: workflowID, memberID: memberID}
+		receipt := concrete.transitionReceipts[key]
+		receipt.workflowDispatchID = "dispatch-corrupt-incarnation"
+		concrete.transitionReceipts[key] = receipt
+		concrete.mu.Unlock()
+	case *sqlStore:
+		if _, err := concrete.db.Exec(`UPDATE bus_workflow_transition_receipts SET workflow_dispatch_id=? WHERE workflow_kind=? AND workflow_id=? AND member_id=?`, "dispatch-corrupt-incarnation", kind, workflowID, memberID); err != nil {
+			t.Fatalf("corrupt SQL transition receipt: %v", err)
+		}
+	default:
+		t.Fatalf("unsupported built-in store %T", store)
+	}
+}
+
+// TestStoreContract_ConcurrentTransitionReceiptOwner proves every competing
+// generation observes the same immutable owner and aggregate outcome.
+func TestStoreContract_ConcurrentTransitionReceiptOwner(t *testing.T) {
+	for name, factory := range testStoreFactories(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			store := factory(t)
+			const deliveries = 16
+
+			if err := store.CreateChain(ctx, ChainRecord{
+				ChainID:    "chain-concurrent-receipt-owner",
+				DispatchID: "dispatch-concurrent-chain-receipt",
+				Nodes:      []ChainNode{{NodeID: "node-concurrent-receipt"}},
+			}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			chainStore := requireChainAdvanceStore(t, store)
+			type chainObservation struct {
+				result chainAdvanceResult
+				err    error
+			}
+			chainStart := make(chan struct{})
+			chainResults := make(chan chainObservation, deliveries)
+			var chainWait sync.WaitGroup
+			for delivery := range deliveries {
+				chainWait.Add(1)
+				go func(delivery int) {
+					defer chainWait.Done()
+					<-chainStart
+					claim := transitionClaim{
+						deliveryID:     fmt.Sprintf("generation-chain-%02d", delivery),
+						attempt:        delivery,
+						dispatchID:     "dispatch-concurrent-chain-receipt",
+						jobID:          "job-concurrent-chain-receipt",
+						jobFingerprint: "fingerprint-concurrent-chain-receipt",
+					}
+					result, err := chainStore.advanceChainOutcome(ctx, "chain-concurrent-receipt-owner", "node-concurrent-receipt", claim)
+					chainResults <- chainObservation{result: result, err: err}
+				}(delivery)
+			}
+			close(chainStart)
+			waitStoreContractOperations(t, &chainWait)
+			close(chainResults)
+			chainOwners := make(map[transitionClaim]struct{})
+			chainClaims := 0
+			for observation := range chainResults {
+				if observation.err != nil {
+					t.Fatalf("concurrent chain claim: %v", observation.err)
+				}
+				if observation.result.claimedNow {
+					chainClaims++
+				}
+				if !observation.result.successOwned || !observation.result.receiptKnown {
+					t.Fatalf("concurrent chain result = %+v, want owned receipt", observation.result)
+				}
+				chainOwners[observation.result.receipt.owner] = struct{}{}
+			}
+			if chainClaims != 1 || len(chainOwners) != 1 {
+				t.Fatalf("chain claims/owners = %d/%d, want 1/1", chainClaims, len(chainOwners))
+			}
+
+			if err := store.CreateBatch(ctx, BatchRecord{
+				BatchID:     "batch-concurrent-receipt-owner",
+				DispatchID:  "dispatch-concurrent-batch-receipt",
+				AllowFailed: true,
+				Jobs:        []BatchJob{{JobID: "job-concurrent-receipt"}},
+			}); err != nil {
+				t.Fatalf("create batch: %v", err)
+			}
+			batchStore := requireBatchSettlementStore(t, store)
+			type batchObservation struct {
+				result batchSettlementResult
+				err    error
+			}
+			batchStart := make(chan struct{})
+			batchResults := make(chan batchObservation, deliveries)
+			var batchWait sync.WaitGroup
+			for delivery := range deliveries {
+				batchWait.Add(1)
+				go func(delivery int) {
+					defer batchWait.Done()
+					<-batchStart
+					outcome := BatchJobSucceeded
+					if delivery%2 == 0 {
+						outcome = BatchJobFailed
+					}
+					claim := transitionClaim{
+						deliveryID:     fmt.Sprintf("generation-batch-%02d", delivery),
+						attempt:        delivery,
+						dispatchID:     "dispatch-concurrent-batch-receipt",
+						jobID:          "job-concurrent-receipt",
+						jobFingerprint: "fingerprint-concurrent-batch-receipt",
+					}
+					result, err := batchStore.settleBatchOutcome(ctx, "batch-concurrent-receipt-owner", "job-concurrent-receipt", outcome, errors.New("raced receipt outcome"), claim)
+					batchResults <- batchObservation{result: result, err: err}
+				}(delivery)
+			}
+			close(batchStart)
+			waitStoreContractOperations(t, &batchWait)
+			close(batchResults)
+			batchOwners := make(map[transitionClaim]struct{})
+			batchOutcomes := make(map[BatchJobOutcome]struct{})
+			batchClaims := 0
+			for observation := range batchResults {
+				if observation.err != nil {
+					t.Fatalf("concurrent batch claim: %v", observation.err)
+				}
+				if observation.result.claimedNow {
+					batchClaims++
+				}
+				if !observation.result.receiptKnown {
+					t.Fatalf("concurrent batch result = %+v, want member receipt", observation.result)
+				}
+				batchOwners[observation.result.receipt.owner] = struct{}{}
+				batchOutcomes[observation.result.receipt.outcome] = struct{}{}
+			}
+			if batchClaims != 1 || len(batchOwners) != 1 || len(batchOutcomes) != 1 {
+				t.Fatalf("batch claims/owners/outcomes = %d/%d/%d, want 1/1/1", batchClaims, len(batchOwners), len(batchOutcomes))
+			}
+			terminalReceipt, known, err := requireTransitionReceiptStore(t, store).batchTransitionReceipt(ctx, "batch-concurrent-receipt-owner", "job-concurrent-receipt")
+			if err != nil || !known || !terminalReceipt.aggregateCompleted {
+				t.Fatalf("terminal batch receipt = known:%t receipt:%+v err:%v", known, terminalReceipt, err)
+			}
+		})
+	}
+}
+
+// TestStoreContract_ConcurrentDistinctBatchReceiptOwner proves concurrent
+// member receipts cannot compete for terminal aggregate ownership after their
+// parent updates serialize, including fail-fast completion before pending
+// members finish.
+func TestStoreContract_ConcurrentDistinctBatchReceiptOwner(t *testing.T) {
+	for name, factory := range testStoreFactories(t) {
+		t.Run(name, func(t *testing.T) {
+			for _, policy := range []struct {
+				name          string
+				allowFailures bool
+			}{
+				{name: "allow_failures", allowFailures: true},
+				{name: "fail_fast", allowFailures: false},
+			} {
+				t.Run(policy.name, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer cancel()
+					store := factory(t)
+					settlements := requireBatchSettlementStore(t, store)
+					receipts := requireTransitionReceiptStore(t, store)
+					const memberCount = 16
+					batchID := "batch-distinct-receipt-" + policy.name
+					dispatchID := "dispatch-distinct-receipt-" + policy.name
+					jobs := make([]BatchJob, memberCount)
+					claims := make(map[string]transitionClaim, memberCount)
+					outcomes := make(map[string]BatchJobOutcome, memberCount)
+					for member := range memberCount {
+						jobID := fmt.Sprintf("job-distinct-receipt-%02d", member)
+						jobs[member] = BatchJob{JobID: jobID}
+						claims[jobID] = transitionClaim{
+							deliveryID:     fmt.Sprintf("generation-distinct-receipt-%02d", member),
+							attempt:        member,
+							dispatchID:     dispatchID,
+							jobID:          "delivery-" + jobID,
+							jobFingerprint: "fingerprint-" + jobID,
+						}
+						outcomes[jobID] = BatchJobSucceeded
+						if member%2 == 1 {
+							outcomes[jobID] = BatchJobFailed
+						}
+					}
+					if err := store.CreateBatch(ctx, BatchRecord{
+						BatchID:     batchID,
+						DispatchID:  dispatchID,
+						AllowFailed: policy.allowFailures,
+						Jobs:        jobs,
+					}); err != nil {
+						t.Fatalf("create batch: %v", err)
+					}
+
+					type settlementObservation struct {
+						jobID  string
+						result batchSettlementResult
+						err    error
+					}
+					start := make(chan struct{})
+					observations := make(chan settlementObservation, memberCount)
+					var wg sync.WaitGroup
+					for _, job := range jobs {
+						wg.Add(1)
+						go func(jobID string) {
+							defer wg.Done()
+							<-start
+							outcome := outcomes[jobID]
+							result, err := settlements.settleBatchOutcome(ctx, batchID, jobID, outcome, errors.New("concurrent member failure"), claims[jobID])
+							observations <- settlementObservation{jobID: jobID, result: result, err: err}
+						}(job.JobID)
+					}
+					close(start)
+					waitStoreContractOperations(t, &wg)
+					close(observations)
+
+					aggregateOwners := 0
+					for observation := range observations {
+						if observation.err != nil {
+							t.Fatalf("settle member %q: %v", observation.jobID, observation.err)
+						}
+						wantClaim := claims[observation.jobID]
+						wantOutcome := outcomes[observation.jobID]
+						if !observation.result.claimedNow || !observation.result.owned || !observation.result.receiptKnown || observation.result.receipt.owner != wantClaim || observation.result.receipt.outcome != wantOutcome {
+							t.Fatalf("member %q result = %+v, want its exact receipt owner and outcome", observation.jobID, observation.result)
+						}
+						if observation.result.receipt.aggregateCompleted {
+							aggregateOwners++
+						}
+					}
+					if aggregateOwners != 1 {
+						t.Fatalf("aggregate owners returned during settlement = %d, want 1", aggregateOwners)
+					}
+
+					persistedOwners := 0
+					for _, job := range jobs {
+						receipt, known, err := receipts.batchTransitionReceipt(ctx, batchID, job.JobID)
+						if err != nil || !known || receipt.owner != claims[job.JobID] || receipt.outcome != outcomes[job.JobID] {
+							t.Fatalf("persisted receipt for %q = known:%t receipt:%+v err:%v", job.JobID, known, receipt, err)
+						}
+						if receipt.aggregateCompleted {
+							persistedOwners++
+							if receipt.aggregateCancelled != !policy.allowFailures {
+								t.Fatalf("terminal receipt for %q cancelled = %t, want %t", job.JobID, receipt.aggregateCancelled, !policy.allowFailures)
+							}
+						}
+					}
+					if persistedOwners != 1 {
+						t.Fatalf("persisted aggregate receipt owners = %d, want 1", persistedOwners)
+					}
+					state, err := store.GetBatch(ctx, batchID)
+					if err != nil {
+						t.Fatalf("get batch: %v", err)
+					}
+					if state.Pending != 0 || state.Processed != memberCount || state.Failed != memberCount/2 || !state.Completed || state.Cancelled != !policy.allowFailures {
+						t.Fatalf("batch state = %+v, want exact counters and cancelled=%t", state, !policy.allowFailures)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestStoreContract_LegacyTransitionRemainsReceiptUnknown proves state written
+// through the established public API is never retroactively assigned an owner.
+func TestStoreContract_LegacyTransitionRemainsReceiptUnknown(t *testing.T) {
+	for name, factory := range testStoreFactories(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store := factory(t)
+			receipts := requireTransitionReceiptStore(t, store)
+			if err := store.CreateChain(ctx, ChainRecord{ChainID: "chain-legacy-receipt", DispatchID: "dispatch-legacy-chain", Nodes: []ChainNode{{NodeID: "node-legacy-receipt"}}}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			if _, done, err := store.AdvanceChain(ctx, "chain-legacy-receipt", "node-legacy-receipt"); err != nil || !done {
+				t.Fatalf("legacy chain advance = done:%t err:%v", done, err)
+			}
+			if receipt, known, err := receipts.chainTransitionReceipt(ctx, "chain-legacy-receipt", "node-legacy-receipt"); err != nil || known {
+				t.Fatalf("legacy chain receipt = known:%t receipt:%+v err:%v", known, receipt, err)
+			}
+
+			if err := store.CreateBatch(ctx, BatchRecord{BatchID: "batch-legacy-receipt", DispatchID: "dispatch-legacy-batch", Jobs: []BatchJob{{JobID: "job-legacy-receipt"}}}); err != nil {
+				t.Fatalf("create batch: %v", err)
+			}
+			if _, done, err := store.MarkBatchJobSucceeded(ctx, "batch-legacy-receipt", "job-legacy-receipt"); err != nil || !done {
+				t.Fatalf("legacy batch settlement = done:%t err:%v", done, err)
+			}
+			if receipt, known, err := receipts.batchTransitionReceipt(ctx, "batch-legacy-receipt", "job-legacy-receipt"); err != nil || known {
+				t.Fatalf("legacy batch receipt = known:%t receipt:%+v err:%v", known, receipt, err)
+			}
+		})
+	}
 }
 
 // TestStoreContract_RejectsAmbiguousChainRecords protects the immutable order

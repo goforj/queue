@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/driver/sqlitequeue"
 	"github.com/goforj/queue/integration/testenv"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -39,6 +41,23 @@ func prepareSQLiteIntegrationSchema(t *testing.T, dsn string) {
 	}
 	if err := bootstrap.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown SQLite schema bootstrap: %v", err)
+	}
+}
+
+// execSQLiteIntegrationEventually tolerates the worker's short polling lock
+// while keeping deterministic fault-fixture schema changes bounded.
+func execSQLiteIntegrationEventually(db *sql.DB, query string, args ...any) (sql.Result, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		result, err := db.Exec(query, args...)
+		if err == nil {
+			return result, nil
+		}
+		message := strings.ToLower(err.Error())
+		if (!strings.Contains(message, "busy") && !strings.Contains(message, "locked")) || time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -75,6 +94,1503 @@ func (r *databaseSettlementRecorder) count(kind queue.EventKind, jobType string)
 		}
 	}
 	return count
+}
+
+// first returns one matching event so integration assertions can verify its
+// correlation fields instead of relying only on aggregate counts.
+func (r *databaseSettlementRecorder) first(kind queue.EventKind, jobType string) (queue.Event, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, event := range r.events {
+		if event.Kind == kind && event.JobType == jobType {
+			return event, true
+		}
+	}
+	return queue.Event{}, false
+}
+
+// runSQLiteWorkflowWinnerFactRecovery proves receipt-backed recovery publishes
+// the workflow facts already committed by the winning generation without
+// executing application code a second time.
+func runSQLiteWorkflowWinnerFactRecovery(t *testing.T, workflowKind string) {
+	t.Helper()
+	queueDSN := fmt.Sprintf("%s/queue-workflow-recovery-%s-%d.db", t.TempDir(), workflowKind, time.Now().UnixNano())
+	workflowDSN := fmt.Sprintf("%s/workflow-recovery-%s-%d.db", t.TempDir(), workflowKind, time.Now().UnixNano())
+	prepareSQLiteIntegrationSchema(t, queueDSN)
+
+	workflowDB, err := sql.Open(testenv.BackendSQLite, workflowDSN)
+	if err != nil {
+		t.Fatalf("open workflow recovery store: %v", err)
+	}
+	t.Cleanup(func() { _ = workflowDB.Close() })
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{
+		DB:          workflowDB,
+		DriverName:  testenv.BackendSQLite,
+		AutoMigrate: true,
+	})
+	if err != nil {
+		t.Fatalf("new workflow recovery store: %v", err)
+	}
+
+	recorder := &databaseSettlementRecorder{settlement: make(chan struct{})}
+	queueName := "workflow-recovery-" + workflowKind
+	runtimeCfg := withDBRecoveryPolicy(withDefaultQueue(sqliteCfg(queueDSN), queueName), 10*time.Millisecond, 30*time.Second)
+	runtimeCfg.DisableAutoMigrate = true
+	runtime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new workflow recovery runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = runtime.Shutdown(shutdownCtx)
+	})
+
+	chainPredecessor := workflowKind == "chain_predecessor"
+	batchPredecessor := workflowKind == "batch_predecessor"
+	jobType := "job:db:workflow-recovery:" + workflowKind
+	successorJobType := ""
+	if chainPredecessor || batchPredecessor {
+		jobType += ":first"
+		successorJobType = "job:db:workflow-recovery:" + workflowKind + ":final"
+	}
+	var handlerCalls, successorCalls atomic.Int64
+	runtime.Register(jobType, func(context.Context, queue.Message) error {
+		handlerCalls.Add(1)
+		return nil
+	})
+	if successorJobType != "" {
+		runtime.Register(successorJobType, func(context.Context, queue.Message) error {
+			successorCalls.Add(1)
+			return nil
+		})
+	}
+
+	queueDB, err := sql.Open(testenv.BackendSQLite, queueDSN)
+	if err != nil {
+		t.Fatalf("open workflow recovery queue database: %v", err)
+	}
+	defer queueDB.Close()
+	triggerName := "reject_" + workflowKind + "_workflow_finalization"
+	trigger := fmt.Sprintf(`CREATE TRIGGER %s
+BEFORE DELETE ON queue_jobs
+WHEN OLD.queue_name = '%s' AND OLD.id = 1
+BEGIN
+    SELECT RAISE(ABORT, 'forced workflow finalization failure');
+END`, triggerName, queueName)
+	if _, err := queueDB.Exec(trigger); err != nil {
+		t.Fatalf("create workflow finalization trigger: %v", err)
+	}
+	if err := runtime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workflow recovery runtime: %v", err)
+	}
+
+	var workflowID string
+	primaryJob := queue.NewJob(jobType).OnQueue(queueName)
+	switch workflowKind {
+	case "chain":
+		workflowID, err = runtime.Chain(primaryJob).Dispatch(context.Background())
+	case "chain_predecessor":
+		workflowID, err = runtime.Chain(
+			primaryJob,
+			queue.NewJob(successorJobType).OnQueue(queueName),
+		).Dispatch(context.Background())
+	case "batch":
+		workflowID, err = runtime.Batch(primaryJob).OnQueue(queueName).Dispatch(context.Background())
+	case "batch_predecessor":
+		workflowID, err = runtime.Batch(primaryJob, queue.NewJob(successorJobType).OnQueue(queueName)).OnQueue(queueName).Dispatch(context.Background())
+	default:
+		t.Fatalf("unsupported workflow kind %q", workflowKind)
+	}
+	if err != nil {
+		t.Fatalf("dispatch %s recovery workflow: %v", workflowKind, err)
+	}
+
+	select {
+	case <-recorder.settlement:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for workflow settlement failure")
+	}
+	if handlerCalls.Load() != 1 {
+		t.Fatalf("handler calls before recovery = %d, want 1", handlerCalls.Load())
+	}
+	if recorder.count(queue.EventJobSucceeded, jobType) != 0 {
+		t.Fatal("job success published before durable queue settlement")
+	}
+	switch workflowKind {
+	case "chain":
+		state, stateErr := store.GetChain(context.Background(), workflowID)
+		if stateErr != nil {
+			t.Fatalf("get committed chain: %v", stateErr)
+		}
+		if !state.Completed || state.Failed || recorder.count(queue.EventChainCompleted, jobType) != 0 {
+			t.Fatalf("chain before recovery = state:%+v completed facts:%d", state, recorder.count(queue.EventChainCompleted, jobType))
+		}
+	case "chain_predecessor":
+		waitForObservabilityScenario(t, "sqlite_workflow_successor_settlement", 5*time.Second, func() bool {
+			state, stateErr := store.GetChain(context.Background(), workflowID)
+			return stateErr == nil && state.Completed && !state.Failed && successorCalls.Load() == 1 && recorder.count(queue.EventChainCompleted, successorJobType) == 1
+		})
+		if recorder.count(queue.EventChainAdvanced, jobType) != 0 || recorder.count(queue.EventChainCompleted, jobType) != 0 {
+			t.Fatalf("predecessor facts before recovery = advanced:%d completed:%d", recorder.count(queue.EventChainAdvanced, jobType), recorder.count(queue.EventChainCompleted, jobType))
+		}
+	case "batch":
+		state, stateErr := store.GetBatch(context.Background(), workflowID)
+		if stateErr != nil {
+			t.Fatalf("get committed batch: %v", stateErr)
+		}
+		if !state.Completed || state.Cancelled || state.Failed != 0 || recorder.count(queue.EventBatchProgressed, jobType) != 0 || recorder.count(queue.EventBatchCompleted, jobType) != 0 {
+			t.Fatalf("batch before recovery = state:%+v progress/completed facts:%d/%d", state, recorder.count(queue.EventBatchProgressed, jobType), recorder.count(queue.EventBatchCompleted, jobType))
+		}
+	case "batch_predecessor":
+		waitForObservabilityScenario(t, "sqlite_batch_terminal_member_settlement", 5*time.Second, func() bool {
+			state, stateErr := store.GetBatch(context.Background(), workflowID)
+			return stateErr == nil && state.Completed && !state.Cancelled && successorCalls.Load() == 1 && recorder.count(queue.EventBatchCompleted, successorJobType) == 1
+		})
+		if recorder.count(queue.EventBatchProgressed, jobType) != 0 || recorder.count(queue.EventBatchCompleted, jobType) != 0 {
+			t.Fatalf("stale batch member facts before recovery = progress:%d completed:%d", recorder.count(queue.EventBatchProgressed, jobType), recorder.count(queue.EventBatchCompleted, jobType))
+		}
+	}
+
+	if _, err := execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName); err != nil {
+		t.Fatalf("drop workflow finalization trigger: %v", err)
+	}
+	if _, err := execSQLiteIntegrationEventually(queueDB, `UPDATE queue_jobs SET processing_started_at=1 WHERE queue_name=? AND state='processing'`, queueName); err != nil {
+		t.Fatalf("age workflow delivery for recovery: %v", err)
+	}
+	waitForObservabilityScenario(t, "sqlite_workflow_winner_fact_recovery_"+workflowKind, 5*time.Second, func() bool {
+		if recorder.count(queue.EventJobSucceeded, jobType) != 1 {
+			return false
+		}
+		if workflowKind == "chain" {
+			return recorder.count(queue.EventChainCompleted, jobType) == 1
+		}
+		if chainPredecessor {
+			return recorder.count(queue.EventChainAdvanced, jobType) == 1 && recorder.count(queue.EventChainCompleted, jobType) == 0
+		}
+		if batchPredecessor {
+			return recorder.count(queue.EventBatchProgressed, jobType) == 1 && recorder.count(queue.EventBatchCompleted, jobType) == 0 && recorder.count(queue.EventBatchCompleted, successorJobType) == 1
+		}
+		return recorder.count(queue.EventBatchProgressed, jobType) == 1 && recorder.count(queue.EventBatchCompleted, jobType) == 1
+	})
+	if handlerCalls.Load() != 1 {
+		t.Fatalf("handler calls after receipt-backed recovery = %d, want 1", handlerCalls.Load())
+	}
+	succeeded, ok := recorder.first(queue.EventJobSucceeded, jobType)
+	if !ok || succeeded.Attempt != 0 || succeeded.EventID == "" {
+		t.Fatalf("recovered attempt-zero success = %+v present:%t", succeeded, ok)
+	}
+	if (chainPredecessor || batchPredecessor) && successorCalls.Load() != 1 {
+		t.Fatalf("successor calls after predecessor recovery = %d, want 1", successorCalls.Load())
+	}
+	var remaining int
+	if err := queueDB.QueryRow(`SELECT COUNT(*) FROM queue_jobs WHERE queue_name=?`, queueName).Scan(&remaining); err != nil {
+		t.Fatalf("count recovered workflow deliveries: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("recovered workflow deliveries = %d, want 0", remaining)
+	}
+	if recorder.count(queue.EventJobFailed, jobType) != 0 || recorder.count(queue.EventChainFailed, jobType) != 0 || recorder.count(queue.EventBatchFailed, jobType) != 0 || recorder.count(queue.EventBatchCancelled, jobType) != 0 {
+		t.Fatal("contradictory replay published losing workflow facts")
+	}
+}
+
+// runSQLiteRepeatedWorkflowSettlementRecovery proves multiple recovery
+// finalization failures retain the original receipt owner until one later
+// generation positively settles the physical row and releases deferred facts.
+func runSQLiteRepeatedWorkflowSettlementRecovery(t *testing.T) {
+	t.Helper()
+	queueDSN := fmt.Sprintf("%s/queue-repeated-workflow-recovery-%d.db", t.TempDir(), time.Now().UnixNano())
+	workflowDSN := fmt.Sprintf("%s/workflow-repeated-recovery-%d.db", t.TempDir(), time.Now().UnixNano())
+	prepareSQLiteIntegrationSchema(t, queueDSN)
+
+	workflowDB, err := sql.Open(testenv.BackendSQLite, workflowDSN)
+	if err != nil {
+		t.Fatalf("open repeated-recovery workflow store: %v", err)
+	}
+	t.Cleanup(func() { _ = workflowDB.Close() })
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{
+		DB:          workflowDB,
+		DriverName:  testenv.BackendSQLite,
+		AutoMigrate: true,
+	})
+	if err != nil {
+		t.Fatalf("new repeated-recovery workflow store: %v", err)
+	}
+
+	const (
+		queueName = "repeated-workflow-recovery"
+		jobType   = "job:db:repeated-workflow-recovery"
+	)
+	recorder := &databaseSettlementRecorder{settlement: make(chan struct{})}
+	runtimeCfg := withDBRecoveryPolicy(withDefaultQueue(sqliteCfg(queueDSN), queueName), 10*time.Millisecond, 30*time.Second)
+	runtimeCfg.DisableAutoMigrate = true
+	firstRuntime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new first repeated-recovery runtime: %v", err)
+	}
+	firstStopped := false
+	t.Cleanup(func() {
+		if firstStopped {
+			return
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = firstRuntime.Shutdown(shutdownCtx)
+	})
+
+	var handlerCalls atomic.Int64
+	firstRuntime.Register(jobType, func(context.Context, queue.Message) error {
+		handlerCalls.Add(1)
+		return nil
+	})
+
+	queueDB, err := sql.Open(testenv.BackendSQLite, queueDSN)
+	if err != nil {
+		t.Fatalf("open repeated-recovery queue database: %v", err)
+	}
+	defer queueDB.Close()
+	const triggerName = "reject_repeated_workflow_finalization"
+	trigger := fmt.Sprintf(`CREATE TRIGGER %s
+BEFORE DELETE ON queue_jobs
+WHEN OLD.queue_name = '%s'
+BEGIN
+    SELECT RAISE(ABORT, 'forced repeated workflow finalization failure');
+END`, triggerName, queueName)
+	if _, err := queueDB.Exec(trigger); err != nil {
+		t.Fatalf("create repeated-recovery finalization trigger: %v", err)
+	}
+	triggerInstalled := true
+	defer func() {
+		if triggerInstalled {
+			_, _ = execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName)
+		}
+	}()
+	if err := firstRuntime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start first repeated-recovery runtime: %v", err)
+	}
+	chainID, err := firstRuntime.Chain(queue.NewJob(jobType).OnQueue(queueName)).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch repeated-recovery chain: %v", err)
+	}
+	select {
+	case <-recorder.settlement:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for initial repeated-recovery settlement failure")
+	}
+	if recorder.count(queue.EventSettlementFailed, jobType) != 1 {
+		t.Fatalf("initial settlement failures = %d, want 1 before stale recovery", recorder.count(queue.EventSettlementFailed, jobType))
+	}
+	if handlerCalls.Load() != 1 || recorder.count(queue.EventJobSucceeded, jobType) != 0 || recorder.count(queue.EventChainCompleted, jobType) != 0 || recorder.count(queue.EventProcessSucceeded, jobType) != 0 {
+		t.Fatalf("initial calls/job/chain/process facts = %d/%d/%d/%d, want 1/0/0/0", handlerCalls.Load(), recorder.count(queue.EventJobSucceeded, jobType), recorder.count(queue.EventChainCompleted, jobType), recorder.count(queue.EventProcessSucceeded, jobType))
+	}
+
+	var (
+		rowID              int64
+		rowState           string
+		rowAttempt         int
+		originalGeneration string
+	)
+	if err := queueDB.QueryRow(`SELECT id, state, attempt, processing_token FROM queue_jobs WHERE queue_name=?`, queueName).Scan(&rowID, &rowState, &rowAttempt, &originalGeneration); err != nil {
+		t.Fatalf("read initial repeated-recovery delivery: %v", err)
+	}
+	if rowState != "processing" || rowAttempt != 0 || originalGeneration == "" {
+		t.Fatalf("initial repeated-recovery delivery = id:%d state:%q attempt:%d generation:%q", rowID, rowState, rowAttempt, originalGeneration)
+	}
+	var receiptOwner string
+	if err := workflowDB.QueryRow(`SELECT owner_delivery_id FROM bus_workflow_transition_receipts WHERE workflow_kind='chain' AND workflow_id=?`, chainID).Scan(&receiptOwner); err != nil {
+		t.Fatalf("read repeated-recovery receipt owner: %v", err)
+	}
+	if receiptOwner != originalGeneration {
+		t.Fatalf("receipt owner = %q, want initial generation %q", receiptOwner, originalGeneration)
+	}
+
+	if _, err := execSQLiteIntegrationEventually(queueDB, `UPDATE queue_jobs SET processing_started_at=1 WHERE id=? AND state='processing'`, rowID); err != nil {
+		t.Fatalf("age repeated-recovery delivery: %v", err)
+	}
+	waitForObservabilityScenario(t, "sqlite_repeated_workflow_settlement_failures", 5*time.Second, func() bool {
+		return recorder.count(queue.EventSettlementFailed, jobType) >= 3
+	})
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := firstRuntime.Shutdown(shutdownCtx); err != nil {
+		cancel()
+		t.Fatalf("shutdown repeated-recovery fault runtime: %v", err)
+	}
+	cancel()
+	firstStopped = true
+
+	var (
+		pendingState      string
+		pendingAttempt    int
+		pendingGeneration string
+		processingStarted sql.NullInt64
+	)
+	if err := queueDB.QueryRow(`SELECT state, attempt, processing_token, processing_started_at FROM queue_jobs WHERE id=?`, rowID).Scan(&pendingState, &pendingAttempt, &pendingGeneration, &processingStarted); err != nil {
+		t.Fatalf("read repaired repeated-recovery delivery: %v", err)
+	}
+	if pendingState != "pending" || pendingAttempt != 0 || pendingGeneration != receiptOwner || processingStarted.Valid {
+		t.Fatalf("repaired delivery = state:%q attempt:%d generation:%q started:%#v, want pending/0/%q/NULL", pendingState, pendingAttempt, pendingGeneration, processingStarted, receiptOwner)
+	}
+	if handlerCalls.Load() != 1 || recorder.count(queue.EventJobSucceeded, jobType) != 0 || recorder.count(queue.EventChainCompleted, jobType) != 0 || recorder.count(queue.EventProcessSucceeded, jobType) != 0 {
+		t.Fatalf("pre-final calls/job/chain/process facts = %d/%d/%d/%d, want 1/0/0/0", handlerCalls.Load(), recorder.count(queue.EventJobSucceeded, jobType), recorder.count(queue.EventChainCompleted, jobType), recorder.count(queue.EventProcessSucceeded, jobType))
+	}
+	if _, err := execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName); err != nil {
+		t.Fatalf("drop repeated-recovery finalization trigger: %v", err)
+	}
+	triggerInstalled = false
+
+	finalRuntime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new final repeated-recovery runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = finalRuntime.Shutdown(shutdownCtx)
+	})
+	finalRuntime.Register(jobType, func(context.Context, queue.Message) error {
+		handlerCalls.Add(1)
+		return queue.Permanent(errors.New("receipt recovery re-executed application code"))
+	})
+	if err := finalRuntime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start final repeated-recovery runtime: %v", err)
+	}
+	waitForObservabilityScenario(t, "sqlite_repeated_workflow_final_settlement", 5*time.Second, func() bool {
+		var remaining int
+		rowErr := queueDB.QueryRow(`SELECT COUNT(*) FROM queue_jobs WHERE id=?`, rowID).Scan(&remaining)
+		return rowErr == nil && remaining == 0 && recorder.count(queue.EventJobSucceeded, jobType) == 1 && recorder.count(queue.EventChainCompleted, jobType) == 1 && recorder.count(queue.EventProcessSucceeded, jobType) == 1
+	})
+	if handlerCalls.Load() != 1 {
+		t.Fatalf("handler calls after repeated recovery = %d, want 1", handlerCalls.Load())
+	}
+	if recorder.count(queue.EventJobSucceeded, jobType) != 1 || recorder.count(queue.EventChainCompleted, jobType) != 1 || recorder.count(queue.EventProcessSucceeded, jobType) != 1 {
+		t.Fatalf("final job/chain/process facts = %d/%d/%d, want 1/1/1", recorder.count(queue.EventJobSucceeded, jobType), recorder.count(queue.EventChainCompleted, jobType), recorder.count(queue.EventProcessSucceeded, jobType))
+	}
+	if recorder.count(queue.EventJobFailed, jobType) != 0 || recorder.count(queue.EventChainFailed, jobType) != 0 {
+		t.Fatal("repeated settlement recovery published contradictory failure facts")
+	}
+}
+
+// runSQLiteTerminalBatchOwnerRecovery proves the terminal member's receipt,
+// rather than an earlier settled member, owns recovered aggregate completion.
+func runSQLiteTerminalBatchOwnerRecovery(t *testing.T) {
+	t.Helper()
+	queueDSN := fmt.Sprintf("%s/queue-terminal-batch-owner-%d.db", t.TempDir(), time.Now().UnixNano())
+	workflowDSN := fmt.Sprintf("%s/workflow-terminal-batch-owner-%d.db", t.TempDir(), time.Now().UnixNano())
+	prepareSQLiteIntegrationSchema(t, queueDSN)
+
+	workflowDB, err := sql.Open(testenv.BackendSQLite, workflowDSN)
+	if err != nil {
+		t.Fatalf("open terminal batch workflow store: %v", err)
+	}
+	t.Cleanup(func() { _ = workflowDB.Close() })
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{
+		DB:          workflowDB,
+		DriverName:  testenv.BackendSQLite,
+		AutoMigrate: true,
+	})
+	if err != nil {
+		t.Fatalf("new terminal batch workflow store: %v", err)
+	}
+
+	const (
+		queueName       = "terminal-batch-owner"
+		firstJobType    = "job:db:terminal-batch-owner:first"
+		terminalJobType = "job:db:terminal-batch-owner:terminal"
+	)
+	recorder := &databaseSettlementRecorder{settlement: make(chan struct{})}
+	runtimeCfg := withDBRecoveryPolicy(withDefaultQueue(sqliteCfg(queueDSN), queueName), 10*time.Millisecond, 30*time.Second)
+	runtimeCfg.DisableAutoMigrate = true
+	runtime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new terminal batch recovery runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = runtime.Shutdown(shutdownCtx)
+	})
+
+	var firstCalls, terminalCalls atomic.Int64
+	runtime.Register(firstJobType, func(context.Context, queue.Message) error {
+		firstCalls.Add(1)
+		return nil
+	})
+	runtime.Register(terminalJobType, func(context.Context, queue.Message) error {
+		terminalCalls.Add(1)
+		return nil
+	})
+
+	queueDB, err := sql.Open(testenv.BackendSQLite, queueDSN)
+	if err != nil {
+		t.Fatalf("open terminal batch queue database: %v", err)
+	}
+	defer queueDB.Close()
+	const triggerName = "reject_terminal_batch_finalization"
+	trigger := fmt.Sprintf(`CREATE TRIGGER %s
+BEFORE DELETE ON queue_jobs
+WHEN OLD.queue_name = '%s' AND OLD.id = 2
+BEGIN
+    SELECT RAISE(ABORT, 'forced terminal batch finalization failure');
+END`, triggerName, queueName)
+	if _, err := queueDB.Exec(trigger); err != nil {
+		t.Fatalf("create terminal batch finalization trigger: %v", err)
+	}
+	if err := runtime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start terminal batch recovery runtime: %v", err)
+	}
+
+	batchID, err := runtime.Batch(
+		queue.NewJob(firstJobType).OnQueue(queueName),
+		queue.NewJob(terminalJobType).OnQueue(queueName),
+	).OnQueue(queueName).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch terminal batch recovery workflow: %v", err)
+	}
+	select {
+	case <-recorder.settlement:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for terminal batch settlement failure")
+	}
+
+	state, err := store.GetBatch(context.Background(), batchID)
+	if err != nil {
+		t.Fatalf("get committed terminal batch: %v", err)
+	}
+	if !state.Completed || state.Cancelled || state.Failed != 0 || state.Processed != 2 || state.Pending != 0 {
+		t.Fatalf("terminal batch state before recovery = %+v", state)
+	}
+	if firstCalls.Load() != 1 || terminalCalls.Load() != 1 {
+		t.Fatalf("first/terminal handler calls before recovery = %d/%d, want 1/1", firstCalls.Load(), terminalCalls.Load())
+	}
+	if recorder.count(queue.EventJobSucceeded, firstJobType) != 1 || recorder.count(queue.EventBatchProgressed, firstJobType) != 1 {
+		t.Fatalf("settled first-member job/progress facts = %d/%d, want 1/1", recorder.count(queue.EventJobSucceeded, firstJobType), recorder.count(queue.EventBatchProgressed, firstJobType))
+	}
+	if recorder.count(queue.EventJobSucceeded, terminalJobType) != 0 || recorder.count(queue.EventBatchProgressed, terminalJobType) != 0 || recorder.count(queue.EventBatchCompleted, terminalJobType) != 0 {
+		t.Fatalf("terminal facts before recovery = success/progress/completed %d/%d/%d, want 0/0/0", recorder.count(queue.EventJobSucceeded, terminalJobType), recorder.count(queue.EventBatchProgressed, terminalJobType), recorder.count(queue.EventBatchCompleted, terminalJobType))
+	}
+	if recorder.count(queue.EventBatchCompleted, firstJobType) != 0 {
+		t.Fatal("earlier member was incorrectly credited with terminal batch completion")
+	}
+	var remainingID int64
+	var remainingState string
+	var processingToken string
+	if err := queueDB.QueryRow(`SELECT id, state, processing_token FROM queue_jobs WHERE queue_name=?`, queueName).Scan(&remainingID, &remainingState, &processingToken); err != nil {
+		t.Fatalf("read terminal delivery before recovery: %v", err)
+	}
+	if remainingID != 2 || remainingState != "processing" || processingToken == "" {
+		t.Fatalf("remaining terminal delivery = id:%d state:%q token:%q, want id:2 state:processing with token", remainingID, remainingState, processingToken)
+	}
+	var receiptOwner, receiptJobID string
+	var receiptCompleted int
+	if err := workflowDB.QueryRow(`SELECT owner_delivery_id, job_id, aggregate_completed
+		FROM bus_workflow_transition_receipts
+		WHERE workflow_kind='batch' AND workflow_id=? AND member_id=''`, batchID).Scan(&receiptOwner, &receiptJobID, &receiptCompleted); err != nil {
+		t.Fatalf("read terminal batch aggregate receipt: %v", err)
+	}
+	if receiptOwner != processingToken || receiptJobID == "" || receiptCompleted != 1 {
+		t.Fatalf("terminal aggregate receipt = owner:%q job:%q completed:%d, want owner:%q with job and completion", receiptOwner, receiptJobID, receiptCompleted, processingToken)
+	}
+	var terminalMemberReceipts int
+	if err := workflowDB.QueryRow(`SELECT COUNT(*) FROM bus_workflow_transition_receipts
+		WHERE workflow_kind='batch' AND workflow_id=? AND member_id=? AND owner_delivery_id=? AND outcome='succeeded'`, batchID, receiptJobID, receiptOwner).Scan(&terminalMemberReceipts); err != nil {
+		t.Fatalf("read terminal batch member receipt: %v", err)
+	}
+	if terminalMemberReceipts != 1 {
+		t.Fatalf("terminal member receipts = %d, want 1", terminalMemberReceipts)
+	}
+
+	if _, err := execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName); err != nil {
+		t.Fatalf("drop terminal batch finalization trigger: %v", err)
+	}
+	if _, err := execSQLiteIntegrationEventually(queueDB, `UPDATE queue_jobs SET processing_started_at=1 WHERE id=? AND queue_name=? AND state='processing'`, remainingID, queueName); err != nil {
+		t.Fatalf("age terminal batch delivery for recovery: %v", err)
+	}
+	waitForObservabilityScenario(t, "sqlite_terminal_batch_owner_recovery", 5*time.Second, func() bool {
+		return recorder.count(queue.EventJobSucceeded, terminalJobType) == 1 &&
+			recorder.count(queue.EventBatchProgressed, terminalJobType) == 1 &&
+			recorder.count(queue.EventBatchCompleted, terminalJobType) == 1
+	})
+	if firstCalls.Load() != 1 || terminalCalls.Load() != 1 {
+		t.Fatalf("first/terminal handler calls after recovery = %d/%d, want 1/1", firstCalls.Load(), terminalCalls.Load())
+	}
+	if recorder.count(queue.EventJobSucceeded, firstJobType) != 1 || recorder.count(queue.EventBatchProgressed, firstJobType) != 1 || recorder.count(queue.EventBatchCompleted, firstJobType) != 0 {
+		t.Fatalf("first-member facts after recovery = success/progress/completed %d/%d/%d, want 1/1/0", recorder.count(queue.EventJobSucceeded, firstJobType), recorder.count(queue.EventBatchProgressed, firstJobType), recorder.count(queue.EventBatchCompleted, firstJobType))
+	}
+	firstProgressed, firstOK := recorder.first(queue.EventBatchProgressed, firstJobType)
+	terminalSucceeded, successOK := recorder.first(queue.EventJobSucceeded, terminalJobType)
+	terminalCompleted, completedOK := recorder.first(queue.EventBatchCompleted, terminalJobType)
+	if !firstOK || !successOK || !completedOK || firstProgressed.JobID == "" || firstProgressed.JobID == receiptJobID || terminalSucceeded.JobID != receiptJobID || terminalCompleted.JobID != receiptJobID || terminalCompleted.BatchID != batchID || terminalCompleted.DispatchID != state.DispatchID {
+		t.Fatalf("first progress/terminal success/terminal completion ownership = %+v present:%t / %+v present:%t / %+v present:%t", firstProgressed, firstOK, terminalSucceeded, successOK, terminalCompleted, completedOK)
+	}
+	var remaining int
+	if err := queueDB.QueryRow(`SELECT COUNT(*) FROM queue_jobs WHERE queue_name=?`, queueName).Scan(&remaining); err != nil {
+		t.Fatalf("count terminal batch deliveries after recovery: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("terminal batch deliveries after recovery = %d, want 0", remaining)
+	}
+	if recorder.count(queue.EventJobFailed, terminalJobType) != 0 || recorder.count(queue.EventBatchFailed, terminalJobType) != 0 || recorder.count(queue.EventBatchCancelled, terminalJobType) != 0 {
+		t.Fatal("terminal batch recovery published contradictory failure facts")
+	}
+}
+
+// runSQLiteFailedChainSettlementRecovery proves a terminal failure receipt
+// survives repeated archive faults without replaying its application occurrence.
+func runSQLiteFailedChainSettlementRecovery(t *testing.T) {
+	t.Helper()
+	queueDSN := fmt.Sprintf("%s/queue-failed-chain-recovery-%d.db", t.TempDir(), time.Now().UnixNano())
+	workflowDSN := fmt.Sprintf("%s/workflow-failed-chain-recovery-%d.db", t.TempDir(), time.Now().UnixNano())
+	prepareSQLiteIntegrationSchema(t, queueDSN)
+
+	workflowDB, err := sql.Open(testenv.BackendSQLite, workflowDSN)
+	if err != nil {
+		t.Fatalf("open failed chain workflow store: %v", err)
+	}
+	t.Cleanup(func() { _ = workflowDB.Close() })
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{DB: workflowDB, DriverName: testenv.BackendSQLite, AutoMigrate: true})
+	if err != nil {
+		t.Fatalf("new failed chain workflow store: %v", err)
+	}
+
+	const (
+		queueName = "failed-chain-recovery"
+		jobType   = "job:db:failed-chain-recovery"
+	)
+	recorder := &databaseSettlementRecorder{settlement: make(chan struct{})}
+	runtimeCfg := withDBRecoveryPolicy(withDefaultQueue(sqliteCfg(queueDSN), queueName), 10*time.Millisecond, 30*time.Second)
+	runtimeCfg.DisableAutoMigrate = true
+	runtime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new failed chain recovery runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = runtime.Shutdown(shutdownCtx)
+	})
+
+	originalCause := errors.New("original failed chain application cause")
+	var handlerCalls atomic.Int64
+	runtime.Register(jobType, func(context.Context, queue.Message) error {
+		handlerCalls.Add(1)
+		return queue.Permanent(originalCause)
+	})
+
+	queueDB, err := sql.Open(testenv.BackendSQLite, queueDSN)
+	if err != nil {
+		t.Fatalf("open failed chain queue database: %v", err)
+	}
+	defer queueDB.Close()
+	const triggerName = "reject_failed_chain_terminal_settlement"
+	trigger := fmt.Sprintf(`CREATE TRIGGER %s
+BEFORE UPDATE OF state ON queue_jobs
+WHEN OLD.queue_name = '%s' AND NEW.state = 'dead'
+BEGIN
+    SELECT RAISE(ABORT, 'forced failed chain finalization failure');
+END`, triggerName, queueName)
+	if _, err := queueDB.Exec(trigger); err != nil {
+		t.Fatalf("create failed chain finalization trigger: %v", err)
+	}
+	triggerInstalled := true
+	defer func() {
+		if triggerInstalled {
+			_, _ = execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName)
+		}
+	}()
+	if err := runtime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start failed chain recovery runtime: %v", err)
+	}
+	chainID, err := runtime.Chain(queue.NewJob(jobType).OnQueue(queueName).Retry(3)).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch failed chain recovery workflow: %v", err)
+	}
+	select {
+	case <-recorder.settlement:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for failed chain settlement failure")
+	}
+
+	state, err := store.GetChain(context.Background(), chainID)
+	if err != nil || !state.Failed || state.Completed || state.Failure != originalCause.Error() {
+		t.Fatalf("failed chain before recovery = %+v err:%v", state, err)
+	}
+	if handlerCalls.Load() != 1 || recorder.count(queue.EventJobStarted, jobType) != 1 || recorder.count(queue.EventJobFailed, jobType) != 1 || recorder.count(queue.EventChainFailed, jobType) != 1 {
+		t.Fatalf("initial chain calls/started/job-failed/chain-failed = %d/%d/%d/%d, want 1/1/1/1", handlerCalls.Load(), recorder.count(queue.EventJobStarted, jobType), recorder.count(queue.EventJobFailed, jobType), recorder.count(queue.EventChainFailed, jobType))
+	}
+
+	var (
+		rowID           int64
+		rowState        string
+		rowAttempt      int
+		processingToken string
+	)
+	if err := queueDB.QueryRow(`SELECT id, state, attempt, processing_token FROM queue_jobs WHERE queue_name=?`, queueName).Scan(&rowID, &rowState, &rowAttempt, &processingToken); err != nil {
+		t.Fatalf("read failed chain delivery: %v", err)
+	}
+	if rowState != "processing" || rowAttempt != 0 || processingToken == "" {
+		t.Fatalf("failed chain delivery = id:%d state:%q attempt:%d token:%q, want processing attempt 0", rowID, rowState, rowAttempt, processingToken)
+	}
+	var (
+		receiptOwner, receiptDispatch, receiptJobID, receiptOutcome string
+		receiptAttempt                                              int
+		receiptCompleted, receiptCancelled                          int
+	)
+	if err := workflowDB.QueryRow(`SELECT owner_delivery_id, owner_attempt, job_dispatch_id, job_id, outcome, aggregate_completed, aggregate_cancelled
+		FROM bus_workflow_transition_receipts WHERE workflow_kind='chain' AND workflow_id=?`, chainID).Scan(
+		&receiptOwner, &receiptAttempt, &receiptDispatch, &receiptJobID, &receiptOutcome, &receiptCompleted, &receiptCancelled,
+	); err != nil {
+		t.Fatalf("read failed chain receipt: %v", err)
+	}
+	if receiptOwner != processingToken || receiptAttempt != 0 || receiptDispatch != state.DispatchID || receiptJobID == "" || receiptOutcome != "failed" || receiptCompleted != 0 || receiptCancelled != 0 {
+		t.Fatalf("failed chain receipt = owner:%q attempt:%d dispatch:%q job:%q outcome:%q completed:%d cancelled:%d", receiptOwner, receiptAttempt, receiptDispatch, receiptJobID, receiptOutcome, receiptCompleted, receiptCancelled)
+	}
+
+	if _, err := execSQLiteIntegrationEventually(queueDB, `UPDATE queue_jobs SET processing_started_at=1 WHERE id=? AND state='processing'`, rowID); err != nil {
+		t.Fatalf("age failed chain delivery: %v", err)
+	}
+	waitForObservabilityScenario(t, "sqlite_repeated_failed_chain_settlement_failures", 5*time.Second, func() bool {
+		return recorder.count(queue.EventSettlementFailed, jobType) >= 3
+	})
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := runtime.Shutdown(shutdownCtx); err != nil {
+		cancel()
+		t.Fatalf("shutdown failed-chain fault runtime: %v", err)
+	}
+	cancel()
+
+	var (
+		repairedState   string
+		repairedAttempt int
+		repairedToken   string
+		repairedStarted sql.NullInt64
+	)
+	if err := queueDB.QueryRow(`SELECT state, attempt, processing_token, processing_started_at FROM queue_jobs WHERE id=?`, rowID).Scan(&repairedState, &repairedAttempt, &repairedToken, &repairedStarted); err != nil {
+		t.Fatalf("read repaired failed chain delivery: %v", err)
+	}
+	if repairedState != "pending" || repairedAttempt != 0 || repairedToken != receiptOwner || repairedStarted.Valid {
+		t.Fatalf("repaired failed chain delivery = state:%q attempt:%d token:%q started:%#v, want pending/0/%q/NULL", repairedState, repairedAttempt, repairedToken, repairedStarted, receiptOwner)
+	}
+	state, err = store.GetChain(context.Background(), chainID)
+	if err != nil || state.Failure != originalCause.Error() {
+		t.Fatalf("failed chain cause after repeated recovery = %+v err:%v", state, err)
+	}
+	if handlerCalls.Load() != 1 || recorder.count(queue.EventJobStarted, jobType) != 1 || recorder.count(queue.EventJobFailed, jobType) != 1 || recorder.count(queue.EventChainFailed, jobType) != 1 {
+		t.Fatalf("pre-archive chain calls/started/job-failed/chain-failed = %d/%d/%d/%d, want 1/1/1/1", handlerCalls.Load(), recorder.count(queue.EventJobStarted, jobType), recorder.count(queue.EventJobFailed, jobType), recorder.count(queue.EventChainFailed, jobType))
+	}
+	if _, err := execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName); err != nil {
+		t.Fatalf("drop failed chain finalization trigger: %v", err)
+	}
+	triggerInstalled = false
+
+	finalRuntime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new final failed chain recovery runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = finalRuntime.Shutdown(shutdownCtx)
+	})
+	finalRuntime.Register(jobType, func(context.Context, queue.Message) error {
+		handlerCalls.Add(1)
+		return queue.Permanent(errors.New("failed-chain receipt recovery re-executed application code"))
+	})
+	if err := finalRuntime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start final failed chain recovery runtime: %v", err)
+	}
+	waitForObservabilityScenario(t, "sqlite_failed_chain_terminal_settlement_recovery", 5*time.Second, func() bool {
+		var archived string
+		return queueDB.QueryRow(`SELECT state FROM queue_jobs WHERE id=?`, rowID).Scan(&archived) == nil && archived == "dead"
+	})
+	if handlerCalls.Load() != 1 || recorder.count(queue.EventJobStarted, jobType) != 1 || recorder.count(queue.EventJobFailed, jobType) != 1 || recorder.count(queue.EventChainFailed, jobType) != 1 {
+		t.Fatalf("archived chain calls/started/job-failed/chain-failed = %d/%d/%d/%d, want 1/1/1/1", handlerCalls.Load(), recorder.count(queue.EventJobStarted, jobType), recorder.count(queue.EventJobFailed, jobType), recorder.count(queue.EventChainFailed, jobType))
+	}
+	var (
+		archivedState   string
+		archivedAttempt int
+		archivedToken   sql.NullString
+		archivedError   sql.NullString
+	)
+	if err := queueDB.QueryRow(`SELECT state, attempt, processing_token, last_error FROM queue_jobs WHERE id=?`, rowID).Scan(&archivedState, &archivedAttempt, &archivedToken, &archivedError); err != nil {
+		t.Fatalf("read archived failed chain delivery: %v", err)
+	}
+	if archivedState != "dead" || archivedAttempt != 1 || archivedToken.Valid || !archivedError.Valid || archivedError.String != originalCause.Error() {
+		t.Fatalf("archived failed chain delivery = state:%q attempt:%d token:%#v error:%q, want dead attempt 1 with persisted cause", archivedState, archivedAttempt, archivedToken, archivedError.String)
+	}
+}
+
+// runSQLiteFailedBatchSettlementRecovery proves a receipt-backed failed member
+// remains archived after finalization recovery without executing its handler or
+// fabricating the application cause omitted from durable receipt state.
+func runSQLiteFailedBatchSettlementRecovery(t *testing.T) {
+	t.Helper()
+	queueDSN := fmt.Sprintf("%s/queue-failed-batch-recovery-%d.db", t.TempDir(), time.Now().UnixNano())
+	workflowDSN := fmt.Sprintf("%s/workflow-failed-batch-recovery-%d.db", t.TempDir(), time.Now().UnixNano())
+	prepareSQLiteIntegrationSchema(t, queueDSN)
+
+	workflowDB, err := sql.Open(testenv.BackendSQLite, workflowDSN)
+	if err != nil {
+		t.Fatalf("open failed batch workflow store: %v", err)
+	}
+	t.Cleanup(func() { _ = workflowDB.Close() })
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{
+		DB:          workflowDB,
+		DriverName:  testenv.BackendSQLite,
+		AutoMigrate: true,
+	})
+	if err != nil {
+		t.Fatalf("new failed batch workflow store: %v", err)
+	}
+
+	const (
+		queueName     = "failed-batch-recovery"
+		firstJobType  = "job:db:failed-batch-recovery:first"
+		failedJobType = "job:db:failed-batch-recovery:failed"
+	)
+	recorder := &databaseSettlementRecorder{settlement: make(chan struct{})}
+	runtimeCfg := withDBRecoveryPolicy(withDefaultQueue(sqliteCfg(queueDSN), queueName), 10*time.Millisecond, 30*time.Second)
+	runtimeCfg.DisableAutoMigrate = true
+	runtime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new failed batch recovery runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = runtime.Shutdown(shutdownCtx)
+	})
+
+	originalCause := errors.New("original failed batch application cause")
+	var firstCalls, failedCalls atomic.Int64
+	runtime.Register(firstJobType, func(context.Context, queue.Message) error {
+		firstCalls.Add(1)
+		return nil
+	})
+	runtime.Register(failedJobType, func(context.Context, queue.Message) error {
+		failedCalls.Add(1)
+		return queue.Permanent(originalCause)
+	})
+
+	queueDB, err := sql.Open(testenv.BackendSQLite, queueDSN)
+	if err != nil {
+		t.Fatalf("open failed batch queue database: %v", err)
+	}
+	defer queueDB.Close()
+	const triggerName = "reject_failed_batch_terminal_settlement"
+	trigger := fmt.Sprintf(`CREATE TRIGGER %s
+BEFORE UPDATE OF state ON queue_jobs
+WHEN OLD.queue_name = '%s' AND NEW.state = 'dead'
+BEGIN
+    SELECT RAISE(ABORT, 'forced failed batch finalization failure');
+END`, triggerName, queueName)
+	if _, err := queueDB.Exec(trigger); err != nil {
+		t.Fatalf("create failed batch finalization trigger: %v", err)
+	}
+	triggerInstalled := true
+	defer func() {
+		if triggerInstalled {
+			_, _ = execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName)
+		}
+	}()
+	if err := runtime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start failed batch recovery runtime: %v", err)
+	}
+
+	batchID, err := runtime.Batch(
+		queue.NewJob(firstJobType).OnQueue(queueName),
+		queue.NewJob(failedJobType).OnQueue(queueName).Retry(3),
+	).AllowFailures().OnQueue(queueName).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch failed batch recovery workflow: %v", err)
+	}
+	select {
+	case <-recorder.settlement:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for failed batch settlement failure")
+	}
+
+	state, err := store.GetBatch(context.Background(), batchID)
+	if err != nil {
+		t.Fatalf("get committed failed batch: %v", err)
+	}
+	if !state.Completed || state.Cancelled || state.Failed != 1 || state.Processed != 2 || state.Pending != 0 || !state.AllowFailed {
+		t.Fatalf("failed batch state before recovery = %+v", state)
+	}
+	if firstCalls.Load() != 1 || failedCalls.Load() != 1 {
+		t.Fatalf("first/failed handler calls before recovery = %d/%d, want 1/1", firstCalls.Load(), failedCalls.Load())
+	}
+	if recorder.count(queue.EventJobSucceeded, firstJobType) != 1 || recorder.count(queue.EventBatchProgressed, firstJobType) != 1 {
+		t.Fatalf("first-member success/progress facts = %d/%d, want 1/1", recorder.count(queue.EventJobSucceeded, firstJobType), recorder.count(queue.EventBatchProgressed, firstJobType))
+	}
+	if recorder.count(queue.EventJobFailed, failedJobType) != 1 || recorder.count(queue.EventBatchProgressed, failedJobType) != 0 || recorder.count(queue.EventBatchCompleted, failedJobType) != 0 {
+		t.Fatalf("failed-member facts before recovery = failed/progress/completed %d/%d/%d, want 1/0/0", recorder.count(queue.EventJobFailed, failedJobType), recorder.count(queue.EventBatchProgressed, failedJobType), recorder.count(queue.EventBatchCompleted, failedJobType))
+	}
+
+	var (
+		rowID           int64
+		rowState        string
+		rowAttempt      int
+		processingToken string
+	)
+	if err := queueDB.QueryRow(`SELECT id, state, attempt, processing_token FROM queue_jobs WHERE queue_name=?`, queueName).Scan(&rowID, &rowState, &rowAttempt, &processingToken); err != nil {
+		t.Fatalf("read failed delivery before recovery: %v", err)
+	}
+	if rowState != "processing" || rowAttempt != 0 || processingToken == "" {
+		t.Fatalf("failed delivery before recovery = id:%d state:%q attempt:%d token:%q, want retained processing attempt 0", rowID, rowState, rowAttempt, processingToken)
+	}
+	var receiptOwner, receiptJobID, receiptOutcome string
+	var receiptCompleted int
+	if err := workflowDB.QueryRow(`SELECT owner_delivery_id, job_id, outcome, aggregate_completed
+		FROM bus_workflow_transition_receipts
+		WHERE workflow_kind='batch' AND workflow_id=? AND member_id=''`, batchID).Scan(&receiptOwner, &receiptJobID, &receiptOutcome, &receiptCompleted); err != nil {
+		t.Fatalf("read failed batch aggregate receipt: %v", err)
+	}
+	if receiptOwner != processingToken || receiptJobID == "" || receiptOutcome != "failed" || receiptCompleted != 1 {
+		t.Fatalf("failed aggregate receipt = owner:%q job:%q outcome:%q completed:%d, want owner:%q failed completion", receiptOwner, receiptJobID, receiptOutcome, receiptCompleted, processingToken)
+	}
+
+	if _, err := execSQLiteIntegrationEventually(queueDB, `UPDATE queue_jobs SET processing_started_at=1 WHERE id=? AND state='processing'`, rowID); err != nil {
+		t.Fatalf("age failed batch delivery for recovery: %v", err)
+	}
+	waitForObservabilityScenario(t, "sqlite_repeated_failed_batch_settlement_failures", 5*time.Second, func() bool {
+		return recorder.count(queue.EventSettlementFailed, failedJobType) >= 3
+	})
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := runtime.Shutdown(shutdownCtx); err != nil {
+		cancel()
+		t.Fatalf("shutdown repeated failed-batch fault runtime: %v", err)
+	}
+	cancel()
+	var (
+		repairedState   string
+		repairedAttempt int
+		repairedToken   string
+		repairedStarted sql.NullInt64
+	)
+	if err := queueDB.QueryRow(`SELECT state, attempt, processing_token, processing_started_at FROM queue_jobs WHERE id=?`, rowID).Scan(&repairedState, &repairedAttempt, &repairedToken, &repairedStarted); err != nil {
+		t.Fatalf("read repeatedly repaired failed delivery: %v", err)
+	}
+	if repairedState != "pending" || repairedAttempt != 0 || repairedToken != receiptOwner || repairedStarted.Valid {
+		t.Fatalf("repaired failed delivery = state:%q attempt:%d token:%q started:%#v, want pending/0/%q/NULL", repairedState, repairedAttempt, repairedToken, repairedStarted, receiptOwner)
+	}
+	if firstCalls.Load() != 1 || failedCalls.Load() != 1 || recorder.count(queue.EventBatchCompleted, failedJobType) != 0 {
+		t.Fatalf("pre-archive calls/completion = %d/%d/%d, want 1/1/0", firstCalls.Load(), failedCalls.Load(), recorder.count(queue.EventBatchCompleted, failedJobType))
+	}
+	if _, err := execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName); err != nil {
+		t.Fatalf("drop failed batch finalization trigger: %v", err)
+	}
+	triggerInstalled = false
+
+	finalRuntime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new final failed-batch recovery runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = finalRuntime.Shutdown(shutdownCtx)
+	})
+	finalRuntime.Register(firstJobType, func(context.Context, queue.Message) error {
+		firstCalls.Add(1)
+		return queue.Permanent(errors.New("failed-batch recovery re-executed the first member"))
+	})
+	finalRuntime.Register(failedJobType, func(context.Context, queue.Message) error {
+		failedCalls.Add(1)
+		return queue.Permanent(errors.New("failed-batch receipt recovery re-executed application code"))
+	})
+	if err := finalRuntime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start final failed-batch recovery runtime: %v", err)
+	}
+	waitForObservabilityScenario(t, "sqlite_failed_batch_terminal_settlement_recovery", 5*time.Second, func() bool {
+		var state string
+		stateErr := queueDB.QueryRow(`SELECT state FROM queue_jobs WHERE id=?`, rowID).Scan(&state)
+		return stateErr == nil && state == "dead" && recorder.count(queue.EventBatchCompleted, failedJobType) == 1
+	})
+	if firstCalls.Load() != 1 || failedCalls.Load() != 1 {
+		t.Fatalf("first/failed handler calls after recovery = %d/%d, want 1/1", firstCalls.Load(), failedCalls.Load())
+	}
+	var (
+		archivedState   string
+		archivedAttempt int
+		archivedToken   sql.NullString
+		archivedError   sql.NullString
+	)
+	if err := queueDB.QueryRow(`SELECT state, attempt, processing_token, last_error FROM queue_jobs WHERE id=?`, rowID).Scan(&archivedState, &archivedAttempt, &archivedToken, &archivedError); err != nil {
+		t.Fatalf("read archived failed delivery: %v", err)
+	}
+	if archivedState != "dead" || archivedAttempt != 1 || archivedToken.Valid || !archivedError.Valid || !strings.Contains(archivedError.String, "original cause was not persisted") || strings.Contains(archivedError.String, originalCause.Error()) {
+		t.Fatalf("archived failed delivery = state:%q attempt:%d token:%#v error:%q, want dead attempt 1 with generic recovered cause", archivedState, archivedAttempt, archivedToken, archivedError.String)
+	}
+	if recorder.count(queue.EventJobFailed, failedJobType) != 1 || recorder.count(queue.EventBatchProgressed, failedJobType) != 0 || recorder.count(queue.EventBatchCompleted, failedJobType) != 1 {
+		t.Fatalf("failed-member facts after recovery = failed/progress/completed %d/%d/%d, want 1/0/1", recorder.count(queue.EventJobFailed, failedJobType), recorder.count(queue.EventBatchProgressed, failedJobType), recorder.count(queue.EventBatchCompleted, failedJobType))
+	}
+	completed, completedOK := recorder.first(queue.EventBatchCompleted, failedJobType)
+	if !completedOK || completed.BatchID != batchID || completed.JobID != receiptJobID || completed.DispatchID != state.DispatchID {
+		t.Fatalf("failed terminal completion = %+v present:%t, want batch:%q job:%q dispatch:%q", completed, completedOK, batchID, receiptJobID, state.DispatchID)
+	}
+}
+
+type sqliteWorkflowHandlerObservation struct {
+	call       int64
+	attempt    int
+	provenance busruntime.DeliveryProvenance
+	present    bool
+}
+
+// runSQLiteLaterWorkflowWinnerRecovery proves recovery follows the generation
+// that actually committed the workflow transition after an earlier generation
+// was reclaimed and retried.
+func runSQLiteLaterWorkflowWinnerRecovery(t *testing.T) {
+	t.Helper()
+	queueDSN := fmt.Sprintf("%s/queue-later-workflow-winner-%d.db", t.TempDir(), time.Now().UnixNano())
+	workflowDSN := fmt.Sprintf("%s/later-workflow-winner-%d.db", t.TempDir(), time.Now().UnixNano())
+	prepareSQLiteIntegrationSchema(t, queueDSN)
+
+	workflowDB, err := sql.Open(testenv.BackendSQLite, workflowDSN)
+	if err != nil {
+		t.Fatalf("open later-winner workflow store: %v", err)
+	}
+	t.Cleanup(func() { _ = workflowDB.Close() })
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{
+		DB:          workflowDB,
+		DriverName:  testenv.BackendSQLite,
+		AutoMigrate: true,
+	})
+	if err != nil {
+		t.Fatalf("new later-winner workflow store: %v", err)
+	}
+
+	const (
+		queueName = "later-workflow-winner"
+		jobType   = "job:db:later-workflow-winner"
+	)
+	recorder := &databaseSettlementRecorder{settlement: make(chan struct{})}
+	runtimeCfg := withDBRecoveryPolicy(withDefaultQueue(sqliteCfg(queueDSN), queueName), 10*time.Millisecond, 30*time.Second)
+	runtimeCfg.DisableAutoMigrate = true
+	firstRuntime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new first later-winner recovery runtime: %v", err)
+	}
+	secondRuntime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new second later-winner recovery runtime: %v", err)
+	}
+
+	firstStarted := make(chan sqliteWorkflowHandlerObservation, 1)
+	recoveredAttemptZero := make(chan sqliteWorkflowHandlerObservation, 1)
+	attemptOneWinner := make(chan sqliteWorkflowHandlerObservation, 1)
+	firstReturned := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	unexpectedCall := make(chan sqliteWorkflowHandlerObservation, 1)
+	var (
+		handlerCalls     atomic.Int64
+		releaseFirstOnce sync.Once
+	)
+	t.Cleanup(func() {
+		releaseFirstOnce.Do(func() { close(releaseFirst) })
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = firstRuntime.Shutdown(shutdownCtx)
+		_ = secondRuntime.Shutdown(shutdownCtx)
+	})
+
+	handler := func(ctx context.Context, message queue.Message) error {
+		provenance, present := busruntime.DeliveryProvenanceFromContext(ctx)
+		observation := sqliteWorkflowHandlerObservation{
+			call:       handlerCalls.Add(1),
+			attempt:    message.Attempt,
+			provenance: provenance,
+			present:    present,
+		}
+		switch observation.call {
+		case 1:
+			firstStarted <- observation
+			<-releaseFirst
+			close(firstReturned)
+			return nil
+		case 2:
+			recoveredAttemptZero <- observation
+			return errors.New("transient error from reclaimed attempt zero")
+		case 3:
+			attemptOneWinner <- observation
+			return nil
+		default:
+			select {
+			case unexpectedCall <- observation:
+			default:
+			}
+			return queue.Permanent(errors.New("receipt recovery re-executed application code"))
+		}
+	}
+	firstRuntime.Register(jobType, handler)
+	secondRuntime.Register(jobType, handler)
+
+	queueDB, err := sql.Open(testenv.BackendSQLite, queueDSN)
+	if err != nil {
+		t.Fatalf("open later-winner queue database: %v", err)
+	}
+	defer queueDB.Close()
+	const triggerName = "reject_later_workflow_winner_finalization"
+	const trigger = `CREATE TRIGGER reject_later_workflow_winner_finalization
+BEFORE DELETE ON queue_jobs
+WHEN OLD.queue_name = 'later-workflow-winner'
+BEGIN
+    SELECT RAISE(ABORT, 'forced later-winner finalization failure');
+END`
+	if _, err := queueDB.Exec(trigger); err != nil {
+		t.Fatalf("create later-winner finalization trigger: %v", err)
+	}
+	if err := firstRuntime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start first later-winner recovery runtime: %v", err)
+	}
+	if err := secondRuntime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start second later-winner recovery runtime: %v", err)
+	}
+	workflowID, err := firstRuntime.Chain(queue.NewJob(jobType).OnQueue(queueName).Retry(1)).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch later-winner chain: %v", err)
+	}
+
+	var initial sqliteWorkflowHandlerObservation
+	select {
+	case initial = <-firstStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial workflow generation did not start")
+	}
+	if !initial.present || initial.attempt != 0 || initial.provenance.GenerationID == "" || initial.provenance.Recovered || initial.provenance.RecoveredGenerationID != "" {
+		t.Fatalf("initial generation observation = %+v, want ordinary attempt-zero provenance", initial)
+	}
+	result, err := execSQLiteIntegrationEventually(queueDB, `UPDATE queue_jobs SET processing_started_at=1 WHERE queue_name=? AND state='processing' AND attempt=0`, queueName)
+	if err != nil {
+		t.Fatalf("age initial workflow generation: %v", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		t.Fatalf("aged initial workflow rows = %d, error %v; want 1", rows, rowsErr)
+	}
+
+	var reclaimed sqliteWorkflowHandlerObservation
+	select {
+	case reclaimed = <-recoveredAttemptZero:
+	case observation := <-unexpectedCall:
+		t.Fatalf("unexpected workflow handler call before attempt-zero recovery: %+v", observation)
+	case <-time.After(5 * time.Second):
+		t.Fatal("stale attempt zero was not reclaimed")
+	}
+	if !reclaimed.present || reclaimed.attempt != 0 || !reclaimed.provenance.Recovered || reclaimed.provenance.GenerationID == "" || reclaimed.provenance.GenerationID == initial.provenance.GenerationID || reclaimed.provenance.RecoveredGenerationID != initial.provenance.GenerationID {
+		t.Fatalf("reclaimed generation observation = %+v, initial = %+v", reclaimed, initial)
+	}
+
+	var winner sqliteWorkflowHandlerObservation
+	select {
+	case winner = <-attemptOneWinner:
+	case observation := <-unexpectedCall:
+		t.Fatalf("unexpected workflow handler call before attempt-one winner: %+v", observation)
+	case <-time.After(5 * time.Second):
+		t.Fatal("application retry did not reach attempt-one winner")
+	}
+	if !winner.present || winner.attempt != 1 || winner.provenance.Recovered || winner.provenance.RecoveredGenerationID != "" || winner.provenance.GenerationID == "" || winner.provenance.GenerationID == reclaimed.provenance.GenerationID {
+		t.Fatalf("attempt-one winner observation = %+v, reclaimed = %+v", winner, reclaimed)
+	}
+	select {
+	case <-recorder.settlement:
+	case observation := <-unexpectedCall:
+		t.Fatalf("unexpected workflow handler call before winner settlement failure: %+v", observation)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for attempt-one finalization failure")
+	}
+	if handlerCalls.Load() != 3 {
+		t.Fatalf("handler calls before winner recovery = %d, want 3", handlerCalls.Load())
+	}
+	state, err := store.GetChain(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("get later-winner chain before recovery: %v", err)
+	}
+	if !state.Completed || state.Failed {
+		t.Fatalf("later-winner chain before recovery = %+v, want completed success", state)
+	}
+	if recorder.count(queue.EventJobSucceeded, jobType) != 0 || recorder.count(queue.EventChainCompleted, jobType) != 0 {
+		t.Fatal("winner facts published before durable queue finalization")
+	}
+	var (
+		queueState      string
+		processingToken sql.NullString
+		attempt         int
+	)
+	if err := queueDB.QueryRow(`SELECT state, processing_token, attempt FROM queue_jobs WHERE queue_name=?`, queueName).Scan(&queueState, &processingToken, &attempt); err != nil {
+		t.Fatalf("query attempt-one winner row: %v", err)
+	}
+	if queueState != "processing" || !processingToken.Valid || processingToken.String != winner.provenance.GenerationID || attempt != 1 {
+		t.Fatalf("attempt-one winner row = state:%q token:%q valid:%t attempt:%d, want processing generation %q at attempt 1", queueState, processingToken.String, processingToken.Valid, attempt, winner.provenance.GenerationID)
+	}
+
+	if _, err := execSQLiteIntegrationEventually(queueDB, "DROP TRIGGER "+triggerName); err != nil {
+		t.Fatalf("drop later-winner finalization trigger: %v", err)
+	}
+	result, err = execSQLiteIntegrationEventually(queueDB, `UPDATE queue_jobs SET processing_started_at=1 WHERE queue_name=? AND state='processing' AND attempt=1`, queueName)
+	if err != nil {
+		t.Fatalf("age attempt-one winner for recovery: %v", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		t.Fatalf("aged attempt-one winner rows = %d, error %v; want 1", rows, rowsErr)
+	}
+	waitForObservabilityScenario(t, "sqlite_later_workflow_winner_receipt_recovery", 5*time.Second, func() bool {
+		return recorder.count(queue.EventJobSucceeded, jobType) == 1 && recorder.count(queue.EventChainCompleted, jobType) == 1
+	})
+	if handlerCalls.Load() != 3 {
+		t.Fatalf("handler calls after receipt-backed winner recovery = %d, want 3", handlerCalls.Load())
+	}
+	select {
+	case observation := <-unexpectedCall:
+		t.Fatalf("receipt-backed winner recovery executed application code: %+v", observation)
+	default:
+	}
+	succeeded, ok := recorder.first(queue.EventJobSucceeded, jobType)
+	if !ok || succeeded.Attempt != 1 || succeeded.EventID == "" {
+		t.Fatalf("recovered attempt-one success = %+v present:%t", succeeded, ok)
+	}
+	var remaining int
+	if err := queueDB.QueryRow(`SELECT COUNT(*) FROM queue_jobs WHERE queue_name=?`, queueName).Scan(&remaining); err != nil {
+		t.Fatalf("count recovered later-winner rows: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("recovered later-winner rows = %d, want 0", remaining)
+	}
+	if recorder.count(queue.EventJobFailed, jobType) != 0 || recorder.count(queue.EventChainFailed, jobType) != 0 {
+		t.Fatal("later-winner recovery published contradictory failure facts")
+	}
+
+	releaseFirstOnce.Do(func() { close(releaseFirst) })
+	select {
+	case <-firstReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("superseded initial handler did not return")
+	}
+	waitForObservabilityScenario(t, "sqlite_superseded_initial_workflow_settlement", 5*time.Second, func() bool {
+		return recorder.count(queue.EventSettlementFailed, jobType) == 2
+	})
+	if handlerCalls.Load() != 3 || recorder.count(queue.EventJobSucceeded, jobType) != 1 || recorder.count(queue.EventChainCompleted, jobType) != 1 || recorder.count(queue.EventJobFailed, jobType) != 0 || recorder.count(queue.EventChainFailed, jobType) != 0 {
+		t.Fatalf("facts changed after superseded generation returned: calls:%d succeeded:%d completed:%d job_failed:%d chain_failed:%d", handlerCalls.Load(), recorder.count(queue.EventJobSucceeded, jobType), recorder.count(queue.EventChainCompleted, jobType), recorder.count(queue.EventJobFailed, jobType), recorder.count(queue.EventChainFailed, jobType))
+	}
+}
+
+// installDatabaseFinalizationFailure installs a queue-scoped delete fault and
+// returns an idempotent cleanup closure for the selected SQL dialect.
+func installDatabaseFinalizationFailure(t *testing.T, backend string, db *sql.DB, queueName string) func() error {
+	t.Helper()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	triggerName := "queue_receipt_delete_" + suffix
+	functionName := "queue_receipt_delete_fn_" + suffix
+	switch backend {
+	case testenv.BackendMySQL:
+		blockerTable := "queue_receipt_block_" + suffix
+		constraintName := blockerTable + "_fk"
+		statement := fmt.Sprintf(`CREATE TABLE %s (
+    queue_job_id BIGINT NOT NULL PRIMARY KEY,
+    CONSTRAINT %s FOREIGN KEY (queue_job_id) REFERENCES queue_jobs(id)
+) ENGINE=InnoDB`, blockerTable, constraintName)
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("create MySQL workflow receipt blocker: %v", err)
+		}
+		result, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (queue_job_id)
+SELECT id FROM queue_jobs WHERE queue_name=?`, blockerTable), queueName)
+		if err != nil {
+			_, _ = db.Exec("DROP TABLE IF EXISTS " + blockerTable)
+			t.Fatalf("attach MySQL workflow receipt blocker: %v", err)
+		}
+		if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+			_, _ = db.Exec("DROP TABLE IF EXISTS " + blockerTable)
+			t.Fatalf("attached MySQL workflow receipt blockers = %d, error %v; want 1", rows, rowsErr)
+		}
+		return func() error {
+			_, err := db.Exec("DROP TABLE IF EXISTS " + blockerTable)
+			return err
+		}
+	case testenv.BackendPostgres:
+		function := fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.queue_name = '%s' THEN
+        RAISE EXCEPTION 'forced workflow receipt finalization failure';
+    END IF;
+    RETURN OLD;
+END;
+$$`, functionName, queueName)
+		if _, err := db.Exec(function); err != nil {
+			t.Fatalf("create PostgreSQL workflow receipt trigger function: %v", err)
+		}
+		trigger := fmt.Sprintf(`CREATE TRIGGER %s BEFORE DELETE ON queue_jobs FOR EACH ROW EXECUTE FUNCTION %s()`, triggerName, functionName)
+		if _, err := db.Exec(trigger); err != nil {
+			_, _ = db.Exec("DROP FUNCTION IF EXISTS " + functionName + "()")
+			t.Fatalf("create PostgreSQL workflow receipt trigger: %v", err)
+		}
+		return func() error {
+			if _, err := db.Exec("DROP TRIGGER IF EXISTS " + triggerName + " ON queue_jobs"); err != nil {
+				return err
+			}
+			_, err := db.Exec("DROP FUNCTION IF EXISTS " + functionName + "()")
+			return err
+		}
+	default:
+		t.Fatalf("unsupported workflow receipt fault backend %q", backend)
+		return func() error { return nil }
+	}
+}
+
+// runDatabaseWorkflowReceiptRecovery proves MySQL and PostgreSQL preserve the
+// same generation-to-transition receipt contract already exercised on SQLite.
+func runDatabaseWorkflowReceiptRecovery[T any](t *testing.T, backend, driverName, dsn string, runtimeCfg T) {
+	t.Helper()
+	db, err := sql.Open(driverName, dsn)
+	if err != nil {
+		t.Fatalf("open %s workflow receipt database: %v", backend, err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{DB: db, DriverName: driverName, AutoMigrate: true})
+	if err != nil {
+		t.Fatalf("new %s workflow receipt store: %v", backend, err)
+	}
+
+	queueName := fmt.Sprintf("workflow_receipt_%s_%d", backend, time.Now().UnixNano())
+	jobType := "job:db:workflow-receipt:" + backend
+	recorder := &databaseSettlementRecorder{settlement: make(chan struct{})}
+	runtimeCfg = withDefaultQueue(withDBRecoveryPolicy(runtimeCfg, 10*time.Millisecond, 30*time.Second), queueName)
+	runtime, err := testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new %s workflow receipt runtime: %v", backend, err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = runtime.Shutdown(shutdownCtx)
+	})
+
+	var (
+		handlerCalls       atomic.Int64
+		handlerStartedOnce sync.Once
+		releaseHandlerOnce sync.Once
+	)
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	t.Cleanup(func() { releaseHandlerOnce.Do(func() { close(releaseHandler) }) })
+	runtime.Register(jobType, func(context.Context, queue.Message) error {
+		handlerCalls.Add(1)
+		handlerStartedOnce.Do(func() { close(handlerStarted) })
+		<-releaseHandler
+		return nil
+	})
+	if err := runtime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start %s workflow receipt runtime: %v", backend, err)
+	}
+	workflowID, err := runtime.Chain(queue.NewJob(jobType).OnQueue(queueName)).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch %s workflow receipt chain: %v", backend, err)
+	}
+	select {
+	case <-handlerStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for %s workflow handler before installing finalization fault", backend)
+	}
+	dropFault := installDatabaseFinalizationFailure(t, backend, db, queueName)
+	t.Cleanup(func() { _ = dropFault() })
+	releaseHandlerOnce.Do(func() { close(releaseHandler) })
+	select {
+	case <-recorder.settlement:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for %s workflow finalization failure", backend)
+	}
+	state, err := store.GetChain(context.Background(), workflowID)
+	if err != nil || !state.Completed || state.Failed {
+		t.Fatalf("%s committed workflow state = %+v, err:%v", backend, state, err)
+	}
+	if handlerCalls.Load() != 1 || recorder.count(queue.EventJobSucceeded, jobType) != 0 || recorder.count(queue.EventChainCompleted, jobType) != 0 {
+		t.Fatalf("%s pre-recovery calls/success/completion = %d/%d/%d, want 1/0/0", backend, handlerCalls.Load(), recorder.count(queue.EventJobSucceeded, jobType), recorder.count(queue.EventChainCompleted, jobType))
+	}
+	if err := dropFault(); err != nil {
+		t.Fatalf("drop %s workflow receipt fault: %v", backend, err)
+	}
+
+	placeholder := "?"
+	if backend == testenv.BackendPostgres {
+		placeholder = "$1"
+	}
+	ageQuery := `UPDATE queue_jobs SET processing_started_at=1 WHERE queue_name=` + placeholder + ` AND state='processing'`
+	result, err := db.Exec(ageQuery, queueName)
+	if err != nil {
+		t.Fatalf("age %s workflow receipt row: %v", backend, err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		t.Fatalf("aged %s workflow rows = %d, error %v; want 1", backend, rows, rowsErr)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	recovered := false
+	for time.Now().Before(deadline) {
+		if recorder.count(queue.EventJobSucceeded, jobType) == 1 && recorder.count(queue.EventChainCompleted, jobType) == 1 {
+			recovered = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !recovered {
+		var (
+			queueState      string
+			processingToken sql.NullString
+			attempt         int
+			receiptCount    int
+			receiptOwner    sql.NullString
+		)
+		rowQuery := `SELECT state, processing_token, attempt FROM queue_jobs WHERE queue_name=` + placeholder
+		rowErr := db.QueryRow(rowQuery, queueName).Scan(&queueState, &processingToken, &attempt)
+		receiptQuery := `SELECT COUNT(*), MAX(owner_delivery_id) FROM bus_workflow_transition_receipts WHERE workflow_kind='chain' AND workflow_id=` + placeholder
+		receiptErr := db.QueryRow(receiptQuery, workflowID).Scan(&receiptCount, &receiptOwner)
+		recorder.mu.Lock()
+		events := append([]queue.Event(nil), recorder.events...)
+		recorder.mu.Unlock()
+		t.Fatalf("%s receipt recovery timed out: handler_calls=%d queue_state=%q processing_token=%q attempt=%d row_error=%v receipt_count=%d receipt_owner=%q receipt_error=%v events=%+v",
+			backend, handlerCalls.Load(), queueState, processingToken.String, attempt, rowErr, receiptCount, receiptOwner.String, receiptErr, events)
+	}
+	if handlerCalls.Load() != 1 {
+		t.Fatalf("%s receipt recovery handler calls = %d, want 1", backend, handlerCalls.Load())
+	}
+	succeeded, ok := recorder.first(queue.EventJobSucceeded, jobType)
+	if !ok || succeeded.Attempt != 0 || succeeded.EventID == "" {
+		t.Fatalf("%s recovered success = %+v present:%t", backend, succeeded, ok)
+	}
+	var remaining int
+	countQuery := `SELECT COUNT(*) FROM queue_jobs WHERE queue_name=` + placeholder
+	if err := db.QueryRow(countQuery, queueName).Scan(&remaining); err != nil {
+		t.Fatalf("count %s recovered workflow rows: %v", backend, err)
+	}
+	if remaining != 0 {
+		t.Fatalf("%s recovered workflow rows = %d, want 0", backend, remaining)
+	}
+}
+
+// runDatabaseConcurrentBatchReceiptOwnership races distinct receipt-backed
+// members through fail-fast completion so only the parent transition winner can
+// own terminal facts across the server SQL dialects.
+func runDatabaseConcurrentBatchReceiptOwnership[T any](t *testing.T, backend, driverName, dsn string, runtimeCfg T) {
+	t.Helper()
+	db, err := sql.Open(driverName, dsn)
+	if err != nil {
+		t.Fatalf("open %s concurrent batch receipt database: %v", backend, err)
+	}
+	db.SetMaxOpenConns(32)
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := queue.NewSQLStore(queue.SQLStoreConfig{DB: db, DriverName: driverName, AutoMigrate: true})
+	if err != nil {
+		t.Fatalf("new %s concurrent batch receipt store: %v", backend, err)
+	}
+
+	const memberCount = 12
+	queueName := fmt.Sprintf("batch_receipt_race_%s_%d", backend, time.Now().UnixNano())
+	jobType := "job:db:batch-receipt-race:" + backend
+	recorder := &databaseSettlementRecorder{settlement: make(chan struct{})}
+	runtimeCfg = withDefaultQueue(runtimeCfg, queueName)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var (
+		handlerCalls atomic.Int64
+		startedOnce  sync.Once
+		releaseOnce  sync.Once
+	)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	handler := func(context.Context, queue.Message) error {
+		if handlerCalls.Add(1) == memberCount {
+			startedOnce.Do(func() { close(started) })
+		}
+		<-release
+		return queue.Permanent(errors.New("concurrent fail-fast member failure"))
+	}
+	runtimes := make([]*queue.Queue, memberCount)
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		for _, runtime := range runtimes {
+			if runtime != nil {
+				_ = runtime.Shutdown(shutdownCtx)
+			}
+		}
+	})
+	for worker := range memberCount {
+		runtimes[worker], err = testenv.NewQueue(runtimeCfg, queue.WithStore(store), queue.WithObserver(recorder), queue.WithWorkers(1))
+		if err != nil {
+			t.Fatalf("new %s concurrent batch receipt runtime %d: %v", backend, worker, err)
+		}
+		runtimes[worker].Register(jobType, handler)
+		if err := runtimes[worker].StartWorkers(context.Background()); err != nil {
+			t.Fatalf("start %s concurrent batch receipt runtime %d: %v", backend, worker, err)
+		}
+	}
+	jobs := make([]queue.Job, memberCount)
+	for member := range memberCount {
+		jobs[member] = queue.NewJob(jobType).Payload(map[string]int{"member": member}).OnQueue(queueName)
+	}
+	batchID, err := runtimes[0].Batch(jobs...).OnQueue(queueName).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch %s concurrent receipt batch: %v", backend, err)
+	}
+	select {
+	case <-started:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("timed out waiting for %s concurrent batch members; calls=%d", backend, handlerCalls.Load())
+	}
+	releaseOnce.Do(func() { close(release) })
+
+	deadline := time.Now().Add(20 * time.Second)
+	var state queue.BatchState
+	for time.Now().Before(deadline) {
+		state, err = store.GetBatch(context.Background(), batchID)
+		if err == nil && state.Pending == 0 && state.Processed == memberCount && recorder.count(queue.EventBatchFailed, jobType) == 1 && recorder.count(queue.EventBatchCancelled, jobType) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil || state.Pending != 0 || state.Processed != memberCount || state.Failed != memberCount || !state.Completed || !state.Cancelled {
+		t.Fatalf("%s concurrent receipt batch state = %+v, err:%v", backend, state, err)
+	}
+	if handlerCalls.Load() != memberCount {
+		t.Fatalf("%s concurrent receipt handler calls = %d, want %d without receipt-conflict redelivery", backend, handlerCalls.Load(), memberCount)
+	}
+	if failed, cancelled, completed := recorder.count(queue.EventBatchFailed, jobType), recorder.count(queue.EventBatchCancelled, jobType), recorder.count(queue.EventBatchCompleted, jobType); failed != 1 || cancelled != 1 || completed != 0 {
+		t.Fatalf("%s terminal batch facts = failed:%d cancelled:%d completed:%d, want 1/1/0", backend, failed, cancelled, completed)
+	}
+
+	placeholder := "?"
+	if backend == testenv.BackendPostgres {
+		placeholder = "$1"
+	}
+	var receiptCount int
+	countQuery := `SELECT COUNT(*) FROM bus_workflow_transition_receipts WHERE workflow_kind='batch' AND workflow_id=` + placeholder
+	if err := db.QueryRow(countQuery, batchID).Scan(&receiptCount); err != nil {
+		t.Fatalf("count %s concurrent batch receipts: %v", backend, err)
+	}
+	if receiptCount != memberCount+1 {
+		t.Fatalf("%s concurrent batch receipts = %d, want %d member plus aggregate rows", backend, receiptCount, memberCount+1)
+	}
+	var aggregateOwner, aggregateJob string
+	var aggregateCompleted, aggregateCancelled int
+	aggregateQuery := `SELECT owner_delivery_id, job_id, aggregate_completed, aggregate_cancelled FROM bus_workflow_transition_receipts WHERE workflow_kind='batch' AND member_id='' AND workflow_id=` + placeholder
+	if err := db.QueryRow(aggregateQuery, batchID).Scan(&aggregateOwner, &aggregateJob, &aggregateCompleted, &aggregateCancelled); err != nil {
+		t.Fatalf("read %s aggregate batch receipt: %v", backend, err)
+	}
+	if aggregateOwner == "" || aggregateJob == "" || aggregateCompleted != 1 || aggregateCancelled != 1 {
+		t.Fatalf("%s aggregate receipt = owner:%q job:%q completed:%d cancelled:%d", backend, aggregateOwner, aggregateJob, aggregateCompleted, aggregateCancelled)
+	}
+	memberPlaceholder := "?"
+	jobPlaceholder := "?"
+	if backend == testenv.BackendPostgres {
+		memberPlaceholder = "$2"
+		jobPlaceholder = "$3"
+	}
+	var matchingMemberReceipts int
+	memberQuery := `SELECT COUNT(*) FROM bus_workflow_transition_receipts WHERE workflow_kind='batch' AND member_id<>'' AND workflow_id=` + placeholder + ` AND owner_delivery_id=` + memberPlaceholder + ` AND job_id=` + jobPlaceholder
+	if err := db.QueryRow(memberQuery, batchID, aggregateOwner, aggregateJob).Scan(&matchingMemberReceipts); err != nil {
+		t.Fatalf("match %s aggregate receipt owner to member: %v", backend, err)
+	}
+	if matchingMemberReceipts != 1 {
+		t.Fatalf("%s member receipts matching aggregate owner = %d, want 1", backend, matchingMemberReceipts)
+	}
 }
 
 func newDatabaseQueueIntegration(t *testing.T, cfg queue.DatabaseConfig) QueueRuntime {
@@ -183,7 +1699,7 @@ func runSQLiteStaleProcessingFence(t *testing.T, staleResult error) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("first processing generation did not start")
 	}
-	result, err := db.Exec(`UPDATE queue_jobs SET processing_started_at=1 WHERE job_type=? AND state='processing'`, jobType)
+	result, err := execSQLiteIntegrationEventually(db, `UPDATE queue_jobs SET processing_started_at=1 WHERE job_type=? AND state='processing'`, jobType)
 	if err != nil {
 		t.Fatalf("age first processing generation: %v", err)
 	}
@@ -494,6 +2010,34 @@ func TestDatabaseIntegration_SQLite(t *testing.T) {
 		}
 	})
 
+	t.Run("sqlite_managed_schema_requires_processing_token", func(t *testing.T) {
+		dsn := fmt.Sprintf("%s/queue-managed-missing-processing-token-%d.db", t.TempDir(), time.Now().UnixNano())
+		prepareSQLiteIntegrationSchema(t, dsn)
+		db, err := sql.Open(testenv.BackendSQLite, dsn)
+		if err != nil {
+			t.Fatalf("open managed schema database: %v", err)
+		}
+		if _, err := db.Exec(`ALTER TABLE queue_jobs DROP COLUMN processing_token`); err != nil {
+			_ = db.Close()
+			t.Fatalf("remove managed processing token column: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close managed schema database: %v", err)
+		}
+		runtime, err := sqlitequeue.NewWithConfig(sqlitequeue.Config{
+			DSN:                dsn,
+			DisableAutoMigrate: true,
+		})
+		if err != nil {
+			t.Fatalf("new managed schema runtime: %v", err)
+		}
+		t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+		err = runtime.StartWorkers(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "missing required processing_token column") {
+			t.Fatalf("managed schema startup error = %v", err)
+		}
+	})
+
 	t.Run("sqlite_start_retries_after_canceled_migration", func(t *testing.T) {
 		runtime := newDatabaseQueueIntegration(t, queue.DatabaseConfig{
 			DriverName:   testenv.BackendSQLite,
@@ -737,6 +2281,86 @@ END`
 		}
 	})
 
+	t.Run("sqlite_workflow_success_facts_recover_after_finalization_failure", func(t *testing.T) {
+		for _, workflowKind := range []string{
+			"chain",
+			"chain_predecessor",
+			"batch",
+			"batch_predecessor",
+		} {
+			t.Run(workflowKind, func(t *testing.T) {
+				runSQLiteWorkflowWinnerFactRecovery(t, workflowKind)
+			})
+		}
+	})
+
+	t.Run("sqlite_workflow_receipt_owner_survives_repeated_finalization_failure", func(t *testing.T) {
+		runSQLiteRepeatedWorkflowSettlementRecovery(t)
+	})
+
+	t.Run("sqlite_failed_chain_recovery_archives_without_reexecution", func(t *testing.T) {
+		runSQLiteFailedChainSettlementRecovery(t)
+	})
+
+	t.Run("sqlite_terminal_batch_completion_recovers_from_completing_member", func(t *testing.T) {
+		runSQLiteTerminalBatchOwnerRecovery(t)
+	})
+
+	t.Run("sqlite_failed_batch_recovery_archives_without_reexecution", func(t *testing.T) {
+		runSQLiteFailedBatchSettlementRecovery(t)
+	})
+
+	t.Run("sqlite_later_workflow_attempt_wins_then_recovers_without_reexecution", func(t *testing.T) {
+		runSQLiteLaterWorkflowWinnerRecovery(t)
+	})
+
+	t.Run("sqlite_application_error_cannot_forge_recovery_proof", func(t *testing.T) {
+		dsn := fmt.Sprintf("%s/queue-recovery-proof-collision-%d.db", t.TempDir(), time.Now().UnixNano())
+		prepareSQLiteIntegrationSchema(t, dsn)
+		const (
+			queueName = "recovery-proof-collision"
+			jobType   = "job:db:recovery-proof-collision"
+		)
+		runtimeCfg := withDefaultQueue(sqliteCfg(dsn), queueName)
+		runtimeCfg.DisableAutoMigrate = true
+		runtime, err := testenv.NewQueue(runtimeCfg, queue.WithWorkers(1))
+		if err != nil {
+			t.Fatalf("new recovery proof collision runtime: %v", err)
+		}
+		t.Cleanup(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = runtime.Shutdown(shutdownCtx)
+		})
+		var calls atomic.Int64
+		var forged atomic.Bool
+		handlerDone := make(chan struct{})
+		var handlerDoneOnce sync.Once
+		runtime.Register(jobType, func(ctx context.Context, _ queue.Message) error {
+			if calls.Add(1) == 1 {
+				return errors.New("queue:internal:stale-processing-recovery:v1")
+			}
+			provenance, present := busruntime.DeliveryProvenanceFromContext(ctx)
+			forged.Store(present && provenance.Recovered)
+			handlerDoneOnce.Do(func() { close(handlerDone) })
+			return nil
+		})
+		if err := runtime.StartWorkers(context.Background()); err != nil {
+			t.Fatalf("start recovery proof collision runtime: %v", err)
+		}
+		if _, err := runtime.Dispatch(queue.NewJob(jobType).OnQueue(queueName).Retry(1)); err != nil {
+			t.Fatalf("dispatch recovery proof collision job: %v", err)
+		}
+		select {
+		case <-handlerDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for collision replay handler")
+		}
+		if forged.Load() {
+			t.Fatal("application error text granted stale-processing recovery authority")
+		}
+	})
+
 	t.Run("sqlite_missing_handler_finalization_failure_is_observed", func(t *testing.T) {
 		dsn := fmt.Sprintf("%s/queue-missing-handler-settlement-%d.db", t.TempDir(), time.Now().UnixNano())
 		prepareSQLiteIntegrationSchema(t, dsn)
@@ -796,6 +2420,12 @@ func TestDatabaseIntegration_MySQL(t *testing.T) {
 		PollInterval: 10 * time.Millisecond,
 	}
 	runDatabaseIntegrationSuite(t, testenv.BackendMySQL, cfg)
+	t.Run("mysql_workflow_receipt_recovery", func(t *testing.T) {
+		runDatabaseWorkflowReceiptRecovery(t, testenv.BackendMySQL, testenv.BackendMySQL, cfg.DSN, mysqlCfg(cfg.DSN))
+	})
+	t.Run("mysql_concurrent_batch_receipt_owner", func(t *testing.T) {
+		runDatabaseConcurrentBatchReceiptOwnership(t, testenv.BackendMySQL, testenv.BackendMySQL, cfg.DSN, mysqlCfg(cfg.DSN))
+	})
 }
 
 func TestDatabaseIntegration_Postgres(t *testing.T) {
@@ -810,4 +2440,10 @@ func TestDatabaseIntegration_Postgres(t *testing.T) {
 		PollInterval: 10 * time.Millisecond,
 	}
 	runDatabaseIntegrationSuite(t, testenv.BackendPostgres, cfg)
+	t.Run("postgres_workflow_receipt_recovery", func(t *testing.T) {
+		runDatabaseWorkflowReceiptRecovery(t, testenv.BackendPostgres, "pgx", cfg.DSN, postgresCfg(cfg.DSN))
+	})
+	t.Run("postgres_concurrent_batch_receipt_owner", func(t *testing.T) {
+		runDatabaseConcurrentBatchReceiptOwnership(t, testenv.BackendPostgres, "pgx", cfg.DSN, postgresCfg(cfg.DSN))
+	})
 }

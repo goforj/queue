@@ -28,6 +28,8 @@ const (
 	databaseFinalizeTimeout         = 5 * time.Second
 	databaseUniquePruneInterval     = 256
 	databaseProcessingTokenBytes    = 16
+	databaseRecoveryMarker          = "queue:internal:stale-processing-recovery:v1"
+	databaseRecoveryDiagnostic      = "recovered stale processing job"
 )
 
 // DatabaseConfig configures the SQL-backed database q.
@@ -100,16 +102,19 @@ type databaseExecer interface {
 }
 
 type dbJob struct {
-	id              int64
-	processingToken string
-	queueName       string
-	jobType         string
-	payload         []byte
-	metadataJSON    sql.NullString
-	timeoutSeconds  sql.NullInt64
-	maxRetry        int
-	backoffMillis   int64
-	attempt         int
+	id                        int64
+	processingToken           string
+	queueName                 string
+	jobType                   string
+	payload                   []byte
+	metadataJSON              sql.NullString
+	timeoutSeconds            sql.NullInt64
+	maxRetry                  int
+	backoffMillis             int64
+	attempt                   int
+	recovered                 bool
+	recoveryToken             string
+	applicationStateCommitted bool
 }
 
 type databaseFailureSettlement struct {
@@ -221,7 +226,7 @@ func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 		if err := d.ensureSchema(ctx); err != nil {
 			return err
 		}
-	} else if err := d.requireMetadataJSONColumn(ctx); err != nil {
+	} else if err := d.requireManagedQueueColumns(ctx); err != nil {
 		return err
 	}
 	for i := 0; i < d.cfg.Workers; i++ {
@@ -624,12 +629,11 @@ func (d *databaseQueue) processJob(job *dbJob) {
 	handler, ok := d.lookup(job.jobType)
 	if !ok {
 		if err := d.markFailedWithRetry(job, fmt.Errorf("no handler registered for job type %q", job.jobType)); err != nil {
-			d.observeSettlementFailure(context.Background(), job, err)
+			d.handleSettlementFailure(job, err)
 		}
 		return
 	}
-	ctx := context.Background()
-	ctx, settlement := busruntime.WithDeliverySettlement(ctx)
+	ctx, settlement := databaseSettlementContext(job)
 	if job.timeoutSeconds.Valid && job.timeoutSeconds.Int64 > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(job.timeoutSeconds.Int64)*time.Second)
@@ -640,6 +644,7 @@ func (d *databaseQueue) processJob(job *dbJob) {
 		handler,
 		databaseDeliveryJob(job),
 	)
+	job.applicationStateCommitted = settlement.ApplicationStateCommitted()
 	var settlementErr error
 	if err == nil {
 		settlementErr = d.markDoneWithRetry(job)
@@ -647,10 +652,37 @@ func (d *databaseQueue) processJob(job *dbJob) {
 		settlementErr = d.markFailedWithRetry(job, err)
 	}
 	if settlementErr != nil {
-		d.observeSettlementFailure(context.Background(), job, settlementErr)
+		d.handleSettlementFailure(job, settlementErr)
 		return
 	}
 	settlement.Commit()
+}
+
+// handleSettlementFailure preserves inherited recovery lineage before reporting
+// an exhausted physical settlement failure. Deferred facts remain uncommitted
+// until a later generation positively settles the fenced row.
+func (d *databaseQueue) handleSettlementFailure(job *dbJob, settlementErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), databaseFinalizeTimeout)
+	repairErr := d.restoreRecoveredSettlementLineage(ctx, job, settlementErr)
+	cancel()
+	if repairErr != nil {
+		settlementErr = errors.Join(settlementErr, fmt.Errorf("restore recovered database settlement lineage: %w", repairErr))
+	}
+	d.observeSettlementFailure(context.Background(), job, settlementErr)
+}
+
+// databaseSettlementContext exposes stale-processing evidence to orchestration
+// while retaining the driver's post-handler commit boundary on every delivery.
+func databaseSettlementContext(job *dbJob) (context.Context, *busruntime.DeliverySettlement) {
+	ctx, settlement := busruntime.WithDeliverySettlement(context.Background())
+	if job != nil {
+		ctx = busruntime.WithDeliveryProvenance(ctx, busruntime.DeliveryProvenance{
+			GenerationID:          job.processingToken,
+			RecoveredGenerationID: job.recoveryToken,
+			Recovered:             job.recovered,
+		})
+	}
+	return ctx, settlement
 }
 
 // runHandlerWithContinuationPermit limits shutdown-time descendant dispatch permission to this queue's active handler call.
@@ -805,7 +837,9 @@ func (d *databaseQueue) recoverStaleProcessing(ctx context.Context, nowMillis in
 		noTimeoutCutoff = 0
 	}
 	query := d.rebind(`UPDATE queue_jobs
-	SET state='pending', available_at=?, processing_started_at=NULL, processing_token=NULL, updated_at=?, last_error=?
+	SET state='pending', available_at=?, processing_started_at=NULL,
+	processing_token=CASE WHEN processing_token IS NOT NULL AND processing_token <> '' THEN processing_token ELSE ? END,
+	updated_at=?, last_error=?
 WHERE state='processing' AND processing_started_at IS NOT NULL AND (
     (timeout_seconds IS NOT NULL AND timeout_seconds > 0 AND (processing_started_at + (timeout_seconds * 1000) + ?) <= ?)
     OR
@@ -815,8 +849,9 @@ WHERE state='processing' AND processing_started_at IS NOT NULL AND (
 		ctx,
 		query,
 		nowMillis,
+		databaseRecoveryMarker,
 		nowMillis,
-		"recovered stale processing job",
+		databaseRecoveryDiagnostic,
 		graceMillis,
 		nowMillis,
 		noTimeoutCutoff,
@@ -839,7 +874,8 @@ WHERE state='processing' AND processing_started_at IS NOT NULL AND (
 }
 
 func (d *databaseQueue) selectPendingJob(ctx context.Context, tx *sql.Tx, now int64) (*dbJob, error) {
-	query := `SELECT id, queue_name, job_type, payload, metadata_json, timeout_seconds, max_retry, backoff_millis, attempt
+	query := `SELECT id, queue_name, job_type, payload, metadata_json, timeout_seconds, max_retry, backoff_millis, attempt,
+	processing_token
 FROM queue_jobs
 WHERE queue_name=? AND state='pending' AND available_at <= ?
 ORDER BY id ASC
@@ -850,6 +886,7 @@ LIMIT 1`
 	query = d.rebind(query)
 	row := tx.QueryRowContext(ctx, query, d.cfg.DefaultQueue, now)
 	job := &dbJob{}
+	var pendingProcessingToken sql.NullString
 	if err := row.Scan(
 		&job.id,
 		&job.queueName,
@@ -860,13 +897,30 @@ LIMIT 1`
 		&job.maxRetry,
 		&job.backoffMillis,
 		&job.attempt,
+		&pendingProcessingToken,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	job.recoveryToken, job.recovered = databaseRecoveryProof(pendingProcessingToken)
 	return job, nil
+}
+
+// databaseRecoveryProof recognizes only transport-owned state and returns the
+// earlier processing generation when that opaque identity survived recovery.
+func databaseRecoveryProof(processingToken sql.NullString) (string, bool) {
+	if !processingToken.Valid {
+		return "", false
+	}
+	if processingToken.String == databaseRecoveryMarker {
+		return "", true
+	}
+	if !databaseProcessingTokenValid(processingToken.String) {
+		return "", false
+	}
+	return processingToken.String, true
 }
 
 func (d *databaseQueue) usesOptimisticClaimLoop() bool {
@@ -909,13 +963,100 @@ func (d *databaseQueue) markFailed(ctx context.Context, job *dbJob, runErr error
 		return requireDatabaseSettlementRow(result)
 	}
 	query := d.rebind(`UPDATE queue_jobs
-	SET state='pending', attempt=?, available_at=?, last_error=?, processing_started_at=NULL, processing_token=NULL, updated_at=?
+	SET state='pending', attempt=?, available_at=?, last_error=?, processing_started_at=NULL, processing_token=?, updated_at=?
 	WHERE id=? AND state='processing' AND processing_token=?`)
-	result, err := d.db.ExecContext(ctx, query, settlement.attempt, settlement.availableAt, runErr.Error(), now, id, processingToken)
+	result, err := d.db.ExecContext(ctx, query, settlement.attempt, settlement.availableAt, runErr.Error(), databasePendingRecoveryToken(job, settlement), now, id, processingToken)
 	if err != nil {
 		return err
 	}
 	return requireDatabaseSettlementRow(result)
+}
+
+// restoreRecoveredSettlementLineage immediately returns an unsuccessfully
+// finalized recovery delivery to the pending set without replacing the receipt
+// owner's inherited generation or advancing the application attempt.
+func (d *databaseQueue) restoreRecoveredSettlementLineage(ctx context.Context, job *dbJob, settlementErr error) error {
+	query := d.rebind(`UPDATE queue_jobs
+	SET state='pending', available_at=?, processing_started_at=NULL,
+	processing_token=?, last_error=?, updated_at=?
+	WHERE id=? AND state='processing' AND processing_token=? AND attempt=?`)
+	now := time.Now()
+	availableAt := now.Add(databaseSettlementRecoveryDelay(d.cfg.PollInterval))
+	return restoreDatabaseSettlementLineage(ctx, d.db, query, job, settlementErr, availableAt.UnixMilli(), now.UnixMilli())
+}
+
+// restoreDatabaseSettlementLineage applies the fenced repair through an
+// injectable executor so ownership, attempt, and no-op cases can be tested
+// without weakening the databaseQueue's concrete connection contract.
+func restoreDatabaseSettlementLineage(ctx context.Context, execer databaseExecer, query string, job *dbJob, settlementErr error, availableAtMillis, nowMillis int64) error {
+	recoveryToken, repair, err := databaseSettlementRecoveryToken(job)
+	if err != nil || !repair {
+		return err
+	}
+	if execer == nil {
+		return errors.New("database settlement recovery executor is nil")
+	}
+	if settlementErr == nil {
+		return errors.New("database settlement recovery error is nil")
+	}
+	id, processingToken, err := databaseProcessingClaim(job)
+	if err != nil {
+		return err
+	}
+	result, err := execer.ExecContext(ctx, query, availableAtMillis, recoveryToken, settlementErr.Error(), nowMillis, id, processingToken, job.attempt)
+	if err != nil {
+		return err
+	}
+	return requireDatabaseSettlementRow(result)
+}
+
+// databaseSettlementRecoveryDelay prevents a persistent physical-settlement
+// fault from immediately reclaiming the same repaired row in a tight loop.
+func databaseSettlementRecoveryDelay(pollInterval time.Duration) time.Duration {
+	if pollInterval > databaseFinalizeRetryDelay {
+		return pollInterval
+	}
+	return databaseFinalizeRetryDelay
+}
+
+// databaseSettlementRecoveryToken selects inherited recovery proof only when
+// the current generation did not itself commit application state.
+func databaseSettlementRecoveryToken(job *dbJob) (sql.NullString, bool, error) {
+	if job == nil || !job.recovered || job.applicationStateCommitted {
+		return sql.NullString{}, false, nil
+	}
+	if job.recoveryToken == "" {
+		return sql.NullString{String: databaseRecoveryMarker, Valid: true}, true, nil
+	}
+	if !databaseProcessingTokenValid(job.recoveryToken) {
+		return sql.NullString{}, false, fmt.Errorf("recovered database settlement generation %q is invalid", job.recoveryToken)
+	}
+	return sql.NullString{String: job.recoveryToken, Valid: true}, true, nil
+}
+
+// databasePendingRecoveryToken preserves the current generation after it
+// durably mutates application state; otherwise it retains inherited recovery
+// proof only across same-attempt infrastructure redelivery.
+func databasePendingRecoveryToken(job *dbJob, settlement databaseFailureSettlement) sql.NullString {
+	if job == nil || settlement.state != "pending" || settlement.attempt != job.attempt {
+		return sql.NullString{}
+	}
+	if job.applicationStateCommitted {
+		if !databaseProcessingTokenValid(job.processingToken) {
+			return sql.NullString{}
+		}
+		return sql.NullString{String: job.processingToken, Valid: true}
+	}
+	if !job.recovered {
+		return sql.NullString{}
+	}
+	if job.recoveryToken == "" {
+		return sql.NullString{String: databaseRecoveryMarker, Valid: true}
+	}
+	if !databaseProcessingTokenValid(job.recoveryToken) {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: job.recoveryToken, Valid: true}
 }
 
 // databaseProcessingClaim returns the fenced identity required to settle one exact processing generation.
@@ -932,13 +1073,27 @@ func databaseProcessingClaim(job *dbJob) (int64, string, error) {
 	return job.id, job.processingToken, nil
 }
 
-// newDatabaseProcessingToken creates a claim generation that stale recovery can invalidate without coordinating with the old handler.
+// newDatabaseProcessingToken creates one opaque physical generation identity
+// that also fences settlement updates for the current claim.
 func newDatabaseProcessingToken() (string, error) {
 	var token [databaseProcessingTokenBytes]byte
 	if _, err := rand.Read(token[:]); err != nil {
 		return "", fmt.Errorf("create database processing token: %w", err)
 	}
 	return hex.EncodeToString(token[:]), nil
+}
+
+// databaseProcessingTokenValid accepts only the canonical lowercase encoding
+// generated for fenced SQL claims.
+func databaseProcessingTokenValid(token string) bool {
+	if len(token) != databaseProcessingTokenBytes*2 || token != strings.ToLower(token) {
+		return false
+	}
+	decoded, err := hex.DecodeString(token)
+	if err != nil || len(decoded) != databaseProcessingTokenBytes {
+		return false
+	}
+	return true
 }
 
 // requireDatabaseSettlementRow rejects stale or lost finalization updates that cannot prove ownership of one delivery.
@@ -1157,9 +1312,9 @@ func (d *databaseQueue) ensureMetadataJSONColumn(ctx context.Context) error {
 	return nil
 }
 
-// requireMetadataJSONColumn fails startup before workers begin polling when a
-// caller-managed schema has not installed the direct-delivery metadata column.
-func (d *databaseQueue) requireMetadataJSONColumn(ctx context.Context) error {
+// requireManagedQueueColumns fails startup before polling when an installed
+// caller-managed schema lacks either additive delivery-correlation column.
+func (d *databaseQueue) requireManagedQueueColumns(ctx context.Context) error {
 	tableExists, err := d.queueJobsTableExists(ctx)
 	if err != nil {
 		return fmt.Errorf("validate caller-managed queue_jobs table: %w", err)
@@ -1175,6 +1330,13 @@ func (d *databaseQueue) requireMetadataJSONColumn(ctx context.Context) error {
 	}
 	if !exists {
 		return fmt.Errorf("caller-managed queue_jobs schema is missing required metadata_json column")
+	}
+	exists, err = d.processingTokenColumnExists(ctx)
+	if err != nil {
+		return fmt.Errorf("validate caller-managed database processing token column: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("caller-managed queue_jobs schema is missing required processing_token column")
 	}
 	return nil
 }

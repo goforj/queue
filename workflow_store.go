@@ -12,9 +12,12 @@ import (
 // SQLStoreConfig configures connection ownership, dialect binding, and schema setup for a SQL workflow store.
 // @group Queue
 type SQLStoreConfig struct {
-	DB          *sql.DB
-	DriverName  string
-	DSN         string
+	DB         *sql.DB
+	DriverName string
+	DSN        string
+	// AutoMigrate is retained for source compatibility. NewSQLStore keeps
+	// startup schema creation enabled regardless of the false zero value; use
+	// NewSQLStoreWithManagedSchema when deployment tooling owns the schema.
 	AutoMigrate bool
 }
 
@@ -32,12 +35,31 @@ func NewMemoryStore() WorkflowStore {
 // NewSQLStore creates a SQL-backed workflow state store.
 // @group Constructors
 func NewSQLStore(config SQLStoreConfig) (WorkflowStore, error) {
-	store, err := workflow.NewSQLStore(workflow.SQLStoreConfig{
+	return wrapWorkflowSQLStore(workflow.NewSQLStore(workflowSQLStoreConfig(config)))
+}
+
+// NewSQLStoreWithManagedSchema creates a SQL-backed workflow state store
+// without executing schema DDL. The supplied database must already contain the
+// dialect-correct workflow tables, including transition receipts.
+// @group Constructors
+func NewSQLStoreWithManagedSchema(config SQLStoreConfig) (WorkflowStore, error) {
+	return wrapWorkflowSQLStore(workflow.NewSQLStoreWithManagedSchema(workflowSQLStoreConfig(config)))
+}
+
+// workflowSQLStoreConfig converts the public connection settings without
+// changing the compatibility-preserved config shape.
+func workflowSQLStoreConfig(config SQLStoreConfig) workflow.SQLStoreConfig {
+	return workflow.SQLStoreConfig{
 		DB:          config.DB,
 		DriverName:  config.DriverName,
 		DSN:         config.DSN,
 		AutoMigrate: config.AutoMigrate,
-	})
+	}
+}
+
+// wrapWorkflowSQLStore exposes a successfully constructed engine store through
+// the root workflow model while preserving constructor errors unchanged.
+func wrapWorkflowSQLStore(store workflow.Store, err error) (WorkflowStore, error) {
 	if err != nil {
 		return nil, err
 	}

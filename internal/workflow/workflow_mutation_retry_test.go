@@ -23,12 +23,19 @@ type workflowMutationFaultStore struct {
 	getChainCalls           int
 	getChainState           *ChainState
 	getBatchErr             error
+	getBatchState           *BatchState
 	markCallbackErr         error
 	advanceDoneWithoutState bool
 	failChainWithoutState   bool
 }
 
 type nonterminalWorkflowOutcomeStore struct {
+	Store
+}
+
+// compatibilityOutcomeStore exposes only the public outcome capability so
+// runtime tests cannot accidentally inherit a built-in private claim method.
+type compatibilityOutcomeStore struct {
 	Store
 }
 
@@ -41,6 +48,26 @@ func (s nonterminalWorkflowOutcomeStore) FailChainNode(ctx context.Context, chai
 // SettleBatchJob is unused by the chain-focused fault but completes the atomic capability contract.
 func (s nonterminalWorkflowOutcomeStore) SettleBatchJob(context.Context, string, string, BatchJobOutcome, error) (BatchState, bool, error) {
 	return BatchState{}, false, errors.New("unexpected batch settlement")
+}
+
+// FailChainNode delegates the public outcome capability without exposing any
+// private transition claim metadata.
+func (s compatibilityOutcomeStore) FailChainNode(ctx context.Context, chainID, nodeID string, cause error) (ChainState, bool, error) {
+	store, ok := s.Store.(outcomeStore)
+	if !ok {
+		return ChainState{}, false, errors.New("wrapped store does not support outcome arbitration")
+	}
+	return store.FailChainNode(ctx, chainID, nodeID, cause)
+}
+
+// SettleBatchJob delegates the public outcome capability without exposing any
+// private transition claim metadata.
+func (s compatibilityOutcomeStore) SettleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (BatchState, bool, error) {
+	store, ok := s.Store.(outcomeStore)
+	if !ok {
+		return BatchState{}, false, errors.New("wrapped store does not support outcome arbitration")
+	}
+	return store.SettleBatchJob(ctx, batchID, jobID, outcome, cause)
 }
 
 // AdvanceChain injects a chain progression persistence failure when configured.
@@ -117,6 +144,9 @@ func (s *workflowMutationFaultStore) GetBatch(ctx context.Context, batchID strin
 	if s.getBatchErr != nil {
 		return BatchState{}, s.getBatchErr
 	}
+	if s.getBatchState != nil {
+		return *s.getBatchState, nil
+	}
 	return s.Store.GetBatch(ctx, batchID)
 }
 
@@ -156,6 +186,34 @@ func newWorkflowMutationRuntime(t *testing.T, store Store) (*runtime, *syncTestR
 // exhaustedWorkflowContext fixes the physical attempt at its application retry boundary.
 func exhaustedWorkflowContext() context.Context {
 	return busruntime.WithDeliveryAttempt(context.Background(), busruntime.DeliveryAttempt{Number: 2, MaxRetry: 2})
+}
+
+// workflowGenerationContext attaches one opaque settlement generation to a
+// direct workflow-delivery test context.
+func workflowGenerationContext(ctx context.Context, generationID string) context.Context {
+	return busruntime.WithDeliveryProvenance(ctx, busruntime.DeliveryProvenance{GenerationID: generationID})
+}
+
+// workflowRecoveryContext identifies both the current claim and the earlier
+// unsettled generation whose receipt may be reconstructed.
+func workflowRecoveryContext(ctx context.Context, generationID, recoveredGenerationID string) context.Context {
+	return busruntime.WithDeliveryProvenance(ctx, busruntime.DeliveryProvenance{
+		GenerationID:          generationID,
+		RecoveredGenerationID: recoveredGenerationID,
+		Recovered:             true,
+	})
+}
+
+// workflowTransitionClaim creates the durable receipt identity expected from
+// one direct workflow-delivery fixture.
+func workflowTransitionClaim(env envelope, attempt int, generationID string) transitionClaim {
+	return transitionClaim{
+		deliveryID:     generationID,
+		attempt:        attempt,
+		dispatchID:     env.DispatchID,
+		jobID:          env.JobID,
+		jobFingerprint: storedJobReceiptFingerprint(env.Job),
+	}
 }
 
 // assertUncommittedMutation verifies the store cause survives the same-attempt redelivery marker.
@@ -584,8 +642,8 @@ func TestCompletedChainPublishesOnlyFinalNodeReplay(t *testing.T) {
 			callbackSucceeded++
 		}
 	}
-	if succeeded != 1 || completed != 1 || callbackSucceeded != 1 {
-		t.Fatalf("final replay events = job:%d chain:%d callback:%d, want 1/1/1", succeeded, completed, callbackSucceeded)
+	if succeeded != 0 || completed != 0 || callbackSucceeded != 1 {
+		t.Fatalf("final replay events = job:%d chain:%d callback:%d, want 0/0/1", succeeded, completed, callbackSucceeded)
 	}
 }
 
@@ -861,6 +919,280 @@ func TestBatchDuplicateCannotPublishContradictoryOutcome(t *testing.T) {
 	}
 }
 
+// TestBatchSameOutcomeDuplicateSeparatesFactsFromCallbackRecovery proves the
+// exact private claim gates logical facts while ordinary replays may still
+// finish idempotently claimed compatibility callbacks.
+func TestBatchSameOutcomeDuplicateSeparatesFactsFromCallbackRecovery(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		outcome        BatchJobOutcome
+		recovered      bool
+		wantSucceeded  int
+		wantProgressed int
+		wantCompleted  int
+		wantThen       int
+		wantCatch      int
+		wantFinally    int
+		wantHandler    int
+		wantPermanent  bool
+	}{
+		{name: "ordinary success", outcome: BatchJobSucceeded, wantThen: 1, wantFinally: 1, wantHandler: 1},
+		{name: "recovered success", outcome: BatchJobSucceeded, recovered: true, wantSucceeded: 1, wantProgressed: 1, wantCompleted: 1},
+		{name: "ordinary failure", outcome: BatchJobFailed, wantCatch: 1, wantFinally: 1, wantHandler: 1},
+		{name: "recovered failure", outcome: BatchJobFailed, recovered: true, wantPermanent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const (
+				batchID = "batch-same-outcome-duplicate"
+				jobID   = "job-same-outcome-duplicate"
+				jobType = "workflow:batch:same-outcome-duplicate"
+			)
+			store := NewMemoryStore()
+			if err := store.CreateBatch(context.Background(), BatchRecord{
+				BatchID:    batchID,
+				DispatchID: "dispatch-same-outcome-duplicate",
+				Jobs:       []BatchJob{{JobID: jobID, Job: StoredJob{Type: jobType}}},
+			}); err != nil {
+				t.Fatalf("create batch: %v", err)
+			}
+			delivery := envelope{
+				SchemaVersion: schemaVersion,
+				DispatchID:    "dispatch-same-outcome-duplicate",
+				Kind:          "batch_job",
+				BatchID:       batchID,
+				JobID:         jobID,
+				Job:           StoredJob{Type: jobType},
+			}
+			settlementStore := requireBatchSettlementStore(t, store)
+			applicationErr := errors.New("same outcome failure")
+			seeded, err := settlementStore.settleBatchOutcome(context.Background(), batchID, jobID, test.outcome, applicationErr, workflowTransitionClaim(delivery, 2, "generation-batch-seed"))
+			if err != nil || !seeded.owned || !seeded.receiptKnown {
+				t.Fatalf("seed batch outcome = %+v err:%v", seeded, err)
+			}
+
+			runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+			var handlerCalls, progressCalls, thenCalls, catchCalls, finallyCalls int
+			runtime.Register(jobType, func(context.Context, Context) error {
+				handlerCalls++
+				if test.outcome == BatchJobFailed {
+					return applicationErr
+				}
+				return nil
+			})
+			runtime.batchCallbacks[batchID] = batchCallbacks{
+				progress: func(context.Context, BatchState) error { progressCalls++; return nil },
+				then:     func(context.Context, BatchState) error { thenCalls++; return nil },
+				catch:    func(context.Context, BatchState, error) error { catchCalls++; return nil },
+				finally:  func(context.Context, BatchState) error { finallyCalls++; return nil },
+			}
+			deliveryContext := exhaustedWorkflowContext()
+			var settlement *busruntime.DeliverySettlement
+			if test.recovered {
+				deliveryContext, settlement = busruntime.WithDeliverySettlement(deliveryContext)
+				deliveryContext = workflowRecoveryContext(deliveryContext, "generation-batch-replay", "generation-batch-seed")
+			}
+			err = queueRuntime.DispatchJSON(deliveryContext, internalJobBatchJob, delivery)
+			if test.wantPermanent {
+				if !busruntime.IsPermanent(err) || busruntime.IsUncommitted(err) || errors.Is(err, applicationErr) {
+					t.Fatalf("same-outcome duplicate error = %v, want generic permanent settlement", err)
+				}
+			} else if err != nil {
+				t.Fatalf("same-outcome duplicate: %v", err)
+			}
+			if test.recovered {
+				assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventBatchProgressed, EventBatchCompleted)
+				settlement.Commit()
+			}
+			var succeeded, failed, progressed, completed, batchFailed, cancelled int
+			for _, event := range recorder.events {
+				switch event.Kind {
+				case EventJobSucceeded:
+					succeeded++
+				case EventJobFailed:
+					failed++
+				case EventBatchProgressed:
+					progressed++
+				case EventBatchCompleted:
+					completed++
+				case EventBatchFailed:
+					batchFailed++
+				case EventBatchCancelled:
+					cancelled++
+				}
+			}
+			if handlerCalls != test.wantHandler || succeeded != test.wantSucceeded || progressed != test.wantProgressed || completed != test.wantCompleted || failed != 0 || batchFailed != 0 || cancelled != 0 {
+				t.Fatalf("handler/job/progress/completion/failure counts = %d/%d/%d/%d/%d/%d/%d, want %d/%d/%d/%d/0/0/0", handlerCalls, succeeded, progressed, completed, failed, batchFailed, cancelled, test.wantHandler, test.wantSucceeded, test.wantProgressed, test.wantCompleted)
+			}
+			if progressCalls != 0 || thenCalls != test.wantThen || catchCalls != test.wantCatch || finallyCalls != test.wantFinally {
+				t.Fatalf("progress/then/catch/finally calls = %d/%d/%d/%d, want 0/%d/%d/%d", progressCalls, thenCalls, catchCalls, finallyCalls, test.wantThen, test.wantCatch, test.wantFinally)
+			}
+		})
+	}
+}
+
+// TestBatchRecoverySettlesNonFactOwnersWithoutFacts proves a valid member
+// receipt settles physical nonowners without granting them fact ownership.
+func TestBatchRecoverySettlesNonFactOwnersWithoutFacts(t *testing.T) {
+	const owner = "generation-batch-non-fact-owner"
+	recoveryCases := []struct {
+		name                  string
+		attempt               int
+		recoveredGenerationID string
+	}{
+		{name: "different physical attempt", attempt: 3, recoveredGenerationID: owner},
+		{name: "negative current attempt", attempt: -1, recoveredGenerationID: owner},
+		{name: "different recovered generation", attempt: 2, recoveredGenerationID: "generation-batch-different-recovered"},
+		{name: "legacy recovery without generation", attempt: 2},
+	}
+	for _, receiptOutcome := range []BatchJobOutcome{BatchJobSucceeded, BatchJobFailed} {
+		for _, recoveryCase := range recoveryCases {
+			t.Run(string(receiptOutcome)+"/"+recoveryCase.name, func(t *testing.T) {
+				const (
+					batchID    = "batch-non-fact-owner"
+					dispatchID = "dispatch-batch-non-fact-owner"
+					jobID      = "job-batch-non-fact-owner"
+					jobType    = "workflow:batch:non-fact-owner"
+				)
+				store := NewMemoryStore()
+				env := envelope{SchemaVersion: schemaVersion, DispatchID: dispatchID, Kind: "batch_job", BatchID: batchID, JobID: jobID, Job: StoredJob{Type: jobType, Payload: []byte(`{"id":5}`)}}
+				if err := store.CreateBatch(context.Background(), BatchRecord{BatchID: batchID, DispatchID: dispatchID, AllowFailed: true, Jobs: []BatchJob{{JobID: jobID, Job: env.Job}}}); err != nil {
+					t.Fatalf("create batch: %v", err)
+				}
+				applicationCause := errors.New("original batch member failure")
+				settled, err := requireBatchSettlementStore(t, store).settleBatchOutcome(context.Background(), batchID, jobID, receiptOutcome, applicationCause, workflowTransitionClaim(env, 2, owner))
+				if err != nil || !settled.claimedNow || !settled.receiptKnown || !settled.state.Completed {
+					t.Fatalf("commit batch member = %+v err:%v", settled, err)
+				}
+
+				runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+				var handlerCalls, callbackCalls int
+				runtime.Register(jobType, func(context.Context, Context) error {
+					handlerCalls++
+					return applicationCause
+				})
+				runtime.batchCallbacks[batchID] = batchCallbacks{
+					progress: func(context.Context, BatchState) error {
+						callbackCalls++
+						return nil
+					},
+					then: func(context.Context, BatchState) error {
+						callbackCalls++
+						return nil
+					},
+					catch: func(context.Context, BatchState, error) error {
+						callbackCalls++
+						return nil
+					},
+					finally: func(context.Context, BatchState) error {
+						callbackCalls++
+						return nil
+					},
+				}
+				attemptContext := busruntime.WithDeliveryAttempt(context.Background(), busruntime.DeliveryAttempt{Number: recoveryCase.attempt, MaxRetry: 3})
+				recoveryContext, deliverySettlement := busruntime.WithDeliverySettlement(attemptContext)
+				recoveryContext = workflowRecoveryContext(recoveryContext, "generation-batch-non-fact-owner-current", recoveryCase.recoveredGenerationID)
+				recoveryErr := queueRuntime.DispatchJSON(recoveryContext, internalJobBatchJob, env)
+				if receiptOutcome == BatchJobFailed {
+					if recoveryErr == nil || !busruntime.IsPermanent(recoveryErr) || busruntime.IsUncommitted(recoveryErr) || errors.Is(recoveryErr, applicationCause) {
+						t.Fatalf("failed-member nonowner recovery = %v, want generic permanent", recoveryErr)
+					}
+				} else if recoveryErr != nil {
+					t.Fatalf("successful-member nonowner recovery: %v", recoveryErr)
+				}
+				deliverySettlement.Commit()
+				if handlerCalls != 0 || callbackCalls != 0 || deliverySettlement.ApplicationStateCommitted() || len(recorder.events) != 0 {
+					t.Fatalf("handler/callback/committed/events = %d/%d/%t/%d, want 0/0/false/0", handlerCalls, callbackCalls, deliverySettlement.ApplicationStateCommitted(), len(recorder.events))
+				}
+			})
+		}
+	}
+}
+
+// TestBatchNonterminalReceiptCannotReplayLaterCompletion proves an ordinary
+// duplicate of an earlier member cannot run terminal callbacks merely because
+// another member completed the aggregate before its receipt was re-read.
+func TestBatchNonterminalReceiptCannotReplayLaterCompletion(t *testing.T) {
+	const (
+		batchID      = "batch-nonterminal-receipt-replay"
+		dispatchID   = "dispatch-nonterminal-receipt-replay"
+		firstJobID   = "job-nonterminal-receipt-replay"
+		finalJobID   = "job-terminal-receipt-owner"
+		firstJobType = "workflow:batch:nonterminal-receipt-replay"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateBatch(context.Background(), BatchRecord{
+		BatchID:     batchID,
+		DispatchID:  dispatchID,
+		AllowFailed: true,
+		Jobs: []BatchJob{
+			{JobID: firstJobID, Job: StoredJob{Type: firstJobType}},
+			{JobID: finalJobID, Job: StoredJob{Type: "workflow:batch:terminal-receipt-owner"}},
+		},
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	settlements := requireBatchSettlementStore(t, store)
+	first := envelope{DispatchID: dispatchID, BatchID: batchID, JobID: firstJobID, Job: StoredJob{Type: firstJobType}}
+	final := envelope{DispatchID: dispatchID, BatchID: batchID, JobID: finalJobID, Job: StoredJob{Type: "workflow:batch:terminal-receipt-owner"}}
+	firstResult, err := settlements.settleBatchOutcome(context.Background(), batchID, firstJobID, BatchJobSucceeded, nil, workflowTransitionClaim(first, 0, "generation-nonterminal-receipt"))
+	if err != nil || !firstResult.claimedNow || firstResult.state.Completed || firstResult.receipt.aggregateCompleted {
+		t.Fatalf("settle nonterminal member = %+v, err:%v", firstResult, err)
+	}
+	finalResult, err := settlements.settleBatchOutcome(context.Background(), batchID, finalJobID, BatchJobSucceeded, nil, workflowTransitionClaim(final, 0, "generation-terminal-receipt"))
+	if err != nil || !finalResult.claimedNow || !finalResult.state.Completed || !finalResult.receipt.aggregateCompleted {
+		t.Fatalf("settle terminal member = %+v, err:%v", finalResult, err)
+	}
+
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var handlerCalls, thenCalls, finallyCalls int
+	runtime.Register(firstJobType, func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+	runtime.batchCallbacks[batchID] = batchCallbacks{
+		then:    func(context.Context, BatchState) error { thenCalls++; return nil },
+		finally: func(context.Context, BatchState) error { finallyCalls++; return nil },
+	}
+	if err := queueRuntime.DispatchJSON(exhaustedWorkflowContext(), internalJobBatchJob, first); err != nil {
+		t.Fatalf("replay nonterminal member: %v", err)
+	}
+	if handlerCalls != 1 || thenCalls != 0 || finallyCalls != 0 {
+		t.Fatalf("handler/then/finally calls = %d/%d/%d, want 1/0/0", handlerCalls, thenCalls, finallyCalls)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventBatchCompleted, EventBatchFailed, EventBatchCancelled, EventCallbackStarted, EventCallbackSucceeded, EventCallbackFailed)
+}
+
+// TestBatchSettlementPublicOutcomeFallbackPreservesCompatibility proves a
+// custom additive store retains its established category ownership even though
+// the public interface cannot expose an exact per-call claim result.
+func TestBatchSettlementPublicOutcomeFallbackPreservesCompatibility(t *testing.T) {
+	const (
+		batchID = "batch-public-outcome-fallback"
+		jobID   = "job-public-outcome-fallback"
+	)
+	baseStore := NewMemoryStore()
+	if err := baseStore.CreateBatch(context.Background(), BatchRecord{
+		BatchID: batchID,
+		Jobs:    []BatchJob{{JobID: jobID}},
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	store := compatibilityOutcomeStore{Store: baseStore}
+	runtime, _, _ := newWorkflowMutationRuntime(t, store)
+	first, err := runtime.settleBatchJob(context.Background(), batchID, jobID, BatchJobSucceeded, nil, transitionClaim{})
+	if err != nil || !first.owned || !first.claimedNow || first.state.Processed != 1 {
+		t.Fatalf("first settlement = %+v err:%v, want owned compatibility claim", first, err)
+	}
+	replayed, err := runtime.settleBatchJob(context.Background(), batchID, jobID, BatchJobSucceeded, nil, transitionClaim{})
+	if err != nil || !replayed.owned || !replayed.claimedNow || replayed.state.Processed != 1 {
+		t.Fatalf("replayed settlement = %+v err:%v, want projected compatibility claim", replayed, err)
+	}
+	contradictory, err := runtime.settleBatchJob(context.Background(), batchID, jobID, BatchJobFailed, errors.New("contradictory"), transitionClaim{})
+	if err != nil || contradictory.owned || !contradictory.claimedNow || contradictory.state.Processed != 1 {
+		t.Fatalf("contradictory settlement = %+v err:%v, want losing projected compatibility claim", contradictory, err)
+	}
+}
+
 // TestUnknownBatchMemberStopsBeforeExecution prevents malformed workflow
 // correlation from running a handler or mutating the real aggregate.
 func TestUnknownBatchMemberStopsBeforeExecution(t *testing.T) {
@@ -992,6 +1324,1331 @@ func TestChainCompletionReadFailureRedeliversWithoutFacts(t *testing.T) {
 	}
 	if succeeded != 1 || completed != 1 || callbackSucceeded != 1 {
 		t.Fatalf("job/chain/callback success events = %d/%d/%d, want 1/1/1", succeeded, completed, callbackSucceeded)
+	}
+}
+
+// TestChainCommittedSuccessSurvivesContradictorySettlementReplay proves a
+// failed physical settlement recovers receipt-owned terminal facts without
+// re-executing application code that could produce a contradictory result.
+func TestChainCommittedSuccessSurvivesContradictorySettlementReplay(t *testing.T) {
+	const (
+		chainID = "chain-committed-success-settlement-replay"
+		nodeID  = "node-committed-success-settlement-replay"
+		jobType = "workflow:chain:committed-success-settlement-replay"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateChain(context.Background(), ChainRecord{
+		ChainID:    chainID,
+		DispatchID: "dispatch-committed-success-settlement-replay",
+		Nodes:      []ChainNode{{NodeID: nodeID, Job: StoredJob{Type: jobType}}},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var handlerCalls int
+	runtime.Register(jobType, func(context.Context, Context) error {
+		handlerCalls++
+		if handlerCalls == 1 {
+			return nil
+		}
+		return busruntime.Permanent(errors.New("contradictory replay failure"))
+	})
+	delivery := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-committed-success-settlement-replay",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        nodeID,
+		JobID:         "job-committed-success-settlement-replay",
+		Job:           StoredJob{Type: jobType},
+	}
+
+	firstContext, _ := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	firstContext = workflowGenerationContext(firstContext, "generation-chain-committed-success")
+	if err := queueRuntime.DispatchJSON(firstContext, internalJobChainNode, delivery); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainCompleted)
+	state, err := store.GetChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("get committed chain: %v", err)
+	}
+	if !state.Completed || state.Failed {
+		t.Fatalf("committed chain state = %+v, want completed only", state)
+	}
+
+	replayContext, replaySettlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	replayContext = workflowRecoveryContext(replayContext, "generation-chain-replay", "generation-chain-committed-success")
+	if err := queueRuntime.DispatchJSON(replayContext, internalJobChainNode, delivery); err != nil {
+		t.Fatalf("contradictory redelivery: %v", err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainCompleted)
+	replaySettlement.Commit()
+
+	var succeeded, completed, failed int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			succeeded++
+		case EventChainCompleted:
+			completed++
+		case EventJobFailed, EventChainFailed:
+			failed++
+		}
+	}
+	if handlerCalls != 1 || succeeded != 1 || completed != 1 || failed != 0 {
+		t.Fatalf("handler/job/chain/failure counts = %d/%d/%d/%d, want 1/1/1/0", handlerCalls, succeeded, completed, failed)
+	}
+}
+
+// TestChainPostTransitionFailureMarksCurrentGenerationForRecovery proves a
+// recovered delivery that becomes the transition owner does not retain an
+// older generation when successor enqueue requires same-attempt redelivery.
+func TestChainPostTransitionFailureMarksCurrentGenerationForRecovery(t *testing.T) {
+	const (
+		chainID      = "chain-post-transition-generation"
+		dispatchID   = "dispatch-post-transition-generation"
+		firstNodeID  = "node-post-transition-generation"
+		finalNodeID  = "node-post-transition-generation-final"
+		firstJobType = "workflow:chain:post-transition-generation"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateChain(context.Background(), ChainRecord{
+		ChainID:    chainID,
+		DispatchID: dispatchID,
+		Nodes: []ChainNode{
+			{NodeID: firstNodeID, Job: StoredJob{Type: firstJobType}},
+			{NodeID: finalNodeID, Job: StoredJob{Type: "workflow:chain:post-transition-generation:final"}},
+		},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var handlerCalls int
+	runtime.Register(firstJobType, func(context.Context, Context) error {
+		handlerCalls++
+		return nil
+	})
+	delivery := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    dispatchID,
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        firstNodeID,
+		JobID:         "job-post-transition-generation",
+		Job:           StoredJob{Type: firstJobType},
+	}
+	payload, err := json.Marshal(delivery)
+	if err != nil {
+		t.Fatalf("encode delivery: %v", err)
+	}
+	successorErr := errors.New("successor queue unavailable")
+	queueRuntime.dispatchErr = successorErr
+	deliveryContext, settlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	deliveryContext = workflowRecoveryContext(deliveryContext, "generation-post-transition-current", "generation-post-transition-older")
+	handler := queueRuntime.handlers[internalJobChainNode]
+	if handler == nil {
+		t.Fatal("chain delivery handler is not registered")
+	}
+	err = handler(deliveryContext, testInboundJob{payload: payload})
+	if !busruntime.IsUncommitted(err) || !errors.Is(err, successorErr) {
+		t.Fatalf("post-transition error = %v, want uncommitted successor error", err)
+	}
+	if handlerCalls != 1 || !settlement.ApplicationStateCommitted() {
+		t.Fatalf("handler calls/application-state signal = %d/%t, want 1/true", handlerCalls, settlement.ApplicationStateCommitted())
+	}
+	receipt, known, err := requireTransitionReceiptStore(t, store).chainTransitionReceipt(context.Background(), chainID, firstNodeID)
+	if err != nil || !known || receipt.owner.deliveryID != "generation-post-transition-current" {
+		t.Fatalf("post-transition receipt = known:%t receipt:%+v err:%v", known, receipt, err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced)
+}
+
+// TestChainRecoveryWithoutExactReceiptOwnershipPreservesOnlyLiveContinuation
+// proves compatibility recovery restores liveness without replaying application effects.
+func TestChainRecoveryWithoutExactReceiptOwnershipPreservesOnlyLiveContinuation(t *testing.T) {
+	const (
+		chainID       = "chain-recovery-without-exact-receipt"
+		dispatchID    = "dispatch-recovery-without-exact-receipt"
+		firstNodeID   = "node-recovery-without-exact-receipt-first"
+		secondNodeID  = "node-recovery-without-exact-receipt-second"
+		finalNodeID   = "node-recovery-without-exact-receipt-final"
+		firstJobType  = "workflow:chain:recovery-without-exact-receipt:first"
+		secondJobType = "workflow:chain:recovery-without-exact-receipt:second"
+		finalJobType  = "workflow:chain:recovery-without-exact-receipt:final"
+	)
+	tests := []struct {
+		name            string
+		decorateStore   bool
+		receiptOwner    string
+		recoveredOwner  string
+		advances        int
+		fail            bool
+		wantSuccessor   bool
+		rejectSuccessor bool
+	}{
+		{name: "memory missing receipt live successor", recoveredOwner: "generation-unrecorded", advances: 1, wantSuccessor: true},
+		{name: "memory missing receipt rejected successor", recoveredOwner: "generation-unrecorded", advances: 1, wantSuccessor: true, rejectSuccessor: true},
+		{name: "memory missing receipt progressed successor", recoveredOwner: "generation-unrecorded", advances: 2},
+		{name: "memory missing receipt completed chain", recoveredOwner: "generation-unrecorded", advances: 3},
+		{name: "memory missing receipt failed chain", recoveredOwner: "generation-unrecorded", advances: 1, fail: true},
+		{name: "decorated store live successor", decorateStore: true, recoveredOwner: "generation-unrecorded", advances: 1, wantSuccessor: true},
+		{name: "decorated store progressed successor", decorateStore: true, recoveredOwner: "generation-unrecorded", advances: 2},
+		{name: "decorated store completed chain", decorateStore: true, recoveredOwner: "generation-unrecorded", advances: 3},
+		{name: "decorated store failed chain", decorateStore: true, recoveredOwner: "generation-unrecorded", advances: 1, fail: true},
+		{name: "supported receipt different recovered generation", receiptOwner: "generation-receipt-owner", recoveredOwner: "generation-different", advances: 1, wantSuccessor: true},
+		{name: "supported receipt legacy recovery without generation", receiptOwner: "generation-receipt-owner", advances: 1, wantSuccessor: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseStore := NewMemoryStore()
+			nodes := []ChainNode{
+				{NodeID: firstNodeID, Job: StoredJob{Type: firstJobType}},
+				{NodeID: secondNodeID, Job: StoredJob{Type: secondJobType}},
+				{NodeID: finalNodeID, Job: StoredJob{Type: finalJobType}},
+			}
+			if err := baseStore.CreateChain(context.Background(), ChainRecord{
+				ChainID:    chainID,
+				DispatchID: dispatchID,
+				Nodes:      nodes,
+			}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			delivery := envelope{
+				SchemaVersion: schemaVersion,
+				DispatchID:    dispatchID,
+				Kind:          "chain_node",
+				ChainID:       chainID,
+				NodeID:        firstNodeID,
+				JobID:         "job-recovery-without-exact-receipt",
+				Job:           nodes[0].Job,
+			}
+			if test.receiptOwner != "" {
+				advanced, err := requireChainAdvanceStore(t, baseStore).advanceChainOutcome(
+					context.Background(),
+					chainID,
+					firstNodeID,
+					workflowTransitionClaim(delivery, 2, test.receiptOwner),
+				)
+				if err != nil || !advanced.claimedNow || advanced.done || advanced.next == nil || advanced.next.NodeID != secondNodeID {
+					t.Fatalf("advance receipt owner = %+v, err:%v", advanced, err)
+				}
+			} else {
+				next, done, err := baseStore.AdvanceChain(context.Background(), chainID, firstNodeID)
+				if err != nil || done || next == nil || next.NodeID != secondNodeID {
+					t.Fatalf("advance receiptless predecessor = next:%+v done:%t err:%v", next, done, err)
+				}
+			}
+			for index := 1; index < test.advances; index++ {
+				next, done, err := baseStore.AdvanceChain(context.Background(), chainID, nodes[index].NodeID)
+				if err != nil {
+					t.Fatalf("advance node %d: %v", index, err)
+				}
+				if index == len(nodes)-1 {
+					if !done || next != nil {
+						t.Fatalf("complete chain = next:%+v done:%t, want nil/true", next, done)
+					}
+					continue
+				}
+				if done || next == nil || next.NodeID != nodes[index+1].NodeID {
+					t.Fatalf("advance node %d = next:%+v done:%t", index, next, done)
+				}
+			}
+			if test.fail {
+				if err := baseStore.FailChain(context.Background(), chainID, errors.New("committed chain failure")); err != nil {
+					t.Fatalf("fail chain: %v", err)
+				}
+			}
+
+			receipt, receiptKnown, err := requireTransitionReceiptStore(t, baseStore).chainTransitionReceipt(context.Background(), chainID, firstNodeID)
+			if err != nil {
+				t.Fatalf("read predecessor receipt: %v", err)
+			}
+			if test.receiptOwner == "" && receiptKnown {
+				t.Fatalf("receiptless predecessor unexpectedly persisted receipt %+v", receipt)
+			}
+			if test.receiptOwner != "" && (!receiptKnown || receipt.owner.deliveryID != test.receiptOwner) {
+				t.Fatalf("predecessor receipt = known:%t receipt:%+v", receiptKnown, receipt)
+			}
+
+			var runtimeStore Store = baseStore
+			if test.decorateStore {
+				runtimeStore = &workflowMutationFaultStore{Store: baseStore}
+				if _, capable := runtimeStore.(transitionReceiptStore); capable {
+					t.Fatal("decorated compatibility store unexpectedly exposes transition receipts")
+				}
+			}
+			runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, runtimeStore)
+			var applicationCalls, callbackCalls int
+			for _, jobType := range []string{firstJobType, secondJobType, finalJobType} {
+				runtime.Register(jobType, func(context.Context, Context) error {
+					applicationCalls++
+					return nil
+				})
+			}
+			runtime.chainCallbacks[chainID] = chainCallbacks{
+				catch: func(context.Context, ChainState, error) error {
+					callbackCalls++
+					return nil
+				},
+				finally: func(context.Context, ChainState) error {
+					callbackCalls++
+					return nil
+				},
+			}
+			payload, err := json.Marshal(delivery)
+			if err != nil {
+				t.Fatalf("encode predecessor delivery: %v", err)
+			}
+			handler := queueRuntime.handlers[internalJobChainNode]
+			if handler == nil {
+				t.Fatal("chain delivery handler is not registered")
+			}
+			var successors []envelope
+			queueRuntime.handlers[internalJobChainNode] = func(_ context.Context, job busruntime.InboundJob) error {
+				var successor envelope
+				if err := job.Bind(&successor); err != nil {
+					return err
+				}
+				successors = append(successors, successor)
+				return nil
+			}
+			var successorErr error
+			if test.rejectSuccessor {
+				successorErr = errors.New("receiptless successor enqueue rejected")
+				queueRuntime.dispatchErr = successorErr
+			}
+			recoveryContext := workflowRecoveryContext(exhaustedWorkflowContext(), "generation-recovery-current", test.recoveredOwner)
+			recoveryErr := handler(recoveryContext, testInboundJob{payload: payload})
+			if test.rejectSuccessor {
+				assertUncommittedMutation(t, recoveryErr, successorErr)
+			} else if recoveryErr != nil {
+				t.Fatalf("recover predecessor: %v", recoveryErr)
+			}
+
+			wantSuccessors := 0
+			if test.wantSuccessor && !test.rejectSuccessor {
+				wantSuccessors = 1
+			}
+			if len(successors) != wantSuccessors {
+				t.Fatalf("successor dispatches = %d, want %d", len(successors), wantSuccessors)
+			}
+			if test.wantSuccessor && !test.rejectSuccessor {
+				successor := successors[0]
+				if successor.ChainID != chainID || successor.DispatchID != dispatchID || successor.NodeID != secondNodeID || successor.Job.Type != secondJobType || successor.JobID == "" {
+					t.Fatalf("successor envelope = %+v, want immediate live successor", successor)
+				}
+			}
+			if applicationCalls != 0 || callbackCalls != 0 || len(recorder.events) != 0 {
+				t.Fatalf("application/callback/event counts = %d/%d/%d, want 0/0/0", applicationCalls, callbackCalls, len(recorder.events))
+			}
+			state, err := baseStore.GetChain(context.Background(), chainID)
+			if err != nil {
+				t.Fatalf("get recovered chain: %v", err)
+			}
+			if state.NextIndex != test.advances || state.Completed != (test.advances == len(nodes)) || state.Failed != test.fail {
+				t.Fatalf("chain state after recovery = %+v", state)
+			}
+		})
+	}
+}
+
+// TestChainSuccessRecoveryAllowsDifferentPhysicalDeliveryIdentity proves
+// duplicate chain rows restore only liveness when another job or attempt owns facts.
+func TestChainSuccessRecoveryAllowsDifferentPhysicalDeliveryIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		currentAttempt int
+		currentJobID   string
+	}{
+		{name: "different physical job", currentAttempt: 2, currentJobID: "job-chain-success-duplicate"},
+		{name: "different physical attempt", currentAttempt: 3, currentJobID: "job-chain-success-owner"},
+		{name: "negative current attempt", currentAttempt: -1, currentJobID: "job-chain-success-owner"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const (
+				chainID      = "chain-success-physical-nonowner"
+				dispatchID   = "dispatch-chain-success-physical-nonowner"
+				firstNodeID  = "node-chain-success-physical-owner"
+				secondNodeID = "node-chain-success-physical-next"
+				firstJobType = "workflow:chain:success-physical-owner"
+				nextJobType  = "workflow:chain:success-physical-next"
+				owner        = "generation-chain-success-physical-owner"
+			)
+			store := NewMemoryStore()
+			nodes := []ChainNode{
+				{NodeID: firstNodeID, Job: StoredJob{Type: firstJobType, Payload: []byte(`{"id":4}`)}},
+				{NodeID: secondNodeID, Job: StoredJob{Type: nextJobType}},
+			}
+			if err := store.CreateChain(context.Background(), ChainRecord{ChainID: chainID, DispatchID: dispatchID, Nodes: nodes}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			ownerEnv := envelope{SchemaVersion: schemaVersion, DispatchID: dispatchID, Kind: "chain_node", ChainID: chainID, NodeID: firstNodeID, JobID: "job-chain-success-owner", Job: nodes[0].Job}
+			advanced, err := requireChainAdvanceStore(t, store).advanceChainOutcome(context.Background(), chainID, firstNodeID, workflowTransitionClaim(ownerEnv, 2, owner))
+			if err != nil || !advanced.claimedNow || advanced.done || advanced.next == nil || advanced.next.NodeID != secondNodeID {
+				t.Fatalf("commit predecessor success = %+v err:%v", advanced, err)
+			}
+
+			runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+			var handlerCalls, callbackCalls int
+			for _, jobType := range []string{firstJobType, nextJobType} {
+				runtime.Register(jobType, func(context.Context, Context) error {
+					handlerCalls++
+					return nil
+				})
+			}
+			runtime.chainCallbacks[chainID] = chainCallbacks{finally: func(context.Context, ChainState) error {
+				callbackCalls++
+				return nil
+			}}
+			payloadEnv := ownerEnv
+			payloadEnv.JobID = test.currentJobID
+			payload, err := json.Marshal(payloadEnv)
+			if err != nil {
+				t.Fatalf("encode duplicate predecessor: %v", err)
+			}
+			handler := queueRuntime.handlers[internalJobChainNode]
+			if handler == nil {
+				t.Fatal("chain delivery handler is not registered")
+			}
+			var successors []envelope
+			queueRuntime.handlers[internalJobChainNode] = func(_ context.Context, job busruntime.InboundJob) error {
+				var successor envelope
+				if err := job.Bind(&successor); err != nil {
+					return err
+				}
+				successors = append(successors, successor)
+				return nil
+			}
+			attemptContext := busruntime.WithDeliveryAttempt(context.Background(), busruntime.DeliveryAttempt{Number: test.currentAttempt, MaxRetry: 3})
+			recoveryContext, settlement := busruntime.WithDeliverySettlement(attemptContext)
+			recoveryContext = workflowRecoveryContext(recoveryContext, "generation-chain-success-current", owner)
+			if err := handler(recoveryContext, testInboundJob{payload: payload}); err != nil {
+				t.Fatalf("recover physical nonowner predecessor: %v", err)
+			}
+			settlement.Commit()
+			if len(successors) != 1 || successors[0].NodeID != secondNodeID || successors[0].Job.Type != nextJobType || successors[0].JobID == "" {
+				t.Fatalf("successor dispatches = %+v, want one immediate successor", successors)
+			}
+			if handlerCalls != 0 || callbackCalls != 0 || settlement.ApplicationStateCommitted() || len(recorder.events) != 0 {
+				t.Fatalf("handler/callback/committed/events = %d/%d/%t/%d, want 0/0/false/0", handlerCalls, callbackCalls, settlement.ApplicationStateCommitted(), len(recorder.events))
+			}
+		})
+	}
+}
+
+// TestChainSuccessRecoveryRejectsInvalidReceiptShapeBeforeLiveness proves a
+// malformed supported receipt cannot emit facts or restore a continuation.
+func TestChainSuccessRecoveryRejectsInvalidReceiptShapeBeforeLiveness(t *testing.T) {
+	const (
+		chainID       = "chain-invalid-success-receipt-shape"
+		dispatchID    = "dispatch-invalid-success-receipt-shape"
+		firstNodeID   = "node-invalid-success-receipt-shape-first"
+		secondNodeID  = "node-invalid-success-receipt-shape-second"
+		firstJobType  = "workflow:chain:invalid-success-receipt-shape:first"
+		secondJobType = "workflow:chain:invalid-success-receipt-shape:second"
+		owner         = "generation-invalid-success-receipt-shape"
+	)
+	tests := []struct {
+		name           string
+		final          bool
+		recoveredOwner string
+		diagnostic     string
+		mutate         func(*transitionReceipt)
+	}{
+		{
+			name:           "nonfinal completion exact owner",
+			recoveredOwner: owner,
+			diagnostic:     "completion",
+			mutate: func(receipt *transitionReceipt) {
+				receipt.aggregateCompleted = true
+			},
+		},
+		{
+			name:           "nonfinal cancellation different owner",
+			recoveredOwner: "generation-different-owner",
+			diagnostic:     "cancellation",
+			mutate: func(receipt *transitionReceipt) {
+				receipt.aggregateCancelled = true
+			},
+		},
+		{
+			name:       "final missing completion legacy recovery",
+			final:      true,
+			diagnostic: "completion",
+			mutate: func(receipt *transitionReceipt) {
+				receipt.aggregateCompleted = false
+			},
+		},
+		{
+			name:           "final cancellation different owner",
+			final:          true,
+			recoveredOwner: "generation-different-owner",
+			diagnostic:     "cancellation",
+			mutate: func(receipt *transitionReceipt) {
+				receipt.aggregateCancelled = true
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore().(*memoryStore)
+			nodes := []ChainNode{{NodeID: firstNodeID, Job: StoredJob{Type: firstJobType}}}
+			if !test.final {
+				nodes = append(nodes, ChainNode{NodeID: secondNodeID, Job: StoredJob{Type: secondJobType}})
+			}
+			if err := store.CreateChain(context.Background(), ChainRecord{ChainID: chainID, DispatchID: dispatchID, Nodes: nodes}); err != nil {
+				t.Fatalf("create chain: %v", err)
+			}
+			delivery := envelope{
+				SchemaVersion: schemaVersion,
+				DispatchID:    dispatchID,
+				Kind:          "chain_node",
+				ChainID:       chainID,
+				NodeID:        firstNodeID,
+				JobID:         "job-invalid-success-receipt-shape",
+				Job:           nodes[0].Job,
+			}
+			advanced, err := store.advanceChainOutcome(context.Background(), chainID, firstNodeID, workflowTransitionClaim(delivery, 2, owner))
+			if err != nil || !advanced.claimedNow || !advanced.receiptKnown || advanced.done != test.final {
+				t.Fatalf("advance chain = %+v err:%v", advanced, err)
+			}
+			key := transitionReceiptKey{workflowKind: chainTransitionKind, workflowID: chainID, memberID: firstNodeID}
+			store.mu.Lock()
+			receipt := store.transitionReceipts[key]
+			test.mutate(&receipt)
+			store.transitionReceipts[key] = receipt
+			store.mu.Unlock()
+
+			runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+			var applicationCalls, callbackCalls, successorDispatches int
+			for _, jobType := range []string{firstJobType, secondJobType} {
+				runtime.Register(jobType, func(context.Context, Context) error {
+					applicationCalls++
+					return nil
+				})
+			}
+			runtime.chainCallbacks[chainID] = chainCallbacks{
+				catch: func(context.Context, ChainState, error) error {
+					callbackCalls++
+					return nil
+				},
+				finally: func(context.Context, ChainState) error {
+					callbackCalls++
+					return nil
+				},
+			}
+			payload, err := json.Marshal(delivery)
+			if err != nil {
+				t.Fatalf("encode delivery: %v", err)
+			}
+			handler := queueRuntime.handlers[internalJobChainNode]
+			if handler == nil {
+				t.Fatal("chain delivery handler is not registered")
+			}
+			queueRuntime.handlers[internalJobChainNode] = func(context.Context, busruntime.InboundJob) error {
+				successorDispatches++
+				return nil
+			}
+			recoveryContext := workflowRecoveryContext(exhaustedWorkflowContext(), "generation-invalid-shape-current", test.recoveredOwner)
+			recoveryErr := handler(recoveryContext, testInboundJob{payload: payload})
+			if !busruntime.IsUncommitted(recoveryErr) || !strings.Contains(recoveryErr.Error(), test.diagnostic) {
+				t.Fatalf("invalid receipt recovery error = %v, want uncommitted %q diagnostic", recoveryErr, test.diagnostic)
+			}
+			if applicationCalls != 0 || callbackCalls != 0 || successorDispatches != 0 || len(recorder.events) != 0 {
+				t.Fatalf("application/callback/successor/event counts = %d/%d/%d/%d, want 0/0/0/0", applicationCalls, callbackCalls, successorDispatches, len(recorder.events))
+			}
+		})
+	}
+}
+
+// TestChainRecoveredPredecessorDoesNotRedispatchAfterTerminalSuccessor proves
+// a stale parent can release its own winner facts without repeating terminal work.
+func TestChainRecoveredPredecessorDoesNotRedispatchAfterTerminalSuccessor(t *testing.T) {
+	const (
+		chainID      = "chain-recovered-predecessor"
+		firstNodeID  = "node-recovered-predecessor"
+		finalNodeID  = "node-recovered-final"
+		firstJobType = "workflow:chain:recovered-predecessor"
+		finalJobType = "workflow:chain:recovered-final"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateChain(context.Background(), ChainRecord{
+		ChainID:    chainID,
+		DispatchID: "dispatch-recovered-predecessor",
+		Nodes: []ChainNode{
+			{NodeID: firstNodeID, Job: StoredJob{Type: firstJobType}},
+			{NodeID: finalNodeID, Job: StoredJob{Type: finalJobType}},
+		},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	delivery := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-recovered-predecessor",
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        firstNodeID,
+		JobID:         "job-recovered-predecessor",
+		Job:           StoredJob{Type: firstJobType},
+	}
+	if advanced, err := requireChainAdvanceStore(t, store).advanceChainOutcome(context.Background(), chainID, firstNodeID, workflowTransitionClaim(delivery, 2, "generation-chain-predecessor")); err != nil || !advanced.claimedNow {
+		t.Fatalf("advance predecessor = %+v, err:%v", advanced, err)
+	}
+	if _, done, err := store.AdvanceChain(context.Background(), chainID, finalNodeID); err != nil || !done {
+		t.Fatalf("complete successor = done:%t err:%v", done, err)
+	}
+
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var firstCalls, finalCalls, finallyCalls int
+	runtime.Register(firstJobType, func(context.Context, Context) error {
+		firstCalls++
+		return busruntime.Permanent(errors.New("contradictory predecessor failure"))
+	})
+	runtime.Register(finalJobType, func(context.Context, Context) error {
+		finalCalls++
+		return nil
+	})
+	runtime.chainCallbacks[chainID] = chainCallbacks{
+		finally: func(context.Context, ChainState) error {
+			finallyCalls++
+			return nil
+		},
+	}
+	deliveryContext, settlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	deliveryContext = workflowRecoveryContext(deliveryContext, "generation-chain-predecessor-replay", "generation-chain-predecessor")
+	if err := queueRuntime.DispatchJSON(deliveryContext, internalJobChainNode, delivery); err != nil {
+		t.Fatalf("recover predecessor: %v", err)
+	}
+	if firstCalls != 0 || finalCalls != 0 || finallyCalls != 0 {
+		t.Fatalf("handler/callback calls = first:%d final:%d finally:%d, want 0/0/0", firstCalls, finalCalls, finallyCalls)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted)
+	settlement.Commit()
+
+	var succeeded, advanced, completed, failed int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			succeeded++
+		case EventChainAdvanced:
+			advanced++
+		case EventChainCompleted:
+			completed++
+		case EventJobFailed, EventChainFailed:
+			failed++
+		}
+	}
+	if succeeded != 1 || advanced != 1 || completed != 0 || failed != 0 {
+		t.Fatalf("job/advance/completion/failure counts = %d/%d/%d/%d, want 1/1/0/0", succeeded, advanced, completed, failed)
+	}
+}
+
+// TestChainSuccessorRejectionRecoversWithoutPredecessorReplay proves exact
+// receipt recovery restores a continuation stranded by definite rejection.
+func TestChainSuccessorRejectionRecoversWithoutPredecessorReplay(t *testing.T) {
+	const (
+		chainID      = "chain-recovered-successful-predecessor"
+		dispatchID   = "dispatch-recovered-successful-predecessor"
+		firstNodeID  = "node-recovered-successful-predecessor"
+		finalNodeID  = "node-recovered-successful-final"
+		firstJobType = "workflow:chain:recovered-successful-predecessor"
+		finalJobType = "workflow:chain:recovered-successful-final"
+		owner        = "generation-chain-successful-predecessor"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateChain(context.Background(), ChainRecord{
+		ChainID:    chainID,
+		DispatchID: dispatchID,
+		Nodes: []ChainNode{
+			{NodeID: firstNodeID, Job: StoredJob{Type: firstJobType}},
+			{NodeID: finalNodeID, Job: StoredJob{Type: finalJobType}},
+		},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	delivery := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    dispatchID,
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        firstNodeID,
+		JobID:         "job-recovered-successful-predecessor",
+		Job:           StoredJob{Type: firstJobType},
+	}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var firstCalls, finalCalls int
+	runtime.Register(firstJobType, func(context.Context, Context) error {
+		firstCalls++
+		return nil
+	})
+	runtime.Register(finalJobType, func(context.Context, Context) error {
+		finalCalls++
+		return nil
+	})
+	payload, err := json.Marshal(delivery)
+	if err != nil {
+		t.Fatalf("encode predecessor delivery: %v", err)
+	}
+	handler := queueRuntime.handlers[internalJobChainNode]
+	if handler == nil {
+		t.Fatal("chain delivery handler is not registered")
+	}
+
+	successorErr := errors.New("successor enqueue rejected")
+	queueRuntime.dispatchErr = successorErr
+	initialContext, initialSettlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	initialContext = workflowGenerationContext(initialContext, owner)
+	initialErr := handler(initialContext, testInboundJob{payload: payload})
+	if !busruntime.IsUncommitted(initialErr) || !errors.Is(initialErr, successorErr) {
+		t.Fatalf("initial predecessor error = %v, want uncommitted successor rejection", initialErr)
+	}
+	if firstCalls != 1 || finalCalls != 0 || !initialSettlement.ApplicationStateCommitted() {
+		t.Fatalf("initial calls/application-state signal = %d/%d/%t, want 1/0/true", firstCalls, finalCalls, initialSettlement.ApplicationStateCommitted())
+	}
+	receiptStore := requireTransitionReceiptStore(t, store)
+	receipt, known, err := receiptStore.chainTransitionReceipt(context.Background(), chainID, firstNodeID)
+	if err != nil || !known || receipt.owner.deliveryID != owner {
+		t.Fatalf("initial predecessor receipt = known:%t receipt:%+v err:%v", known, receipt, err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted)
+
+	for index, generationID := range []string{"generation-chain-recovery-one", "generation-chain-recovery-two"} {
+		recoveryContext, recoverySettlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+		recoveryContext = workflowRecoveryContext(recoveryContext, generationID, owner)
+		recoveryErr := handler(recoveryContext, testInboundJob{payload: payload})
+		if !busruntime.IsUncommitted(recoveryErr) || !errors.Is(recoveryErr, successorErr) {
+			t.Fatalf("recovery %d error = %v, want uncommitted successor rejection", index+1, recoveryErr)
+		}
+		if recoverySettlement.ApplicationStateCommitted() {
+			t.Fatalf("recovery %d marked current generation as transition owner", index+1)
+		}
+		receipt, known, err = receiptStore.chainTransitionReceipt(context.Background(), chainID, firstNodeID)
+		if err != nil || !known || receipt.owner.deliveryID != owner {
+			t.Fatalf("recovery %d predecessor receipt = known:%t receipt:%+v err:%v", index+1, known, receipt, err)
+		}
+	}
+	if firstCalls != 1 || finalCalls != 0 {
+		t.Fatalf("handler calls after repeated rejection = first:%d final:%d, want 1/0", firstCalls, finalCalls)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted)
+
+	queueRuntime.dispatchErr = nil
+	recoveryContext, settlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	recoveryContext = workflowRecoveryContext(recoveryContext, "generation-chain-recovery-success", owner)
+	if err := handler(recoveryContext, testInboundJob{payload: payload}); err != nil {
+		t.Fatalf("recover successful predecessor: %v", err)
+	}
+	if firstCalls != 1 || finalCalls != 1 {
+		t.Fatalf("handler calls after recovery = first:%d final:%d, want 1/1", firstCalls, finalCalls)
+	}
+	state, err := store.GetChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("get recovered chain: %v", err)
+	}
+	if !state.Completed || state.Failed || state.NextIndex != 2 {
+		t.Fatalf("recovered chain state = %+v, want completed", state)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted)
+	settlement.Commit()
+
+	var succeeded, advanced, completed int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			succeeded++
+		case EventChainAdvanced:
+			advanced++
+		case EventChainCompleted:
+			completed++
+		}
+	}
+	if succeeded != 2 || advanced != 1 || completed != 1 {
+		t.Fatalf("job/advance/completion counts = %d/%d/%d, want 2/1/1", succeeded, advanced, completed)
+	}
+}
+
+// TestChainRecoveredPredecessorDoesNotRedispatchAfterSuccessorProgress proves
+// recovery cannot duplicate a continuation after the immediate successor won.
+func TestChainRecoveredPredecessorDoesNotRedispatchAfterSuccessorProgress(t *testing.T) {
+	const (
+		chainID      = "chain-recovered-progressed-successor"
+		dispatchID   = "dispatch-recovered-progressed-successor"
+		firstNodeID  = "node-recovered-progressed-first"
+		secondNodeID = "node-recovered-progressed-second"
+		finalNodeID  = "node-recovered-progressed-final"
+		firstJobType = "workflow:chain:recovered-progressed-first"
+		finalJobType = "workflow:chain:recovered-progressed-final"
+		owner        = "generation-chain-progressed-predecessor"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateChain(context.Background(), ChainRecord{
+		ChainID:    chainID,
+		DispatchID: dispatchID,
+		Nodes: []ChainNode{
+			{NodeID: firstNodeID, Job: StoredJob{Type: firstJobType}},
+			{NodeID: secondNodeID, Job: StoredJob{Type: "workflow:chain:recovered-progressed-second"}},
+			{NodeID: finalNodeID, Job: StoredJob{Type: finalJobType}},
+		},
+	}); err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	delivery := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    dispatchID,
+		Kind:          "chain_node",
+		ChainID:       chainID,
+		NodeID:        firstNodeID,
+		JobID:         "job-recovered-progressed-first",
+		Job:           StoredJob{Type: firstJobType},
+	}
+	if advanced, err := requireChainAdvanceStore(t, store).advanceChainOutcome(context.Background(), chainID, firstNodeID, workflowTransitionClaim(delivery, 2, owner)); err != nil || !advanced.claimedNow {
+		t.Fatalf("advance predecessor = %+v, err:%v", advanced, err)
+	}
+	if next, done, err := store.AdvanceChain(context.Background(), chainID, secondNodeID); err != nil || done || next == nil || next.NodeID != finalNodeID {
+		t.Fatalf("advance successor = next:%+v done:%t err:%v", next, done, err)
+	}
+
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var firstCalls, finalCalls int
+	runtime.Register(firstJobType, func(context.Context, Context) error {
+		firstCalls++
+		return nil
+	})
+	runtime.Register(finalJobType, func(context.Context, Context) error {
+		finalCalls++
+		return nil
+	})
+	recoveryContext, settlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	recoveryContext = workflowRecoveryContext(recoveryContext, "generation-chain-progressed-recovery", owner)
+	if err := queueRuntime.DispatchJSON(recoveryContext, internalJobChainNode, delivery); err != nil {
+		t.Fatalf("recover progressed predecessor: %v", err)
+	}
+	if firstCalls != 0 || finalCalls != 0 {
+		t.Fatalf("handler calls = first:%d final:%d, want 0/0", firstCalls, finalCalls)
+	}
+	state, err := store.GetChain(context.Background(), chainID)
+	if err != nil {
+		t.Fatalf("get progressed chain: %v", err)
+	}
+	if state.NextIndex != 2 || state.Completed || state.Failed {
+		t.Fatalf("progressed chain state = %+v, want active final node", state)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted)
+	settlement.Commit()
+	var succeeded, advanced, completed int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			succeeded++
+		case EventChainAdvanced:
+			advanced++
+		case EventChainCompleted:
+			completed++
+		}
+	}
+	if succeeded != 1 || advanced != 1 || completed != 0 {
+		t.Fatalf("recovered fact counts = job:%d advanced:%d completed:%d, want 1/1/0", succeeded, advanced, completed)
+	}
+}
+
+// TestRecoverCommittedChainSuccessRejectsInconsistentState covers every
+// validation boundary before recovery can publish a persisted winner fact.
+func TestRecoverCommittedChainSuccessRejectsInconsistentState(t *testing.T) {
+	baseNode := ChainNode{NodeID: "node-recovery-validation", Job: StoredJob{Type: "workflow:chain:recovery-validation"}}
+	tests := []struct {
+		name          string
+		state         ChainState
+		withoutProof  bool
+		wantRecovered bool
+		wantErr       bool
+	}{
+		{
+			name:    "unknown node",
+			state:   ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{{NodeID: "other-node"}}, NextIndex: 1, Completed: true},
+			wantErr: true,
+		},
+		{
+			name:    "negative next index",
+			state:   ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{baseNode}, NextIndex: -1},
+			wantErr: true,
+		},
+		{
+			name:    "oversized next index",
+			state:   ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{baseNode}, NextIndex: 2},
+			wantErr: true,
+		},
+		{
+			name: "all nodes advanced without completion",
+			state: ChainState{
+				ChainID:   "chain-recovery-validation",
+				Nodes:     []ChainNode{baseNode, {NodeID: "node-recovery-final"}},
+				NextIndex: 2,
+			},
+			wantErr: true,
+		},
+		{
+			name: "completed before all nodes advanced",
+			state: ChainState{
+				ChainID:   "chain-recovery-validation",
+				Nodes:     []ChainNode{baseNode, {NodeID: "node-recovery-final"}},
+				NextIndex: 1,
+				Completed: true,
+			},
+			wantErr: true,
+		},
+		{
+			name:    "completed before node advance",
+			state:   ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{baseNode}, Completed: true},
+			wantErr: true,
+		},
+		{
+			name:    "final node advanced without completion",
+			state:   ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{baseNode}, NextIndex: 1},
+			wantErr: true,
+		},
+		{
+			name:  "current node remains unsettled",
+			state: ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{baseNode}},
+		},
+		{
+			name:    "chain identity mismatch",
+			state:   ChainState{ChainID: "different-chain", Nodes: []ChainNode{baseNode}, NextIndex: 1, Completed: true},
+			wantErr: true,
+		},
+		{
+			name: "dispatch identity mismatch",
+			state: ChainState{
+				ChainID:    "chain-recovery-validation",
+				DispatchID: "different-dispatch",
+				Nodes:      []ChainNode{baseNode},
+				NextIndex:  1,
+				Completed:  true,
+			},
+			wantErr: true,
+		},
+		{
+			name:    "persisted job type mismatch",
+			state:   ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{{NodeID: baseNode.NodeID, Job: StoredJob{Type: "different-job"}}}, NextIndex: 1, Completed: true},
+			wantErr: true,
+		},
+		{
+			name: "persisted job payload mismatch",
+			state: ChainState{
+				ChainID:   "chain-recovery-validation",
+				Nodes:     []ChainNode{{NodeID: baseNode.NodeID, Job: StoredJob{Type: baseNode.Job.Type, Payload: []byte(`{"different":true}`)}}},
+				NextIndex: 1,
+				Completed: true,
+			},
+			wantErr: true,
+		},
+		{
+			name: "persisted job options mismatch",
+			state: ChainState{
+				ChainID:   "chain-recovery-validation",
+				Nodes:     []ChainNode{{NodeID: baseNode.NodeID, Job: StoredJob{Type: baseNode.Job.Type, Options: JobOptions{Queue: "different"}}}},
+				NextIndex: 1,
+				Completed: true,
+			},
+			wantErr: true,
+		},
+		{
+			name:         "missing recovery proof",
+			state:        ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{baseNode}, NextIndex: 1, Completed: true},
+			withoutProof: true,
+		},
+		{
+			name:          "receipt capability absent",
+			state:         ChainState{ChainID: "chain-recovery-validation", Nodes: []ChainNode{baseNode}, NextIndex: 1, Completed: true},
+			wantRecovered: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			faultStore := &workflowMutationFaultStore{Store: NewMemoryStore(), getChainState: &test.state}
+			runtime, _, recorder := newWorkflowMutationRuntime(t, faultStore)
+			env := envelope{
+				DispatchID: "dispatch-recovery-validation",
+				ChainID:    "chain-recovery-validation",
+				NodeID:     baseNode.NodeID,
+				JobID:      "job-recovery-validation",
+				Job:        baseNode.Job,
+			}
+			recoveryContext := context.Background()
+			if !test.withoutProof {
+				recoveryContext = workflowRecoveryContext(recoveryContext, "generation-chain-validation-current", "generation-chain-validation-recovered")
+			}
+			recovered, err := runtime.recoverCommittedChainSuccess(recoveryContext, env)
+			wantRecovered := test.wantRecovered || test.wantErr
+			if (err != nil) != test.wantErr || recovered != wantRecovered {
+				t.Fatalf("recovery = recovered:%t err:%v, want recovered:%t err:%t", recovered, err, wantRecovered, test.wantErr)
+			}
+			if err != nil && !busruntime.IsUncommitted(err) {
+				t.Fatalf("recovery validation error = %v, want uncommitted", err)
+			}
+			assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventChainAdvanced, EventChainCompleted)
+		})
+	}
+}
+
+// TestBatchCommittedSuccessSurvivesContradictorySettlementReplay proves a
+// terminal member's receipt remains observable after settlement failure
+// without re-executing application code that could contradict it.
+func TestBatchCommittedSuccessSurvivesContradictorySettlementReplay(t *testing.T) {
+	const (
+		batchID = "batch-committed-success-settlement-replay"
+		jobID   = "job-committed-success-settlement-replay"
+		jobType = "workflow:batch:committed-success-settlement-replay"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateBatch(context.Background(), BatchRecord{
+		BatchID:    batchID,
+		DispatchID: "dispatch-committed-success-settlement-replay",
+		Jobs:       []BatchJob{{JobID: jobID, Job: StoredJob{Type: jobType}}},
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var handlerCalls int
+	runtime.Register(jobType, func(context.Context, Context) error {
+		handlerCalls++
+		if handlerCalls == 1 {
+			return nil
+		}
+		return busruntime.Permanent(errors.New("contradictory replay failure"))
+	})
+	delivery := envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    "dispatch-committed-success-settlement-replay",
+		Kind:          "batch_job",
+		BatchID:       batchID,
+		JobID:         jobID,
+		Job:           StoredJob{Type: jobType},
+	}
+
+	firstContext, _ := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	firstContext = workflowGenerationContext(firstContext, "generation-batch-committed-success")
+	if err := queueRuntime.DispatchJSON(firstContext, internalJobBatchJob, delivery); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventBatchProgressed, EventBatchCompleted)
+	state, err := store.GetBatch(context.Background(), batchID)
+	if err != nil {
+		t.Fatalf("get committed batch: %v", err)
+	}
+	if !state.Completed || state.Cancelled || state.Processed != 1 || state.Failed != 0 {
+		t.Fatalf("committed batch state = %+v, want successful completion", state)
+	}
+
+	replayContext, replaySettlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	replayContext = workflowRecoveryContext(replayContext, "generation-batch-replay", "generation-batch-committed-success")
+	if err := queueRuntime.DispatchJSON(replayContext, internalJobBatchJob, delivery); err != nil {
+		t.Fatalf("contradictory redelivery: %v", err)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventBatchProgressed, EventBatchCompleted)
+	replaySettlement.Commit()
+
+	var succeeded, progressed, completed, failed int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			succeeded++
+		case EventBatchProgressed:
+			progressed++
+		case EventBatchCompleted:
+			completed++
+		case EventJobFailed, EventBatchFailed, EventBatchCancelled:
+			failed++
+		}
+	}
+	if handlerCalls != 1 || succeeded != 1 || progressed != 1 || completed != 1 || failed != 0 {
+		t.Fatalf("handler/job/progress/completion/failure counts = %d/%d/%d/%d/%d, want 1/1/1/1/0", handlerCalls, succeeded, progressed, completed, failed)
+	}
+}
+
+// TestBatchCompletionReceiptIdentifiesCompletingMember proves member facts
+// and aggregate completion are recovered only from their exact receipt owners.
+func TestBatchCompletionReceiptIdentifiesCompletingMember(t *testing.T) {
+	const (
+		batchID       = "batch-recovery-terminal-owner"
+		dispatchID    = "dispatch-batch-recovery-terminal-owner"
+		staleJobID    = "job-batch-recovery-stale"
+		terminalJobID = "job-batch-recovery-terminal"
+		staleJobType  = "workflow:batch:recovery-stale"
+		terminalType  = "workflow:batch:recovery-terminal"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateBatch(context.Background(), BatchRecord{
+		BatchID:    batchID,
+		DispatchID: dispatchID,
+		Jobs: []BatchJob{
+			{JobID: staleJobID, Job: StoredJob{Type: staleJobType}},
+			{JobID: terminalJobID, Job: StoredJob{Type: terminalType}},
+		},
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	stale := envelope{SchemaVersion: schemaVersion, DispatchID: dispatchID, Kind: "batch_job", BatchID: batchID, JobID: staleJobID, Job: StoredJob{Type: staleJobType}}
+	terminal := envelope{SchemaVersion: schemaVersion, DispatchID: dispatchID, Kind: "batch_job", BatchID: batchID, JobID: terminalJobID, Job: StoredJob{Type: terminalType}}
+	settlements := requireBatchSettlementStore(t, store)
+	staleResult, err := settlements.settleBatchOutcome(context.Background(), batchID, staleJobID, BatchJobSucceeded, nil, workflowTransitionClaim(stale, 2, "generation-batch-stale"))
+	if err != nil || !staleResult.claimedNow || staleResult.state.Completed || staleResult.receipt.aggregateCompleted {
+		t.Fatalf("settle stale member = %+v, err:%v", staleResult, err)
+	}
+	terminalResult, err := settlements.settleBatchOutcome(context.Background(), batchID, terminalJobID, BatchJobSucceeded, nil, workflowTransitionClaim(terminal, 2, "generation-batch-terminal"))
+	if err != nil || !terminalResult.claimedNow || !terminalResult.state.Completed || !terminalResult.receipt.aggregateCompleted {
+		t.Fatalf("settle terminal member = %+v, err:%v", terminalResult, err)
+	}
+
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var handlerCalls int
+	runtime.Register(staleJobType, func(context.Context, Context) error {
+		handlerCalls++
+		return busruntime.Permanent(errors.New("stale handler must not run"))
+	})
+	runtime.Register(terminalType, func(context.Context, Context) error {
+		handlerCalls++
+		return busruntime.Permanent(errors.New("terminal handler must not run"))
+	})
+
+	staleContext, staleSettlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	staleContext = workflowRecoveryContext(staleContext, "generation-batch-stale-replay", "generation-batch-stale")
+	if err := queueRuntime.DispatchJSON(staleContext, internalJobBatchJob, stale); err != nil {
+		t.Fatalf("recover stale member: %v", err)
+	}
+	staleSettlement.Commit()
+	assertNoCommittedEvents(t, recorder.events, EventBatchCompleted)
+
+	terminalContext, terminalSettlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	terminalContext = workflowRecoveryContext(terminalContext, "generation-batch-terminal-replay", "generation-batch-terminal")
+	if err := queueRuntime.DispatchJSON(terminalContext, internalJobBatchJob, terminal); err != nil {
+		t.Fatalf("recover terminal member: %v", err)
+	}
+	terminalSettlement.Commit()
+
+	var staleSucceeded, terminalSucceeded, progressed, completed int
+	completedJobID := ""
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventJobSucceeded:
+			if event.JobID == staleJobID {
+				staleSucceeded++
+			}
+			if event.JobID == terminalJobID {
+				terminalSucceeded++
+			}
+		case EventBatchProgressed:
+			progressed++
+		case EventBatchCompleted:
+			completed++
+			completedJobID = event.JobID
+		}
+	}
+	if handlerCalls != 0 || staleSucceeded != 1 || terminalSucceeded != 1 || progressed != 2 || completed != 1 || completedJobID != terminalJobID {
+		t.Fatalf("handlers/stale/terminal/progress/completion/completer = %d/%d/%d/%d/%d/%q, want 0/1/1/2/1/%q", handlerCalls, staleSucceeded, terminalSucceeded, progressed, completed, completedJobID, terminalJobID)
+	}
+}
+
+// TestBatchCompletionReceiptSurvivesFailedCompletingMember proves an
+// allow-failures aggregate can recover completion even though the member error
+// itself is intentionally absent from the durable receipt.
+func TestBatchCompletionReceiptSurvivesFailedCompletingMember(t *testing.T) {
+	const (
+		batchID    = "batch-recovery-failed-completer"
+		dispatchID = "dispatch-batch-recovery-failed-completer"
+		firstJobID = "job-batch-recovery-first"
+		finalJobID = "job-batch-recovery-failed-completer"
+		finalType  = "workflow:batch:recovery-failed-completer"
+	)
+	store := NewMemoryStore()
+	if err := store.CreateBatch(context.Background(), BatchRecord{
+		BatchID:     batchID,
+		DispatchID:  dispatchID,
+		AllowFailed: true,
+		Jobs: []BatchJob{
+			{JobID: firstJobID, Job: StoredJob{Type: "workflow:batch:recovery-first"}},
+			{JobID: finalJobID, Job: StoredJob{Type: finalType}},
+		},
+	}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	first := envelope{DispatchID: dispatchID, BatchID: batchID, JobID: firstJobID, Job: StoredJob{Type: "workflow:batch:recovery-first"}}
+	final := envelope{SchemaVersion: schemaVersion, DispatchID: dispatchID, Kind: "batch_job", BatchID: batchID, JobID: finalJobID, Job: StoredJob{Type: finalType}}
+	settlements := requireBatchSettlementStore(t, store)
+	if result, err := settlements.settleBatchOutcome(context.Background(), batchID, firstJobID, BatchJobSucceeded, nil, workflowTransitionClaim(first, 2, "generation-batch-first")); err != nil || !result.claimedNow || result.state.Completed {
+		t.Fatalf("settle first member = %+v, err:%v", result, err)
+	}
+	originalCause := errors.New("durable cause remains delivery-local")
+	result, err := settlements.settleBatchOutcome(context.Background(), batchID, finalJobID, BatchJobFailed, originalCause, workflowTransitionClaim(final, 2, "generation-batch-failed-completer"))
+	if err != nil || !result.claimedNow || !result.state.Completed || result.state.Cancelled || !result.receipt.aggregateCompleted {
+		t.Fatalf("settle failed completer = %+v, err:%v", result, err)
+	}
+
+	runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+	var handlerCalls int
+	runtime.Register(finalType, func(context.Context, Context) error {
+		handlerCalls++
+		return errors.New("handler must not run")
+	})
+	recoveryContext, settlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	recoveryContext = workflowRecoveryContext(recoveryContext, "generation-batch-failed-completer-replay", "generation-batch-failed-completer")
+	recoveryErr := queueRuntime.DispatchJSON(recoveryContext, internalJobBatchJob, final)
+	if !busruntime.IsPermanent(recoveryErr) || busruntime.IsUncommitted(recoveryErr) || errors.Is(recoveryErr, originalCause) {
+		t.Fatalf("recover failed completer error = %v, want generic permanent settlement without original cause", recoveryErr)
+	}
+	assertNoCommittedEvents(t, recorder.events, EventBatchCompleted)
+	settlement.Commit()
+	nestedContext, nestedSettlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+	nestedContext = workflowRecoveryContext(nestedContext, "generation-batch-failed-completer-replay-2", "generation-batch-failed-completer-replay")
+	nestedErr := queueRuntime.DispatchJSON(nestedContext, internalJobBatchJob, final)
+	if !busruntime.IsPermanent(nestedErr) || busruntime.IsUncommitted(nestedErr) || errors.Is(nestedErr, originalCause) {
+		t.Fatalf("recover failed completer after another unsettled generation = %v, want generic permanent settlement", nestedErr)
+	}
+	nestedSettlement.Commit()
+
+	var completed, memberFacts int
+	for _, event := range recorder.events {
+		switch event.Kind {
+		case EventBatchCompleted:
+			completed++
+			if event.JobID != finalJobID {
+				t.Fatalf("completion job id = %q, want %q", event.JobID, finalJobID)
+			}
+		case EventJobSucceeded, EventJobFailed, EventBatchProgressed:
+			memberFacts++
+		}
+	}
+	if handlerCalls != 0 || completed != 1 || memberFacts != 0 {
+		t.Fatalf("handler/completion/member facts = %d/%d/%d, want 0/1/0", handlerCalls, completed, memberFacts)
+	}
+}
+
+// TestBatchRecoveryRejectsInvalidAggregateReceiptShape proves corrupt terminal
+// ownership cannot acknowledge a recovered member or publish partial facts.
+func TestBatchRecoveryRejectsInvalidAggregateReceiptShape(t *testing.T) {
+	tests := []struct {
+		name       string
+		diagnostic string
+		mutate     func(*memoryStore, transitionReceiptKey)
+	}{
+		{name: "completion for nonterminal state", diagnostic: "nonterminal state", mutate: func(store *memoryStore, _ transitionReceiptKey) {
+			state := &store.batch["batch-invalid-aggregate-receipt"].state
+			state.Total = 2
+			state.Pending = 1
+			state.Processed = 1
+			state.Completed = false
+		}},
+		{name: "cancellation without completion", diagnostic: "cancellation is not completed", mutate: func(store *memoryStore, key transitionReceiptKey) {
+			receipt := store.transitionReceipts[key]
+			receipt.aggregateCompleted = false
+			receipt.aggregateCancelled = true
+			store.transitionReceipts[key] = receipt
+		}},
+		{name: "cancellation owns success", diagnostic: "does not own failure", mutate: func(store *memoryStore, key transitionReceiptKey) {
+			receipt := store.transitionReceipts[key]
+			receipt.aggregateCancelled = true
+			store.transitionReceipts[key] = receipt
+			store.batch["batch-invalid-aggregate-receipt"].state.Cancelled = true
+		}},
+		{name: "cancellation disagrees with state", diagnostic: "does not match aggregate state", mutate: func(store *memoryStore, key transitionReceiptKey) {
+			receipt := store.transitionReceipts[key]
+			receipt.outcome = BatchJobFailed
+			receipt.aggregateCancelled = true
+			store.transitionReceipts[key] = receipt
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const (
+				batchID    = "batch-invalid-aggregate-receipt"
+				dispatchID = "dispatch-invalid-aggregate-receipt"
+				jobID      = "job-invalid-aggregate-receipt"
+				jobType    = "workflow:batch:invalid-aggregate-receipt"
+				owner      = "generation-invalid-aggregate-receipt"
+			)
+			store := NewMemoryStore().(*memoryStore)
+			env := envelope{SchemaVersion: schemaVersion, DispatchID: dispatchID, Kind: "batch_job", BatchID: batchID, JobID: jobID, Job: StoredJob{Type: jobType}}
+			if err := store.CreateBatch(context.Background(), BatchRecord{BatchID: batchID, DispatchID: dispatchID, Jobs: []BatchJob{{JobID: jobID, Job: env.Job}}}); err != nil {
+				t.Fatalf("create batch: %v", err)
+			}
+			if settled, err := store.settleBatchOutcome(context.Background(), batchID, jobID, BatchJobSucceeded, nil, workflowTransitionClaim(env, 2, owner)); err != nil || !settled.receiptKnown || !settled.receipt.aggregateCompleted {
+				t.Fatalf("settle batch = %+v err:%v", settled, err)
+			}
+			key := transitionReceiptKey{workflowKind: batchTransitionKind, workflowID: batchID, memberID: jobID}
+			store.mu.Lock()
+			test.mutate(store, key)
+			store.mu.Unlock()
+
+			runtime, queueRuntime, recorder := newWorkflowMutationRuntime(t, store)
+			var handlerCalls, callbackCalls int
+			runtime.Register(jobType, func(context.Context, Context) error { handlerCalls++; return nil })
+			runtime.batchCallbacks[batchID] = batchCallbacks{finally: func(context.Context, BatchState) error { callbackCalls++; return nil }}
+			recoveryContext, settlement := busruntime.WithDeliverySettlement(exhaustedWorkflowContext())
+			recoveryContext = workflowRecoveryContext(recoveryContext, "generation-invalid-aggregate-current", owner)
+			recoveryErr := queueRuntime.DispatchJSON(recoveryContext, internalJobBatchJob, env)
+			if !busruntime.IsUncommitted(recoveryErr) || !strings.Contains(recoveryErr.Error(), test.diagnostic) {
+				t.Fatalf("invalid aggregate receipt recovery = %v, want uncommitted %q", recoveryErr, test.diagnostic)
+			}
+			if handlerCalls != 0 || callbackCalls != 0 || settlement.ApplicationStateCommitted() || len(recorder.events) != 0 {
+				t.Fatalf("handler/callback/committed/events = %d/%d/%t/%d, want 0/0/false/0", handlerCalls, callbackCalls, settlement.ApplicationStateCommitted(), len(recorder.events))
+			}
+		})
+	}
+}
+
+// TestRecoverCommittedBatchTransitionRejectsInconsistentState covers every
+// aggregate validation branch before recovery can publish member facts.
+func TestRecoverCommittedBatchTransitionRejectsInconsistentState(t *testing.T) {
+	env := envelope{
+		DispatchID: "dispatch-batch-recovery-validation",
+		BatchID:    "batch-recovery-validation",
+		JobID:      "job-batch-recovery-validation",
+		Job:        StoredJob{Type: "workflow:batch:recovery-validation"},
+	}
+	valid := BatchState{
+		BatchID:    env.BatchID,
+		DispatchID: env.DispatchID,
+		Total:      2,
+		Pending:    1,
+		Processed:  1,
+	}
+	tests := []struct {
+		name         string
+		state        BatchState
+		withoutProof bool
+		valid        bool
+	}{
+		{name: "batch identity mismatch", state: func() BatchState { state := valid; state.BatchID = "different-batch"; return state }()},
+		{name: "dispatch identity mismatch", state: func() BatchState { state := valid; state.DispatchID = "different-dispatch"; return state }()},
+		{name: "nonpositive total", state: func() BatchState { state := valid; state.Total = 0; return state }()},
+		{name: "negative pending", state: func() BatchState { state := valid; state.Pending = -1; return state }()},
+		{name: "negative processed", state: func() BatchState { state := valid; state.Processed = -1; return state }()},
+		{name: "negative failed", state: func() BatchState { state := valid; state.Failed = -1; return state }()},
+		{name: "counter sum mismatch", state: func() BatchState { state := valid; state.Total = 3; return state }()},
+		{name: "failures exceed processed", state: func() BatchState { state := valid; state.Failed = 2; return state }()},
+		{name: "exhausted without completion", state: BatchState{BatchID: env.BatchID, DispatchID: env.DispatchID, Total: 1, Processed: 1}},
+		{name: "completed with pending member", state: func() BatchState { state := valid; state.Completed = true; return state }()},
+		{name: "missing recovery proof", state: valid, withoutProof: true, valid: true},
+		{name: "valid aggregate without receipt", state: valid, valid: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			faultStore := &workflowMutationFaultStore{Store: NewMemoryStore(), getBatchState: &test.state}
+			runtime, _, recorder := newWorkflowMutationRuntime(t, faultStore)
+			recoveryContext := context.Background()
+			if !test.withoutProof {
+				recoveryContext = workflowRecoveryContext(recoveryContext, "generation-batch-validation-current", "generation-batch-validation-recovered")
+			}
+			handled, err := runtime.recoverCommittedBatchTransition(recoveryContext, env)
+			wantErr := !test.withoutProof && !test.valid
+			if (err != nil) != wantErr || handled != wantErr {
+				t.Fatalf("recovery = handled:%t err:%v, want handled:%t err:%t", handled, err, wantErr, wantErr)
+			}
+			if err != nil && !busruntime.IsUncommitted(err) {
+				t.Fatalf("recovery validation error = %v, want uncommitted", err)
+			}
+			assertNoCommittedEvents(t, recorder.events, EventJobSucceeded, EventBatchProgressed, EventBatchCompleted)
+		})
 	}
 }
 

@@ -50,3 +50,49 @@ func TestDeliverySettlementAbsentAndPanickingCallbacks(t *testing.T) {
 		t.Fatal("panicking callback prevented later settlement facts")
 	}
 }
+
+// TestDeliveryProvenanceContext distinguishes current generation identity from
+// an earlier delivery whose settlement owner proved it remained unsettled.
+func TestDeliveryProvenanceContext(t *testing.T) {
+	if _, ok := DeliveryProvenanceFromContext(nil); ok {
+		t.Fatal("nil context unexpectedly reports delivery provenance")
+	}
+	if _, ok := DeliveryProvenanceFromContext(context.Background()); ok {
+		t.Fatal("plain context unexpectedly reports delivery provenance")
+	}
+	want := DeliveryProvenance{
+		GenerationID:          "generation-current",
+		RecoveredGenerationID: "generation-earlier",
+		Recovered:             true,
+	}
+	ctx := WithDeliveryProvenance(nil, want)
+	if got, ok := DeliveryProvenanceFromContext(ctx); !ok || got != want {
+		t.Fatalf("delivery provenance = %+v ok:%t, want %+v/true", got, ok, want)
+	}
+}
+
+// TestDeliveryApplicationStateCommittedSignal keeps post-mutation provenance
+// distinct from both deferred fact publication and physical settlement.
+func TestDeliveryApplicationStateCommittedSignal(t *testing.T) {
+	if MarkDeliveryApplicationStateCommitted(nil) {
+		t.Fatal("nil context accepted an application-state signal")
+	}
+	if MarkDeliveryApplicationStateCommitted(context.Background()) {
+		t.Fatal("plain context accepted an application-state signal")
+	}
+	ctx, settlement := WithDeliverySettlement(context.Background())
+	if settlement.ApplicationStateCommitted() {
+		t.Fatal("new settlement reports committed application state")
+	}
+	if !MarkDeliveryApplicationStateCommitted(ctx) || !settlement.ApplicationStateCommitted() {
+		t.Fatal("settlement did not retain committed application state")
+	}
+	settlement.Commit()
+	if !settlement.ApplicationStateCommitted() {
+		t.Fatal("physical settlement erased application-state provenance")
+	}
+	var nilSettlement *DeliverySettlement
+	if nilSettlement.ApplicationStateCommitted() {
+		t.Fatal("nil settlement reports committed application state")
+	}
+}

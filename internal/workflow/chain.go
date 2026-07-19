@@ -1,8 +1,10 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/goforj/queue/busruntime"
@@ -138,7 +140,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 	}
 
 	first := nodes[0]
-	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
+	b.r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventChainStarted, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
 	if err := b.r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
 		SchemaVersion: schemaVersion,
 		DispatchID:    dispatchID,
@@ -159,7 +161,7 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 			return chainID, err
 		}
 		base := envelope{DispatchID: dispatchID, ChainID: chainID, Job: first.Job}
-		b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now(), Err: err})
+		b.r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: dispatchID, ChainID: chainID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now(), Err: err})
 		_, stErr := b.r.store.GetChain(ctx, chainID)
 		if stErr != nil {
 			return chainID, errors.Join(err, uncommittedMutationError("read chain after initial dispatch rejection", stErr))
@@ -257,6 +259,16 @@ func (r *runtime) failChainNode(ctx context.Context, chainID, nodeID string, cau
 	return state, owned, nil
 }
 
+// failChainNodeOutcome uses built-in receipt fencing when available while
+// preserving the established arbitration behavior of decorated custom stores.
+func (r *runtime) failChainNodeOutcome(ctx context.Context, chainID, nodeID string, cause error, claim transitionClaim) (chainFailureResult, error) {
+	if store, ok := r.store.(chainFailureStore); ok {
+		return store.failChainOutcome(ctx, chainID, nodeID, cause, claim)
+	}
+	state, owned, err := r.failChainNode(ctx, chainID, nodeID, cause)
+	return chainFailureResult{state: state, owned: owned, claimedNow: owned}, err
+}
+
 // observedChainFailure preserves the committed cause across redelivery while
 // retaining permanent classification without exposing a replayed cause.
 func observedChainFailure(state ChainState, current error) error {
@@ -270,22 +282,267 @@ func observedChainFailure(state ChainState, current error) error {
 	return committed
 }
 
+// advanceChainNode uses built-in atomic ownership when available while
+// retaining the established Store projection for compatibility implementations.
+func (r *runtime) advanceChainNode(ctx context.Context, chainID, nodeID string, claim transitionClaim) (chainAdvanceResult, error) {
+	if store, ok := r.store.(chainAdvanceStore); ok {
+		return store.advanceChainOutcome(ctx, chainID, nodeID, claim)
+	}
+	next, done, err := r.store.AdvanceChain(ctx, chainID, nodeID)
+	if err != nil {
+		return chainAdvanceResult{}, err
+	}
+	return chainAdvanceResult{next: next, done: done, successOwned: true, claimedNow: true}, nil
+}
+
+// storedJobsEqual compares persisted protocol identity before recovery trusts
+// an envelope to reconstruct externally visible job correlation.
+func storedJobsEqual(left, right StoredJob) bool {
+	return left.Type == right.Type && bytes.Equal(left.Payload, right.Payload) && left.Options == right.Options
+}
+
+// chainFactID includes retained-row correlation so one deterministic ID never
+// labels different event payloads when duplicate physical envelopes disagree.
+func chainFactID(kind EventKind, env envelope) string {
+	return stableWorkflowFactID(kind, env.DispatchID, env.ChainID, env.NodeID, env.JobID, env.Job.Type, storedJobEventKey(env.Job), env.Job.Options.Queue)
+}
+
+// recoverCommittedChainSuccessor preserves a committed predecessor's live
+// continuation without reconstructing facts that require exact receipt ownership.
+func (r *runtime) recoverCommittedChainSuccessor(ctx context.Context, env envelope, state ChainState, index int) error {
+	if state.Completed || state.Failed || state.NextIndex != index+1 {
+		return nil
+	}
+	next := state.Nodes[state.NextIndex]
+	return r.dispatchChainSuccessor(ctx, env, &next)
+}
+
+// recoverCommittedChainSuccess handles a reclaimed row before application code
+// runs when durable state proves the node already succeeded. Facts require a
+// receipt owned by the exact unsettled generation; application effects are not
+// replayed, while an immediate still-pending continuation remains recoverable.
+func (r *runtime) recoverCommittedChainSuccess(ctx context.Context, env envelope) (bool, error) {
+	provenance, recovering := recoveredDeliveryProvenance(ctx)
+	if !recovering {
+		return false, nil
+	}
+	state, err := r.store.GetChain(ctx, env.ChainID)
+	if err != nil {
+		return true, uncommittedMutationError("recover committed chain success", err)
+	}
+	if state.ChainID != env.ChainID {
+		return true, uncommittedMutationError("recover committed chain success", fmt.Errorf("requested chain %q returned state for %q", env.ChainID, state.ChainID))
+	}
+	if state.DispatchID != "" && env.DispatchID != "" && state.DispatchID != env.DispatchID {
+		return true, uncommittedMutationError("recover committed chain success", fmt.Errorf("chain %q dispatch mismatch", env.ChainID))
+	}
+	index, known := chainNodePosition(state.Nodes, env.NodeID)
+	if !known {
+		return true, uncommittedMutationError("recover committed chain success", fmt.Errorf("chain %q does not contain node %q", env.ChainID, env.NodeID))
+	}
+	successOwned, err := chainNodeSuccessDisposition(state, env.NodeID)
+	if err != nil {
+		return true, uncommittedMutationError("recover committed chain success", err)
+	}
+	if !storedJobsEqual(state.Nodes[index].Job, env.Job) {
+		return true, uncommittedMutationError("recover committed chain success", fmt.Errorf("chain %q node %q job mismatch", env.ChainID, env.NodeID))
+	}
+	if !successOwned {
+		return false, nil
+	}
+	receiptStore, capable := r.store.(transitionReceiptStore)
+	if !capable {
+		return true, r.recoverCommittedChainSuccessor(ctx, env, state, index)
+	}
+	receipt, receiptKnown, receiptErr := receiptStore.chainTransitionReceipt(ctx, env.ChainID, env.NodeID)
+	if receiptErr != nil {
+		return true, uncommittedMutationError("recover committed chain success", receiptErr)
+	}
+	if !receiptKnown {
+		return true, r.recoverCommittedChainSuccessor(ctx, env, state, index)
+	}
+	if receipt.workflowKind != chainTransitionKind || receipt.workflowID != env.ChainID || receipt.memberID != env.NodeID || receipt.workflowDispatchID != state.DispatchID || !receipt.workflowCreatedAt.Equal(state.CreatedAt) {
+		return true, uncommittedMutationError("recover committed chain success", errors.New("transition receipt does not match chain state"))
+	}
+	if err := validateRecoveredTransitionReceipt(env, receipt, false); err != nil {
+		return true, uncommittedMutationError("recover committed chain success", err)
+	}
+	if receipt.outcome != BatchJobSucceeded {
+		return true, uncommittedMutationError("recover committed chain success", errors.New("transition receipt does not own success"))
+	}
+	if receipt.aggregateCancelled {
+		return true, uncommittedMutationError("recover committed chain success", errors.New("successful chain receipt cannot own cancellation"))
+	}
+	finalNode := index == len(state.Nodes)-1
+	if receipt.aggregateCompleted != finalNode {
+		return true, uncommittedMutationError("recover committed chain success", errors.New("transition receipt completion does not match chain node position"))
+	}
+	if !transitionReceiptOwnsRecoveredFacts(env, receipt, provenance) {
+		return true, r.recoverCommittedChainSuccessor(ctx, env, state, index)
+	}
+	committedOutcome, recoveryErr := recoveredStoredJobSuccess(storedJobOutcome{env: env}, receipt, r.now())
+	if recoveryErr != nil {
+		return true, uncommittedMutationError("recover committed chain success", recoveryErr)
+	}
+	if finalNode {
+		r.emitStoredJobOutcome(ctx, committedOutcome)
+		r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: chainFactID(EventChainCompleted, env), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+		return true, nil
+	}
+
+	r.emitStoredJobOutcome(ctx, committedOutcome)
+	r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: chainFactID(EventChainAdvanced, env), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+	if !state.Completed && !state.Failed && state.NextIndex == index+1 {
+		next := state.Nodes[state.NextIndex]
+		return true, r.dispatchChainSuccessor(ctx, env, &next)
+	}
+	return true, nil
+}
+
+// recoverCommittedChainFailure settles a reclaimed terminal failure from its
+// persisted cause without fabricating another handler occurrence or callback.
+func (r *runtime) recoverCommittedChainFailure(ctx context.Context, env envelope) (bool, error) {
+	_, recovering := recoveredDeliveryProvenance(ctx)
+	if !recovering {
+		return false, nil
+	}
+	state, err := r.store.GetChain(ctx, env.ChainID)
+	if err != nil {
+		return true, uncommittedMutationError("recover committed chain failure", err)
+	}
+	if state.ChainID != env.ChainID {
+		return true, uncommittedMutationError("recover committed chain failure", fmt.Errorf("requested chain %q returned state for %q", env.ChainID, state.ChainID))
+	}
+	if state.DispatchID != "" && env.DispatchID != "" && state.DispatchID != env.DispatchID {
+		return true, uncommittedMutationError("recover committed chain failure", fmt.Errorf("chain %q dispatch mismatch", env.ChainID))
+	}
+	if !state.Failed || state.Completed {
+		return false, nil
+	}
+	index, known := chainNodePosition(state.Nodes, env.NodeID)
+	if !known {
+		return true, uncommittedMutationError("recover committed chain failure", fmt.Errorf("chain %q does not contain node %q", env.ChainID, env.NodeID))
+	}
+	owned, _, err := chainNodeFailureDisposition(state, env.NodeID)
+	if err != nil {
+		return true, uncommittedMutationError("recover committed chain failure", err)
+	}
+	if !owned {
+		return false, nil
+	}
+	if !storedJobsEqual(state.Nodes[index].Job, env.Job) {
+		return true, uncommittedMutationError("recover committed chain failure", fmt.Errorf("chain %q node %q job mismatch", env.ChainID, env.NodeID))
+	}
+	receiptStore, capable := r.store.(transitionReceiptStore)
+	if !capable {
+		return false, nil
+	}
+	receipt, receiptKnown, receiptErr := receiptStore.chainTransitionReceipt(ctx, env.ChainID, env.NodeID)
+	if receiptErr != nil {
+		return true, uncommittedMutationError("recover committed chain failure", receiptErr)
+	}
+	if !receiptKnown {
+		return false, nil
+	}
+	if receipt.workflowKind != chainTransitionKind || receipt.workflowID != env.ChainID || receipt.memberID != env.NodeID || receipt.workflowDispatchID != state.DispatchID || !receipt.workflowCreatedAt.Equal(state.CreatedAt) {
+		return true, uncommittedMutationError("recover committed chain failure", errors.New("transition receipt does not match chain state"))
+	}
+	if receipt.outcome != BatchJobFailed {
+		return true, uncommittedMutationError("recover committed chain failure", errors.New("transition receipt does not own failure"))
+	}
+	if receipt.aggregateCompleted || receipt.aggregateCancelled {
+		return true, uncommittedMutationError("recover committed chain failure", errors.New("failed chain receipt cannot own completion"))
+	}
+	if err := validateRecoveredTransitionReceipt(env, receipt, false); err != nil {
+		return true, uncommittedMutationError("recover committed chain failure", err)
+	}
+	if state.Failure == "" {
+		return true, busruntime.Permanent(fmt.Errorf("chain %q node %q was already committed as failed; original cause was empty", env.ChainID, env.NodeID))
+	}
+	return true, busruntime.Permanent(errors.New(state.Failure))
+}
+
+// dispatchChainSuccessor retains at-least-once continuation recovery after a
+// predecessor transition committed but its first enqueue did not complete.
+// A surviving predecessor cannot distinguish a missing successor from one
+// already enqueued but not yet progressed, so recovery may enqueue a duplicate
+// under the queue's existing at-least-once contract.
+func (r *runtime) dispatchChainSuccessor(ctx context.Context, env envelope, next *ChainNode) error {
+	if next == nil {
+		return uncommittedMutationError("dispatch next chain node", errors.New("chain store omitted successor"))
+	}
+	dispatchErr := r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
+		SchemaVersion: schemaVersion,
+		DispatchID:    env.DispatchID,
+		Kind:          "chain_node",
+		ChainID:       env.ChainID,
+		NodeID:        next.NodeID,
+		JobID:         newID("job"),
+		Job:           next.Job,
+	})
+	if executionErr, ok := acceptedDispatchExecutionError(dispatchErr); ok {
+		recordSynchronousChainError(ctx, executionErr)
+		return nil
+	}
+	if dispatchErr != nil {
+		return uncommittedMutationError("dispatch next chain node", dispatchErr)
+	}
+	return nil
+}
+
 // handleInternalChainNode advances or fails a chain only after its application attempt reaches a committable outcome.
 func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
+	if _, recovering := recoveredDeliveryProvenance(ctx); recovering {
+		applyDeliveryAttempt(ctx, &env)
+		handled, recoveryErr := r.recoverCommittedChainFailure(ctx, env)
+		if recoveryErr != nil || handled {
+			return recoveryErr
+		}
+		handled, recoveryErr = r.recoverCommittedChainSuccess(ctx, env)
+		if recoveryErr != nil || handled {
+			return recoveryErr
+		}
+	}
 	outcome := r.executeStoredJobAttempt(ctx, env)
 	switch busruntime.ClassifyAttempt(outcome.attempt, outcome.err) {
 	case busruntime.AttemptRetry, busruntime.AttemptRedeliver:
 		return outcome.err
 	case busruntime.AttemptFailed:
-		state, owned, markErr := r.failChainNode(ctx, env.ChainID, env.NodeID, outcome.err)
+		failed, markErr := r.failChainNodeOutcome(ctx, env.ChainID, env.NodeID, outcome.err, transitionClaimFromOutcome(ctx, outcome))
 		if markErr != nil {
 			return uncommittedMutationError("fail chain", markErr)
 		}
-		if !owned || state.Completed {
+		markDeliveryTransitionCommitted(ctx, failed.claimedNow, failed.receiptKnown)
+		if !failed.owned {
+			if _, recovered := recoveredDeliveryProvenance(ctx); !recovered {
+				return nil
+			}
+			recovered, recoveryErr := r.recoverCommittedChainFailure(ctx, outcome.env)
+			if recoveryErr != nil || recovered {
+				return recoveryErr
+			}
+			recovered, recoveryErr = r.recoverCommittedChainSuccess(ctx, outcome.env)
+			if recoveryErr != nil || recovered {
+				return recoveryErr
+			}
+			return nil
+		}
+		if !failed.claimedNow {
+			if _, recovered := recoveredDeliveryProvenance(ctx); recovered {
+				recovered, recoveryErr := r.recoverCommittedChainFailure(ctx, outcome.env)
+				if recoveryErr != nil || recovered {
+					return recoveryErr
+				}
+				return outcome.err
+			}
+			return nil
+		}
+		state := failed.state
+		if state.Completed {
 			return nil
 		}
 		if !state.Failed {
@@ -295,20 +552,50 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 		observedOutcome := outcome
 		observedOutcome.err = observedErr
 		r.emitStoredJobOutcome(ctx, observedOutcome)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: observedErr})
+		r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventChainFailed, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: observedErr})
 		_ = r.dispatchCallback(ctx, env, "chain_catch", observedErr)
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		r.cleanupChainCallbacks(env.ChainID)
 		return outcome.err
 	}
-	next, done, advErr := r.store.AdvanceChain(ctx, env.ChainID, env.NodeID)
+	advance, advErr := r.advanceChainNode(ctx, env.ChainID, env.NodeID, transitionClaimFromOutcome(ctx, outcome))
 	if advErr != nil {
 		return uncommittedMutationError("advance chain", advErr)
 	}
+	markDeliveryTransitionCommitted(ctx, advance.claimedNow, advance.receiptKnown)
+	_, recovering := recoveredDeliveryProvenance(ctx)
+	if !advance.claimedNow {
+		if !advance.successOwned {
+			return nil
+		}
+		if recovering {
+			recovered, recoveryErr := r.recoverCommittedChainSuccess(ctx, outcome.env)
+			if recoveryErr != nil || recovered {
+				return recoveryErr
+			}
+			return uncommittedMutationError("recover committed chain success", errors.New("store reported success ownership without advanced state"))
+		}
+		if advance.done {
+			state := advance.state
+			index, known := chainNodePosition(state.Nodes, env.NodeID)
+			if known && state.Completed && index == len(state.Nodes)-1 {
+				r.prepareChainSuccessCallbacks(env.ChainID)
+				_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
+				r.cleanupChainCallbacks(env.ChainID)
+			}
+			return nil
+		}
+		return r.dispatchChainSuccessor(ctx, env, advance.next)
+	}
+	next, done := advance.next, advance.done
 	if done {
-		state, stateErr := r.store.GetChain(ctx, env.ChainID)
-		if stateErr != nil {
-			return uncommittedMutationError("confirm chain completion", stateErr)
+		state := advance.state
+		if state.ChainID == "" {
+			var stateErr error
+			state, stateErr = r.store.GetChain(ctx, env.ChainID)
+			if stateErr != nil {
+				return uncommittedMutationError("confirm chain completion", stateErr)
+			}
 		}
 		// Old SQL stores could record failure after completion, so completion
 		// retains precedence for those otherwise-unreachable dual-terminal rows.
@@ -327,30 +614,14 @@ func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.In
 		}
 		r.emitStoredJobOutcome(ctx, outcome)
 		r.prepareChainSuccessCallbacks(env.ChainID)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+		r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: chainFactID(EventChainCompleted, env), Kind: EventChainCompleted, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "chain_finally", nil)
 		r.cleanupChainCallbacks(env.ChainID)
 		return nil
 	}
 	r.emitStoredJobOutcome(ctx, outcome)
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
-	dispatchErr := r.dispatchEnvelope(ctx, internalJobChainNode, envelope{
-		SchemaVersion: schemaVersion,
-		DispatchID:    env.DispatchID,
-		Kind:          "chain_node",
-		ChainID:       env.ChainID,
-		NodeID:        next.NodeID,
-		JobID:         newID("job"),
-		Job:           next.Job,
-	})
-	if executionErr, ok := acceptedDispatchExecutionError(dispatchErr); ok {
-		recordSynchronousChainError(ctx, executionErr)
-		return nil
-	}
-	if dispatchErr != nil {
-		return uncommittedMutationError("dispatch next chain node", dispatchErr)
-	}
-	return nil
+	r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: chainFactID(EventChainAdvanced, env), Kind: EventChainAdvanced, DispatchID: env.DispatchID, ChainID: env.ChainID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+	return r.dispatchChainSuccessor(ctx, env, next)
 }
 
 // invokeChainCatch claims the ephemeral catch callback before application code can run.

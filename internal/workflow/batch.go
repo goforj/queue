@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/goforj/queue/busruntime"
 )
@@ -123,7 +124,7 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 	}
 
 	first := jobs[0]
-	b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
+	b.r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventBatchStarted, DispatchID: dispatchID, BatchID: batchID, JobType: first.Job.Type, JobKey: storedJobEventKey(first.Job), Queue: first.Job.Options.Queue, Time: b.r.now()})
 	var synchronousErr error
 	for _, job := range jobs {
 		if err := b.r.dispatchEnvelope(ctx, internalJobBatchJob, envelope{
@@ -150,8 +151,8 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 				return batchID, uncommittedMutationError("cancel batch after initial dispatch rejection", errors.Join(err, cancelErr))
 			}
 			base := envelope{DispatchID: dispatchID, BatchID: batchID, Job: job.Job}
-			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: storedJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now(), Err: err})
-			b.r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: storedJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now()})
+			b.r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: storedJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now(), Err: err})
+			b.r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: dispatchID, BatchID: batchID, JobID: job.JobID, JobType: job.Job.Type, JobKey: storedJobEventKey(job.Job), Queue: job.Job.Options.Queue, Time: b.r.now()})
 			st, stErr := b.r.store.GetBatch(ctx, batchID)
 			if stErr != nil {
 				return batchID, errors.Join(err, uncommittedMutationError("read batch after initial dispatch rejection", stErr))
@@ -238,31 +239,179 @@ func (r *runtime) cleanupBatchCallbacks(batchID string) {
 // dispatchBatchTerminal publishes one aggregate terminal outcome regardless of which job finishes last.
 func (r *runtime) dispatchBatchTerminal(ctx context.Context, env envelope, st BatchState) {
 	succeeded := st.Completed && !st.Cancelled
+	if succeeded {
+		r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: batchFactID(EventBatchCompleted, env), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+	}
+	r.dispatchBatchTerminalCallbacks(ctx, env, st)
+}
+
+// dispatchBatchTerminalCallbacks retries only idempotently claimed callbacks
+// when aggregate state committed before their earlier enqueue completed.
+func (r *runtime) dispatchBatchTerminalCallbacks(ctx context.Context, env envelope, st BatchState) {
+	succeeded := st.Completed && !st.Cancelled
 	r.prepareBatchTerminalCallbacks(env.BatchID, succeeded, st.Failed > 0)
 	if succeeded {
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		_ = r.dispatchCallback(ctx, env, "batch_then", nil)
 	}
 	_ = r.dispatchCallback(ctx, env, "batch_finally", nil)
 	r.cleanupBatchCallbacks(env.BatchID)
 }
 
+// batchFactID includes the retained queue-row job identity because the
+// established aggregate store persists member outcome but not member payload.
+func batchFactID(kind EventKind, env envelope) string {
+	return stableWorkflowFactID(kind, env.DispatchID, env.BatchID, env.JobID, env.Job.Type, storedJobEventKey(env.Job), env.Job.Options.Queue)
+}
+
 // settleBatchJob uses first-writer outcome ownership when the store supports
 // it and preserves the established compatibility path for custom stores.
-func (r *runtime) settleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (BatchState, bool, error) {
+func (r *runtime) settleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error, claim transitionClaim) (batchSettlementResult, error) {
+	if store, ok := r.store.(batchSettlementStore); ok {
+		return store.settleBatchOutcome(ctx, batchID, jobID, outcome, cause, claim)
+	}
 	if store, ok := r.store.(outcomeStore); ok {
-		return store.SettleBatchJob(ctx, batchID, jobID, outcome, cause)
+		state, owned, err := store.SettleBatchJob(ctx, batchID, jobID, outcome, cause)
+		return batchSettlementResult{state: state, owned: owned, claimedNow: true}, err
 	}
 	switch outcome {
 	case BatchJobSucceeded:
 		state, _, err := r.store.MarkBatchJobSucceeded(ctx, batchID, jobID)
-		return state, true, err
+		return batchSettlementResult{state: state, owned: true, claimedNow: true}, err
 	case BatchJobFailed:
 		state, _, err := r.store.MarkBatchJobFailed(ctx, batchID, jobID, cause)
-		return state, true, err
+		return batchSettlementResult{state: state, owned: true, claimedNow: true}, err
 	default:
-		return BatchState{}, false, errors.New("unsupported batch job outcome")
+		return batchSettlementResult{}, errors.New("unsupported batch job outcome")
 	}
+}
+
+// batchSettlementOwnsTerminal preserves compatibility for established stores
+// while requiring built-in receipt-backed settlements to prove that this exact
+// member crossed its parent into the terminal state it now reports.
+func batchSettlementOwnsTerminal(settled batchSettlementResult, outcome BatchJobOutcome) bool {
+	if !settled.state.Completed {
+		return false
+	}
+	if !settled.receiptKnown {
+		return true
+	}
+	return settled.receipt.supported() &&
+		settled.receipt.outcome == outcome &&
+		settled.receipt.aggregateCompleted &&
+		settled.receipt.aggregateCancelled == settled.state.Cancelled
+}
+
+// emitCommittedBatchSuccessFacts publishes the success category already owned
+// by one member without coupling fact recovery to application callbacks.
+func (r *runtime) emitCommittedBatchSuccessFacts(ctx context.Context, env envelope, outcome storedJobOutcome) {
+	committedOutcome := outcome
+	committedOutcome.err = nil
+	r.emitStoredJobOutcome(ctx, committedOutcome)
+	r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: batchFactID(EventBatchProgressed, env), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+}
+
+// validateRecoveredBatchState rejects aggregate representations that cannot
+// safely support reconstruction of a persisted member success.
+func validateRecoveredBatchState(env envelope, state BatchState) error {
+	if state.BatchID != env.BatchID {
+		return fmt.Errorf("requested batch %q returned state for %q", env.BatchID, state.BatchID)
+	}
+	if state.DispatchID != "" && env.DispatchID != "" && state.DispatchID != env.DispatchID {
+		return fmt.Errorf("batch %q dispatch mismatch", env.BatchID)
+	}
+	if state.Total <= 0 || state.Pending < 0 || state.Processed < 0 || state.Failed < 0 || state.Pending+state.Processed != state.Total || state.Failed > state.Processed {
+		return fmt.Errorf("batch %q has inconsistent counters", env.BatchID)
+	}
+	if !state.Completed && state.Pending == 0 {
+		return fmt.Errorf("batch %q exhausted pending members without completing", env.BatchID)
+	}
+	if state.Completed && !state.Cancelled && state.Pending != 0 {
+		return fmt.Errorf("batch %q completed with pending members", env.BatchID)
+	}
+	return nil
+}
+
+// validateRecoveredBatchReceiptShape rejects terminal ownership that cannot
+// have been produced atomically with the aggregate state it now describes.
+func validateRecoveredBatchReceiptShape(state BatchState, receipt transitionReceipt) error {
+	if receipt.aggregateCancelled && !receipt.aggregateCompleted {
+		return errors.New("batch transition receipt cancellation is not completed")
+	}
+	if receipt.aggregateCancelled && receipt.outcome != BatchJobFailed {
+		return errors.New("batch transition receipt cancellation does not own failure")
+	}
+	if !receipt.aggregateCompleted {
+		return nil
+	}
+	if !state.Completed {
+		return errors.New("batch transition receipt owns completion for nonterminal state")
+	}
+	if receipt.aggregateCancelled != state.Cancelled {
+		return errors.New("batch transition receipt cancellation does not match aggregate state")
+	}
+	return nil
+}
+
+// recoverCommittedBatchTransition handles a receipt-backed settled member before
+// application code runs. Aggregate completion is reconstructed only when a
+// separate receipt identifies this member as the transaction that completed it.
+func (r *runtime) recoverCommittedBatchTransition(ctx context.Context, env envelope) (bool, error) {
+	provenance, recovering := recoveredDeliveryProvenance(ctx)
+	if !recovering {
+		return false, nil
+	}
+	state, stateErr := r.store.GetBatch(ctx, env.BatchID)
+	if stateErr != nil {
+		return true, uncommittedMutationError("recover committed batch transition", stateErr)
+	}
+	if err := validateRecoveredBatchState(env, state); err != nil {
+		return true, uncommittedMutationError("recover committed batch transition", err)
+	}
+	receiptStore, capable := r.store.(transitionReceiptStore)
+	if !capable {
+		return false, nil
+	}
+	receipt, receiptKnown, receiptErr := receiptStore.batchTransitionReceipt(ctx, env.BatchID, env.JobID)
+	if receiptErr != nil {
+		return true, uncommittedMutationError("recover committed batch transition", receiptErr)
+	}
+	if !receiptKnown {
+		return false, nil
+	}
+	if receipt.workflowKind != batchTransitionKind || receipt.workflowID != env.BatchID || receipt.memberID != env.JobID || receipt.workflowDispatchID != state.DispatchID || !receipt.workflowCreatedAt.Equal(state.CreatedAt) {
+		return true, uncommittedMutationError("recover committed batch transition", errors.New("transition receipt does not match batch state"))
+	}
+	if err := validateRecoveredTransitionReceipt(env, receipt, true); err != nil {
+		return true, uncommittedMutationError("recover committed batch transition", err)
+	}
+	if err := validateRecoveredBatchReceiptShape(state, receipt); err != nil {
+		return true, uncommittedMutationError("recover committed batch transition", err)
+	}
+	exactFactOwner := transitionReceiptOwnsRecoveredFacts(env, receipt, provenance)
+	var settlementErr error
+	switch receipt.outcome {
+	case BatchJobSucceeded:
+		if !exactFactOwner {
+			return true, nil
+		}
+	case BatchJobFailed:
+		// The receipt intentionally omits application error details, but its
+		// terminal classification must survive every physical redelivery.
+		settlementErr = busruntime.Permanent(fmt.Errorf("batch %q member %q was already committed as failed; original cause was not persisted", env.BatchID, env.JobID))
+	default:
+		return true, uncommittedMutationError("recover committed batch transition", fmt.Errorf("unsupported transition receipt outcome %q", receipt.outcome))
+	}
+	if receipt.outcome == BatchJobSucceeded {
+		committedOutcome, recoveryErr := recoveredStoredJobSuccess(storedJobOutcome{env: env}, receipt, r.now())
+		if recoveryErr != nil {
+			return true, uncommittedMutationError("recover committed batch transition", recoveryErr)
+		}
+		r.emitCommittedBatchSuccessFacts(ctx, env, committedOutcome)
+	}
+	if exactFactOwner && receipt.aggregateCompleted && !receipt.aggregateCancelled && state.Pending == 0 && state.Completed && !state.Cancelled {
+		r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: batchFactID(EventBatchCompleted, env), Kind: EventBatchCompleted, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+	}
+	return true, settlementErr
 }
 
 // handleInternalBatchJob records each batch mutation before publishing its corresponding workflow fact.
@@ -270,6 +419,13 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
+	}
+	if _, recovering := recoveredDeliveryProvenance(ctx); recovering {
+		applyDeliveryAttempt(ctx, &env)
+		handled, recoveryErr := r.recoverCommittedBatchTransition(ctx, env)
+		if recoveryErr != nil || handled {
+			return recoveryErr
+		}
 	}
 	progress := r.batchProgressCallback(env.BatchID)
 	if markErr := r.store.MarkBatchJobStarted(ctx, env.BatchID, env.JobID); markErr != nil {
@@ -281,39 +437,70 @@ func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.Inb
 	case busruntime.AttemptRetry, busruntime.AttemptRedeliver:
 		return outcome.err
 	case busruntime.AttemptFailed:
-		st, owned, markErr := r.settleBatchJob(ctx, env.BatchID, env.JobID, BatchJobFailed, outcome.err)
+		settled, markErr := r.settleBatchJob(ctx, env.BatchID, env.JobID, BatchJobFailed, outcome.err, transitionClaimFromOutcome(ctx, outcome))
 		if markErr != nil {
 			return uncommittedMutationError("mark batch job failed", markErr)
 		}
-		if !owned {
+		markDeliveryTransitionCommitted(ctx, settled.claimedNow, settled.receiptKnown)
+		if !settled.owned {
+			if _, recovered := recoveredDeliveryProvenance(ctx); !recovered {
+				return nil
+			}
+			_, recoveryErr := r.recoverCommittedBatchTransition(ctx, outcome.env)
+			return recoveryErr
+		}
+		ownsTerminal := batchSettlementOwnsTerminal(settled, BatchJobFailed)
+		if !settled.claimedNow {
+			if _, recovered := recoveredDeliveryProvenance(ctx); recovered {
+				return nil
+			}
+			if settled.state.Failed == 1 {
+				_ = r.dispatchCallback(ctx, env, "batch_catch", outcome.err)
+			}
+			if ownsTerminal {
+				r.dispatchBatchTerminalCallbacks(ctx, env, settled.state)
+			}
 			return nil
 		}
+		st := settled.state
 		r.emitStoredJobOutcome(ctx, outcome)
-		r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
-		if st.Cancelled {
-			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
-			r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+		r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: batchFactID(EventBatchProgressed, env), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+		if ownsTerminal && st.Cancelled {
+			r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventBatchFailed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now(), Err: outcome.err})
+			r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventBatchCancelled, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
 		}
 		if st.Failed == 1 {
 			_ = r.dispatchCallback(ctx, env, "batch_catch", outcome.err)
 		}
 		r.invokeBatchProgress(ctx, st, progress)
-		if st.Completed {
+		if ownsTerminal {
 			r.dispatchBatchTerminal(ctx, env, st)
 		}
 		return outcome.err
 	}
-	st, owned, markErr := r.settleBatchJob(ctx, env.BatchID, env.JobID, BatchJobSucceeded, nil)
+	settled, markErr := r.settleBatchJob(ctx, env.BatchID, env.JobID, BatchJobSucceeded, nil, transitionClaimFromOutcome(ctx, outcome))
 	if markErr != nil {
 		return uncommittedMutationError("mark batch job succeeded", markErr)
 	}
-	if !owned {
+	markDeliveryTransitionCommitted(ctx, settled.claimedNow, settled.receiptKnown)
+	if !settled.owned {
 		return nil
 	}
-	r.emitStoredJobOutcome(ctx, outcome)
-	r.emit(ctx, Event{SchemaVersion: schemaVersion, EventID: newID("evt"), Kind: EventBatchProgressed, DispatchID: env.DispatchID, BatchID: env.BatchID, JobID: env.JobID, JobType: env.Job.Type, JobKey: storedJobEventKey(env.Job), Queue: env.Job.Options.Queue, Time: r.now()})
+	ownsTerminal := batchSettlementOwnsTerminal(settled, BatchJobSucceeded)
+	if !settled.claimedNow {
+		if _, recovered := recoveredDeliveryProvenance(ctx); recovered {
+			_, recoveryErr := r.recoverCommittedBatchTransition(ctx, outcome.env)
+			return recoveryErr
+		}
+		if ownsTerminal {
+			r.dispatchBatchTerminalCallbacks(ctx, env, settled.state)
+		}
+		return nil
+	}
+	st := settled.state
+	r.emitCommittedBatchSuccessFacts(ctx, env, outcome)
 	r.invokeBatchProgress(ctx, st, progress)
-	if st.Completed {
+	if ownsTerminal {
 		r.dispatchBatchTerminal(ctx, env, st)
 	}
 	return nil
@@ -455,7 +642,7 @@ func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) erro
 	onClaimed := func() {
 		start = r.now()
 		r.emit(ctx, Event{
-			SchemaVersion: schemaVersion,
+			SchemaVersion: eventSchemaVersion,
 			EventID:       newID("evt"),
 			Kind:          EventCallbackStarted,
 			DispatchID:    env.DispatchID,
@@ -536,7 +723,7 @@ func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) erro
 			return err
 		}
 		r.emit(ctx, Event{
-			SchemaVersion: schemaVersion,
+			SchemaVersion: eventSchemaVersion,
 			EventID:       newID("evt"),
 			Kind:          EventCallbackFailed,
 			DispatchID:    env.DispatchID,
@@ -553,7 +740,7 @@ func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) erro
 		return err
 	}
 	r.emit(ctx, Event{
-		SchemaVersion: schemaVersion,
+		SchemaVersion: eventSchemaVersion,
 		EventID:       newID("evt"),
 		Kind:          EventCallbackSucceeded,
 		DispatchID:    env.DispatchID,

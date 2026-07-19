@@ -10,6 +10,10 @@ import (
 // ErrNotFound reports that workflow state is absent from a store.
 var ErrNotFound = errors.New("bus record not found")
 
+// errUnsupportedTransitionReceipt keeps mixed-version workers from treating
+// unreadable provenance as either a missing receipt or permission to replay.
+var errUnsupportedTransitionReceipt = errors.New("unsupported workflow transition receipt")
+
 // ChainNode binds a stable node identifier to its serialized job.
 type ChainNode struct {
 	NodeID string
@@ -127,6 +131,119 @@ type outcomeStore interface {
 	SettleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (BatchState, bool, error)
 }
 
+type transitionClaim struct {
+	deliveryID     string
+	attempt        int
+	dispatchID     string
+	jobID          string
+	jobFingerprint string
+}
+
+// valid reports whether a settlement generation supplied every identity field
+// required for durable transition provenance.
+func (c transitionClaim) valid() bool {
+	return c.deliveryID != "" && c.attempt >= 0 && c.dispatchID != "" && c.jobID != "" && c.jobFingerprint != ""
+}
+
+type transitionReceipt struct {
+	version            int
+	eventSchemaVersion int
+	workflowKind       string
+	workflowID         string
+	workflowDispatchID string
+	workflowCreatedAt  time.Time
+	memberID           string
+	outcome            BatchJobOutcome
+	owner              transitionClaim
+	aggregateCompleted bool
+	aggregateCancelled bool
+	createdAt          time.Time
+}
+
+type transitionReceiptKey struct {
+	workflowKind string
+	workflowID   string
+	memberID     string
+}
+
+const (
+	transitionReceiptVersion = 1
+	chainTransitionKind      = "chain"
+	batchTransitionKind      = "batch"
+)
+
+// supported reports whether this runtime can interpret both durable identity
+// and the event contract reconstructed from it.
+func (r transitionReceipt) supported() bool {
+	return r.version == transitionReceiptVersion && r.eventSchemaVersion == eventSchemaVersion
+}
+
+// validateTransitionReceiptSupport fails closed when a worker cannot interpret
+// either the durable receipt identity or the observer facts reconstructed from it.
+func validateTransitionReceiptSupport(receipt transitionReceipt) error {
+	if receipt.supported() {
+		return nil
+	}
+	return fmt.Errorf("%w: receipt version %d, event schema %d", errUnsupportedTransitionReceipt, receipt.version, receipt.eventSchemaVersion)
+}
+
+// chainAdvanceResult distinguishes the logical success owner from the physical
+// delivery that claimed it so recovery never repeats continuation effects.
+type chainAdvanceResult struct {
+	state        ChainState
+	next         *ChainNode
+	done         bool
+	successOwned bool
+	claimedNow   bool
+	receipt      transitionReceipt
+	receiptKnown bool
+}
+
+// chainAdvanceStore exposes built-in atomic transition ownership without
+// expanding the compatibility-critical Store interface.
+type chainAdvanceStore interface {
+	advanceChainOutcome(ctx context.Context, chainID, nodeID string, claim transitionClaim) (chainAdvanceResult, error)
+}
+
+// chainFailureResult distinguishes durable failure ownership from the physical
+// delivery that atomically persisted its recovery receipt.
+type chainFailureResult struct {
+	state        ChainState
+	owned        bool
+	claimedNow   bool
+	receipt      transitionReceipt
+	receiptKnown bool
+}
+
+// chainFailureStore exposes built-in atomic failure provenance without
+// expanding either Store or the established outcomeStore capability.
+type chainFailureStore interface {
+	failChainOutcome(ctx context.Context, chainID, nodeID string, cause error, claim transitionClaim) (chainFailureResult, error)
+}
+
+// batchSettlementResult separates first-writer category ownership from the
+// delivery that changed aggregate counters in this transaction.
+type batchSettlementResult struct {
+	state        BatchState
+	owned        bool
+	claimedNow   bool
+	receipt      transitionReceipt
+	receiptKnown bool
+}
+
+// batchSettlementStore exposes built-in member transition ownership without
+// requiring established custom stores to implement another public method.
+type batchSettlementStore interface {
+	settleBatchOutcome(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error, claim transitionClaim) (batchSettlementResult, error)
+}
+
+// transitionReceiptStore exposes durable writer identity only to the workflow
+// engine; established public stores remain source-compatible.
+type transitionReceiptStore interface {
+	chainTransitionReceipt(ctx context.Context, chainID, nodeID string) (transitionReceipt, bool, error)
+	batchTransitionReceipt(ctx context.Context, batchID, jobID string) (transitionReceipt, bool, error)
+}
+
 // chainNodePosition resolves persisted order so stale and future deliveries
 // cannot mutate the aggregate merely because they carry a valid chain ID.
 func chainNodePosition(nodes []ChainNode, nodeID string) (int, bool) {
@@ -136,6 +253,37 @@ func chainNodePosition(nodes []ChainNode, nodeID string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// validateChainState rejects representations that cannot prove which nodes
+// committed before recovery reconstructs any externally visible fact.
+func validateChainState(state ChainState) error {
+	if err := validateChainRecord(ChainRecord{ChainID: state.ChainID, Nodes: state.Nodes}); err != nil {
+		return err
+	}
+	if state.NextIndex < 0 || state.NextIndex > len(state.Nodes) {
+		return fmt.Errorf("chain %q has invalid next index %d", state.ChainID, state.NextIndex)
+	}
+	if state.Completed != (state.NextIndex == len(state.Nodes)) {
+		return fmt.Errorf("chain %q completion does not match next index %d", state.ChainID, state.NextIndex)
+	}
+	return nil
+}
+
+// chainNodeSuccessDisposition reports whether the persisted ordering proves
+// that node success won while rejecting future or internally inconsistent deliveries.
+func chainNodeSuccessDisposition(state ChainState, nodeID string) (bool, error) {
+	if err := validateChainState(state); err != nil {
+		return false, err
+	}
+	index, ok := chainNodePosition(state.Nodes, nodeID)
+	if !ok {
+		return false, fmt.Errorf("chain %q does not contain node %q", state.ChainID, nodeID)
+	}
+	if index > state.NextIndex {
+		return false, fmt.Errorf("chain %q received node %q before node %q", state.ChainID, nodeID, state.Nodes[state.NextIndex].NodeID)
+	}
+	return index < state.NextIndex, nil
 }
 
 // validateChainRecord rejects ambiguous order because duplicate or empty node

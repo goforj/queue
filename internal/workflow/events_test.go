@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/goforj/queue/busruntime"
 )
@@ -283,6 +284,275 @@ func TestPositiveWorkflowEventsWaitForDeliverySettlement(t *testing.T) {
 			settlement.Commit()
 			if len(events) != 1 || events[0].Kind != kind {
 				t.Fatalf("events after settlement = %+v, want %q", events, kind)
+			}
+		})
+	}
+}
+
+// TestStableWorkflowFactIDPreservesLogicalIdentity verifies replay identifiers
+// are deterministic, kind-specific, and immune to ambiguous field partitioning.
+func TestStableWorkflowFactIDPreservesLogicalIdentity(t *testing.T) {
+	want := stableWorkflowFactID(EventChainCompleted, "chain", "node")
+	if len(want) != len("evt_")+32 {
+		t.Fatalf("stable fact id length = %d, want %d", len(want), len("evt_")+32)
+	}
+	if got := stableWorkflowFactID(EventChainCompleted, "chain", "node"); got != want {
+		t.Fatalf("replayed fact id = %q, want %q", got, want)
+	}
+	if got := stableWorkflowFactID(EventChainAdvanced, "chain", "node"); got == want {
+		t.Fatalf("different event kinds share fact id %q", got)
+	}
+	if left, right := stableWorkflowFactID(EventJobSucceeded, "ab", "c"), stableWorkflowFactID(EventJobSucceeded, "a", "bc"); left == right {
+		t.Fatalf("differently framed identities share fact id %q", left)
+	}
+}
+
+// TestStoredJobOutcomeFactIDRequiresCorrelation keeps unrelated legacy
+// deliveries from sharing a deterministic identifier merely by type/attempt.
+func TestStoredJobOutcomeFactIDRequiresCorrelation(t *testing.T) {
+	correlated := storedJobOutcome{env: envelope{
+		DispatchID: "dispatch-fact-id",
+		JobID:      "job-fact-id",
+		Job: StoredJob{
+			Type:    "workflow:fact-id",
+			Payload: []byte(`{"version":1}`),
+			Options: JobOptions{Queue: "critical"},
+		},
+		Attempt: 2,
+	}}
+	first := storedJobOutcomeFactID(EventJobSucceeded, correlated)
+	if second := storedJobOutcomeFactID(EventJobSucceeded, correlated); second != first {
+		t.Fatalf("correlated fact ids = %q/%q, want stable", first, second)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*storedJobOutcome)
+	}{
+		{name: "payload", mutate: func(outcome *storedJobOutcome) { outcome.env.Job.Payload = []byte(`{"version":2}`) }},
+		{name: "queue", mutate: func(outcome *storedJobOutcome) { outcome.env.Job.Options.Queue = "bulk" }},
+		{name: "job type", mutate: func(outcome *storedJobOutcome) { outcome.env.Job.Type = "workflow:other-fact" }},
+		{name: "attempt", mutate: func(outcome *storedJobOutcome) { outcome.env.Attempt++ }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changed := correlated
+			test.mutate(&changed)
+			if got := storedJobOutcomeFactID(EventJobSucceeded, changed); got == first {
+				t.Fatalf("changed %s reused fact id %q", test.name, got)
+			}
+		})
+	}
+
+	uncorrelated := correlated
+	uncorrelated.env.DispatchID = ""
+	if left, right := storedJobOutcomeFactID(EventJobSucceeded, uncorrelated), storedJobOutcomeFactID(EventJobSucceeded, uncorrelated); left == right {
+		t.Fatalf("uncorrelated delivery reused fact id %q", left)
+	}
+	uncorrelated = correlated
+	uncorrelated.env.JobID = ""
+	if left, right := storedJobOutcomeFactID(EventJobSucceeded, uncorrelated), storedJobOutcomeFactID(EventJobSucceeded, uncorrelated); left == right {
+		t.Fatalf("partially correlated delivery reused fact id %q", left)
+	}
+	if left, right := storedJobOutcomeFactID(EventJobFailed, correlated), storedJobOutcomeFactID(EventJobFailed, correlated); left == right {
+		t.Fatalf("non-recoverable failures reused fact id %q", left)
+	}
+}
+
+// TestAggregateFactIDsIncludeObservableCorrelation proves deterministic chain
+// and batch identifiers cannot label events whose visible job fields disagree.
+func TestAggregateFactIDsIncludeObservableCorrelation(t *testing.T) {
+	base := envelope{
+		DispatchID: "dispatch-aggregate-fact-id",
+		JobID:      "job-aggregate-fact-id",
+		ChainID:    "chain-aggregate-fact-id",
+		BatchID:    "batch-aggregate-fact-id",
+		NodeID:     "node-aggregate-fact-id",
+		Job: StoredJob{
+			Type:    "workflow:aggregate-fact-id",
+			Payload: []byte(`{"version":1}`),
+			Options: JobOptions{Queue: "critical"},
+		},
+	}
+	chainID := chainFactID(EventChainAdvanced, base)
+	batchID := batchFactID(EventBatchProgressed, base)
+	if got := chainFactID(EventChainAdvanced, base); got != chainID {
+		t.Fatalf("replayed chain fact ids = %q/%q, want stable", chainID, got)
+	}
+	if got := batchFactID(EventBatchProgressed, base); got != batchID {
+		t.Fatalf("replayed batch fact ids = %q/%q, want stable", batchID, got)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*envelope)
+	}{
+		{name: "dispatch", mutate: func(env *envelope) { env.DispatchID = "dispatch-other" }},
+		{name: "job", mutate: func(env *envelope) { env.JobID = "job-other" }},
+		{name: "job type", mutate: func(env *envelope) { env.Job.Type = "workflow:other-fact" }},
+		{name: "payload", mutate: func(env *envelope) { env.Job.Payload = []byte(`{"version":2}`) }},
+		{name: "queue", mutate: func(env *envelope) { env.Job.Options.Queue = "bulk" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changed := base
+			test.mutate(&changed)
+			if got := chainFactID(EventChainAdvanced, changed); got == chainID {
+				t.Fatalf("changed %s reused chain fact id %q", test.name, got)
+			}
+			if got := batchFactID(EventBatchProgressed, changed); got == batchID {
+				t.Fatalf("changed %s reused batch fact id %q", test.name, got)
+			}
+		})
+	}
+}
+
+// TestRecoveredSuccessRetainsLogicalIdentityWithoutReplayTiming proves recovery
+// deduplicates the same application attempt without borrowing failed replay telemetry.
+func TestRecoveredSuccessRetainsLogicalIdentityWithoutReplayTiming(t *testing.T) {
+	started := time.Unix(10, 0)
+	finished := time.Unix(12, 0)
+	normal := storedJobOutcome{
+		env: envelope{
+			DispatchID: "dispatch-recovered-success-id",
+			JobID:      "job-recovered-success-id",
+			ChainID:    "chain-recovered-success-id",
+			Attempt:    0,
+			Job:        StoredJob{Type: "workflow:recovered-success-id"},
+		},
+		started:  started,
+		finished: finished,
+	}
+	replayed := normal
+	replayed.attempt = busruntime.DeliveryAttempt{Number: 0, MaxRetry: 1}
+	replayed.started = time.Unix(20, 0)
+	replayed.finished = time.Unix(25, 0)
+	replayed.err = errors.New("contradictory replay failure")
+	observed := time.Unix(30, 0)
+	receipt := transitionReceipt{
+		version:            transitionReceiptVersion,
+		eventSchemaVersion: eventSchemaVersion,
+		outcome:            BatchJobSucceeded,
+		owner: transitionClaim{
+			deliveryID:     "generation-recovered-success-id",
+			attempt:        0,
+			dispatchID:     normal.env.DispatchID,
+			jobID:          normal.env.JobID,
+			jobFingerprint: storedJobReceiptFingerprint(normal.env.Job),
+		},
+	}
+	recovered, err := recoveredStoredJobSuccess(replayed, receipt, observed)
+	if err != nil {
+		t.Fatalf("recover stored job success: %v", err)
+	}
+	if got, want := storedJobOutcomeFactID(EventJobSucceeded, recovered), storedJobOutcomeFactID(EventJobSucceeded, normal); got != want {
+		t.Fatalf("recovered/normal fact ids = %q/%q", got, want)
+	}
+	if recovered.err != nil || recovered.env.Attempt != 0 || recovered.attempt.Number != 0 || !recovered.started.Equal(observed) || !recovered.finished.Equal(observed) || recovered.finished.Sub(recovered.started) != 0 {
+		t.Fatalf("recovered outcome retained replay telemetry: %+v", recovered)
+	}
+	nextAttempt := normal
+	nextAttempt.env.Attempt++
+	if got, previous := storedJobOutcomeFactID(EventJobSucceeded, nextAttempt), storedJobOutcomeFactID(EventJobSucceeded, normal); got == previous {
+		t.Fatalf("different application attempts share fact id %q", got)
+	}
+}
+
+// TestRecoveredSuccessRequiresValidTransitionReceipt rejects incomplete or
+// mismatched durable identity before a reconstructed fact can be emitted.
+func TestRecoveredSuccessRequiresValidTransitionReceipt(t *testing.T) {
+	job := StoredJob{Type: "workflow:receipt-validation", Payload: []byte(`{"id":1}`)}
+	outcome := storedJobOutcome{env: envelope{
+		DispatchID: "dispatch-receipt-validation",
+		JobID:      "job-receipt-validation",
+		Attempt:    1,
+		Job:        job,
+	}}
+	valid := transitionReceipt{
+		version:            transitionReceiptVersion,
+		eventSchemaVersion: eventSchemaVersion,
+		outcome:            BatchJobSucceeded,
+		owner: transitionClaim{
+			deliveryID:     "generation-receipt-validation",
+			attempt:        1,
+			dispatchID:     outcome.env.DispatchID,
+			jobID:          outcome.env.JobID,
+			jobFingerprint: storedJobReceiptFingerprint(job),
+		},
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*transitionReceipt)
+	}{
+		{name: "failed outcome", mutate: func(receipt *transitionReceipt) { receipt.outcome = BatchJobFailed }},
+		{name: "unknown receipt version", mutate: func(receipt *transitionReceipt) { receipt.version++ }},
+		{name: "unknown event schema", mutate: func(receipt *transitionReceipt) { receipt.eventSchemaVersion++ }},
+		{name: "empty delivery owner", mutate: func(receipt *transitionReceipt) { receipt.owner.deliveryID = "" }},
+		{name: "negative attempt", mutate: func(receipt *transitionReceipt) { receipt.owner.attempt = -1 }},
+		{name: "different attempt", mutate: func(receipt *transitionReceipt) { receipt.owner.attempt = 2 }},
+		{name: "dispatch mismatch", mutate: func(receipt *transitionReceipt) { receipt.owner.dispatchID = "different" }},
+		{name: "job mismatch", mutate: func(receipt *transitionReceipt) { receipt.owner.jobID = "different" }},
+		{name: "fingerprint mismatch", mutate: func(receipt *transitionReceipt) { receipt.owner.jobFingerprint = "different" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			receipt := valid
+			test.mutate(&receipt)
+			if _, err := recoveredStoredJobSuccess(outcome, receipt, time.Now()); err == nil {
+				t.Fatal("invalid transition receipt was accepted")
+			}
+		})
+	}
+}
+
+// TestRecoveredTransitionReceiptLogicalValidationSeparatesPhysicalOwnership
+// keeps malformed identity fail-closed while permitting legitimate nonowners.
+func TestRecoveredTransitionReceiptLogicalValidationSeparatesPhysicalOwnership(t *testing.T) {
+	job := StoredJob{Type: "workflow:logical-receipt-validation", Payload: []byte(`{"id":2}`)}
+	env := envelope{
+		DispatchID: "dispatch-logical-receipt-validation",
+		JobID:      "job-logical-receipt-validation",
+		Attempt:    2,
+		Job:        job,
+	}
+	valid := transitionReceipt{
+		version:            transitionReceiptVersion,
+		eventSchemaVersion: eventSchemaVersion,
+		owner: transitionClaim{
+			deliveryID:     "generation-logical-receipt-validation",
+			attempt:        env.Attempt,
+			dispatchID:     env.DispatchID,
+			jobID:          env.JobID,
+			jobFingerprint: storedJobReceiptFingerprint(job),
+		},
+	}
+	for _, test := range []struct {
+		name              string
+		requireOwnerJobID bool
+		mutateEnv         func(*envelope)
+		mutateReceipt     func(*transitionReceipt)
+		wantErr           bool
+	}{
+		{name: "chain different owner attempt", mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.attempt++ }},
+		{name: "chain different owner job", mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.jobID = "job-other-physical-delivery" }},
+		{name: "batch different owner attempt", requireOwnerJobID: true, mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.attempt++ }},
+		{name: "batch different logical member", requireOwnerJobID: true, mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.jobID = "job-other-member" }, wantErr: true},
+		{name: "chain negative current attempt", mutateEnv: func(env *envelope) { env.Attempt = -1 }},
+		{name: "empty delivery dispatch", mutateEnv: func(env *envelope) { env.DispatchID = "" }, wantErr: true},
+		{name: "empty delivery job", mutateEnv: func(env *envelope) { env.JobID = "" }, wantErr: true},
+		{name: "empty owner generation", mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.deliveryID = "" }, wantErr: true},
+		{name: "negative owner attempt", mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.attempt = -1 }, wantErr: true},
+		{name: "empty owner job", mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.jobID = "" }, wantErr: true},
+		{name: "owner dispatch mismatch", mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.dispatchID = "dispatch-other" }, wantErr: true},
+		{name: "owner fingerprint mismatch", mutateReceipt: func(receipt *transitionReceipt) { receipt.owner.jobFingerprint = "fingerprint-other" }, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			currentEnv := env
+			currentReceipt := valid
+			if test.mutateEnv != nil {
+				test.mutateEnv(&currentEnv)
+			}
+			if test.mutateReceipt != nil {
+				test.mutateReceipt(&currentReceipt)
+			}
+			err := validateRecoveredTransitionReceipt(currentEnv, currentReceipt, test.requireOwnerJobID)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("logical receipt validation error = %v, want error %t", err, test.wantErr)
 			}
 		})
 	}

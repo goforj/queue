@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/busruntime"
@@ -77,11 +77,28 @@ type databaseResultStub struct {
 	err  error
 }
 
+type databaseExecerStub struct {
+	calls  int
+	query  string
+	args   []any
+	result sql.Result
+	err    error
+}
+
 // LastInsertId returns an unused identifier for the sql.Result contract.
 func (r databaseResultStub) LastInsertId() (int64, error) { return 0, nil }
 
 // RowsAffected returns the configured settlement evidence.
 func (r databaseResultStub) RowsAffected() (int64, error) { return r.rows, r.err }
+
+// ExecContext records one recovery-lineage repair without requiring a live SQL
+// driver in this dependency-light core module.
+func (e *databaseExecerStub) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+	e.calls++
+	e.query = query
+	e.args = append([]any(nil), args...)
+	return e.result, e.err
+}
 
 // TestDatabaseDeliveryJobRestoresAttemptMetadata verifies SQL persistence reaches the shared orchestration context intact.
 func TestDatabaseDeliveryJobRestoresAttemptMetadata(t *testing.T) {
@@ -115,6 +132,373 @@ func TestDatabaseDeliveryJobRestoresAttemptMetadata(t *testing.T) {
 	}
 	if metadata := queue.DriverMetadata(job); metadata != wantMetadata {
 		t.Fatalf("delivery metadata = %+v, want %+v", metadata, wantMetadata)
+	}
+}
+
+// TestDatabaseSettlementContextMarksOnlyRecoveredRows ensures an ordinary
+// duplicate cannot request winner-fact replay without stale-processing proof.
+func TestDatabaseSettlementContextMarksOnlyRecoveredRows(t *testing.T) {
+	tests := []struct {
+		name        string
+		job         *dbJob
+		want        busruntime.DeliveryProvenance
+		wantPresent bool
+	}{
+		{name: "nil"},
+		{
+			name:        "ordinary",
+			job:         &dbJob{processingToken: "current-generation"},
+			want:        busruntime.DeliveryProvenance{GenerationID: "current-generation"},
+			wantPresent: true,
+		},
+		{
+			name: "identified recovery",
+			job: &dbJob{
+				processingToken: "current-generation",
+				recoveryToken:   "earlier-generation",
+				recovered:       true,
+			},
+			want: busruntime.DeliveryProvenance{
+				GenerationID:          "current-generation",
+				RecoveredGenerationID: "earlier-generation",
+				Recovered:             true,
+			},
+			wantPresent: true,
+		},
+		{
+			name:        "legacy recovery",
+			job:         &dbJob{processingToken: "current-generation", recovered: true},
+			want:        busruntime.DeliveryProvenance{GenerationID: "current-generation", Recovered: true},
+			wantPresent: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, settlement := databaseSettlementContext(test.job)
+			if settlement == nil {
+				t.Fatal("database settlement context omitted commit boundary")
+			}
+			got, present := busruntime.DeliveryProvenanceFromContext(ctx)
+			if present != test.wantPresent || got != test.want {
+				t.Fatalf("delivery provenance = %+v present:%t, want %+v/%t", got, present, test.want, test.wantPresent)
+			}
+		})
+	}
+}
+
+// TestDatabaseRecoveryProofUsesOnlyTransportState verifies application error
+// text cannot collide with the internal stale-processing recovery marker.
+func TestDatabaseRecoveryProofUsesOnlyTransportState(t *testing.T) {
+	tests := []struct {
+		name            string
+		processingToken sql.NullString
+		lastError       sql.NullString
+		wantToken       string
+		want            bool
+	}{
+		{
+			name:      "application error matches marker",
+			lastError: sql.NullString{String: databaseRecoveryMarker, Valid: true},
+		},
+		{
+			name:            "ordinary processing token",
+			processingToken: sql.NullString{String: "ordinary-claim", Valid: true},
+			lastError:       sql.NullString{String: databaseRecoveryMarker, Valid: true},
+		},
+		{
+			name:            "transport recovery marker",
+			processingToken: sql.NullString{String: databaseRecoveryMarker, Valid: true},
+			lastError:       sql.NullString{String: databaseRecoveryDiagnostic, Valid: true},
+			want:            true,
+		},
+		{
+			name:            "identified transport generation",
+			processingToken: sql.NullString{String: strings.Repeat("a", databaseProcessingTokenBytes*2), Valid: true},
+			wantToken:       strings.Repeat("a", databaseProcessingTokenBytes*2),
+			want:            true,
+		},
+		{
+			name:            "uppercase generation is not canonical",
+			processingToken: sql.NullString{String: strings.Repeat("A", databaseProcessingTokenBytes*2), Valid: true},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			token, recovered := databaseRecoveryProof(test.processingToken)
+			if recovered != test.want || token != test.wantToken {
+				t.Fatalf("recovery proof = token:%q recovered:%t, want %q/%t (processing_token=%q, last_error=%q)", token, recovered, test.wantToken, test.want, test.processingToken.String, test.lastError.String)
+			}
+		})
+	}
+}
+
+// TestDatabasePendingRecoveryTokenPreservesPendingRecovery verifies the exact
+// durable owner survives same-attempt infrastructure redelivery.
+func TestDatabasePendingRecoveryTokenPreservesPendingRecovery(t *testing.T) {
+	const (
+		recoveryToken = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		currentToken  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	tests := []struct {
+		name       string
+		job        *dbJob
+		settlement databaseFailureSettlement
+		wantToken  string
+	}{
+		{name: "nil job", settlement: databaseFailureSettlement{state: "pending"}},
+		{
+			name:       "ordinary same attempt redelivery",
+			job:        &dbJob{attempt: 2},
+			settlement: databaseFailureSettlement{state: "pending", attempt: 2},
+		},
+		{
+			name:       "recovered same attempt redelivery",
+			job:        &dbJob{attempt: 2, recovered: true, recoveryToken: recoveryToken, processingToken: currentToken},
+			settlement: databaseFailureSettlement{state: "pending", attempt: 2},
+			wantToken:  recoveryToken,
+		},
+		{
+			name:       "legacy same attempt redelivery",
+			job:        &dbJob{attempt: 2, recovered: true, processingToken: currentToken},
+			settlement: databaseFailureSettlement{state: "pending", attempt: 2},
+			wantToken:  databaseRecoveryMarker,
+		},
+		{
+			name:       "recovered current generation committed application state",
+			job:        &dbJob{attempt: 2, recovered: true, recoveryToken: recoveryToken, processingToken: currentToken, applicationStateCommitted: true},
+			settlement: databaseFailureSettlement{state: "pending", attempt: 2},
+			wantToken:  currentToken,
+		},
+		{
+			name:       "ordinary current generation committed application state",
+			job:        &dbJob{attempt: 2, processingToken: currentToken, applicationStateCommitted: true},
+			settlement: databaseFailureSettlement{state: "pending", attempt: 2},
+			wantToken:  currentToken,
+		},
+		{
+			name:       "application retry starts a new owner",
+			job:        &dbJob{attempt: 2, recovered: true, recoveryToken: recoveryToken, processingToken: currentToken, applicationStateCommitted: true},
+			settlement: databaseFailureSettlement{state: "pending", attempt: 3},
+		},
+		{
+			name:       "recovered terminal failure",
+			job:        &dbJob{attempt: 2, recovered: true, recoveryToken: recoveryToken, processingToken: currentToken},
+			settlement: databaseFailureSettlement{state: "dead", attempt: 3},
+		},
+		{
+			name:       "malformed recovered generation",
+			job:        &dbJob{attempt: 2, recovered: true, recoveryToken: "malformed", processingToken: currentToken},
+			settlement: databaseFailureSettlement{state: "pending", attempt: 2},
+		},
+		{
+			name:       "malformed committed current generation",
+			job:        &dbJob{attempt: 2, processingToken: "malformed", applicationStateCommitted: true},
+			settlement: databaseFailureSettlement{state: "pending", attempt: 2},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			token := databasePendingRecoveryToken(test.job, test.settlement)
+			if token.Valid != (test.wantToken != "") || token.String != test.wantToken {
+				t.Fatalf("recovery token = %#v, want %q", token, test.wantToken)
+			}
+		})
+	}
+}
+
+// TestDatabaseSettlementRecoveryTokenRepairsOnlyInheritedLineage verifies an
+// exhausted recovery settlement never replaces a receipt owner with the current
+// physical generation or repairs an ordinary first delivery.
+func TestDatabaseSettlementRecoveryTokenRepairsOnlyInheritedLineage(t *testing.T) {
+	const (
+		recoveryToken = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		currentToken  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	tests := []struct {
+		name       string
+		job        *dbJob
+		wantToken  string
+		wantRepair bool
+		wantError  bool
+	}{
+		{name: "nil job"},
+		{name: "ordinary delivery", job: &dbJob{processingToken: currentToken}},
+		{
+			name:       "identified inherited owner",
+			job:        &dbJob{recovered: true, recoveryToken: recoveryToken, processingToken: currentToken},
+			wantToken:  recoveryToken,
+			wantRepair: true,
+		},
+		{
+			name:       "legacy inherited marker",
+			job:        &dbJob{recovered: true, processingToken: currentToken},
+			wantToken:  databaseRecoveryMarker,
+			wantRepair: true,
+		},
+		{
+			name: "current generation superseded provenance",
+			job: &dbJob{
+				recovered:                 true,
+				recoveryToken:             recoveryToken,
+				processingToken:           currentToken,
+				applicationStateCommitted: true,
+			},
+		},
+		{
+			name:      "malformed inherited owner",
+			job:       &dbJob{recovered: true, recoveryToken: "malformed", processingToken: currentToken},
+			wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			token, repair, err := databaseSettlementRecoveryToken(test.job)
+			if (err != nil) != test.wantError {
+				t.Fatalf("databaseSettlementRecoveryToken() error = %v, wantError %t", err, test.wantError)
+			}
+			if repair != test.wantRepair || token.Valid != test.wantRepair || token.String != test.wantToken {
+				t.Fatalf("databaseSettlementRecoveryToken() = %#v repair:%t, want %q/%t", token, repair, test.wantToken, test.wantRepair)
+			}
+		})
+	}
+}
+
+// TestRestoreDatabaseSettlementLineageFencesPendingRepair verifies the repair
+// targets one exact processing generation while preserving attempt and owner.
+func TestRestoreDatabaseSettlementLineageFencesPendingRepair(t *testing.T) {
+	const (
+		query             = "fenced recovery update"
+		recoveryToken     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		currentToken      = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		nowMillis         = int64(123456)
+		availableAtMillis = int64(123531)
+	)
+	job := &dbJob{
+		id:              41,
+		attempt:         3,
+		recovered:       true,
+		recoveryToken:   recoveryToken,
+		processingToken: currentToken,
+	}
+	settlementErr := errors.New("delete remained unavailable")
+	execer := &databaseExecerStub{result: databaseResultStub{rows: 1}}
+	if err := restoreDatabaseSettlementLineage(context.Background(), execer, query, job, settlementErr, availableAtMillis, nowMillis); err != nil {
+		t.Fatalf("restore database settlement lineage: %v", err)
+	}
+	if execer.calls != 1 || execer.query != query {
+		t.Fatalf("repair execution = calls:%d query:%q, want 1/%q", execer.calls, execer.query, query)
+	}
+	wantArgs := []any{
+		availableAtMillis,
+		sql.NullString{String: recoveryToken, Valid: true},
+		settlementErr.Error(),
+		nowMillis,
+		job.id,
+		currentToken,
+		job.attempt,
+	}
+	if len(execer.args) != len(wantArgs) {
+		t.Fatalf("repair argument count = %d, want %d: %#v", len(execer.args), len(wantArgs), execer.args)
+	}
+	for index := range wantArgs {
+		if execer.args[index] != wantArgs[index] {
+			t.Fatalf("repair argument %d = %#v, want %#v", index, execer.args[index], wantArgs[index])
+		}
+	}
+	if job.attempt != 3 || job.processingToken != currentToken || job.recoveryToken != recoveryToken {
+		t.Fatalf("repair mutated in-memory claim: %+v", job)
+	}
+}
+
+// TestDatabaseSettlementRecoveryDelayBoundsFaultLoop verifies repaired rows
+// honor the slower of queue polling and the driver's finalization retry floor.
+func TestDatabaseSettlementRecoveryDelayBoundsFaultLoop(t *testing.T) {
+	tests := []struct {
+		name         string
+		pollInterval time.Duration
+		want         time.Duration
+	}{
+		{name: "zero poll interval", want: databaseFinalizeRetryDelay},
+		{name: "short poll interval", pollInterval: time.Millisecond, want: databaseFinalizeRetryDelay},
+		{name: "equal poll interval", pollInterval: databaseFinalizeRetryDelay, want: databaseFinalizeRetryDelay},
+		{name: "long poll interval", pollInterval: 150 * time.Millisecond, want: 150 * time.Millisecond},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := databaseSettlementRecoveryDelay(test.pollInterval); got != test.want {
+				t.Fatalf("databaseSettlementRecoveryDelay(%s) = %s, want %s", test.pollInterval, got, test.want)
+			}
+		})
+	}
+}
+
+// TestRestoreDatabaseSettlementLineageRejectsUnprovableRepair covers every
+// failure branch that must leave the currently fenced row untouched.
+func TestRestoreDatabaseSettlementLineageRejectsUnprovableRepair(t *testing.T) {
+	const currentToken = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	settlementErr := errors.New("settlement failed")
+	tests := []struct {
+		name      string
+		execer    databaseExecer
+		job       *dbJob
+		err       error
+		wantError bool
+		wantCalls int
+	}{
+		{
+			name:   "ordinary delivery is unchanged",
+			execer: &databaseExecerStub{result: databaseResultStub{rows: 1}},
+			job:    &dbJob{id: 1, processingToken: currentToken},
+		},
+		{
+			name:      "nil executor",
+			job:       &dbJob{id: 1, recovered: true, processingToken: currentToken},
+			wantError: true,
+		},
+		{
+			name:      "nil settlement error",
+			execer:    &databaseExecerStub{result: databaseResultStub{rows: 1}},
+			job:       &dbJob{id: 1, recovered: true, processingToken: currentToken},
+			wantError: true,
+		},
+		{
+			name:      "missing fenced id",
+			execer:    &databaseExecerStub{result: databaseResultStub{rows: 1}},
+			job:       &dbJob{recovered: true, processingToken: currentToken},
+			err:       settlementErr,
+			wantError: true,
+		},
+		{
+			name:      "execution failure",
+			execer:    &databaseExecerStub{err: errors.New("database offline")},
+			job:       &dbJob{id: 1, recovered: true, processingToken: currentToken},
+			err:       settlementErr,
+			wantError: true,
+			wantCalls: 1,
+		},
+		{
+			name:      "lost fence",
+			execer:    &databaseExecerStub{result: databaseResultStub{}},
+			job:       &dbJob{id: 1, recovered: true, processingToken: currentToken},
+			err:       settlementErr,
+			wantError: true,
+			wantCalls: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repairErr := test.err
+			if test.name != "nil settlement error" && repairErr == nil {
+				repairErr = settlementErr
+			}
+			err := restoreDatabaseSettlementLineage(context.Background(), test.execer, "repair", test.job, repairErr, 2, 1)
+			if (err != nil) != test.wantError {
+				t.Fatalf("restoreDatabaseSettlementLineage() error = %v, wantError %t", err, test.wantError)
+			}
+			if execer, ok := test.execer.(*databaseExecerStub); ok && execer.calls != test.wantCalls {
+				t.Fatalf("repair calls = %d, want %d", execer.calls, test.wantCalls)
+			}
+		})
 	}
 }
 
@@ -311,12 +695,22 @@ func TestNewDatabaseProcessingToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newDatabaseProcessingToken(): %v", err)
 	}
-	decoded, err := hex.DecodeString(token)
-	if err != nil {
-		t.Fatalf("decode processing token %q: %v", token, err)
+	if !databaseProcessingTokenValid(token) {
+		t.Fatalf("processing token %q is not canonical", token)
 	}
-	if len(decoded) != databaseProcessingTokenBytes {
-		t.Fatalf("processing token bytes = %d, want %d", len(decoded), databaseProcessingTokenBytes)
+	if len(token) != databaseProcessingTokenBytes*2 || len(token) > 64 {
+		t.Fatalf("processing token length = %d, want %d within additive column", len(token), databaseProcessingTokenBytes*2)
+	}
+	for _, malformed := range []string{
+		"",
+		strings.Repeat("a", databaseProcessingTokenBytes*2-1),
+		strings.Repeat("a", databaseProcessingTokenBytes*2+1),
+		strings.Repeat("z", databaseProcessingTokenBytes*2),
+		strings.Repeat("A", databaseProcessingTokenBytes*2),
+	} {
+		if databaseProcessingTokenValid(malformed) {
+			t.Fatalf("malformed processing token %q was accepted", malformed)
+		}
 	}
 }
 
