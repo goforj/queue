@@ -68,10 +68,10 @@ module_is_excluded() {
 json_value() {
   local key="$1"
   awk -v key="$key" '
-    $0 ~ "\\\"" key "\\\"[[:space:]]*:" {
+    $0 ~ "\"" key "\"[[:space:]]*:" {
       line = $0
-      sub("^.*\\\"" key "\\\"[[:space:]]*:[[:space:]]*\\\"", "", line)
-      sub("\\\".*$", "", line)
+      sub("^.*\"" key "\"[[:space:]]*:[[:space:]]*\"", "", line)
+      sub("\".*$", "", line)
       print line
       exit
     }
@@ -83,8 +83,8 @@ module_path_from_json() {
     /"Module"[[:space:]]*:/ { in_module = 1; next }
     in_module && /"Path"[[:space:]]*:/ {
       line = $0
-      sub("^.*\\\"Path\\\"[[:space:]]*:[[:space:]]*\\\"", "", line)
-      sub("\\\".*$", "", line)
+      sub("^.*\"Path\"[[:space:]]*:[[:space:]]*\"", "", line)
+      sub("\".*$", "", line)
       print line
       exit
     }
@@ -95,8 +95,8 @@ parse_edges() {
   local owner="$1"
   awk -v owner="$owner" '
     function value(line, key) {
-      sub("^.*\\\"" key "\\\"[[:space:]]*:[[:space:]]*\\\"", "", line)
-      sub("\\\".*$", "", line)
+      sub("^.*\"" key "\"[[:space:]]*:[[:space:]]*\"", "", line)
+      sub("\".*$", "", line)
       return line
     }
 
@@ -293,7 +293,7 @@ while IFS= read -r disk_path; do
     fail "go.work references a module outside the repository: $disk_path"
   fi
   printf '%s\n' "$workspace_dir" >>"$WORKSPACE_DIRS_RAW_FILE"
-done < <(awk '/"DiskPath"[[:space:]]*:/ { line = $0; sub("^.*\\\"DiskPath\\\"[[:space:]]*:[[:space:]]*\\\"", "", line); sub("\\\".*$", "", line); print line }' "$workspace_json")
+done < <(awk '/"DiskPath"[[:space:]]*:/ { line = $0; sub("^.*\"DiskPath\"[[:space:]]*:[[:space:]]*\"", "", line); sub("\".*$", "", line); print line }' "$workspace_json")
 sort -u "$WORKSPACE_DIRS_RAW_FILE" >"$WORKSPACE_DIRS_FILE"
 workspace_entry_count="$(wc -l <"$WORKSPACE_DIRS_RAW_FILE" | tr -d ' ')"
 workspace_unique_count="$(wc -l <"$WORKSPACE_DIRS_FILE" | tr -d ' ')"
@@ -319,7 +319,7 @@ if ! awk '
     count = split(line, entries, ",")
     for (i = 1; i <= count; i++) {
       value = entries[i]
-      gsub(/^[[:space:]\"]+|[[:space:]\"]+$/, "", value)
+      gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", value)
       if (value != "") {
         print value
       }

@@ -98,7 +98,7 @@ while IFS= read -r discovered_dir; do
     relative_file="$dir/go.mod"
   fi
 
-  module_path="$(awk '$1 == "module" { value = $2; gsub(/^\"|\"$/, "", value); print value; exit }' "$ROOT_DIR/$relative_file")"
+  module_path="$(awk '$1 == "module" { value = $2; gsub(/^"|"$/, "", value); print value; exit }' "$ROOT_DIR/$relative_file")"
   if [[ -z "$module_path" ]]; then
     echo "error: could not read module path from $relative_file" >&2
     exit 1

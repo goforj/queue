@@ -656,4 +656,19 @@ if ! run_tag "$RELEASE_VERSION" --skip-existing >"$TMP_DIR/skip-existing.log" 2>
   fail "the release preflight broke the documented skip-existing path"
 fi
 
+inventory_stdout="$TMP_DIR/inventory-stdout.log"
+inventory_stderr="$TMP_DIR/inventory-stderr.log"
+if ! (
+  cd "$FIXTURE_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$inventory_stdout" 2>"$inventory_stderr"; then
+  cat "$inventory_stdout" >&2
+  cat "$inventory_stderr" >&2
+  fail "the ordinary inventory guard failed after the release contracts"
+fi
+if [[ -s "$inventory_stderr" ]]; then
+  cat "$inventory_stderr" >&2
+  fail "the ordinary inventory guard emitted non-portable parser diagnostics"
+fi
+
 echo "release script contract: strict versions, path majors, captured-HEAD planning, fail-closed status, final-state checks, dependency closure, dirty-tree safety, remote queries, safe reuse, atomic push, excludes, dry-run, and synchronized tags OK"
