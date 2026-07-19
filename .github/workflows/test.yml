@@ -52,6 +52,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify Codecov report freshness guard
+        run: .github/scripts/test_wait_codecov_report.sh
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -200,7 +203,16 @@ jobs:
           files: ${{ steps.coverage-files.outputs.files }}
           disable_search: true
           fail_ci_if_error: true
-          name: complete-test-suite
+          name: complete-test-suite-${{ github.run_id }}-${{ github.run_attempt }}
+          override_build: ${{ github.run_id }}-${{ github.run_attempt }}
+          override_commit: ${{ github.event.pull_request.head.sha || github.sha }}
           verbose: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Wait for the exact Codecov report
+        env:
+          CODECOV_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CODECOV_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CODECOV_UPLOAD_NAME: complete-test-suite-${{ github.run_id }}-${{ github.run_attempt }}
+        run: .github/scripts/wait_codecov_report.sh
