@@ -58,6 +58,77 @@ func TestDatabaseDispatchPropagatesUniqueTransactionFailures(t *testing.T) {
 	}
 }
 
+// TestDatabaseClaimRejectsAmbiguousUpdateResults verifies a worker rolls back
+// when the database cannot prove that exactly one pending row was fenced.
+func TestDatabaseClaimRejectsAmbiguousUpdateResults(t *testing.T) {
+	rowsErr := errors.New("rows affected unavailable")
+	tests := []struct {
+		name    string
+		result  driver.Result
+		wantErr error
+		want    string
+	}{
+		{
+			name:    "rows affected failure",
+			result:  databaseResultStub{err: rowsErr},
+			wantErr: rowsErr,
+			want:    rowsErr.Error(),
+		},
+		{
+			name:   "multiple rows affected",
+			result: databaseResultStub{rows: 2},
+			want:   "database claim affected 2 rows, want 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			execCalls := 0
+			conn := &databaseConnStub{
+				exec: func(_ context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
+					execCalls++
+					if execCalls == 1 {
+						return driver.RowsAffected(0), nil
+					}
+					return test.result, nil
+				},
+				query: func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+					return &databaseRowsStub{
+						columns: []string{
+							"id", "queue_name", "job_type", "payload", "metadata_json",
+							"timeout_seconds", "max_retry", "backoff_millis", "attempt", "processing_token",
+						},
+						values: [][]driver.Value{{
+							int64(42), "default", "reports:build", []byte(`{"report_id":42}`), nil,
+							nil, int64(0), int64(0), int64(0), nil,
+						}},
+					}, nil
+				},
+			}
+			db := newDatabaseStub(conn)
+			defer db.Close()
+			database := &databaseQueue{
+				cfg: localDatabaseConfig{
+					DriverName:   "mysql",
+					DefaultQueue: "default",
+				},
+				db: db,
+			}
+
+			job, err := database.claimOne(context.Background())
+			if job != nil || err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ambiguous claim = (%+v, %v), want nil job and %q", job, err, test.want)
+			}
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("ambiguous claim error = %v, want wrapped %v", err, test.wantErr)
+			}
+			if conn.rollbackCalls != 1 {
+				t.Fatalf("claim rollback calls = %d, want 1", conn.rollbackCalls)
+			}
+		})
+	}
+}
+
 // TestDatabaseSettlementFailureIncludesLineageRepairError verifies telemetry
 // retains both the original finalization failure and a failed recovery repair.
 func TestDatabaseSettlementFailureIncludesLineageRepairError(t *testing.T) {

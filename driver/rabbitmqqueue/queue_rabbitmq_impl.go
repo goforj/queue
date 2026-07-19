@@ -163,21 +163,31 @@ func (q *rabbitMQQueue) claimUnique(job queue.Job, queueName string, ttl time.Du
 
 // enqueueWithReconnectLocked retries one publish after replacing a closed connection.
 func (q *rabbitMQQueue) enqueueWithReconnectLocked(ctx context.Context, queueName string, body []byte) error {
-	if err := q.ensureConnectedLocked(); err != nil {
+	return retryRabbitPublish(
+		q.ensureConnectedLocked,
+		func() error { return q.enqueueLocked(ctx, queueName, body) },
+		q.closeLocked,
+	)
+}
+
+// retryRabbitPublish reconnects only when the first publish is known to have
+// failed because the transport was already closed.
+func retryRabbitPublish(ensureConnected func() error, publish func() error, closeConnection func()) error {
+	if err := ensureConnected(); err != nil {
 		return err
 	}
-	if err := q.enqueueLocked(ctx, queueName, body); err != nil {
+	if err := publish(); err != nil {
 		if isRabbitPublishAmbiguous(err) {
 			return err
 		}
 		if !isRabbitConnectionClosed(err) {
 			return err
 		}
-		q.closeLocked()
-		if reconnectErr := q.ensureConnectedLocked(); reconnectErr != nil {
+		closeConnection()
+		if reconnectErr := ensureConnected(); reconnectErr != nil {
 			return reconnectErr
 		}
-		return q.enqueueLocked(ctx, queueName, body)
+		return publish()
 	}
 	return nil
 }
@@ -261,11 +271,14 @@ func publishRabbitConfirmed(ctx context.Context, ch *amqp.Channel, exchange, que
 		return amqp.ErrClosed
 	}
 	confirmation, err := ch.PublishWithDeferredConfirmWithContext(ctx, exchange, queueName, false, false, message)
-	if err != nil {
-		return rabbitPublishAmbiguousError{cause: err}
-	}
-	if confirmation == nil {
-		return rabbitPublishAmbiguousError{cause: fmt.Errorf("rabbitmq publish returned no confirmation")}
+	return completeRabbitPublish(ctx, confirmation, err)
+}
+
+// completeRabbitPublish preserves send ambiguity before waiting for the
+// broker's positive confirmation.
+func completeRabbitPublish(ctx context.Context, confirmation rabbitPublishConfirmation, publishErr error) error {
+	if publishErr != nil {
+		return rabbitPublishAmbiguousError{cause: publishErr}
 	}
 	return awaitRabbitConfirmation(ctx, confirmation)
 }

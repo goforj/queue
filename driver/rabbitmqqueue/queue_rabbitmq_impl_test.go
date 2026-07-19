@@ -163,6 +163,25 @@ func TestRabbitMQQueue_HelperBranches(t *testing.T) {
 	}
 }
 
+// TestRabbitMQQueueDriverAndPreflight verifies driver identity and preflight
+// cancellation before exercising the deterministic connection rejection path.
+func TestRabbitMQQueueDriverAndPreflight(t *testing.T) {
+	q := newRabbitMQQueue("://bad-url", "default")
+	q.dialTimeout = 5 * time.Millisecond
+	if got := q.Driver(); got != queue.DriverRabbitMQ {
+		t.Fatalf("driver = %q, want %q", got, queue.DriverRabbitMQ)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := q.Preflight(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled preflight error = %v, want context.Canceled", err)
+	}
+	if err := q.Preflight(nil); err == nil {
+		t.Fatal("invalid RabbitMQ URL unexpectedly passed preflight")
+	}
+}
+
 func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 	q := newRabbitMQQueue("amqp://example", "default")
 
@@ -221,6 +240,113 @@ func TestRabbitMQQueueRejectedDispatchReleasesUniqueClaim(t *testing.T) {
 	second := q.Dispatch(context.Background(), job)
 	if second == nil || errors.Is(second, queue.ErrDuplicate) {
 		t.Fatalf("second dispatch error = %v, uniqueness claim was not compensated", second)
+	}
+}
+
+// TestRetryRabbitPublish verifies reconnect decisions without weakening the
+// broker ambiguity rule that prevents duplicate publishes.
+func TestRetryRabbitPublish(t *testing.T) {
+	connectErr := errors.New("connect failed")
+	publishErr := errors.New("publish rejected")
+	reconnectErr := errors.New("reconnect failed")
+	retryErr := errors.New("retry failed")
+	ambiguousCause := errors.New("publish outcome unknown")
+	ambiguousErr := rabbitPublishAmbiguousError{cause: ambiguousCause}
+	tests := []struct {
+		name          string
+		ensureErrors  []error
+		publishErrors []error
+		wantCalls     []string
+		wantErr       error
+	}{
+		{
+			name:         "initial connection rejection",
+			ensureErrors: []error{connectErr},
+			wantCalls:    []string{"ensure"},
+			wantErr:      connectErr,
+		},
+		{
+			name:          "accepted first publish",
+			ensureErrors:  []error{nil},
+			publishErrors: []error{nil},
+			wantCalls:     []string{"ensure", "publish"},
+		},
+		{
+			name:          "ambiguous publish is not repeated",
+			ensureErrors:  []error{nil},
+			publishErrors: []error{ambiguousErr},
+			wantCalls:     []string{"ensure", "publish"},
+			wantErr:       ambiguousCause,
+		},
+		{
+			name:          "non-connection rejection is not repeated",
+			ensureErrors:  []error{nil},
+			publishErrors: []error{publishErr},
+			wantCalls:     []string{"ensure", "publish"},
+			wantErr:       publishErr,
+		},
+		{
+			name:          "reconnect rejection",
+			ensureErrors:  []error{nil, reconnectErr},
+			publishErrors: []error{amqp.ErrClosed},
+			wantCalls:     []string{"ensure", "publish", "close", "ensure"},
+			wantErr:       reconnectErr,
+		},
+		{
+			name:          "accepted retry",
+			ensureErrors:  []error{nil, nil},
+			publishErrors: []error{amqp.ErrClosed, nil},
+			wantCalls:     []string{"ensure", "publish", "close", "ensure", "publish"},
+		},
+		{
+			name:          "retry rejection",
+			ensureErrors:  []error{nil, nil},
+			publishErrors: []error{amqp.ErrClosed, retryErr},
+			wantCalls:     []string{"ensure", "publish", "close", "ensure", "publish"},
+			wantErr:       retryErr,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls []string
+			ensureIndex := 0
+			publishIndex := 0
+			ensureConnected := func() error {
+				calls = append(calls, "ensure")
+				if ensureIndex >= len(test.ensureErrors) {
+					t.Fatal("unexpected ensure call")
+					return nil
+				}
+				err := test.ensureErrors[ensureIndex]
+				ensureIndex++
+				return err
+			}
+			publish := func() error {
+				calls = append(calls, "publish")
+				if publishIndex >= len(test.publishErrors) {
+					t.Fatal("unexpected publish call")
+					return nil
+				}
+				err := test.publishErrors[publishIndex]
+				publishIndex++
+				return err
+			}
+			closeConnection := func() { calls = append(calls, "close") }
+
+			err := retryRabbitPublish(ensureConnected, publish, closeConnection)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("retry error = %v, want %v", err, test.wantErr)
+			}
+			if len(calls) != len(test.wantCalls) {
+				t.Fatalf("calls = %v, want %v", calls, test.wantCalls)
+			}
+			for i := range calls {
+				if calls[i] != test.wantCalls[i] {
+					t.Fatalf("calls = %v, want %v", calls, test.wantCalls)
+				}
+			}
+		})
 	}
 }
 

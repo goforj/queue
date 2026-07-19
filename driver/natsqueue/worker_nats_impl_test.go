@@ -144,6 +144,88 @@ func TestNATSWorkerNilContextAndIdempotentStart(t *testing.T) {
 	}
 }
 
+// TestNATSWorkerAcceptedCallbackRunsThroughWorkerLifecycle verifies successful
+// readiness admits subscribed messages and shutdown waits for their handlers.
+func TestNATSWorkerAcceptedCallbackRunsThroughWorkerLifecycle(t *testing.T) {
+	w := newNATSWorkerWithConfig(natsWorkerConfig{
+		URL:          "nats://example:4222",
+		DefaultQueue: "critical",
+		Workers:      1,
+	})
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	var callback nats.MsgHandler
+	var connectedSubject string
+	w.connect = func(_ string, subject string, handler nats.MsgHandler) (natsConnection, natsWorkerSubscription, error) {
+		connectedSubject = subject
+		callback = handler
+		return connection, subscription, nil
+	}
+	handled := make(chan queue.Job, 1)
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	handlerReleased := false
+	defer func() {
+		if !handlerReleased {
+			close(releaseHandler)
+		}
+	}()
+	w.Register("reports:accepted", func(_ context.Context, job queue.Job) error {
+		handled <- job
+		close(handlerStarted)
+		<-releaseHandler
+		return nil
+	})
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	if connectedSubject != "queue.critical" || callback == nil {
+		t.Fatalf("subscription = subject:%q callback:%t", connectedSubject, callback != nil)
+	}
+	payload, err := json.Marshal(natsMessage{Type: "reports:accepted", Queue: "critical", Payload: []byte("report")})
+	if err != nil {
+		t.Fatalf("marshal accepted message: %v", err)
+	}
+	callback(&nats.Msg{Data: payload})
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("accepted callback did not reach its handler")
+	}
+	job := <-handled
+	if job.Type != "reports:accepted" || string(job.PayloadBytes()) != "report" {
+		t.Fatalf("handled job = type:%q payload:%q", job.Type, job.PayloadBytes())
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- w.Shutdown(context.Background()) }()
+	select {
+	case <-subscription.drained:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not drain the subscription")
+	}
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("shutdown returned before the handler completed: %v", err)
+	default:
+	}
+	select {
+	case <-connection.drained:
+		t.Fatal("connection drained before the handler completed")
+	default:
+	}
+
+	handlerReleased = true
+	close(releaseHandler)
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after the handler completed")
+	}
+}
+
 // TestNATSWorkerRejectsStartDuringShutdown verifies callers can retry a timed
 // out drain while worker restart remains blocked.
 func TestNATSWorkerRejectsStartDuringShutdown(t *testing.T) {
@@ -268,6 +350,18 @@ func TestConnectNATSWorkerRejectsInvalidURL(t *testing.T) {
 	}
 }
 
+// TestNATSWorkerDefaultConnectorRejectsInvalidURL verifies StartWorkers uses
+// the production connector when no custom lifecycle connector is configured.
+func TestNATSWorkerDefaultConnectorRejectsInvalidURL(t *testing.T) {
+	w := newNATSWorker("://bad-url")
+	if err := w.StartWorkers(context.Background()); err == nil {
+		t.Fatal("expected default connector to reject invalid URL")
+	}
+	if w.started || w.conn != nil || w.sub != nil {
+		t.Fatalf("failed default start retained state: started:%t conn:%T sub:%T", w.started, w.conn, w.sub)
+	}
+}
+
 // TestNATSWorkerRepublishRejected verifies a publish rejection is returned
 // directly and never followed by a flush.
 func TestNATSWorkerRepublishRejected(t *testing.T) {
@@ -279,6 +373,20 @@ func TestNATSWorkerRepublishRejected(t *testing.T) {
 	}
 	if connection.publishN != 1 || connection.flushN != 0 {
 		t.Fatalf("publish/flush calls = %d/%d, want 1/0", connection.publishN, connection.flushN)
+	}
+}
+
+// TestNATSWorkerRepublishFlushFailure verifies a lost flush response remains
+// an ambiguous error after the retry publish reaches the connection.
+func TestNATSWorkerRepublishFlushFailure(t *testing.T) {
+	flushErr := errors.New("retry flush response lost")
+	connection := &natsConnectionStub{flushErr: flushErr}
+	w := &natsWorker{conn: connection}
+	if err := w.republish(natsMessage{Type: "job:retry", Queue: "default"}); !errors.Is(err, flushErr) {
+		t.Fatalf("republish error = %v, want %v", err, flushErr)
+	}
+	if connection.publishN != 1 || connection.flushN != 1 {
+		t.Fatalf("publish/flush calls = %d/%d, want 1/1", connection.publishN, connection.flushN)
 	}
 }
 

@@ -252,6 +252,7 @@ func TestRedisApplicationMaxRetry(t *testing.T) {
 		transportMax int
 		want         int
 	}{
+		{name: "nil task", task: nil, transportMax: 4, want: 4},
 		{name: "legacy task", task: backend.NewTask("job", nil), transportMax: 3, want: 3},
 		{name: "reserved task", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "2"}), transportMax: 3, want: 2},
 		{name: "mismatched reserve", task: backend.NewTaskWithHeaders("job", nil, map[string]string{redisApplicationMaxRetryHeader: "2"}), transportMax: 4, want: 4},

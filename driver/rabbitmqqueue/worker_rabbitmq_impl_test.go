@@ -594,6 +594,18 @@ func TestRabbitPublishAmbiguityClassification(t *testing.T) {
 	if !isRabbitPublishAmbiguous(err) || !errors.Is(err, waitErr) {
 		t.Fatalf("confirmation error = %v, want ambiguous wrapped cause", err)
 	}
+	publishErr := errors.New("publish response lost")
+	err = completeRabbitPublish(context.Background(), nil, publishErr)
+	if !isRabbitPublishAmbiguous(err) || !errors.Is(err, publishErr) {
+		t.Fatalf("publish error = %v, want ambiguous wrapped cause", err)
+	}
+	err = completeRabbitPublish(context.Background(), nil, nil)
+	if !isRabbitPublishAmbiguous(err) {
+		t.Fatalf("missing deferred confirmation error = %v, want ambiguous", err)
+	}
+	if err := completeRabbitPublish(context.Background(), rabbitConfirmationStub{acked: true}, nil); err != nil {
+		t.Fatalf("completed publish: %v", err)
+	}
 	if isRabbitPublishAmbiguous(errors.New("dial rejected")) {
 		t.Fatal("pre-publish failure classified as ambiguous")
 	}

@@ -27,15 +27,21 @@ type redisInspectorStub struct {
 	runTaskID       string
 	archivedTaskID  string
 	deleteAllErr    error
+	closeN          int
+	closeErr        error
 }
 
-// Close releases the inspector stub without external resources.
-func (s *redisInspectorStub) Close() error { return nil }
+// Close records inspector ownership cleanup.
+func (s *redisInspectorStub) Close() error {
+	s.closeN++
+	return s.closeErr
+}
 
 type redisEnqueueClientStub struct {
 	enqueueErr error
 	enqueueN   int
 	closeN     int
+	closeErr   error
 	task       *backend.Task
 	opts       []backend.Option
 }
@@ -48,6 +54,12 @@ type redisUniqueStoreStub struct {
 	acquireToken string
 	releaseKey   string
 	releaseToken string
+}
+
+type redisStateStoreStub struct {
+	redisUniqueStoreStub
+	closeN   int
+	closeErr error
 }
 
 // Acquire records the logical claim requested by the queue.
@@ -64,6 +76,22 @@ func (s *redisUniqueStoreStub) Release(_ context.Context, key, token string) err
 	return s.releaseErr
 }
 
+// Get returns no timeline sample because lifecycle tests only require the shared state contract.
+func (s *redisStateStoreStub) Get(context.Context, string) (string, error) {
+	return "", nil
+}
+
+// Set accepts timeline samples because lifecycle tests only require the shared state contract.
+func (s *redisStateStoreStub) Set(context.Context, string, any, time.Duration) error {
+	return nil
+}
+
+// Close records shared Redis state cleanup.
+func (s *redisStateStoreStub) Close() error {
+	s.closeN++
+	return s.closeErr
+}
+
 // Enqueue records the task and options passed through the Redis acceptance boundary.
 func (s *redisEnqueueClientStub) Enqueue(task *backend.Task, opts ...backend.Option) (*backend.TaskInfo, error) {
 	s.enqueueN++
@@ -72,9 +100,10 @@ func (s *redisEnqueueClientStub) Enqueue(task *backend.Task, opts ...backend.Opt
 	return &backend.TaskInfo{}, s.enqueueErr
 }
 
+// Close records enqueue-client ownership cleanup.
 func (s *redisEnqueueClientStub) Close() error {
 	s.closeN++
-	return nil
+	return s.closeErr
 }
 
 func (s *redisInspectorStub) Queues() ([]string, error) {
@@ -202,6 +231,55 @@ func (s *redisInspectorStub) GetTaskInfo(queueName, id string) (*backend.TaskInf
 		}
 	}
 	return nil, backend.ErrTaskNotFound
+}
+
+// TestRedisQueueConstruction verifies the producer shares one state client across history, uniqueness, and cleanup.
+func TestRedisQueueConstruction(t *testing.T) {
+	client := &redisEnqueueClientStub{}
+	inspector := &redisInspectorStub{}
+	state := &redisStateStoreStub{}
+	driver := newRedisQueue(client, inspector, state, true)
+
+	if driver.client != client || driver.inspector != inspector || driver.timeline != state || driver.unique != state || driver.state != state || !driver.ownsClient {
+		t.Fatalf("new Redis queue did not preserve dependencies: %+v", driver)
+	}
+	if got := driver.Driver(); got != queue.DriverRedis {
+		t.Fatalf("driver = %q, want %q", got, queue.DriverRedis)
+	}
+
+	cfg := Config{Addr: "redis.example:6380", Password: "secret", DB: 3}
+	configuredState, ok := newRedisTimelineStore(cfg).(*redisTimelineClient)
+	if !ok {
+		t.Fatal("new Redis timeline store returned an unexpected implementation")
+	}
+	opts := configuredState.client.Options()
+	if opts.Addr != cfg.Addr || opts.Password != cfg.Password || opts.DB != cfg.DB {
+		t.Fatalf("state client options = addr:%q password:%q db:%d", opts.Addr, opts.Password, opts.DB)
+	}
+	if err := configuredState.Close(); err != nil {
+		t.Fatalf("close configured state client: %v", err)
+	}
+}
+
+// TestRedisQueuePreflightBoundaries verifies context, dependency, and backend failures are returned before dispatch starts.
+func TestRedisQueuePreflightBoundaries(t *testing.T) {
+	if err := (&redisQueue{inspector: &redisInspectorStub{}}).Preflight(nil); err != nil {
+		t.Fatalf("preflight with nil context: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := (&redisQueue{inspector: &redisInspectorStub{}}).Preflight(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled preflight = %v, want context.Canceled", err)
+	}
+	if err := (&redisQueue{}).Preflight(context.Background()); err == nil {
+		t.Fatal("preflight without an inspector unexpectedly succeeded")
+	}
+
+	preflightErr := errors.New("redis unavailable")
+	if err := (&redisQueue{inspector: &redisInspectorStub{queuesErr: preflightErr}}).Preflight(context.Background()); !errors.Is(err, preflightErr) {
+		t.Fatalf("backend preflight = %v, want %v", err, preflightErr)
+	}
 }
 
 func TestRedisQueue_PauseResumeNormalization(t *testing.T) {
@@ -459,6 +537,19 @@ func TestRedisQueueDispatchInputAndClaimFailures(t *testing.T) {
 		}
 	})
 
+	t.Run("canceled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		client := &redisEnqueueClientStub{}
+		r := &redisQueue{client: client}
+		if err := r.Dispatch(ctx, queue.NewJob("job:canceled").OnQueue("default")); !errors.Is(err, context.Canceled) {
+			t.Fatalf("dispatch error = %v, want context.Canceled", err)
+		}
+		if client.enqueueN != 0 {
+			t.Fatalf("canceled dispatch reached enqueue %d times", client.enqueueN)
+		}
+	})
+
 	t.Run("whitespace type", func(t *testing.T) {
 		client := &redisEnqueueClientStub{}
 		r := &redisQueue{client: client}
@@ -467,6 +558,40 @@ func TestRedisQueueDispatchInputAndClaimFailures(t *testing.T) {
 		}
 		if client.enqueueN != 0 {
 			t.Fatalf("invalid type reached enqueue %d times", client.enqueueN)
+		}
+	})
+
+	t.Run("whitespace queue", func(t *testing.T) {
+		client := &redisEnqueueClientStub{}
+		r := &redisQueue{client: client}
+		if err := r.Dispatch(context.Background(), queue.NewJob("job:redis").OnQueue(" \t")); err == nil {
+			t.Fatal("expected whitespace-only Redis queue rejection")
+		}
+		if client.enqueueN != 0 {
+			t.Fatalf("invalid queue reached enqueue %d times", client.enqueueN)
+		}
+	})
+
+	t.Run("delay and default timeout", func(t *testing.T) {
+		client := &redisEnqueueClientStub{}
+		r := &redisQueue{client: client}
+		if err := r.Dispatch(context.Background(), queue.NewJob("job:delayed").OnQueue("default").Delay(2*time.Second)); err != nil {
+			t.Fatalf("dispatch delayed job: %v", err)
+		}
+		var (
+			delay   time.Duration
+			timeout time.Duration
+		)
+		for _, option := range client.opts {
+			switch option.Type() {
+			case backend.ProcessInOpt:
+				delay = option.Value().(time.Duration)
+			case backend.TimeoutOpt:
+				timeout = option.Value().(time.Duration)
+			}
+		}
+		if delay != 2*time.Second || timeout != redisDefaultJobTimeout {
+			t.Fatalf("dispatch options = delay:%s timeout:%s", delay, timeout)
 		}
 	})
 
@@ -530,16 +655,34 @@ func TestRedisQueueLogicalUniqueFailureBoundaries(t *testing.T) {
 	}
 }
 
+// TestRedisQueue_ShutdownOwnsClientCloseOnce verifies every owned producer resource closes once and all failures survive joining.
 func TestRedisQueue_ShutdownOwnsClientCloseOnce(t *testing.T) {
-	client := &redisEnqueueClientStub{}
-	r := &redisQueue{client: client, ownsClient: true}
-	if err := r.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown failed: %v", err)
+	clientErr := errors.New("close enqueue client")
+	inspectorErr := errors.New("close inspector")
+	stateErr := errors.New("close state")
+	client := &redisEnqueueClientStub{closeErr: clientErr}
+	inspector := &redisInspectorStub{closeErr: inspectorErr}
+	state := &redisStateStoreStub{closeErr: stateErr}
+	r := newRedisQueue(client, inspector, state, true)
+
+	for call := 1; call <= 2; call++ {
+		err := r.Shutdown(context.Background())
+		if !errors.Is(err, clientErr) || !errors.Is(err, inspectorErr) || !errors.Is(err, stateErr) {
+			t.Fatalf("shutdown call %d = %v, want all close failures", call, err)
+		}
 	}
-	if err := r.Shutdown(context.Background()); err != nil {
-		t.Fatalf("second shutdown failed: %v", err)
+	if client.closeN != 1 || inspector.closeN != 1 || state.closeN != 1 {
+		t.Fatalf("close counts = client:%d inspector:%d state:%d, want one each", client.closeN, inspector.closeN, state.closeN)
 	}
-	if client.closeN != 1 {
-		t.Fatalf("expected close once, got %d", client.closeN)
+
+	notOwnedClient := &redisEnqueueClientStub{}
+	notOwnedInspector := &redisInspectorStub{}
+	notOwnedState := &redisStateStoreStub{}
+	notOwned := newRedisQueue(notOwnedClient, notOwnedInspector, notOwnedState, false)
+	if err := notOwned.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown unowned resources: %v", err)
+	}
+	if notOwnedClient.closeN != 0 || notOwnedInspector.closeN != 0 || notOwnedState.closeN != 0 {
+		t.Fatalf("unowned resources closed = client:%d inspector:%d state:%d", notOwnedClient.closeN, notOwnedInspector.closeN, notOwnedState.closeN)
 	}
 }

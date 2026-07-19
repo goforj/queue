@@ -242,37 +242,25 @@ func (q *sqsQueue) ensureQueue(ctx context.Context, queueName string) (string, e
 	return url, nil
 }
 
+// getOrCreateSQSQueue resolves a queue and tolerates an absent lookup response
+// because SQS queue creation is idempotent by name.
 func getOrCreateSQSQueue(ctx context.Context, client sqsClient, queueName string) (string, error) {
 	out, err := client.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{QueueName: &queueName})
-	if err == nil && out.QueueUrl != nil && *out.QueueUrl != "" {
+	if err == nil && out != nil && out.QueueUrl != nil && *out.QueueUrl != "" {
 		return *out.QueueUrl, nil
 	}
 	var notFound *types.QueueDoesNotExist
-	if err != nil && !isQueueDoesNotExist(err, &notFound) {
+	if err != nil && !errors.As(err, &notFound) {
 		return "", err
 	}
 	createOut, createErr := client.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: &queueName})
 	if createErr != nil {
 		return "", createErr
 	}
-	if createOut.QueueUrl == nil || *createOut.QueueUrl == "" {
+	if createOut == nil || createOut.QueueUrl == nil || *createOut.QueueUrl == "" {
 		return "", fmt.Errorf("created queue %q but no queue url returned", queueName)
 	}
 	return *createOut.QueueUrl, nil
-}
-
-func isQueueDoesNotExist(err error, target **types.QueueDoesNotExist) bool {
-	if err == nil {
-		return false
-	}
-	var notFound *types.QueueDoesNotExist
-	if ok := errors.As(err, &notFound); ok {
-		if target != nil {
-			*target = notFound
-		}
-		return true
-	}
-	return false
 }
 
 // claimUnique returns the ownership token needed to compensate a rejected send.

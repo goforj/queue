@@ -16,19 +16,34 @@ import (
 )
 
 type sqsWorkerClientStub struct {
-	sendInputs   []*sqs.SendMessageInput
-	deleteInputs []*sqs.DeleteMessageInput
-	queueURL     string
-	queueURLHook func()
-	sendErr      error
-	deleteErr    error
-	sendNil      bool
-	sendEmptyID  bool
+	getQueueInputs   []*sqs.GetQueueUrlInput
+	createInputs     []*sqs.CreateQueueInput
+	sendInputs       []*sqs.SendMessageInput
+	deleteInputs     []*sqs.DeleteMessageInput
+	queueURL         string
+	queueURLHook     func()
+	getQueueErr      error
+	createOutput     *sqs.CreateQueueOutput
+	createErr        error
+	getNilSuccess    bool
+	createNilSuccess bool
+	sendErr          error
+	deleteErr        error
+	sendNil          bool
+	sendEmptyID      bool
 }
 
-func (s *sqsWorkerClientStub) GetQueueUrl(context.Context, *sqs.GetQueueUrlInput, ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error) {
+// GetQueueUrl supplies scripted lookup outcomes so service-boundary tests stay deterministic.
+func (s *sqsWorkerClientStub) GetQueueUrl(_ context.Context, params *sqs.GetQueueUrlInput, _ ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error) {
+	s.getQueueInputs = append(s.getQueueInputs, params)
 	if s.queueURLHook != nil {
 		s.queueURLHook()
+	}
+	if s.getQueueErr != nil {
+		return nil, s.getQueueErr
+	}
+	if s.getNilSuccess {
+		return nil, nil
 	}
 	if s.queueURL != "" {
 		return &sqs.GetQueueUrlOutput{QueueUrl: aws.String(s.queueURL)}, nil
@@ -36,7 +51,18 @@ func (s *sqsWorkerClientStub) GetQueueUrl(context.Context, *sqs.GetQueueUrlInput
 	return nil, errors.New("not implemented")
 }
 
-func (s *sqsWorkerClientStub) CreateQueue(context.Context, *sqs.CreateQueueInput, ...func(*sqs.Options)) (*sqs.CreateQueueOutput, error) {
+// CreateQueue supplies scripted creation outcomes so service-boundary tests stay deterministic.
+func (s *sqsWorkerClientStub) CreateQueue(_ context.Context, params *sqs.CreateQueueInput, _ ...func(*sqs.Options)) (*sqs.CreateQueueOutput, error) {
+	s.createInputs = append(s.createInputs, params)
+	if s.createErr != nil {
+		return nil, s.createErr
+	}
+	if s.createNilSuccess {
+		return nil, nil
+	}
+	if s.createOutput != nil {
+		return s.createOutput, nil
+	}
 	return nil, errors.New("not implemented")
 }
 

@@ -17,13 +17,14 @@ type databaseDriverStub struct {
 }
 
 type databaseConnStub struct {
-	exec        func(context.Context, string, []driver.NamedValue) (driver.Result, error)
-	query       func(context.Context, string, []driver.NamedValue) (driver.Rows, error)
-	beginErr    error
-	commitErr   error
-	rollbackErr error
-	pingErr     error
-	closeCalls  int
+	exec          func(context.Context, string, []driver.NamedValue) (driver.Result, error)
+	query         func(context.Context, string, []driver.NamedValue) (driver.Rows, error)
+	beginErr      error
+	commitErr     error
+	rollbackErr   error
+	rollbackCalls int
+	pingErr       error
+	closeCalls    int
 }
 
 type databaseTxStub struct {
@@ -104,6 +105,7 @@ func (t databaseTxStub) Commit() error {
 
 // Rollback returns the configured transaction rollback result.
 func (t databaseTxStub) Rollback() error {
+	t.conn.rollbackCalls++
 	return t.conn.rollbackErr
 }
 

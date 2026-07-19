@@ -248,6 +248,18 @@ func TestNATSQueue_EnsureConnFailure(t *testing.T) {
 // TestNATSQueuePreflightBoundaries verifies readiness reports both connection
 // and server-roundtrip failures without requiring a live NATS server.
 func TestNATSQueuePreflightBoundaries(t *testing.T) {
+	t.Run("canceled context", func(t *testing.T) {
+		q := newNATSQueue("nats://example")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := q.Preflight(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("preflight error = %v, want context.Canceled", err)
+		}
+		if q.nc != nil {
+			t.Fatalf("canceled preflight established connection %T", q.nc)
+		}
+	})
+
 	t.Run("connection failure", func(t *testing.T) {
 		q := newNATSQueue("://bad-url")
 		if err := q.Preflight(context.Background()); err == nil {
@@ -280,6 +292,56 @@ func TestNATSQueueNilDispatchContext(t *testing.T) {
 	}
 	if connection.publishN != 1 || connection.flushN != 1 {
 		t.Fatalf("publish/flush calls = %d/%d, want 1/1", connection.publishN, connection.flushN)
+	}
+}
+
+// TestNATSQueueDispatchPreservesTemporalOptions verifies the producer writes
+// retry timing and availability controls into the direct-delivery envelope.
+func TestNATSQueueDispatchPreservesTemporalOptions(t *testing.T) {
+	connection := &natsConnectionStub{}
+	q := newNATSQueue("nats://example")
+	q.nc = connection
+	delay := 2 * time.Second
+	beforeDispatch := time.Now()
+	job := queue.NewJob("reports:scheduled").
+		OnQueue("critical").
+		Retry(4).
+		Backoff(250 * time.Millisecond).
+		Timeout(3 * time.Second).
+		Delay(delay)
+
+	if err := q.Dispatch(context.Background(), job); err != nil {
+		t.Fatalf("dispatch temporal job: %v", err)
+	}
+	if len(connection.published) != 1 {
+		t.Fatalf("published messages = %d, want 1", len(connection.published))
+	}
+	var message natsMessage
+	if err := json.Unmarshal(connection.published[0], &message); err != nil {
+		t.Fatalf("decode temporal message: %v", err)
+	}
+	if message.MaxRetry != 4 || message.BackoffMillis != 250 || message.TimeoutMillis != 3_000 {
+		t.Fatalf("temporal options = retry:%d backoff:%d timeout:%d", message.MaxRetry, message.BackoffMillis, message.TimeoutMillis)
+	}
+	minimumAvailableAt := beforeDispatch.Add(delay).Add(-time.Millisecond).UnixMilli()
+	maximumAvailableAt := time.Now().Add(delay).Add(time.Millisecond).UnixMilli()
+	if message.AvailableAtMS < minimumAvailableAt || message.AvailableAtMS > maximumAvailableAt {
+		t.Fatalf("available_at_ms = %d, want between %d and %d", message.AvailableAtMS, minimumAvailableAt, maximumAvailableAt)
+	}
+}
+
+// TestNATSPublishContextNormalizesNil verifies internal retry publication is
+// bounded even when no caller context is available.
+func TestNATSPublishContextNormalizesNil(t *testing.T) {
+	ctx, cancel := natsPublishContext(nil)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("nil publish context did not receive a deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > natsPublishFlushTimeout {
+		t.Fatalf("publish deadline remaining = %v, want within (0, %v]", remaining, natsPublishFlushTimeout)
 	}
 }
 

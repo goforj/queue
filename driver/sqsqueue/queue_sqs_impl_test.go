@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/goforj/queue"
 )
 
@@ -193,6 +196,161 @@ func TestSQSQueueCanceledDispatchStopsBeforeClaim(t *testing.T) {
 	q.unique.Release(key, token)
 	if len(client.sendInputs) != 0 {
 		t.Fatalf("canceled dispatch sent %d messages", len(client.sendInputs))
+	}
+}
+
+// TestSQSQueueDriverAndPreflight verifies driver identity, nil-context
+// normalization, queue discovery, and cancellation before client activity.
+func TestSQSQueueDriverAndPreflight(t *testing.T) {
+	client := &sqsWorkerClientStub{queueURL: "https://example.local/queue/critical"}
+	q := newSQSQueue(Config{})
+	q.cfg.DefaultQueue = "critical"
+	q.client = client
+	if got := q.Driver(); got != queue.DriverSQS {
+		t.Fatalf("driver = %q, want %q", got, queue.DriverSQS)
+	}
+	if got := q.physicalQueueName(); got != "critical" {
+		t.Fatalf("physical queue = %q, want critical", got)
+	}
+	if err := q.Preflight(nil); err != nil {
+		t.Fatalf("preflight with configured client: %v", err)
+	}
+	if len(client.getQueueInputs) != 1 || aws.ToString(client.getQueueInputs[0].QueueName) != "critical" {
+		t.Fatalf("queue lookups = %+v, want one critical lookup", client.getQueueInputs)
+	}
+	if got := q.queueURLs["critical"]; got != client.queueURL {
+		t.Fatalf("cached queue URL = %q, want %q", got, client.queueURL)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := q.Preflight(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled preflight error = %v, want context.Canceled", err)
+	}
+	if len(client.getQueueInputs) != 1 {
+		t.Fatalf("canceled preflight performed %d queue lookups, want 0 additional lookups", len(client.getQueueInputs))
+	}
+	if got := newSQSQueue(Config{}).physicalQueueName(); got != "default" {
+		t.Fatalf("default physical queue = %q, want default", got)
+	}
+}
+
+// TestGetOrCreateSQSQueueBoundaries verifies malformed success responses and
+// service errors are returned without nil dereferences.
+func TestGetOrCreateSQSQueueBoundaries(t *testing.T) {
+	getErr := errors.New("lookup failed")
+	createErr := errors.New("create failed")
+	tests := []struct {
+		name        string
+		client      *sqsWorkerClientStub
+		wantURL     string
+		wantErr     error
+		wantAnyErr  bool
+		wantCreates int
+	}{
+		{
+			name:    "existing queue",
+			client:  &sqsWorkerClientStub{queueURL: "https://example.local/queue/existing"},
+			wantURL: "https://example.local/queue/existing",
+		},
+		{
+			name: "missing queue is created",
+			client: &sqsWorkerClientStub{
+				getQueueErr:  &types.QueueDoesNotExist{},
+				createOutput: &sqs.CreateQueueOutput{QueueUrl: aws.String("https://example.local/queue/created")},
+			},
+			wantURL:     "https://example.local/queue/created",
+			wantCreates: 1,
+		},
+		{
+			name: "nil lookup success falls back to creation",
+			client: &sqsWorkerClientStub{
+				getNilSuccess: true,
+				createOutput:  &sqs.CreateQueueOutput{QueueUrl: aws.String("https://example.local/queue/from-nil")},
+			},
+			wantURL:     "https://example.local/queue/from-nil",
+			wantCreates: 1,
+		},
+		{
+			name:    "lookup rejection",
+			client:  &sqsWorkerClientStub{getQueueErr: getErr},
+			wantErr: getErr,
+		},
+		{
+			name: "creation rejection",
+			client: &sqsWorkerClientStub{
+				getQueueErr: &types.QueueDoesNotExist{},
+				createErr:   createErr,
+			},
+			wantErr:     createErr,
+			wantCreates: 1,
+		},
+		{
+			name: "nil creation success",
+			client: &sqsWorkerClientStub{
+				getQueueErr:      &types.QueueDoesNotExist{},
+				createNilSuccess: true,
+			},
+			wantAnyErr:  true,
+			wantCreates: 1,
+		},
+		{
+			name: "empty creation URL",
+			client: &sqsWorkerClientStub{
+				getQueueErr:  &types.QueueDoesNotExist{},
+				createOutput: &sqs.CreateQueueOutput{},
+			},
+			wantAnyErr:  true,
+			wantCreates: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := getOrCreateSQSQueue(context.Background(), test.client, "reports")
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("queue resolution error = %v, want %v", err, test.wantErr)
+			}
+			if test.wantAnyErr && err == nil {
+				t.Fatal("malformed service response unexpectedly succeeded")
+			}
+			if test.wantErr == nil && !test.wantAnyErr && err != nil {
+				t.Fatalf("queue resolution: %v", err)
+			}
+			if got != test.wantURL {
+				t.Fatalf("queue URL = %q, want %q", got, test.wantURL)
+			}
+			if len(test.client.createInputs) != test.wantCreates {
+				t.Fatalf("create calls = %d, want %d", len(test.client.createInputs), test.wantCreates)
+			}
+		})
+	}
+}
+
+// TestSQSQueueDelayEncodingBoundsServiceDelay verifies SQS receives only its
+// supported delay while the wire message retains the full delivery deadline.
+func TestSQSQueueDelayEncodingBoundsServiceDelay(t *testing.T) {
+	client := &sqsWorkerClientStub{}
+	q := newSQSQueue(Config{})
+	q.client = client
+	q.queueURLs["default"] = "https://example.local/queue/default"
+	started := time.Now()
+	job := queue.NewJob("reports:delayed").OnQueue("default").Delay(901 * time.Second)
+	if err := q.Dispatch(context.Background(), job); err != nil {
+		t.Fatalf("dispatch delayed job: %v", err)
+	}
+	finished := time.Now()
+	if len(client.sendInputs) != 1 {
+		t.Fatalf("send calls = %d, want 1", len(client.sendInputs))
+	}
+	if got := client.sendInputs[0].DelaySeconds; got != 900 {
+		t.Fatalf("service delay = %d seconds, want 900", got)
+	}
+	message := decodeSQSBody(t, client.sendInputs[0])
+	minimumDeadline := started.Add(901 * time.Second).Add(-time.Millisecond).UnixMilli()
+	maximumDeadline := finished.Add(901 * time.Second).Add(time.Millisecond).UnixMilli()
+	if message.AvailableAtMS < minimumDeadline || message.AvailableAtMS > maximumDeadline {
+		t.Fatalf("wire availability = %d, want the original 901-second deadline in [%d, %d]", message.AvailableAtMS, minimumDeadline, maximumDeadline)
 	}
 }
 
