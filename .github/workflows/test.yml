@@ -44,6 +44,9 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: /tmp/gocache
+      GOMODCACHE: /tmp/gomodcache
 
     steps:
       - name: Checkout
@@ -68,15 +71,24 @@ jobs:
         run: FULL=1 VET=1 ./scripts/test-all-modules.sh
 
       - name: Run unit tests with coverage
-        run: ./scripts/coverage-codecov.sh
+        run: ./scripts/coverage-codecov.sh unit
 
-      - name: Upload results to Codecov
-        uses: codecov/codecov-action@v5
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Preserve multi-module unit coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: |
+            coverage/coverage-unit.out
+            coverage/coverage-unit-modules.tsv
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
 
   race:
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: /tmp/gocache
+      GOMODCACHE: /tmp/gomodcache
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,6 +107,9 @@ jobs:
   integration-all:
     needs: [integration-matrix-guard, integration-scenarios-contract-guard]
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: /tmp/gocache
+      GOMODCACHE: /tmp/gomodcache
     strategy:
       fail-fast: false
       matrix:
@@ -109,9 +124,58 @@ jobs:
           go-version: "stable"
 
       - name: Install dependencies
+        working-directory: integration
         run: go mod download
 
-      - name: Run integration tests
+      - name: Run integration tests with coverage
         env:
           INTEGRATION_BACKEND: ${{ matrix.backend }}
-        run: go test -p=1 -tags integration ./integration/...
+        run: ./scripts/coverage-codecov.sh integration
+
+      - name: Preserve integration coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration-${{ matrix.backend }}
+          path: coverage/coverage-integration-${{ matrix.backend }}.out
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  coverage:
+    needs: [unit, integration-all]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage-artifacts
+          merge-multiple: false
+
+      - name: Verify complete coverage fan-in
+        id: coverage-files
+        run: |
+          set -euo pipefail
+          .github/scripts/check_codecov_coverage.sh coverage-artifacts
+          profiles="$(find coverage-artifacts -type f -name '*.out' -print | LC_ALL=C sort | paste -sd, -)"
+          test -n "$profiles"
+          echo "files=$profiles" >> "$GITHUB_OUTPUT"
+
+      - name: Upload complete coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ${{ steps.coverage-files.outputs.files }}
+          disable_search: true
+          fail_ci_if_error: true
+          name: complete-test-suite
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

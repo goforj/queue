@@ -1,3 +1,5 @@
 .idea
 coverage.txt
+coverage/
+coverage-artifacts/
 .artifacts

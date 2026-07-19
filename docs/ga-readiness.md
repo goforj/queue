@@ -195,6 +195,8 @@ What is not yet sufficient for a GA claim:
 
 ## 7. Coverage and Test Debt (should complete)
 
+Coverage reporting now includes the root module, every buildable driver/example/integration module, and the tagged integration suite across the parallel backend matrix. CI rejects incomplete or ambiguous profile fan-in before its single required Codecov upload. This fixes reporting scope; it does not by itself close the test-debt items below.
+
 - [ ] Close remaining low-value 0% helper branches where practical.
   - Acceptance: no easy/uncontroversial 0% branches remain in core runtime paths.
 

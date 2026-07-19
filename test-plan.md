@@ -83,15 +83,21 @@ Related documentation and CI checks:
 
 ## 4. Coverage aggregation (supporting signal)
 
-Script:
+Commands:
 
 ```bash
-scripts/coverage-codecov.sh
+scripts/coverage-codecov.sh unit
+INTEGRATION_BACKEND=redis scripts/coverage-codecov.sh integration
 ```
 
 Current role:
 
-- merges unit + integration-tagged coverage
+- unit mode runs the root module and every buildable nested module independently with `GOWORK=off`; the tooling-only `docs` module is inventory-checked but has no package to cover
+- integration mode runs the tagged tests from the actual `integration` module and instruments repository root, integration, and driver packages
+- CI runs one integration coverage command in each existing backend matrix leg, then fans the unit profile and all ten backend profiles into one guarded Codecov upload
+- emitted atomic text profiles use module-qualified source paths and collapse duplicate source ranges produced by broad `-coverpkg` runs
+- the fan-in guard requires every expected unit/backend artifact, all buildable module records, and covered representative root, driver, and integration-module source before upload
+- Codecov upload errors fail CI; project and patch status checks compare to the base at the repository's established 1% threshold
 - tracks broad regressions
 - not used as a substitute for guarantee validation
 
@@ -631,8 +637,8 @@ Minimum gate for a v1 release candidate:
 1. `GOCACHE=/tmp/queue-gocache go test ./...`
 2. `GOCACHE=/tmp/queue-gocache ./scripts/test-all-modules.sh`
 3. `GOCACHE=/tmp/queue-gocache FULL=1 ./scripts/test-all-modules.sh` (or equivalent split full runs)
-4. `INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/... -count=1`
-5. `scripts/coverage-codecov.sh`
+4. `scripts/coverage-codecov.sh unit`
+5. `INTEGRATION_BACKEND=all scripts/coverage-codecov.sh integration` (runs the full integration suite with coverage; CI parallelizes this by backend)
 6. `GOCACHE=/tmp/queue-gocache go run ./docs/readme/main.go`
 7. `GOCACHE=/tmp/queue-gocache go run ./docs/examplegen/main.go`
 8. `cd examples && GOCACHE=/tmp/queue-gocache go test ./... -run '^TestExamplesBuild$' -count=1`
