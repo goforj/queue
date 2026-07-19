@@ -52,7 +52,7 @@ const (
 	EventProcessStarted EventKind = "process_started"
 	// EventProcessSucceeded indicates a handler completed successfully.
 	EventProcessSucceeded EventKind = "process_succeeded"
-	// EventProcessFailed indicates a handler returned an error.
+	// EventProcessFailed indicates a handler returned an error or panicked; panics are reported before being rethrown.
 	EventProcessFailed EventKind = "process_failed"
 	// EventProcessRetried indicates processing began for a numbered application retry attempt; redelivery may repeat the fact.
 	EventProcessRetried EventKind = "process_retried"
@@ -578,14 +578,110 @@ type StatsCollector struct {
 }
 
 type collectorQueueState struct {
-	counters     QueueCounters
-	processedAt  []time.Time
-	failedAt     []time.Time
-	pendingByKey map[string][]time.Time
-	waitSum      time.Duration
-	waitCount    int64
-	runSum       time.Duration
-	runCount     int64
+	counters           QueueCounters
+	processedAt        []time.Time
+	failedAt           []time.Time
+	pendingByKey       map[string][]time.Time
+	activeSettlements  map[busruntime.DeliverySettlementIdentity]struct{}
+	activeByKey        map[string]int64
+	uncorrelatedActive int64
+	waitSum            time.Duration
+	waitCount          int64
+	runSum             time.Duration
+	runCount           int64
+}
+
+// openActive records one physical handler invocation so later process and
+// settlement facts can close that exact execution at most once.
+func (s *collectorQueueState) openActive(ctx context.Context, event Event) {
+	if settlement, ok := busruntime.DeliverySettlementIdentityFromContext(ctx); ok {
+		if s.activeSettlements == nil {
+			s.activeSettlements = make(map[busruntime.DeliverySettlementIdentity]struct{})
+		}
+		if _, exists := s.activeSettlements[settlement]; exists {
+			return
+		}
+		s.activeSettlements[settlement] = struct{}{}
+		s.counters.Active++
+		return
+	}
+	key := collectorExecutionKey(event)
+	if key != "" {
+		if s.activeByKey == nil {
+			s.activeByKey = make(map[string]int64)
+		}
+		s.activeByKey[key]++
+	} else {
+		s.uncorrelatedActive++
+	}
+	s.counters.Active++
+}
+
+// removeSettlement deletes one exact physical boundary without changing the
+// queue-wide gauge.
+func (s *collectorQueueState) removeSettlement(settlement busruntime.DeliverySettlementIdentity) bool {
+	_, exists := s.activeSettlements[settlement]
+	if !exists {
+		return false
+	}
+	delete(s.activeSettlements, settlement)
+	return true
+}
+
+// closeByKey removes one execution only from the identity-less correlation
+// domain; losing an exact context cannot consume a different physical owner.
+func (s *collectorQueueState) closeByKey(key string) bool {
+	removed := false
+	if key == "" && s.uncorrelatedActive > 0 {
+		s.uncorrelatedActive--
+		removed = true
+	} else if key != "" && s.activeByKey[key] > 0 {
+		s.activeByKey[key]--
+		if s.activeByKey[key] == 0 {
+			delete(s.activeByKey, key)
+		}
+		removed = true
+	}
+	if !removed {
+		return false
+	}
+	if s.counters.Active > 0 {
+		s.counters.Active--
+	}
+	return true
+}
+
+// closeActive removes one matching physical invocation and reports whether
+// the queue-wide gauge changed, using the strongest available correlation.
+func (s *collectorQueueState) closeActive(ctx context.Context, event Event) bool {
+	if settlement, ok := busruntime.DeliverySettlementIdentityFromContext(ctx); ok {
+		if !s.removeSettlement(settlement) {
+			return false
+		}
+		if s.counters.Active > 0 {
+			s.counters.Active--
+		}
+		return true
+	}
+	return s.closeByKey(collectorExecutionKey(event))
+}
+
+// closeSettlementActive requires exact physical identity because event fields
+// cannot distinguish a late settlement from a newer execution of the same job.
+func (s *collectorQueueState) closeSettlementActive(ctx context.Context, event Event) bool {
+	if _, ok := busruntime.DeliverySettlementIdentityFromContext(ctx); !ok {
+		return false
+	}
+	return s.closeActive(ctx, event)
+}
+
+// collectorExecutionKey derives the strongest event-only execution identity
+// available when a driver does not attach a settlement boundary.
+func collectorExecutionKey(event Event) string {
+	if event.JobID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s\x00%s\x00%d", event.DispatchID, event.JobID, event.Attempt)
 }
 
 // NewStatsCollector creates an event collector for queue counters.
@@ -611,7 +707,7 @@ func NewStatsCollector() *StatsCollector {
 //		Queue:  "default",
 //		Time:   time.Now(),
 //	})
-func (c *StatsCollector) Observe(_ context.Context, event Event) {
+func (c *StatsCollector) Observe(ctx context.Context, event Event) {
 	queue := event.Queue
 	if queue == "" {
 		queue = "default"
@@ -650,7 +746,7 @@ func (c *StatsCollector) Observe(_ context.Context, event Event) {
 		if state.counters.Scheduled > 0 && event.Scheduled {
 			state.counters.Scheduled--
 		}
-		state.counters.Active++
+		state.openActive(ctx, event)
 		if event.JobKey != "" {
 			if entries, ok := state.pendingByKey[event.JobKey]; ok && len(entries) > 0 {
 				enqueuedAt := entries[0]
@@ -678,28 +774,22 @@ func (c *StatsCollector) Observe(_ context.Context, event Event) {
 			state.counters.Paused--
 		}
 	case EventProcessSucceeded:
-		if state.counters.Active > 0 {
-			state.counters.Active--
-		}
+		state.closeActive(ctx, event)
 		state.counters.Processed++
 		state.processedAt = append(state.processedAt, now)
 		state.runSum += event.Duration
 		state.runCount++
 		state.counters.AvgRun = state.runSum / time.Duration(state.runCount)
 	case EventProcessFailed:
-		if state.counters.Active > 0 {
-			state.counters.Active--
-		}
+		state.closeActive(ctx, event)
 		state.counters.Failed++
 		state.failedAt = append(state.failedAt, now)
 		state.runSum += event.Duration
 		state.runCount++
 		state.counters.AvgRun = state.runSum / time.Duration(state.runCount)
 	case EventSettlementFailed:
-		// Handler execution ended, but the delivery remains unresolved; close Active without inventing a processed or application-failed outcome.
-		if state.counters.Active > 0 {
-			state.counters.Active--
-		}
+		// Built-in drivers attach exact identity. Identity-less settlement facts cannot safely choose between late and current executions that share event fields.
+		state.closeSettlementActive(ctx, event)
 	}
 
 	c.pruneThroughputLocked(state, now)
@@ -1037,6 +1127,17 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 			safeObserve(ctx, observer, retry)
 		}
 		safeObserve(ctx, observer, base)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				finish := base
+				finish.Kind = EventProcessFailed
+				finish.Duration = time.Since(start)
+				finish.Time = time.Now()
+				finish.Err = handlerPanicError(recovered)
+				safeObserve(ctx, observer, finish)
+				panic(recovered)
+			}
+		}()
 
 		err := handler(ctx, job)
 		finish := base
@@ -1058,6 +1159,15 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 		safeObserve(ctx, observer, finish)
 		return err
 	}
+}
+
+// handlerPanicError preserves error identity for telemetry while the wrapper
+// re-panics so each backend retains its established panic behavior.
+func handlerPanicError(recovered any) error {
+	if err, ok := recovered.(error); ok {
+		return fmt.Errorf("handler panicked: %w", err)
+	}
+	return fmt.Errorf("handler panicked: %v", recovered)
 }
 
 // safeObserve keeps internal and driver event delivery on the same panic-isolated path.

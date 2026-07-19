@@ -66,7 +66,7 @@ Recommended required fields (when available):
 | `schema_version` | integer | event envelope schema version |
 | `event_id` | string | unique event identifier |
 | `driver` | string | backend/runtime (`redis`, `sqs`, etc.) |
-| `queue` | string | logical/physical queue name in runtime context |
+| `queue` | string | effective physical backend queue name; omitted targets currently report `default` |
 | `job_type` | string | job type identifier |
 | `job_key` | string | stable job key/idempotency key when available |
 | `attempt` | integer | current attempt number |
@@ -125,7 +125,7 @@ Recommended required fields (when available):
 | `job_id` | string | workflow job record ID |
 | `chain_id` | string | chain workflow ID |
 | `batch_id` | string | batch workflow ID |
-| `queue` | string | target queue |
+| `queue` | string | effective physical backend queue name; omitted targets currently report `default` |
 | `job_type` | string | job type |
 | `attempt` | integer | attempt number for job events |
 | `duration_ms` | number | duration for succeeded/failed events |
@@ -167,7 +167,7 @@ These may be implemented via logs, counters, histograms, or OTel metrics.
 - `queue_settlement_failed_total{driver,queue}` (from `settlement_failed`)
 - `queue_process_recovered_total{driver,queue}` (from `process_recovered`)
 
-For `StatsCollector`, `settlement_failed` closes the corresponding active attempt because handler execution has ended, but it increments neither `Processed` nor application `Failed`: the delivery outcome remains unresolved and may redeliver. Track `queue_settlement_failed_total` separately rather than folding it into either terminal counter.
+For `StatsCollector`, an identity-bearing `settlement_failed` closes the exact active attempt because handler execution has ended, but it increments neither `Processed` nor application `Failed`: the delivery outcome remains unresolved and may redeliver. Current built-in drivers carry the same opaque physical identity through start, process, and settlement facts. An identity-less terminal fact cannot close an identity-bearing start, and an identity-less settlement fact leaves `Active` unchanged, because event fields cannot distinguish a late settlement from a newer execution of the same job. Upgrade settlement-aware driver modules with root, and require custom drivers to forward the handler's settlement context consistently, when exact gauges matter. This deliberately conservative compatibility behavior can overcount outdated drivers instead of undercounting unrelated live work. Track `queue_settlement_failed_total` separately rather than folding it into either terminal counter.
 
 ### Workflow Metrics
 

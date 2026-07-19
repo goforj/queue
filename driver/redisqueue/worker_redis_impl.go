@@ -3,6 +3,7 @@ package redisqueue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -82,6 +83,17 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 			Time:       start,
 		}
 		observeRedisAttemptStart(ctx, w.obs, base)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				finish := base
+				finish.Kind = queue.EventProcessFailed
+				finish.Time = time.Now()
+				finish.Duration = time.Since(start)
+				finish.Err = redisHandlerPanicError(recovered)
+				queuecore.SafeObserve(ctx, w.obs, finish)
+				panic(recovered)
+			}
+		}()
 
 		err := handler(ctx, delivery)
 		finish := base
@@ -97,6 +109,15 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 		queuecore.SafeObserve(ctx, w.obs, finish)
 		return redisSettlementError(physicalAttempt, err)
 	})
+}
+
+// redisHandlerPanicError preserves error identity for telemetry while the
+// worker re-panics so Asynq retains ownership of panic recovery and retry.
+func redisHandlerPanicError(recovered any) error {
+	if err, ok := recovered.(error); ok {
+		return fmt.Errorf("redis handler panicked: %w", err)
+	}
+	return fmt.Errorf("redis handler panicked: %v", recovered)
 }
 
 // observeRedisAttemptStart treats an Asynq retry delivery as evidence that its application retry was scheduled; infrastructure redelivery may repeat the fact.

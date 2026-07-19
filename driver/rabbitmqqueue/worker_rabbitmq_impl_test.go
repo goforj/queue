@@ -66,14 +66,22 @@ func TestRabbitMQWorkerSettlementFailuresAreObserved(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var events []queue.Event
 			committed := false
+			var handlerSettlement busruntime.DeliverySettlementIdentity
+			var handlerSettlementOK bool
+			var observedSettlement busruntime.DeliverySettlementIdentity
+			var observedSettlementOK bool
 			w := &rabbitMQWorker{
 				handlers: map[string]queue.Handler{"bus:job": func(ctx context.Context, _ queue.Job) error {
+					handlerSettlement, handlerSettlementOK = busruntime.DeliverySettlementIdentityFromContext(ctx)
 					if !busruntime.DeferUntilDeliveryCommitted(ctx, func() { committed = true }) {
 						t.Fatal("handler context did not carry a settlement boundary")
 					}
 					return test.handlerErr
 				}},
-				observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+				observer: queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+					observedSettlement, observedSettlementOK = busruntime.DeliverySettlementIdentityFromContext(ctx)
+					events = append(events, event)
+				}),
 			}
 			payload := []byte(`{"schema_version":1,"dispatch_id":"dsp_rabbit_settle","job_id":"job_rabbit_settle","job":{"type":"reports:build","payload":"eyJpZCI6MX0="}}`)
 			body, err := json.Marshal(rabbitMQMessage{Type: "bus:job", Queue: "critical", Payload: payload, MaxRetry: test.maxRetry})
@@ -90,6 +98,9 @@ func TestRabbitMQWorkerSettlementFailuresAreObserved(t *testing.T) {
 			if committed {
 				t.Fatal("failed acknowledgement committed deferred handler outcome")
 			}
+			if !handlerSettlementOK || !observedSettlementOK || observedSettlement != handlerSettlement {
+				t.Fatal("settlement observer did not retain the handler's delivery identity")
+			}
 		})
 	}
 }
@@ -98,12 +109,20 @@ func TestRabbitMQWorkerSettlementFailuresAreObserved(t *testing.T) {
 func TestRabbitMQWorkerRetrySettlementFailureUsesDeliveredAttempt(t *testing.T) {
 	acks := &ackRecorder{ackErr: errors.New("ack failed")}
 	var events []queue.Event
+	var handlerSettlement busruntime.DeliverySettlementIdentity
+	var handlerSettlementOK bool
+	var observedSettlement busruntime.DeliverySettlementIdentity
+	var observedSettlementOK bool
 	w := &rabbitMQWorker{
-		handlers: map[string]queue.Handler{"job:retry:settlement": func(context.Context, queue.Job) error {
+		handlers: map[string]queue.Handler{"job:retry:settlement": func(ctx context.Context, _ queue.Job) error {
+			handlerSettlement, handlerSettlementOK = busruntime.DeliverySettlementIdentityFromContext(ctx)
 			return errors.New("retry me")
 		}},
-		cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
-		observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+		cfg: rabbitMQWorkerConfig{DefaultQueue: "default"},
+		observer: queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+			observedSettlement, observedSettlementOK = busruntime.DeliverySettlementIdentityFromContext(ctx)
+			events = append(events, event)
+		}),
 		publishOverride: func(context.Context, rabbitMQMessage) error {
 			return nil
 		},
@@ -115,6 +134,9 @@ func TestRabbitMQWorkerRetrySettlementFailureUsesDeliveredAttempt(t *testing.T) 
 	w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 71})
 	if len(events) != 1 || events[0].Kind != queue.EventSettlementFailed || events[0].Attempt != 1 {
 		t.Fatalf("settlement events = %+v, want original attempt 1", events)
+	}
+	if !handlerSettlementOK || !observedSettlementOK || observedSettlement != handlerSettlement {
+		t.Fatal("retry settlement observer did not retain the handler's delivery identity")
 	}
 }
 
@@ -318,6 +340,45 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 5})
 		if acks.acks != 0 || acks.nacks != 1 {
 			t.Fatalf("expected nack once, got ack=%d nack=%d", acks.acks, acks.nacks)
+		}
+	})
+
+	t.Run("republish and nack failures retain their physical attempts", func(t *testing.T) {
+		acks := &ackRecorder{nackErr: errors.New("nack failed")}
+		var events []queue.Event
+		w := &rabbitMQWorker{
+			handlers: map[string]queue.Handler{
+				"job:retry:failed-settlement": func(context.Context, queue.Job) error { return errors.New("retry") },
+			},
+			cfg: rabbitMQWorkerConfig{DefaultQueue: "default"},
+			observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+				events = append(events, event)
+			}),
+			publishOverride: func(context.Context, rabbitMQMessage) error {
+				return errors.New("publish failed")
+			},
+		}
+		body, err := json.Marshal(rabbitMQMessage{
+			Type:     "job:retry:failed-settlement",
+			Queue:    "critical",
+			Attempt:  2,
+			MaxRetry: 4,
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		w.processDelivery(context.Background(), amqp.Delivery{Body: body, Acknowledger: acks, DeliveryTag: 55})
+		if acks.acks != 0 || acks.nacks != 1 {
+			t.Fatalf("publish failure ack/nack = %d/%d, want 0/1", acks.acks, acks.nacks)
+		}
+		if len(events) != 2 {
+			t.Fatalf("failure events = %+v, want republish and settlement failures", events)
+		}
+		if events[0].Kind != queue.EventRepublishFailed || events[0].Attempt != 3 {
+			t.Fatalf("republish failure = %+v, want replacement attempt 3", events[0])
+		}
+		if events[1].Kind != queue.EventSettlementFailed || events[1].Attempt != 2 {
+			t.Fatalf("settlement failure = %+v, want original receipt attempt 2", events[1])
 		}
 	})
 

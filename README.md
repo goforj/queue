@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/unit_tests-920-brightgreen" alt="Unit tests (executed count)">
+    <img src="https://img.shields.io/badge/unit_tests-934-brightgreen" alt="Unit tests (executed count)">
     <img src="https://img.shields.io/badge/integration_tests-612-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
@@ -391,7 +391,7 @@ Use `queue.Observer` implementations to capture normalized runtime events across
 collector := queue.NewStatsCollector()
 observer := queue.MultiObserver(
     collector,
-    queue.ObserverFunc(func(event queue.Event) {
+    queue.ObserverFunc(func(_ context.Context, event queue.Event) {
         _ = event.Kind
     }),
 )
@@ -422,7 +422,7 @@ observer := queue.MultiObserver(
         Events:     events,
         DropIfFull: true,
     },
-    queue.ObserverFunc(func(e queue.Event) {
+    queue.ObserverFunc(func(_ context.Context, e queue.Event) {
         _ = e
     }),
 )
@@ -478,7 +478,7 @@ _ = q
 | **queue** | enqueue_canceled | Context cancellation prevented enqueue. |
 | **worker** | process_started | Worker began processing job. |
 | **worker** | process_succeeded | Handler returned success. |
-| **worker** | process_failed | Handler returned error. |
+| **worker** | process_failed | Handler returned an error or panicked. |
 | **worker** | process_retried | A numbered application retry attempt began; infrastructure redelivery may repeat the fact. |
 | **worker** | process_archived | Driver confirmed terminal settlement; unsupported paths omit this fact. |
 | **queue** | queue_paused | Queue was paused (driver supports pause). |
@@ -498,6 +498,8 @@ _ = q
 | **workflow** | callback_started | Chain/batch callback execution started. |
 | **workflow** | callback_succeeded | Chain/batch callback completed successfully. |
 | **workflow** | callback_failed | Chain/batch callback returned an error. |
+
+Handler panics now emit `process_failed` before the original panic value is rethrown. This adds truthful failure telemetry without changing backend panic recovery or retry behavior.
 
 ## Examples
 

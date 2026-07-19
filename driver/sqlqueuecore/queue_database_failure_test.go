@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 )
 
 // TestDatabaseDispatchPropagatesUniqueTransactionFailures verifies a unique
@@ -134,8 +135,10 @@ func TestDatabaseClaimRejectsAmbiguousUpdateResults(t *testing.T) {
 func TestDatabaseSettlementFailureIncludesLineageRepairError(t *testing.T) {
 	settlementErr := errors.New("settlement unavailable")
 	var events []queue.Event
+	var observedCtx context.Context
 	database := &databaseQueue{
-		observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+		observer: queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+			observedCtx = ctx
 			events = append(events, event)
 		}),
 	}
@@ -148,7 +151,12 @@ func TestDatabaseSettlementFailureIncludesLineageRepairError(t *testing.T) {
 		processingToken: strings.Repeat("b", databaseProcessingTokenBytes*2),
 	}
 
-	database.handleSettlementFailure(job, settlementErr)
+	settlementCtx, _ := busruntime.WithDeliverySettlement(context.Background())
+	wantIdentity, ok := busruntime.DeliverySettlementIdentityFromContext(settlementCtx)
+	if !ok {
+		t.Fatal("settlement context did not expose an identity")
+	}
+	database.handleSettlementFailure(settlementCtx, job, settlementErr)
 	if len(events) != 1 {
 		t.Fatalf("settlement failure events = %d, want 1", len(events))
 	}
@@ -159,6 +167,9 @@ func TestDatabaseSettlementFailureIncludesLineageRepairError(t *testing.T) {
 	if !strings.Contains(event.Err.Error(), "restore recovered database settlement lineage") ||
 		!strings.Contains(event.Err.Error(), "malformed") {
 		t.Fatalf("settlement event error = %v, want recovery repair context", event.Err)
+	}
+	if observed, observedOK := busruntime.DeliverySettlementIdentityFromContext(observedCtx); !observedOK || observed != wantIdentity {
+		t.Fatal("settlement observer did not retain the handler's delivery identity")
 	}
 
 	database.observeSettlementFailure(context.Background(), nil, settlementErr)

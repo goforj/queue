@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,70 @@ func TestDatabaseStartAfterShutdownRejectsFalseRestart(t *testing.T) {
 	database.shuttingDown.Store(true)
 	if err := database.StartWorkers(context.Background()); !errors.Is(err, queue.ErrQueuerShuttingDown) {
 		t.Fatalf("start after shutdown = %v, want ErrQueuerShuttingDown", err)
+	}
+}
+
+// TestDatabaseShutdownRetriesShareOneDrain verifies caller deadlines do not
+// multiply waiter goroutines and later cleanup reports close diagnostics once
+// before converging.
+func TestDatabaseShutdownRetriesShareOneDrain(t *testing.T) {
+	closeErr := errors.New("close database")
+	connection := &databaseConnStub{closeErr: closeErr}
+	db := newDatabaseStub(connection)
+	if err := db.PingContext(context.Background()); err != nil {
+		t.Fatalf("open database connection: %v", err)
+	}
+
+	database := &databaseQueue{
+		db:         db,
+		ownsDB:     true,
+		shutdownCh: make(chan struct{}),
+	}
+	releaseWorker := make(chan struct{})
+	database.workerWG.Add(1)
+	go func() {
+		defer database.workerWG.Done()
+		<-releaseWorker
+	}()
+
+	shutdownWithDeadline := func() {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+		if err := database.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("timed shutdown = %v, want context deadline exceeded", err)
+		}
+	}
+
+	shutdownWithDeadline()
+	sharedDone := database.shutdownDone
+	if sharedDone == nil {
+		t.Fatal("shutdown did not retain its drain completion channel")
+	}
+	goroutinesAfterFirstDeadline := runtime.NumGoroutine()
+	for range 32 {
+		shutdownWithDeadline()
+		if database.shutdownDone != sharedDone {
+			t.Fatal("shutdown retry replaced the shared drain completion channel")
+		}
+	}
+	runtime.Gosched()
+	if got := runtime.NumGoroutine(); got > goroutinesAfterFirstDeadline+2 {
+		t.Fatalf("shutdown retries grew goroutines from %d to %d", goroutinesAfterFirstDeadline, got)
+	}
+	if connection.closeCalls != 0 {
+		t.Fatalf("database close calls before worker drain = %d, want 0", connection.closeCalls)
+	}
+
+	close(releaseWorker)
+	if err := database.Shutdown(context.Background()); !errors.Is(err, closeErr) {
+		t.Fatalf("converged shutdown = %v, want %v", err, closeErr)
+	}
+	if err := database.Shutdown(context.Background()); err != nil {
+		t.Fatalf("repeated converged shutdown = %v, want nil after diagnostic was reported", err)
+	}
+	if connection.closeCalls != 1 {
+		t.Fatalf("database close calls = %d, want 1", connection.closeCalls)
 	}
 }
 

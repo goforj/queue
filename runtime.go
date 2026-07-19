@@ -237,12 +237,22 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	}
 	if observer != nil {
 		driver := Driver("")
+		resolveQueueName := func(queueName string) string {
+			return PhysicalQueueName("default", queueName)
+		}
 		if q != nil {
 			driver = q.Driver()
+			resolveQueueName = func(queueName string) string {
+				if queueName == "" {
+					return "default"
+				}
+				return q.physicalQueueNameOrDefault(queueName)
+			}
 		}
 		ro.workflowOpts = append(ro.workflowOpts, workflow.WithObserver(workflowObserverAdapter{
-			driver:   driver,
-			observer: observer,
+			driver:           driver,
+			resolveQueueName: resolveQueueName,
+			observer:         observer,
 		}))
 	}
 	b, err := workflow.New(q, ro.workflowOpts...)
@@ -267,15 +277,16 @@ func attachRuntimeObserver(q queueRuntime, observer Observer) Observer {
 }
 
 type workflowObserverAdapter struct {
-	driver   Driver
-	observer Observer
+	driver           Driver
+	resolveQueueName func(string) string
+	observer         Observer
 }
 
 // Observe converts workflow facts into the canonical event envelope without exposing the internal engine model to applications.
 func (a workflowObserverAdapter) Observe(ctx context.Context, event workflow.Event) {
-	queueName := event.Queue
-	if queueName == "" {
-		queueName = "default"
+	queueName := PhysicalQueueName("default", event.Queue)
+	if a.resolveQueueName != nil {
+		queueName = a.resolveQueueName(event.Queue)
 	}
 	safeObserve(ctx, a.observer, Event{
 		SchemaVersion: event.SchemaVersion,

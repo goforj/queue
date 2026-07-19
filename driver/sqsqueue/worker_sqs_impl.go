@@ -216,7 +216,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	)
 	switch busruntime.ClassifyAttempt(attempt, err) {
 	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
-		if w.deleteAndObserve(ctx, message, incoming) {
+		if w.deleteAndObserve(runCtx, message, incoming) {
 			settlement.Commit()
 		}
 		return
@@ -236,7 +236,7 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 		w.observeRepublishFailure(ctx, incoming, err)
 		return
 	}
-	if w.deleteAndObserve(ctx, message, settledMessage) {
+	if w.deleteAndObserve(runCtx, message, settledMessage) {
 		settlement.Commit()
 	}
 }

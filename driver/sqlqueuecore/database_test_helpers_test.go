@@ -24,6 +24,7 @@ type databaseConnStub struct {
 	rollbackErr   error
 	rollbackCalls int
 	pingErr       error
+	closeErr      error
 	closeCalls    int
 }
 
@@ -61,7 +62,7 @@ func (c *databaseConnStub) Prepare(string) (driver.Stmt, error) {
 // Close records database ownership behavior without invalidating the reusable script fixture.
 func (c *databaseConnStub) Close() error {
 	c.closeCalls++
-	return nil
+	return c.closeErr
 }
 
 // Begin starts a transaction through the context-aware implementation.

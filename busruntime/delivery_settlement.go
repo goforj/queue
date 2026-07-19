@@ -14,6 +14,13 @@ type DeliverySettlement struct {
 	callbacks                 []func()
 }
 
+// DeliverySettlementIdentity is an opaque, comparable identity for one
+// physical handler invocation. It permits correlation without exposing the
+// driver's authority to commit the underlying settlement.
+type DeliverySettlementIdentity struct {
+	settlement *DeliverySettlement
+}
+
 type deliverySettlementContextKey struct{}
 type deliveryProvenanceContextKey struct{}
 
@@ -42,6 +49,26 @@ func WithDeliverySettlement(ctx context.Context) (context.Context, *DeliverySett
 	return context.WithValue(ctx, deliverySettlementContextKey{}, settlement), settlement
 }
 
+// DeliverySettlementIdentityFromContext returns the opaque identity for the
+// physical settlement boundary attached to ctx.
+func DeliverySettlementIdentityFromContext(ctx context.Context) (DeliverySettlementIdentity, bool) {
+	settlement, ok := deliverySettlementFromContext(ctx)
+	if !ok {
+		return DeliverySettlementIdentity{}, false
+	}
+	return DeliverySettlementIdentity{settlement: settlement}, true
+}
+
+// deliverySettlementFromContext returns the driver-owned mutable settlement
+// boundary without exposing settlement authority outside this package.
+func deliverySettlementFromContext(ctx context.Context) (*DeliverySettlement, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	settlement, ok := ctx.Value(deliverySettlementContextKey{}).(*DeliverySettlement)
+	return settlement, ok && settlement != nil
+}
+
 // WithDeliveryProvenance attaches settlement-owner generation identity to one
 // physical handler invocation. Callers must not manufacture recovery evidence
 // for an ordinary duplicate.
@@ -67,11 +94,8 @@ func DeliveryProvenanceFromContext(ctx context.Context) (DeliveryProvenance, boo
 // drivers use this only to preserve truthful provenance across a later
 // same-attempt infrastructure redelivery.
 func MarkDeliveryApplicationStateCommitted(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	settlement, ok := ctx.Value(deliverySettlementContextKey{}).(*DeliverySettlement)
-	if !ok || settlement == nil {
+	settlement, ok := deliverySettlementFromContext(ctx)
+	if !ok {
 		return false
 	}
 	settlement.mu.Lock()
@@ -94,11 +118,11 @@ func (s *DeliverySettlement) ApplicationStateCommitted() bool {
 // DeferUntilDeliveryCommitted registers fn when ctx carries a driver-owned settlement boundary.
 // It returns false when the driver cannot report settlement, allowing callers to preserve legacy immediate behavior.
 func DeferUntilDeliveryCommitted(ctx context.Context, fn func()) bool {
-	if ctx == nil || fn == nil {
+	if fn == nil {
 		return false
 	}
-	settlement, ok := ctx.Value(deliverySettlementContextKey{}).(*DeliverySettlement)
-	if !ok || settlement == nil {
+	settlement, ok := deliverySettlementFromContext(ctx)
+	if !ok {
 		return false
 	}
 	settlement.deferCommit(fn)

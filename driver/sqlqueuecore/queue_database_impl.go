@@ -83,6 +83,8 @@ type databaseQueue struct {
 
 	startMu      sync.Mutex
 	shutdownOnce sync.Once
+	shutdownDone chan struct{}
+	shutdownErr  error
 	workerWG     sync.WaitGroup
 	shutdownCh   chan struct{}
 
@@ -246,15 +248,41 @@ func (d *databaseQueue) Shutdown(ctx context.Context) error {
 	d.shutdownOnce.Do(func() {
 		d.shuttingDown.Store(true)
 		close(d.shutdownCh)
+		d.shutdownDone = make(chan struct{})
+		go d.finishShutdown(d.shutdownDone)
 	})
+	done := d.shutdownDone
 	d.startMu.Unlock()
-	if err := waitGroupWithContext(ctx, &d.workerWG); err != nil {
-		return err
+	select {
+	case <-done:
+		return d.takeShutdownError()
+	case <-ctx.Done():
+		return ctx.Err()
 	}
+}
+
+// finishShutdown waits once for the worker generation so callers with expired
+// deadlines can retry without creating another goroutine for the same drain.
+func (d *databaseQueue) finishShutdown(done chan struct{}) {
+	d.workerWG.Wait()
+	var closeErr error
 	if d.ownsDB {
-		return d.db.Close()
+		closeErr = d.db.Close()
 	}
-	return nil
+	d.startMu.Lock()
+	d.shutdownErr = closeErr
+	close(done)
+	d.startMu.Unlock()
+}
+
+// takeShutdownError reports completed cleanup diagnostics once so a later
+// outer runtime retry can converge after the owned resource is already closed.
+func (d *databaseQueue) takeShutdownError() error {
+	d.startMu.Lock()
+	defer d.startMu.Unlock()
+	err := d.shutdownErr
+	d.shutdownErr = nil
+	return err
 }
 
 // Dispatch commits a uniqueness claim and its queue row in one transaction when deduplication is requested.
@@ -629,7 +657,7 @@ func (d *databaseQueue) processJob(job *dbJob) {
 	handler, ok := d.lookup(job.jobType)
 	if !ok {
 		if err := d.markFailedWithRetry(job, fmt.Errorf("no handler registered for job type %q", job.jobType)); err != nil {
-			d.handleSettlementFailure(job, err)
+			d.handleSettlementFailure(context.Background(), job, err)
 		}
 		return
 	}
@@ -652,7 +680,7 @@ func (d *databaseQueue) processJob(job *dbJob) {
 		settlementErr = d.markFailedWithRetry(job, err)
 	}
 	if settlementErr != nil {
-		d.handleSettlementFailure(job, settlementErr)
+		d.handleSettlementFailure(ctx, job, settlementErr)
 		return
 	}
 	settlement.Commit()
@@ -661,14 +689,14 @@ func (d *databaseQueue) processJob(job *dbJob) {
 // handleSettlementFailure preserves inherited recovery lineage before reporting
 // an exhausted physical settlement failure. Deferred facts remain uncommitted
 // until a later generation positively settles the fenced row.
-func (d *databaseQueue) handleSettlementFailure(job *dbJob, settlementErr error) {
-	ctx, cancel := context.WithTimeout(context.Background(), databaseFinalizeTimeout)
-	repairErr := d.restoreRecoveredSettlementLineage(ctx, job, settlementErr)
+func (d *databaseQueue) handleSettlementFailure(ctx context.Context, job *dbJob, settlementErr error) {
+	repairCtx, cancel := context.WithTimeout(context.Background(), databaseFinalizeTimeout)
+	repairErr := d.restoreRecoveredSettlementLineage(repairCtx, job, settlementErr)
 	cancel()
 	if repairErr != nil {
 		settlementErr = errors.Join(settlementErr, fmt.Errorf("restore recovered database settlement lineage: %w", repairErr))
 	}
-	d.observeSettlementFailure(context.Background(), job, settlementErr)
+	d.observeSettlementFailure(ctx, job, settlementErr)
 }
 
 // databaseSettlementContext exposes stale-processing evidence to orchestration
@@ -1532,27 +1560,6 @@ func defaultWorkerCount(n int) int {
 		return 1
 	}
 	return n
-}
-
-func waitGroupWithContext(ctx context.Context, wg *sync.WaitGroup) error {
-	if wg == nil {
-		return nil
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		wg.Wait()
-	}()
-	if ctx == nil {
-		<-done
-		return nil
-	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func (d *databaseQueue) rebind(query string) string {

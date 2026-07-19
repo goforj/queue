@@ -225,12 +225,12 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 	)
 	switch busruntime.ClassifyAttempt(attempt, err) {
 	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
-		if w.ack(ctx, delivery, incoming) {
+		if w.ack(runCtx, delivery, incoming) {
 			settlement.Commit()
 		}
 		return
 	case busruntime.AttemptRedeliver:
-		w.nack(ctx, delivery, incoming, true)
+		w.nack(runCtx, delivery, incoming, true)
 		return
 	case busruntime.AttemptRetry:
 	}
@@ -243,10 +243,10 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 	}
 	if err := w.publish(context.Background(), incoming); err != nil {
 		w.observeRepublishFailure(runCtx, incoming, err)
-		w.nack(ctx, delivery, incoming, true)
+		w.nack(runCtx, delivery, settledMessage, true)
 		return
 	}
-	if w.ack(ctx, delivery, settledMessage) {
+	if w.ack(runCtx, delivery, settledMessage) {
 		settlement.Commit()
 	}
 }

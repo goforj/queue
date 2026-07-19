@@ -9,6 +9,17 @@ import (
 // TestDeliverySettlementDefersAndCommitsOnce verifies settlement facts cannot precede the driver's positive commit.
 func TestDeliverySettlementDefersAndCommitsOnce(t *testing.T) {
 	ctx, settlement := WithDeliverySettlement(context.Background())
+	identity, ok := DeliverySettlementIdentityFromContext(ctx)
+	if !ok {
+		t.Fatal("settlement identity was absent from its context")
+	}
+	if same, sameOK := DeliverySettlementIdentityFromContext(ctx); !sameOK || same != identity {
+		t.Fatal("settlement identity changed for the same context")
+	}
+	otherCtx, _ := WithDeliverySettlement(context.Background())
+	if other, otherOK := DeliverySettlementIdentityFromContext(otherCtx); !otherOK || other == identity {
+		t.Fatal("distinct settlements shared one identity")
+	}
 	var calls atomic.Int32
 	if !DeferUntilDeliveryCommitted(ctx, func() { calls.Add(1) }) {
 		t.Fatal("settlement callback was not deferred")
@@ -38,6 +49,12 @@ func TestDeliverySettlementLateRegistration(t *testing.T) {
 
 // TestDeliverySettlementAbsentAndPanickingCallbacks verifies optional settlement and telemetry panics remain isolated.
 func TestDeliverySettlementAbsentAndPanickingCallbacks(t *testing.T) {
+	if identity, ok := DeliverySettlementIdentityFromContext(nil); ok || identity != (DeliverySettlementIdentity{}) {
+		t.Fatalf("nil context identity = %#v ok:%t, want zero/false", identity, ok)
+	}
+	if identity, ok := DeliverySettlementIdentityFromContext(context.Background()); ok || identity != (DeliverySettlementIdentity{}) {
+		t.Fatalf("plain context identity = %#v ok:%t, want zero/false", identity, ok)
+	}
 	if DeferUntilDeliveryCommitted(context.Background(), func() {}) {
 		t.Fatal("plain context unexpectedly exposed settlement")
 	}

@@ -45,6 +45,9 @@ type queueRuntime interface {
 	// @group Driver Integration
 	Ready(ctx context.Context) error
 
+	// physicalQueueNameOrDefault resolves the effective backend queue name used in canonical events.
+	physicalQueueNameOrDefault(queueName string) string
+
 	// setHandlerContextDecorator decorates handler execution context at registration time.
 	setHandlerContextDecorator(func(context.Context) context.Context)
 }
@@ -398,6 +401,8 @@ func (q *queueCommon) Dispatch(job any) error {
 	return q.inner.Dispatch(ctx, dispatchJob)
 }
 
+// physicalJob namespaces explicit targets while preserving the current
+// backend-specific contract for jobs that omit a queue.
 func (q *queueCommon) physicalJob(job Job) Job {
 	if job.options.queueName == "" {
 		return job
@@ -413,6 +418,7 @@ func (q *queueCommon) physicalQueueName(queueName string) string {
 	return PhysicalQueueName(q.cfg.DefaultQueue, queueName)
 }
 
+// physicalQueueNameOrDefault resolves the configured default and namespace before a queue name reaches the backend.
 func (q *queueCommon) physicalQueueNameOrDefault(queueName string) string {
 	queueName = strings.TrimSpace(queueName)
 	if queueName == "" && q != nil {
@@ -466,6 +472,14 @@ func queueNamePrefix(defaultQueue string) string {
 // Driver returns the native runtime's configured backend identifier.
 func (q *nativeQueueRuntime) Driver() Driver { return q.common.Driver() }
 
+// physicalQueueNameOrDefault keeps canonical event labels aligned with native backend queue names.
+func (q *nativeQueueRuntime) physicalQueueNameOrDefault(queueName string) string {
+	if q == nil || q.common == nil {
+		return PhysicalQueueName("default", queueName)
+	}
+	return q.common.physicalQueueNameOrDefault(queueName)
+}
+
 // Dispatch rejects new application work once native runtime draining begins.
 func (q *nativeQueueRuntime) Dispatch(job any) error {
 	release, err := q.acquireOperation(q.common.context(), true)
@@ -486,6 +500,14 @@ func (q *nativeQueueRuntime) WithContext(ctx context.Context) queueRuntime {
 
 // Driver returns the external runtime's configured backend identifier.
 func (q *externalQueueRuntime) Driver() Driver { return q.common.Driver() }
+
+// physicalQueueNameOrDefault keeps canonical event labels aligned with external backend queue names.
+func (q *externalQueueRuntime) physicalQueueNameOrDefault(queueName string) string {
+	if q == nil || q.common == nil {
+		return PhysicalQueueName("default", queueName)
+	}
+	return q.common.physicalQueueNameOrDefault(queueName)
+}
 
 // Dispatch rejects new application work once external runtime draining begins.
 func (q *externalQueueRuntime) Dispatch(job any) error {

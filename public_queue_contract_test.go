@@ -549,6 +549,246 @@ func TestPublicQueueContractObserverSpansEveryLayer(t *testing.T) {
 	}
 }
 
+// TestPublicQueueContractObserverUsesEffectiveQueueAcrossDirectAndWorkflows verifies namespace mapping does not split correlated events or collector buckets.
+func TestPublicQueueContractObserverUsesEffectiveQueueAcrossDirectAndWorkflows(t *testing.T) {
+	const (
+		logicalQueue            = "critical"
+		whitespaceQueue         = "   "
+		physicalQueue           = "billing_critical"
+		physicalWhitespaceQueue = "billing_default"
+		physicalDefaultQueue    = "default"
+	)
+
+	var (
+		eventsMu sync.Mutex
+		events   []queue.Event
+	)
+	collector := queue.NewStatsCollector()
+	observer := queue.MultiObserver(
+		queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+			eventsMu.Lock()
+			events = append(events, event)
+			eventsMu.Unlock()
+		}),
+		collector,
+	)
+	q, err := queue.New(
+		queue.Config{
+			Driver:       queue.DriverSync,
+			DefaultQueue: "billing_default",
+		},
+		queue.WithObserver(observer),
+	)
+	if err != nil {
+		t.Fatalf("new namespaced sync queue: %v", err)
+	}
+	t.Cleanup(func() {
+		if shutdownErr := q.Shutdown(context.Background()); shutdownErr != nil {
+			t.Errorf("shutdown: %v", shutdownErr)
+		}
+	})
+
+	jobTypes := []string{
+		"contract:effective-queue:direct",
+		"contract:effective-queue:chain:first",
+		"contract:effective-queue:chain:second",
+		"contract:effective-queue:batch:first",
+		"contract:effective-queue:batch:second",
+		"contract:effective-whitespace:direct",
+		"contract:effective-whitespace:chain:first",
+		"contract:effective-whitespace:chain:second",
+		"contract:effective-whitespace:batch:first",
+		"contract:effective-whitespace:batch:second",
+		"contract:effective-default:direct",
+		"contract:effective-default:chain:first",
+		"contract:effective-default:chain:second",
+		"contract:effective-default:batch:first",
+		"contract:effective-default:batch:second",
+	}
+	for _, jobType := range jobTypes {
+		q.Register(jobType, func(context.Context, queue.Message) error { return nil })
+	}
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+
+	direct, err := q.Dispatch(
+		queue.NewJob("contract:effective-queue:direct").OnQueue(logicalQueue),
+	)
+	if err != nil {
+		t.Fatalf("dispatch direct job: %v", err)
+	}
+	chainID, err := q.Chain(
+		queue.NewJob("contract:effective-queue:chain:first"),
+		queue.NewJob("contract:effective-queue:chain:second"),
+	).OnQueue(logicalQueue).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch chain: %v", err)
+	}
+	batchID, err := q.Batch(
+		queue.NewJob("contract:effective-queue:batch:first"),
+		queue.NewJob("contract:effective-queue:batch:second"),
+	).OnQueue(logicalQueue).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch batch: %v", err)
+	}
+	whitespaceDirect, err := q.Dispatch(
+		queue.NewJob("contract:effective-whitespace:direct").OnQueue(whitespaceQueue),
+	)
+	if err != nil {
+		t.Fatalf("dispatch whitespace direct job: %v", err)
+	}
+	whitespaceChainID, err := q.Chain(
+		queue.NewJob("contract:effective-whitespace:chain:first"),
+		queue.NewJob("contract:effective-whitespace:chain:second"),
+	).OnQueue(whitespaceQueue).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch whitespace chain: %v", err)
+	}
+	whitespaceBatchID, err := q.Batch(
+		queue.NewJob("contract:effective-whitespace:batch:first"),
+		queue.NewJob("contract:effective-whitespace:batch:second"),
+	).OnQueue(whitespaceQueue).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch whitespace batch: %v", err)
+	}
+	defaultDirect, err := q.Dispatch(
+		queue.NewJob("contract:effective-default:direct"),
+	)
+	if err != nil {
+		t.Fatalf("dispatch default direct job: %v", err)
+	}
+	defaultChainID, err := q.Chain(
+		queue.NewJob("contract:effective-default:chain:first"),
+		queue.NewJob("contract:effective-default:chain:second"),
+	).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch default chain: %v", err)
+	}
+	defaultBatchID, err := q.Batch(
+		queue.NewJob("contract:effective-default:batch:first"),
+		queue.NewJob("contract:effective-default:batch:second"),
+	).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("dispatch default batch: %v", err)
+	}
+
+	eventsMu.Lock()
+	snapshot := append([]queue.Event(nil), events...)
+	eventsMu.Unlock()
+
+	scopes := []struct {
+		name          string
+		expectedQueue string
+		matches       func(queue.Event) bool
+	}{
+		{
+			name:          "direct",
+			expectedQueue: physicalQueue,
+			matches: func(event queue.Event) bool {
+				return event.DispatchID == direct.DispatchID
+			},
+		},
+		{
+			name:          "chain",
+			expectedQueue: physicalQueue,
+			matches: func(event queue.Event) bool {
+				return event.ChainID == chainID
+			},
+		},
+		{
+			name:          "batch",
+			expectedQueue: physicalQueue,
+			matches: func(event queue.Event) bool {
+				return event.BatchID == batchID
+			},
+		},
+		{
+			name:          "whitespace direct",
+			expectedQueue: physicalWhitespaceQueue,
+			matches: func(event queue.Event) bool {
+				return event.DispatchID == whitespaceDirect.DispatchID
+			},
+		},
+		{
+			name:          "whitespace chain",
+			expectedQueue: physicalWhitespaceQueue,
+			matches: func(event queue.Event) bool {
+				return event.ChainID == whitespaceChainID
+			},
+		},
+		{
+			name:          "whitespace batch",
+			expectedQueue: physicalWhitespaceQueue,
+			matches: func(event queue.Event) bool {
+				return event.BatchID == whitespaceBatchID
+			},
+		},
+		{
+			name:          "default direct",
+			expectedQueue: physicalDefaultQueue,
+			matches: func(event queue.Event) bool {
+				return event.DispatchID == defaultDirect.DispatchID
+			},
+		},
+		{
+			name:          "default chain",
+			expectedQueue: physicalDefaultQueue,
+			matches: func(event queue.Event) bool {
+				return event.ChainID == defaultChainID
+			},
+		},
+		{
+			name:          "default batch",
+			expectedQueue: physicalDefaultQueue,
+			matches: func(event queue.Event) bool {
+				return event.BatchID == defaultBatchID
+			},
+		},
+	}
+	for _, scope := range scopes {
+		layers := make(map[queue.EventLayer]bool)
+		matched := 0
+		for _, event := range snapshot {
+			if !scope.matches(event) {
+				continue
+			}
+			matched++
+			layers[event.Layer] = true
+			if event.Queue != scope.expectedQueue {
+				t.Errorf("%s event %q queue = %q, want %q: %+v", scope.name, event.Kind, event.Queue, scope.expectedQueue, event)
+			}
+		}
+		if matched == 0 {
+			t.Errorf("observer received no %s events: %+v", scope.name, snapshot)
+			continue
+		}
+		for _, layer := range []queue.EventLayer{
+			queue.EventLayerQueue,
+			queue.EventLayerWorker,
+			queue.EventLayerWorkflow,
+		} {
+			if !layers[layer] {
+				t.Errorf("%s events did not include %q layer: %+v", scope.name, layer, snapshot)
+			}
+		}
+	}
+
+	stats := collector.Snapshot()
+	queues := stats.Queues()
+	if len(queues) != 3 || queues[0] != physicalQueue || queues[1] != physicalWhitespaceQueue || queues[2] != physicalDefaultQueue {
+		t.Fatalf("collector queues = %v, want [%s %s %s]", queues, physicalQueue, physicalWhitespaceQueue, physicalDefaultQueue)
+	}
+	for _, queueName := range []string{physicalQueue, physicalWhitespaceQueue, physicalDefaultQueue} {
+		if processed := stats.Processed(queueName); processed != 5 {
+			t.Errorf("collector processed[%q] = %d, want 5", queueName, processed)
+		}
+	}
+	if processed := stats.Processed(logicalQueue); processed != 0 {
+		t.Errorf("collector created logical queue bucket %q with %d processed jobs", logicalQueue, processed)
+	}
+}
+
 // TestPublicQueueContractWorkflowAggregatesPreserveQueueAndIdentity verifies aggregate facts retain the triggering logical job's known correlation.
 func TestPublicQueueContractWorkflowAggregatesPreserveQueueAndIdentity(t *testing.T) {
 	var events []queue.Event

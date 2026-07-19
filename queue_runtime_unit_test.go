@@ -317,6 +317,44 @@ func TestRuntimeWithContextSharesLifecycleState(t *testing.T) {
 	}
 }
 
+// TestRuntimeEventQueueResolvers verifies every runtime shape exposes the same
+// namespace mapping without requiring a live backend.
+func TestRuntimeEventQueueResolvers(t *testing.T) {
+	common := &queueCommon{cfg: Config{DefaultQueue: "billing_default"}}
+	if got := common.physicalQueueNameOrDefault(""); got != "billing_default" {
+		t.Fatalf("common default queue = %q, want billing_default", got)
+	}
+	if got := common.physicalQueueNameOrDefault("critical"); got != "billing_critical" {
+		t.Fatalf("common explicit queue = %q, want billing_critical", got)
+	}
+
+	native := &nativeQueueRuntime{common: common}
+	if got := native.physicalQueueNameOrDefault("critical"); got != "billing_critical" {
+		t.Fatalf("native explicit queue = %q, want billing_critical", got)
+	}
+	if got := (*nativeQueueRuntime)(nil).physicalQueueNameOrDefault(""); got != "default" {
+		t.Fatalf("nil native default queue = %q, want default", got)
+	}
+	external := &externalQueueRuntime{common: common}
+	if got := external.physicalQueueNameOrDefault("critical"); got != "billing_critical" {
+		t.Fatalf("external explicit queue = %q, want billing_critical", got)
+	}
+	if got := (*externalQueueRuntime)(nil).physicalQueueNameOrDefault(""); got != "default" {
+		t.Fatalf("nil external default queue = %q, want default", got)
+	}
+
+	fake := NewFake()
+	if got := fake.physicalQueueNameOrDefault(""); got != "default" {
+		t.Fatalf("fake default queue = %q, want default", got)
+	}
+	if got := fake.physicalQueueNameOrDefault("critical"); got != "critical" {
+		t.Fatalf("fake explicit queue = %q, want critical", got)
+	}
+	if got := (*FakeQueue)(nil).physicalQueueNameOrDefault(""); got != "default" {
+		t.Fatalf("nil fake default queue = %q, want default", got)
+	}
+}
+
 func TestPhysicalQueueNameInfersTargetPrefixFromDefaultQueue(t *testing.T) {
 	tests := []struct {
 		defaultQueue string

@@ -69,6 +69,15 @@ func NewFake() *FakeQueue {
 //	_ = driver
 func (f *FakeQueue) Driver() Driver { return DriverNull }
 
+// physicalQueueNameOrDefault keeps fake event labels aligned with its recording queue names.
+func (f *FakeQueue) physicalQueueNameOrDefault(queueName string) string {
+	defaultQueue := "default"
+	if f != nil && f.state != nil && f.state.defaultQueue != "" {
+		defaultQueue = f.state.defaultQueue
+	}
+	return PhysicalQueueName(defaultQueue, queueName)
+}
+
 // WithContext returns a derived fake queue handle bound to ctx.
 // @group Testing
 func (f *FakeQueue) WithContext(ctx context.Context) queueRuntime {

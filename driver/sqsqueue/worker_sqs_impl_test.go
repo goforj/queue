@@ -81,8 +81,13 @@ func TestSQSWorkerDeleteFailureEmitsSettlementEvent(t *testing.T) {
 	stub := &sqsWorkerClientStub{deleteErr: deleteErr}
 	var events []queue.Event
 	committed := false
+	var handlerSettlement busruntime.DeliverySettlementIdentity
+	var handlerSettlementOK bool
+	var observedSettlement busruntime.DeliverySettlementIdentity
+	var observedSettlementOK bool
 	w := &sqsWorker{
 		handlers: map[string]queue.Handler{"bus:job": func(ctx context.Context, _ queue.Job) error {
+			handlerSettlement, handlerSettlementOK = busruntime.DeliverySettlementIdentityFromContext(ctx)
 			if !busruntime.DeferUntilDeliveryCommitted(ctx, func() { committed = true }) {
 				t.Fatal("handler context did not carry a settlement boundary")
 			}
@@ -90,7 +95,10 @@ func TestSQSWorkerDeleteFailureEmitsSettlementEvent(t *testing.T) {
 		}},
 		client:   stub,
 		queueURL: "https://example.local/queue/default",
-		observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+		observer: queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+			observedSettlement, observedSettlementOK = busruntime.DeliverySettlementIdentityFromContext(ctx)
+			events = append(events, event)
+		}),
 	}
 	payload := []byte(`{"schema_version":1,"dispatch_id":"dsp_sqs_settle","job_id":"job_sqs_settle","job":{"type":"reports:build","payload":"eyJpZCI6MX0="}}`)
 	body, err := json.Marshal(sqsMessage{Type: "bus:job", Queue: "critical", Payload: payload, Attempt: 2, MaxRetry: 4})
@@ -107,19 +115,30 @@ func TestSQSWorkerDeleteFailureEmitsSettlementEvent(t *testing.T) {
 	if committed {
 		t.Fatal("delete failure committed deferred handler success")
 	}
+	if !handlerSettlementOK || !observedSettlementOK || observedSettlement != handlerSettlement {
+		t.Fatal("settlement observer did not retain the handler's delivery identity")
+	}
 }
 
 // TestSQSWorkerRetrySettlementFailureUsesDeliveredAttempt verifies replacement metadata does not overwrite the unsettled receipt's correlation.
 func TestSQSWorkerRetrySettlementFailureUsesDeliveredAttempt(t *testing.T) {
 	stub := &sqsWorkerClientStub{deleteErr: errors.New("delete failed")}
 	var events []queue.Event
+	var handlerSettlement busruntime.DeliverySettlementIdentity
+	var handlerSettlementOK bool
+	var observedSettlement busruntime.DeliverySettlementIdentity
+	var observedSettlementOK bool
 	w := &sqsWorker{
-		handlers: map[string]queue.Handler{"job:retry:settlement": func(context.Context, queue.Job) error {
+		handlers: map[string]queue.Handler{"job:retry:settlement": func(ctx context.Context, _ queue.Job) error {
+			handlerSettlement, handlerSettlementOK = busruntime.DeliverySettlementIdentityFromContext(ctx)
 			return errors.New("retry me")
 		}},
 		client:   stub,
 		queueURL: "https://example.local/queue/default",
-		observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) { events = append(events, event) }),
+		observer: queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+			observedSettlement, observedSettlementOK = busruntime.DeliverySettlementIdentityFromContext(ctx)
+			events = append(events, event)
+		}),
 	}
 	body, err := json.Marshal(sqsMessage{Type: "job:retry:settlement", Queue: "critical", Attempt: 1, MaxRetry: 3})
 	if err != nil {
@@ -131,6 +150,9 @@ func TestSQSWorkerRetrySettlementFailureUsesDeliveredAttempt(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Kind != queue.EventSettlementFailed || events[0].Attempt != 1 {
 		t.Fatalf("settlement events = %+v, want original attempt 1", events)
+	}
+	if !handlerSettlementOK || !observedSettlementOK || observedSettlement != handlerSettlement {
+		t.Fatal("retry settlement observer did not retain the handler's delivery identity")
 	}
 }
 

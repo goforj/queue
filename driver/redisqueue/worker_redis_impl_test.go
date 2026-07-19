@@ -164,6 +164,63 @@ func TestRedisWorker_ProcessEventsWithObserver(t *testing.T) {
 	}
 }
 
+// TestRedisWorker_PanicClosesObserverActive verifies native Redis telemetry
+// finalizes the failed attempt before preserving Asynq's panic semantics.
+func TestRedisWorker_PanicClosesObserverActive(t *testing.T) {
+	server := &serverStub{}
+	collector := queue.NewStatsCollector()
+	var events []queue.Event
+	observer := queue.MultiObserver(
+		collector,
+		queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+			events = append(events, event)
+		}),
+	)
+	w := newRedisWorker(server, backend.NewServeMux(), observer)
+	w.Register("job:panic", func(context.Context, queue.Job) error {
+		panic("redis panic")
+	})
+	if err := w.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	task := backend.NewTaskWithHeaders("job:panic", nil, map[string]string{
+		redisDriverJobMetadataHeader: `{"schema_version":1,"dispatch_id":"dsp_redis_panic","job_id":"job_redis_panic"}`,
+	})
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = server.lastStartHandler.ProcessTask(context.Background(), task)
+	}()
+	if recovered != "redis panic" {
+		t.Fatalf("recovered panic = %#v, want original value", recovered)
+	}
+	if len(events) != 2 || events[0].Kind != queue.EventProcessStarted || events[1].Kind != queue.EventProcessFailed {
+		t.Fatalf("panic events = %+v, want process_started then process_failed", events)
+	}
+	if events[1].Err == nil || events[1].Err.Error() != "redis handler panicked: redis panic" {
+		t.Fatalf("panic failure error = %v, want stable diagnostic", events[1].Err)
+	}
+	counters, ok := collector.Snapshot().Queue("default")
+	if !ok {
+		t.Fatal("expected default queue counters")
+	}
+	if counters.Active != 0 || counters.Failed != 1 || counters.Processed != 0 {
+		t.Fatalf("panic counters = %+v, want active=0 failed=1 processed=0", counters)
+	}
+}
+
+// TestRedisHandlerPanicErrorPreservesErrorIdentity verifies Redis panic
+// telemetry wraps error values and formats non-error values deterministically.
+func TestRedisHandlerPanicErrorPreservesErrorIdentity(t *testing.T) {
+	sentinel := errors.New("redis panic sentinel")
+	if err := redisHandlerPanicError(sentinel); !errors.Is(err, sentinel) {
+		t.Fatalf("error panic = %v, want wrapped sentinel", err)
+	}
+	if err := redisHandlerPanicError("value"); err == nil || err.Error() != "redis handler panicked: value" {
+		t.Fatalf("value panic = %v, want stable diagnostic", err)
+	}
+}
+
 // TestObserveRedisAttemptStartEmitsRetryDelivery verifies Redis reports a numbered retry when Asynq delivers that attempt.
 func TestObserveRedisAttemptStartEmitsRetryDelivery(t *testing.T) {
 	var events []queue.Event

@@ -24,7 +24,7 @@ Processing lifecycle:
 
 - `EventProcessStarted`: handler attempt started.
 - `EventProcessSucceeded`: handler attempt succeeded. SQL, SQS, and RabbitMQ emit this only after durable row finalization, deletion, or acknowledgement respectively; backends without a post-handler settlement hook retain their documented weaker boundary.
-- `EventProcessFailed`: handler attempt failed.
+- `EventProcessFailed`: handler attempt returned an error or panicked. A panic is reported before the original panic value is rethrown so backend recovery and retry semantics remain unchanged.
 - `EventProcessRetried`: processing began for a numbered application retry attempt. Infrastructure redelivery of that same attempt may repeat the fact.
 - `EventProcessArchived`: the driver confirmed terminal settlement for a failed attempt.
 - `EventRepublishFailed`: an internal delay or retry replacement could not be published.
@@ -90,7 +90,7 @@ Every layer includes the applicable `DispatchID`, `JobID`, `ChainID`, and `Batch
 - `EventProcessArchived` is reserved for a driver-confirmed terminal settlement; drivers that cannot yet confirm that boundary omit it rather than emitting a prediction.
 - `JobKey` is a deterministic hash of the logical job type and payload. Volatile dispatch/workflow IDs are excluded, and the value is not guaranteed globally unique.
 - Correlated recoverable job successes and emitted positive chain or batch transition facts use a deterministic `EventID` for the same logical fact across settlement recovery. Failure EventIDs remain occurrence-based. Deterministic identity supports deduplication; it does not prove that an observer received the fact or make every event exactly-once.
-- `Queue` defaults to `"default"` when not explicitly set.
+- `Queue` is the effective physical backend name carried by the dispatch. With a namespaced default such as `billing_default`, an explicit logical queue such as `critical` is reported as `billing_critical`. Jobs that omit a queue continue to report `default`; changing how `Config.DefaultQueue` routes empty targets is a separate targeting decision. Correlated queue, worker, workflow, aggregate, and callback facts always report the same name.
 - Aggregate and callback workflow facts retain the triggering job's effective queue, logical job type, and `JobKey`, so observers can join them to queue and worker facts without reading payloads.
 
 ## Cross-driver support
@@ -112,6 +112,7 @@ Driver-specific capabilities:
 - Observer calls are synchronous and causally ordered on an individual execution path. Slow observers therefore delay that path.
 - Dispatchers and workers may invoke the same observer concurrently. Observer implementations must synchronize mutable state they own.
 - Observer panics are isolated and do not change queue or workflow outcomes.
+- Handler panics emit `EventProcessFailed` before being rethrown; observation does not convert them into returned errors or otherwise change backend panic handling.
 - Use `ChannelObserver` when asynchronous delivery or an explicit drop-if-full policy is required.
 - Logging adapters should avoid raw payload logging by default.
 
