@@ -33,6 +33,10 @@ Event kind type:
 
 Current runtime event kinds include:
 
+- public dispatch lifecycle:
+  - `dispatch_started`
+  - `dispatch_succeeded`
+  - `dispatch_failed`
 - enqueue lifecycle:
   - `enqueue_accepted`
   - `enqueue_rejected`
@@ -84,12 +88,10 @@ Event kind type:
 
 The deprecated `WorkflowEvent`, `WorkflowEventKind`, `WorkflowObserver`, and `WorkflowObserverFunc` names are aliases of the canonical root model rather than a second stream.
 
+Public dispatch lifecycle facts are intentionally queue-layer events because they bracket queue acceptance. They are not logical workflow transitions, even when a workflow dispatch produced them. A sink migrated from the legacy workflow observer contract must accept `dispatch_started`, `dispatch_succeeded`, and `dispatch_failed` in addition to `EventLayerWorkflow` events to retain its former scope. A filter that accepts only `EventLayerWorkflow` is the narrower job, chain, batch, and callback stream.
+
 Current workflow event kinds (via internal orchestration engine) include:
 
-- dispatch:
-  - `dispatch_started`
-  - `dispatch_succeeded`
-  - `dispatch_failed`
 - job orchestration:
   - `job_started`
   - `job_succeeded`
@@ -158,6 +160,7 @@ These may be implemented via logs, counters, histograms, or OTel metrics.
 ### Queue and Worker Metrics
 
 - `queue_events_total{kind,driver,queue}`
+- `queue_dispatch_total{kind,driver,queue}`
 - `queue_process_duration_ms` histogram `{driver,queue,job_type}`
 - `queue_enqueue_failures_total{driver,queue}`
 - `queue_republish_failed_total{driver,queue}` (from `republish_failed`)
@@ -169,7 +172,6 @@ For `StatsCollector`, `settlement_failed` closes the corresponding active attemp
 ### Workflow Metrics
 
 - `queue_workflow_events_total{kind,queue}`
-- `queue_workflow_dispatch_total{kind,queue}`
 - `queue_workflow_job_duration_ms` histogram `{kind,queue,job_type}`
 - `queue_workflow_chain_events_total{kind}`
 - `queue_workflow_batch_events_total{kind}`

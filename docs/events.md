@@ -130,6 +130,19 @@ The observer collapse is an explicit pre-v1 compatibility boundary:
 - `queue.WorkflowEvent`, `queue.WorkflowEventKind`, `queue.WorkflowObserver`, and `queue.WorkflowObserverFunc` are deprecated aliases of the root event model.
 - Code that used unkeyed `queue.Event` or `bus.Event` literals must switch to keyed literals because the envelopes now include correlation fields.
 - Adapt custom `bus.Observer` implementations with `queue.ObserverFunc` when constructing a root queue. `bus.WithObserver` remains supported only on the retained raw-`busruntime.Runtime` construction route; an already-built `*queue.Queue` must receive observation options when it is constructed.
-- Existing workflow-only sinks can retain their previous scope by returning early unless `event.Layer == queue.EventLayerWorkflow`.
+- Sinks that only need logical job, chain, batch, and callback transitions can return early unless `event.Layer == queue.EventLayerWorkflow`.
+- Legacy `queue.WorkflowObserver` and `bus.Observer` sinks also received `EventDispatchStarted`, `EventDispatchSucceeded`, and `EventDispatchFailed`. Those dispatch facts deliberately belong to `EventLayerQueue` in the unified model because they describe public queue acceptance, not a committed workflow transition. To retain the full legacy scope, accept the workflow layer plus those three event kinds:
+
+```go
+if event.Layer != queue.EventLayerWorkflow {
+	switch event.Kind {
+	case queue.EventDispatchStarted,
+		queue.EventDispatchSucceeded,
+		queue.EventDispatchFailed:
+	default:
+		return
+	}
+}
+```
 
 This migration changes Go source compatibility and observer volume/concurrency. It does not change persisted workflow records or queue wire envelopes.
