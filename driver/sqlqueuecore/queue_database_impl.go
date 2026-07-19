@@ -20,6 +20,8 @@ import (
 	"github.com/goforj/queue/queuecore"
 )
 
+type managedQueueTable string
+
 const (
 	defaultProcessingRecoveryGrace  = 2 * time.Second
 	defaultProcessingLeaseNoTimeout = 5 * time.Minute
@@ -30,7 +32,37 @@ const (
 	databaseProcessingTokenBytes    = 16
 	databaseRecoveryMarker          = "queue:internal:stale-processing-recovery:v1"
 	databaseRecoveryDiagnostic      = "recovered stale processing job"
+	managedQueueJobsTable           = managedQueueTable("queue_jobs")
+	managedQueueUniqueLocksTable    = managedQueueTable("queue_unique_locks")
 )
+
+// managedQueueJobColumns captures the durable fields touched by dispatch,
+// polling, recovery, settlement, administration, and statistics operations.
+var managedQueueJobColumns = [...]string{
+	"id",
+	"queue_name",
+	"job_type",
+	"payload",
+	"metadata_json",
+	"timeout_seconds",
+	"max_retry",
+	"backoff_millis",
+	"attempt",
+	"available_at",
+	"processing_started_at",
+	"processing_token",
+	"last_error",
+	"state",
+	"created_at",
+	"updated_at",
+}
+
+// managedQueueUniqueLockColumns captures the durable fields required by
+// distributed uniqueness acquisition and expiry pruning.
+var managedQueueUniqueLockColumns = [...]string{
+	"lock_key",
+	"expires_at",
+}
 
 // DatabaseConfig configures the SQL-backed database q.
 // @group Config
@@ -190,6 +222,7 @@ func (d *databaseQueue) Driver() queue.Driver {
 	return queue.DriverDatabase
 }
 
+// Preflight verifies connectivity and any caller-managed schema without changing database state.
 func (d *databaseQueue) Preflight(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -197,7 +230,13 @@ func (d *databaseQueue) Preflight(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return d.db.PingContext(ctx)
+	if err := d.db.PingContext(ctx); err != nil {
+		return err
+	}
+	if d.cfg.AutoMigrate && !d.cfg.DisableAutoMigrate {
+		return nil
+	}
+	return d.requireManagedQueueSchema(ctx)
 }
 
 func (d *databaseQueue) Register(jobType string, handler queue.Handler) {
@@ -209,6 +248,7 @@ func (d *databaseQueue) Register(jobType string, handler queue.Handler) {
 	d.mu.Unlock()
 }
 
+// StartWorkers prepares or validates durable storage before admitting the worker generation.
 func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -224,11 +264,11 @@ func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 	if d.started.Load() {
 		return nil
 	}
-	if d.cfg.AutoMigrate {
+	if d.cfg.AutoMigrate && !d.cfg.DisableAutoMigrate {
 		if err := d.ensureSchema(ctx); err != nil {
 			return err
 		}
-	} else if err := d.requireManagedQueueColumns(ctx); err != nil {
+	} else if err := d.requireManagedQueueSchema(ctx); err != nil {
 		return err
 	}
 	for i := 0; i < d.cfg.Workers; i++ {
@@ -1340,50 +1380,103 @@ func (d *databaseQueue) ensureMetadataJSONColumn(ctx context.Context) error {
 	return nil
 }
 
-// requireManagedQueueColumns fails startup before polling when an installed
-// caller-managed schema lacks either additive delivery-correlation column.
-func (d *databaseQueue) requireManagedQueueColumns(ctx context.Context) error {
+// requireManagedQueueSchema keeps readiness and worker startup aligned with
+// every table and column that runtime SQL can touch without performing DDL.
+func (d *databaseQueue) requireManagedQueueSchema(ctx context.Context) error {
 	tableExists, err := d.queueJobsTableExists(ctx)
 	if err != nil {
 		return fmt.Errorf("validate caller-managed queue_jobs table: %w", err)
 	}
 	if !tableExists {
-		// DisableAutoMigrate historically permits an intentionally empty schema;
-		// polling remains inert until the caller installs its managed tables.
-		return nil
+		return fmt.Errorf("caller-managed schema is missing required queue_jobs table")
 	}
-	exists, err := d.metadataJSONColumnExists(ctx)
+	jobColumns, err := d.managedQueueTableColumns(ctx, managedQueueJobsTable)
 	if err != nil {
-		return fmt.Errorf("validate caller-managed database job metadata column: %w", err)
+		return fmt.Errorf("validate caller-managed queue_jobs columns: %w", err)
 	}
-	if !exists {
-		return fmt.Errorf("caller-managed queue_jobs schema is missing required metadata_json column")
+	for _, columnName := range managedQueueJobColumns {
+		if _, exists := jobColumns[columnName]; !exists {
+			return fmt.Errorf("caller-managed queue_jobs schema is missing required %s column", columnName)
+		}
 	}
-	exists, err = d.processingTokenColumnExists(ctx)
+
+	tableExists, err = d.queueUniqueLocksTableExists(ctx)
 	if err != nil {
-		return fmt.Errorf("validate caller-managed database processing token column: %w", err)
+		return fmt.Errorf("validate caller-managed queue_unique_locks table: %w", err)
 	}
-	if !exists {
-		return fmt.Errorf("caller-managed queue_jobs schema is missing required processing_token column")
+	if !tableExists {
+		return fmt.Errorf("caller-managed schema is missing required queue_unique_locks table")
+	}
+	uniqueLockColumns, err := d.managedQueueTableColumns(ctx, managedQueueUniqueLocksTable)
+	if err != nil {
+		return fmt.Errorf("validate caller-managed queue_unique_locks columns: %w", err)
+	}
+	for _, columnName := range managedQueueUniqueLockColumns {
+		if _, exists := uniqueLockColumns[columnName]; !exists {
+			return fmt.Errorf("caller-managed queue_unique_locks schema is missing required %s column", columnName)
+		}
 	}
 	return nil
 }
 
-// queueJobsTableExists distinguishes an intentionally empty caller-managed
-// database from an installed legacy schema that needs the additive column.
+// queueJobsTableExists reports whether the caller installed the durable job table.
 func (d *databaseQueue) queueJobsTableExists(ctx context.Context) (bool, error) {
+	return d.managedQueueTableExists(ctx, managedQueueJobsTable)
+}
+
+// queueUniqueLocksTableExists reports whether the caller installed the distributed uniqueness table.
+func (d *databaseQueue) queueUniqueLocksTableExists(ctx context.Context) (bool, error) {
+	return d.managedQueueTableExists(ctx, managedQueueUniqueLocksTable)
+}
+
+// managedQueueTableExists inspects one trusted runtime table name through the active dialect.
+func (d *databaseQueue) managedQueueTableExists(ctx context.Context, tableName managedQueueTable) (bool, error) {
 	var count int
 	switch d.cfg.DriverName {
 	case "sqlite":
-		err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='queue_jobs'`).Scan(&count)
+		err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, string(tableName)).Scan(&count)
 		return count > 0, err
 	case "pgx", "postgres":
-		err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_class WHERE oid = to_regclass('queue_jobs')`).Scan(&count)
+		err := d.db.QueryRowContext(ctx, d.rebind(`SELECT COUNT(*) FROM pg_class WHERE oid = to_regclass(?) AND relkind IN ('r', 'p')`), string(tableName)).Scan(&count)
 		return count > 0, err
 	default:
-		err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'queue_jobs'`).Scan(&count)
+		err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? AND table_type = 'BASE TABLE'`, string(tableName)).Scan(&count)
 		return count > 0, err
 	}
+}
+
+// managedQueueTableColumns reads one complete catalog snapshot so frequent
+// readiness checks do not issue a separate database roundtrip per field.
+func (d *databaseQueue) managedQueueTableColumns(ctx context.Context, tableName managedQueueTable) (map[string]struct{}, error) {
+	query := `SELECT column_name
+	FROM information_schema.columns
+	WHERE table_schema = DATABASE() AND table_name = ?`
+	switch d.cfg.DriverName {
+	case "sqlite":
+		query = `SELECT name FROM pragma_table_info(?)`
+	case "pgx", "postgres":
+		query = `SELECT attname
+			FROM pg_attribute
+			WHERE attrelid = to_regclass(?) AND attnum > 0 AND NOT attisdropped`
+	}
+	rows, err := d.db.QueryContext(ctx, d.rebind(query), string(tableName))
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s columns: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var columnName string
+		if err := rows.Scan(&columnName); err != nil {
+			return nil, fmt.Errorf("scan %s column: %w", tableName, err)
+		}
+		columns[columnName] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect %s columns: %w", tableName, err)
+	}
+	return columns, nil
 }
 
 // metadataJSONColumnExists reports whether direct-delivery metadata has an

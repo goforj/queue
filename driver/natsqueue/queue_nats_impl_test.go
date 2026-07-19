@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -153,6 +154,7 @@ type natsConnectionStub struct {
 	publishN   int
 	flushN     int
 	closeN     int
+	flushCtx   context.Context
 	published  [][]byte
 }
 
@@ -163,9 +165,10 @@ func (s *natsConnectionStub) Publish(_ string, payload []byte) error {
 	return s.publishErr
 }
 
-// FlushWithContext reports successful readiness for the stub connection.
-func (s *natsConnectionStub) FlushWithContext(context.Context) error {
+// FlushWithContext records the bounded server-roundtrip request.
+func (s *natsConnectionStub) FlushWithContext(ctx context.Context) error {
 	s.flushN++
+	s.flushCtx = ctx
 	return s.flushErr
 }
 
@@ -278,7 +281,66 @@ func TestNATSQueuePreflightBoundaries(t *testing.T) {
 		if connection.flushN != 1 {
 			t.Fatalf("preflight flush calls = %d, want 1", connection.flushN)
 		}
+		deadline, ok := connection.flushCtx.Deadline()
+		if !ok {
+			t.Fatal("preflight flush context has no deadline")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 || remaining > natsRoundTripTimeout {
+			t.Fatalf("preflight deadline remaining = %v, want within (0, %v]", remaining, natsRoundTripTimeout)
+		}
 	})
+
+	t.Run("shorter caller deadline", func(t *testing.T) {
+		connection := &natsConnectionStub{}
+		q := newNATSQueue("nats://example")
+		q.nc = connection
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		callerDeadline, _ := ctx.Deadline()
+		if err := q.Preflight(ctx); err != nil {
+			t.Fatalf("preflight with caller deadline: %v", err)
+		}
+		flushDeadline, ok := connection.flushCtx.Deadline()
+		if !ok || !flushDeadline.Equal(callerDeadline) {
+			t.Fatalf("preflight flush deadline = %v/%t, want caller deadline %v", flushDeadline, ok, callerDeadline)
+		}
+	})
+}
+
+// TestNATSQueuePublicReadyReportsUnavailableBackend verifies the public queue
+// path does not mistake a reachable non-NATS socket for backend readiness.
+func TestNATSQueuePublicReadyReportsUnavailableBackend(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for non-NATS endpoint: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-done
+	})
+
+	runtime, err := New("nats://" + listener.Addr().String())
+	if err != nil {
+		t.Fatalf("new public NATS queue: %v", err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := runtime.Ready(ctx); err == nil {
+		t.Fatal("public NATS readiness accepted a non-NATS endpoint")
+	}
 }
 
 // TestNATSQueueNilDispatchContext verifies a nil caller context still reaches
@@ -330,18 +392,18 @@ func TestNATSQueueDispatchPreservesTemporalOptions(t *testing.T) {
 	}
 }
 
-// TestNATSPublishContextNormalizesNil verifies internal retry publication is
+// TestNATSRoundTripContextNormalizesNil verifies server roundtrips remain
 // bounded even when no caller context is available.
-func TestNATSPublishContextNormalizesNil(t *testing.T) {
-	ctx, cancel := natsPublishContext(nil)
+func TestNATSRoundTripContextNormalizesNil(t *testing.T) {
+	ctx, cancel := natsRoundTripContext(nil)
 	defer cancel()
 	deadline, ok := ctx.Deadline()
 	if !ok {
-		t.Fatal("nil publish context did not receive a deadline")
+		t.Fatal("nil roundtrip context did not receive a deadline")
 	}
 	remaining := time.Until(deadline)
-	if remaining <= 0 || remaining > natsPublishFlushTimeout {
-		t.Fatalf("publish deadline remaining = %v, want within (0, %v]", remaining, natsPublishFlushTimeout)
+	if remaining <= 0 || remaining > natsRoundTripTimeout {
+		t.Fatalf("roundtrip deadline remaining = %v, want within (0, %v]", remaining, natsRoundTripTimeout)
 	}
 }
 

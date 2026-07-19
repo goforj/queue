@@ -1618,6 +1618,96 @@ func newDatabaseQueueIntegration(t *testing.T, cfg queue.DatabaseConfig) QueueRu
 	return q
 }
 
+// managedDatabaseRuntimeConfig preserves each integration suite's physical
+// database while making external schema ownership explicit for the runtime
+// under test.
+func managedDatabaseRuntimeConfig(cfg queue.DatabaseConfig, queueName string) any {
+	switch cfg.DriverName {
+	case testenv.BackendMySQL:
+		runtimeCfg := withDefaultQueue(withDBHandle(mysqlCfg(cfg.DSN), cfg.DB), queueName)
+		runtimeCfg.DisableAutoMigrate = true
+		return runtimeCfg
+	case "pgx", testenv.BackendPostgres:
+		runtimeCfg := withDefaultQueue(withDBHandle(postgresCfg(cfg.DSN), cfg.DB), queueName)
+		runtimeCfg.DisableAutoMigrate = true
+		return runtimeCfg
+	case testenv.BackendSQLite:
+		runtimeCfg := withDefaultQueue(withDBHandle(sqliteCfg(cfg.DSN), cfg.DB), queueName)
+		runtimeCfg.DisableAutoMigrate = true
+		return runtimeCfg
+	default:
+		return nil
+	}
+}
+
+// provisionDatabaseIntegrationSchema installs the canonical dialect schema
+// through a distinct auto-migrating runtime before managed-mode validation.
+func provisionDatabaseIntegrationSchema(t *testing.T, cfg queue.DatabaseConfig) {
+	t.Helper()
+	bootstrap := newDatabaseQueueIntegration(t, cfg)
+	if err := bootstrap.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("provision %s managed schema: %v", cfg.DriverName, err)
+	}
+	if err := bootstrap.Shutdown(context.Background()); err != nil {
+		t.Fatalf("close %s managed schema bootstrap: %v", cfg.DriverName, err)
+	}
+}
+
+// runDatabaseManagedSchemaIntegration proves a canonical externally
+// provisioned schema supports readiness, uniqueness, dispatch, and processing
+// through the same managed runtime path on every SQL dialect.
+func runDatabaseManagedSchemaIntegration(t *testing.T, name string, cfg queue.DatabaseConfig) {
+	t.Helper()
+	provisionDatabaseIntegrationSchema(t, cfg)
+	resetQueueTables(t, cfg)
+	queueName := name + "-managed-schema"
+	runtimeCfg := managedDatabaseRuntimeConfig(cfg, queueName)
+	if runtimeCfg == nil {
+		t.Fatalf("unsupported managed database driver %q", cfg.DriverName)
+	}
+	runtime, err := testenv.NewQueue(runtimeCfg)
+	if err != nil {
+		t.Fatalf("new %s managed-schema runtime: %v", name, err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = runtime.Shutdown(shutdownCtx)
+	})
+
+	jobType := "job:db:managed-schema:" + name
+	processed := make(chan queue.Message, 2)
+	runtime.Register(jobType, func(_ context.Context, message queue.Message) error {
+		processed <- message
+		return nil
+	})
+	if err := runtime.Ready(context.Background()); err != nil {
+		t.Fatalf("%s managed schema readiness: %v", name, err)
+	}
+	if err := runtime.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start %s managed-schema runtime: %v", name, err)
+	}
+	job := queue.NewJob(jobType).
+		Payload([]byte(`{"managed":true}`)).
+		OnQueue(queueName).
+		UniqueFor(time.Minute)
+	if _, err := runtime.Dispatch(job); err != nil {
+		t.Fatalf("dispatch through %s managed schema: %v", name, err)
+	}
+	if _, err := runtime.Dispatch(job); !errors.Is(err, queue.ErrDuplicate) {
+		t.Fatalf("duplicate dispatch through %s managed schema = %v, want ErrDuplicate", name, err)
+	}
+	select {
+	case delivered := <-processed:
+		if delivered.JobType != jobType || string(delivered.PayloadBytes()) != `{"managed":true}` {
+			t.Fatalf("%s managed-schema delivery = type:%q payload:%q", name, delivered.JobType, delivered.PayloadBytes())
+		}
+	case <-time.After(15 * time.Second):
+		logDatabaseQueueState(t, cfg, name+" managed-schema timeout")
+		t.Fatalf("%s managed-schema runtime did not consume the dispatched job", name)
+	}
+}
+
 // runSQLiteStaleProcessingFence proves a superseded handler cannot settle the row generation now owned by another runtime.
 func runSQLiteStaleProcessingFence(t *testing.T, staleResult error) {
 	t.Helper()
@@ -1957,6 +2047,9 @@ func TestDatabaseIntegration_SQLite(t *testing.T) {
 		PollInterval: 10 * time.Millisecond,
 	}
 	runDatabaseIntegrationSuite(t, testenv.BackendSQLite, cfg)
+	t.Run("sqlite_managed_schema_dispatch_and_process", func(t *testing.T) {
+		runDatabaseManagedSchemaIntegration(t, testenv.BackendSQLite, cfg)
+	})
 
 	t.Run("sqlite_caller_owned_database_remains_open", func(t *testing.T) {
 		dsn := fmt.Sprintf("%s/queue-caller-owned-%d.db", t.TempDir(), time.Now().UnixNano())
@@ -1982,7 +2075,7 @@ func TestDatabaseIntegration_SQLite(t *testing.T) {
 		}
 	})
 
-	t.Run("sqlite_disable_auto_migrate_creates_no_schema", func(t *testing.T) {
+	t.Run("sqlite_managed_schema_fails_closed_then_recovers_after_provisioning", func(t *testing.T) {
 		dsn := fmt.Sprintf("%s/queue-no-migrate-%d.db", t.TempDir(), time.Now().UnixNano())
 		runtime, err := sqlitequeue.NewWithConfig(sqlitequeue.Config{
 			DSN:                dsn,
@@ -1991,10 +2084,18 @@ func TestDatabaseIntegration_SQLite(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new no-migrate runtime: %v", err)
 		}
-		if err := runtime.StartWorkers(context.Background()); err != nil {
-			t.Fatalf("start no-migrate runtime: %v", err)
-		}
 		t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+		processed := make(chan struct{}, 1)
+		runtime.Register("job:db:managed-schema-retry", func(context.Context, queue.Message) error {
+			processed <- struct{}{}
+			return nil
+		})
+		if err := runtime.Ready(context.Background()); err == nil {
+			t.Fatal("managed runtime reported ready before external schema provisioning")
+		}
+		if err := runtime.StartWorkers(context.Background()); err == nil {
+			t.Fatal("managed runtime started workers before external schema provisioning")
+		}
 
 		db, err := sql.Open(testenv.BackendSQLite, dsn)
 		if err != nil {
@@ -2006,7 +2107,23 @@ func TestDatabaseIntegration_SQLite(t *testing.T) {
 			t.Fatalf("inspect no-migrate schema: %v", err)
 		}
 		if tables != 0 {
-			t.Fatalf("auto migration created %d queue tables while disabled", tables)
+			t.Fatalf("managed readiness or startup created %d queue tables", tables)
+		}
+
+		prepareSQLiteIntegrationSchema(t, dsn)
+		if err := runtime.Ready(context.Background()); err != nil {
+			t.Fatalf("managed runtime readiness after external provisioning: %v", err)
+		}
+		if err := runtime.StartWorkers(context.Background()); err != nil {
+			t.Fatalf("start same managed runtime after external provisioning: %v", err)
+		}
+		if _, err := runtime.Dispatch(queue.NewJob("job:db:managed-schema-retry").OnQueue("default")); err != nil {
+			t.Fatalf("dispatch after external schema provisioning: %v", err)
+		}
+		select {
+		case <-processed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("same managed runtime did not consume after external schema provisioning")
 		}
 	})
 
@@ -2420,6 +2537,9 @@ func TestDatabaseIntegration_MySQL(t *testing.T) {
 		PollInterval: 10 * time.Millisecond,
 	}
 	runDatabaseIntegrationSuite(t, testenv.BackendMySQL, cfg)
+	t.Run("mysql_managed_schema_dispatch_and_process", func(t *testing.T) {
+		runDatabaseManagedSchemaIntegration(t, testenv.BackendMySQL, cfg)
+	})
 	t.Run("mysql_workflow_receipt_recovery", func(t *testing.T) {
 		runDatabaseWorkflowReceiptRecovery(t, testenv.BackendMySQL, testenv.BackendMySQL, cfg.DSN, mysqlCfg(cfg.DSN))
 	})
@@ -2440,6 +2560,9 @@ func TestDatabaseIntegration_Postgres(t *testing.T) {
 		PollInterval: 10 * time.Millisecond,
 	}
 	runDatabaseIntegrationSuite(t, testenv.BackendPostgres, cfg)
+	t.Run("postgres_managed_schema_dispatch_and_process", func(t *testing.T) {
+		runDatabaseManagedSchemaIntegration(t, testenv.BackendPostgres, cfg)
+	})
 	t.Run("postgres_workflow_receipt_recovery", func(t *testing.T) {
 		runDatabaseWorkflowReceiptRecovery(t, testenv.BackendPostgres, "pgx", cfg.DSN, postgresCfg(cfg.DSN))
 	})

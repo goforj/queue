@@ -139,7 +139,7 @@ func (w *natsWorker) StartWorkers(ctx context.Context) error {
 	}
 	w.conn = nc
 	w.sub = sub
-	flushCtx, cancel := natsPublishContext(ctx)
+	flushCtx, cancel := natsRoundTripContext(ctx)
 	flushErr := nc.FlushWithContext(flushCtx)
 	cancel()
 	if flushErr != nil {
@@ -293,7 +293,7 @@ func (w *natsWorker) republish(message natsMessage) error {
 	if err := w.conn.Publish(natsSubject(message.Queue), payload); err != nil {
 		return err
 	}
-	ctx, cancel := natsPublishContext(context.Background())
+	ctx, cancel := natsRoundTripContext(context.Background())
 	defer cancel()
 	return w.conn.FlushWithContext(ctx)
 }

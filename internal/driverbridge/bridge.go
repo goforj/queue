@@ -93,6 +93,17 @@ func (a queueBackendAdapter) Dispatch(ctx context.Context, job queue.Job) error 
 	return a.inner.Dispatch(ctx, job)
 }
 func (a queueBackendAdapter) Shutdown(ctx context.Context) error { return a.inner.Shutdown(ctx) }
+
+// Ready preserves an optional backend readiness contract through the internal bridge.
+func (a queueBackendAdapter) Ready(ctx context.Context) error {
+	if checker, ok := a.inner.(interface{ Ready(context.Context) error }); ok {
+		return checker.Ready(ctx)
+	}
+	if checker, ok := a.inner.(interface{ Preflight(context.Context) error }); ok {
+		return checker.Preflight(ctx)
+	}
+	return nil
+}
 func (a queueBackendAdapter) Pause(ctx context.Context, queueName string) error {
 	controller, ok := a.inner.(queue.QueueController)
 	if !ok {

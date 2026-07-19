@@ -385,86 +385,178 @@ func TestDatabaseAdditiveColumnMigrationHandlesInspectionAndRaces(t *testing.T) 
 	}
 }
 
+type databaseManagedSchemaFault struct {
+	missingTable      string
+	missingColumn     string
+	errorTable        string
+	errorColumnsTable string
+	err               error
+}
+
+// databaseManagedQueueJobColumns is an independent test inventory of every
+// queue_jobs field used by runtime SQL.
+var databaseManagedQueueJobColumns = []string{
+	"id",
+	"queue_name",
+	"job_type",
+	"payload",
+	"metadata_json",
+	"timeout_seconds",
+	"max_retry",
+	"backoff_millis",
+	"attempt",
+	"available_at",
+	"processing_started_at",
+	"processing_token",
+	"last_error",
+	"state",
+	"created_at",
+	"updated_at",
+}
+
+// databaseManagedQueueUniqueLockColumns is an independent test inventory of
+// every queue_unique_locks field used by runtime SQL.
+var databaseManagedQueueUniqueLockColumns = []string{
+	"lock_key",
+	"expires_at",
+}
+
+// databaseManagedSchemaQuery returns a complete dialect-neutral schema
+// inspection script with one optional structural or query failure.
+func databaseManagedSchemaQuery(fault databaseManagedSchemaFault) func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	return func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		if strings.Contains(query, "sqlite_master") || strings.Contains(query, "information_schema.tables") || strings.Contains(query, "FROM pg_class") {
+			if len(args) != 1 {
+				return nil, fmt.Errorf("table query arguments = %#v", args)
+			}
+			tableName := fmt.Sprint(args[0].Value)
+			if tableName == fault.errorTable {
+				return nil, fault.err
+			}
+			if tableName == fault.missingTable {
+				return databaseCountRows(0), nil
+			}
+			return databaseCountRows(1), nil
+		}
+
+		if len(args) != 1 {
+			return nil, fmt.Errorf("column query arguments = %#v", args)
+		}
+		tableName := fmt.Sprint(args[0].Value)
+		if tableName == fault.errorColumnsTable {
+			return nil, fault.err
+		}
+		columns := databaseManagedQueueUniqueLockColumns
+		if tableName == "queue_jobs" {
+			columns = databaseManagedQueueJobColumns
+		}
+		values := make([][]driver.Value, 0, len(columns))
+		for _, columnName := range columns {
+			if tableName+"."+columnName != fault.missingColumn {
+				values = append(values, []driver.Value{columnName})
+			}
+		}
+		return &databaseRowsStub{
+			columns: []string{"column_name"},
+			values:  values,
+		}, nil
+	}
+}
+
 // TestDatabaseManagedSchemaValidationRejectsIncompleteBackends verifies worker
-// startup validates caller-managed MySQL and PostgreSQL schemas before polling.
+// startup validates every table and column used by runtime SQL before polling.
 func TestDatabaseManagedSchemaValidationRejectsIncompleteBackends(t *testing.T) {
-	tableErr := errors.New("table inspection unavailable")
-	metadataErr := errors.New("metadata inspection unavailable")
-	processingErr := errors.New("processing inspection unavailable")
-	tests := []struct {
-		name            string
-		driverName      string
-		tableCount      int64
-		metadataCount   int64
-		processingCount int64
-		tableErr        error
-		metadataErr     error
-		processingErr   error
-		want            string
-	}{
+	validationErr := errors.New("schema inspection unavailable")
+	type managedSchemaCase struct {
+		name       string
+		driverName string
+		fault      databaseManagedSchemaFault
+		want       string
+	}
+	tests := []managedSchemaCase{
 		{
 			name:       "mysql table inspection failure",
 			driverName: "mysql",
-			tableErr:   tableErr,
-			want:       "validate caller-managed queue_jobs table",
+			fault: databaseManagedSchemaFault{
+				errorTable: "queue_jobs",
+				err:        validationErr,
+			},
+			want: "validate caller-managed queue_jobs table",
 		},
 		{
-			name:        "postgres metadata inspection failure",
-			driverName:  "postgres",
-			tableCount:  1,
-			metadataErr: metadataErr,
-			want:        "validate caller-managed database job metadata column",
+			name:       "postgres missing queue jobs table",
+			driverName: "postgres",
+			fault: databaseManagedSchemaFault{
+				missingTable: "queue_jobs",
+			},
+			want: "missing required queue_jobs table",
 		},
 		{
-			name:       "mysql missing metadata",
+			name:       "mysql base column inspection failure",
 			driverName: "mysql",
-			tableCount: 1,
-			want:       "missing required metadata_json column",
+			fault: databaseManagedSchemaFault{
+				errorColumnsTable: "queue_jobs",
+				err:               validationErr,
+			},
+			want: "validate caller-managed queue_jobs columns",
 		},
 		{
-			name:          "postgres processing inspection failure",
-			driverName:    "postgres",
-			tableCount:    1,
-			metadataCount: 1,
-			processingErr: processingErr,
-			want:          "validate caller-managed database processing token column",
+			name:       "postgres uniqueness column inspection failure",
+			driverName: "postgres",
+			fault: databaseManagedSchemaFault{
+				errorColumnsTable: "queue_unique_locks",
+				err:               validationErr,
+			},
+			want: "validate caller-managed queue_unique_locks columns",
 		},
 		{
-			name:          "mysql missing processing token",
-			driverName:    "mysql",
-			tableCount:    1,
-			metadataCount: 1,
-			want:          "missing required processing_token column",
+			name:       "postgres uniqueness table inspection failure",
+			driverName: "postgres",
+			fault: databaseManagedSchemaFault{
+				errorTable: "queue_unique_locks",
+				err:        validationErr,
+			},
+			want: "validate caller-managed queue_unique_locks table",
 		},
+		{
+			name:       "mysql missing uniqueness table",
+			driverName: "mysql",
+			fault: databaseManagedSchemaFault{
+				missingTable: "queue_unique_locks",
+			},
+			want: "missing required queue_unique_locks table",
+		},
+	}
+
+	for _, columnName := range databaseManagedQueueJobColumns {
+		tests = append(tests, managedSchemaCase{
+			name:       "mysql missing queue jobs " + columnName,
+			driverName: "mysql",
+			fault: databaseManagedSchemaFault{
+				missingColumn: "queue_jobs." + columnName,
+			},
+			want: "missing required " + columnName + " column",
+		})
+	}
+	for _, columnName := range databaseManagedQueueUniqueLockColumns {
+		tests = append(tests, managedSchemaCase{
+			name:       "postgres missing uniqueness " + columnName,
+			driverName: "postgres",
+			fault: databaseManagedSchemaFault{
+				missingColumn: "queue_unique_locks." + columnName,
+			},
+			want: "missing required " + columnName + " column",
+		})
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			execCalls := 0
 			conn := &databaseConnStub{
-				query: func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-					if strings.Contains(query, "FROM pg_class") || strings.Contains(query, "information_schema.tables") {
-						if test.tableErr != nil {
-							return nil, test.tableErr
-						}
-						return databaseCountRows(test.tableCount), nil
-					}
-					if len(args) != 1 {
-						return nil, fmt.Errorf("column query arguments = %#v", args)
-					}
-					switch args[0].Value {
-					case "metadata_json":
-						if test.metadataErr != nil {
-							return nil, test.metadataErr
-						}
-						return databaseCountRows(test.metadataCount), nil
-					case "processing_token":
-						if test.processingErr != nil {
-							return nil, test.processingErr
-						}
-						return databaseCountRows(test.processingCount), nil
-					default:
-						return nil, fmt.Errorf("unexpected managed column %v", args[0].Value)
-					}
+				query: databaseManagedSchemaQuery(test.fault),
+				exec: func(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+					execCalls++
+					return nil, errors.New("managed validation performed DDL")
 				},
 			}
 			db := newDatabaseStub(conn)
@@ -481,10 +573,248 @@ func TestDatabaseManagedSchemaValidationRejectsIncompleteBackends(t *testing.T) 
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("managed schema startup error = %v, want %q", err, test.want)
 			}
+			if test.fault.err != nil && !errors.Is(err, test.fault.err) {
+				t.Fatalf("managed schema startup error = %v, want wrapped %v", err, test.fault.err)
+			}
 			if database.started.Load() {
 				t.Fatal("workers started after caller-managed schema validation failed")
 			}
+			if execCalls != 0 {
+				t.Fatalf("managed schema validation executed %d statements, want read-only inspection", execCalls)
+			}
 		})
+	}
+}
+
+// TestDatabaseManagedSchemaPreflightAndStartupRetry verifies readiness and
+// worker startup share read-only validation and recover after schema repair.
+func TestDatabaseManagedSchemaPreflightAndStartupRetry(t *testing.T) {
+	missingUniqueTable := true
+	execCalls := 0
+	queryCalls := 0
+	conn := &databaseConnStub{
+		query: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+			queryCalls++
+			fault := databaseManagedSchemaFault{}
+			if missingUniqueTable {
+				fault.missingTable = "queue_unique_locks"
+			}
+			return databaseManagedSchemaQuery(fault)(ctx, query, args)
+		},
+		exec: func(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+			execCalls++
+			return nil, errors.New("managed validation performed DDL")
+		},
+	}
+	db := newDatabaseStub(conn)
+	defer db.Close()
+	database := &databaseQueue{
+		cfg: localDatabaseConfig{
+			DriverName:         "mysql",
+			AutoMigrate:        true,
+			DisableAutoMigrate: true,
+		},
+		db:         db,
+		shutdownCh: make(chan struct{}),
+	}
+
+	preflightErr := database.Preflight(context.Background())
+	startErr := database.StartWorkers(context.Background())
+	if preflightErr == nil || startErr == nil || preflightErr.Error() != startErr.Error() {
+		t.Fatalf("managed validation errors = (preflight: %v, startup: %v), want matching failures", preflightErr, startErr)
+	}
+	if database.started.Load() {
+		t.Fatal("failed managed startup latched the queue as started")
+	}
+	if queryCalls != 6 {
+		t.Fatalf("failed managed validation queries = %d, want three per attempt", queryCalls)
+	}
+
+	missingUniqueTable = false
+	queryCalls = 0
+	if err := database.Preflight(context.Background()); err != nil {
+		t.Fatalf("managed preflight after schema repair: %v", err)
+	}
+	if err := database.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("managed startup after schema repair: %v", err)
+	}
+	if !database.started.Load() {
+		t.Fatal("managed startup did not become ready after schema repair")
+	}
+	if queryCalls != 8 {
+		t.Fatalf("successful managed validation queries = %d, want four per attempt", queryCalls)
+	}
+	if execCalls != 0 {
+		t.Fatalf("managed validation executed %d statements, want no DDL", execCalls)
+	}
+}
+
+// TestDatabaseManagedSchemaColumnInspectionReportsFailures verifies catalog
+// conversion and iteration errors remain visible instead of resembling absent columns.
+func TestDatabaseManagedSchemaColumnInspectionReportsFailures(t *testing.T) {
+	iterationErr := errors.New("catalog iteration unavailable")
+	tests := []struct {
+		name string
+		rows driver.Rows
+		want string
+	}{
+		{
+			name: "scan failure",
+			rows: &databaseRowsStub{
+				columns: []string{"column_name"},
+				values:  [][]driver.Value{{nil}},
+			},
+			want: "scan queue_jobs column",
+		},
+		{
+			name: "iteration failure",
+			rows: &databaseRowsStub{
+				columns: []string{"column_name"},
+				err:     iterationErr,
+			},
+			want: "inspect queue_jobs columns",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &databaseConnStub{
+				query: func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+					return test.rows, nil
+				},
+			}
+			db := newDatabaseStub(conn)
+			defer db.Close()
+			database := &databaseQueue{
+				cfg: localDatabaseConfig{DriverName: "mysql"},
+				db:  db,
+			}
+			_, err := database.managedQueueTableColumns(context.Background(), managedQueueJobsTable)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("managed column inspection error = %v, want %q", err, test.want)
+			}
+			if test.name == "iteration failure" && !errors.Is(err, iterationErr) {
+				t.Fatalf("managed column inspection error = %v, want wrapped %v", err, iterationErr)
+			}
+		})
+	}
+}
+
+// TestDatabaseManagedSchemaSQLiteCatalog verifies SQLite readiness uses the
+// same complete, bounded structural inspection as the server SQL dialects.
+func TestDatabaseManagedSchemaSQLiteCatalog(t *testing.T) {
+	queryCalls := 0
+	conn := &databaseConnStub{
+		query: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+			queryCalls++
+			return databaseManagedSchemaQuery(databaseManagedSchemaFault{})(ctx, query, args)
+		},
+	}
+	db := newDatabaseStub(conn)
+	defer db.Close()
+	database := &databaseQueue{
+		cfg: localDatabaseConfig{DriverName: "sqlite"},
+		db:  db,
+	}
+	if err := database.requireManagedQueueSchema(context.Background()); err != nil {
+		t.Fatalf("sqlite managed schema validation: %v", err)
+	}
+	if queryCalls != 4 {
+		t.Fatalf("sqlite managed schema queries = %d, want 4", queryCalls)
+	}
+}
+
+// TestDatabaseManagedSchemaRejectsNonBaseRelations verifies views cannot pass
+// a readiness gate whose runtime contract requires writes and row locking.
+func TestDatabaseManagedSchemaRejectsNonBaseRelations(t *testing.T) {
+	tests := []struct {
+		name       string
+		driverName string
+		baseFilter string
+	}{
+		{
+			name:       "mysql view",
+			driverName: "mysql",
+			baseFilter: "table_type = 'BASE TABLE'",
+		},
+		{
+			name:       "postgres view",
+			driverName: "postgres",
+			baseFilter: "relkind IN ('r', 'p')",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &databaseConnStub{
+				query: func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+					if len(args) != 1 || fmt.Sprint(args[0].Value) != "queue_jobs" {
+						return nil, fmt.Errorf("table query arguments = %#v", args)
+					}
+					if !strings.Contains(query, test.baseFilter) {
+						return databaseCountRows(1), nil
+					}
+					return databaseCountRows(0), nil
+				},
+			}
+			db := newDatabaseStub(conn)
+			defer db.Close()
+			database := &databaseQueue{
+				cfg: localDatabaseConfig{DriverName: test.driverName},
+				db:  db,
+			}
+			err := database.requireManagedQueueSchema(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "missing required queue_jobs table") {
+				t.Fatalf("managed view validation error = %v, want missing base-table diagnostic", err)
+			}
+		})
+	}
+}
+
+// TestDatabasePreflightSkipsManagedValidationWhenMigrationsAreEnabled verifies
+// readiness does not require a schema that worker startup is configured to create.
+func TestDatabasePreflightSkipsManagedValidationWhenMigrationsAreEnabled(t *testing.T) {
+	queryCalls := 0
+	conn := &databaseConnStub{
+		query: func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+			queryCalls++
+			return nil, errors.New("unexpected schema inspection")
+		},
+	}
+	db := newDatabaseStub(conn)
+	defer db.Close()
+	database := &databaseQueue{
+		cfg: localDatabaseConfig{AutoMigrate: true},
+		db:  db,
+	}
+	if err := database.Preflight(context.Background()); err != nil {
+		t.Fatalf("auto-migrating preflight: %v", err)
+	}
+	if queryCalls != 0 {
+		t.Fatalf("auto-migrating preflight schema queries = %d, want 0", queryCalls)
+	}
+}
+
+// TestDatabasePreflightPropagatesPingFailureBeforeManagedValidation verifies a
+// connectivity failure remains the primary readiness diagnostic.
+func TestDatabasePreflightPropagatesPingFailureBeforeManagedValidation(t *testing.T) {
+	pingErr := errors.New("database unavailable")
+	queryCalls := 0
+	conn := &databaseConnStub{
+		pingErr: pingErr,
+		query: func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+			queryCalls++
+			return nil, errors.New("unexpected schema inspection")
+		},
+	}
+	db := newDatabaseStub(conn)
+	defer db.Close()
+	database := &databaseQueue{db: db}
+	if err := database.Preflight(context.Background()); !errors.Is(err, pingErr) {
+		t.Fatalf("database preflight = %v, want %v", err, pingErr)
+	}
+	if queryCalls != 0 {
+		t.Fatalf("database preflight queries after failed ping = %d, want 0", queryCalls)
 	}
 }
 

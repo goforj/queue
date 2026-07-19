@@ -2,6 +2,7 @@ package driverbridge
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/goforj/queue"
@@ -89,6 +90,77 @@ func (b *nativeBackendStub) StartWorkers(context.Context) error {
 func (b *nativeBackendStub) Shutdown(context.Context) error {
 	b.stopped = true
 	return nil
+}
+
+type preflightBackendStub struct {
+	externalBackendStub
+	err   error
+	calls int
+}
+
+// Preflight records one legacy backend readiness check.
+func (b *preflightBackendStub) Preflight(context.Context) error {
+	b.calls++
+	return b.err
+}
+
+type readyBackendStub struct {
+	preflightBackendStub
+	readyErr   error
+	readyCalls int
+}
+
+// Ready records one canonical backend readiness check.
+func (b *readyBackendStub) Ready(context.Context) error {
+	b.readyCalls++
+	return b.readyErr
+}
+
+// TestNewQueueFromDriverPreservesReadiness verifies optional health checks
+// survive adaptation and canonical Ready takes precedence over legacy Preflight.
+func TestNewQueueFromDriverPreservesReadiness(t *testing.T) {
+	preflightErr := errors.New("managed schema unavailable")
+	legacy := &preflightBackendStub{
+		externalBackendStub: externalBackendStub{driver: queue.DriverDatabase},
+		err:                 preflightErr,
+	}
+	legacyQueue, err := NewQueueFromDriver(
+		queue.Config{Driver: queue.DriverDatabase},
+		legacy,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("new queue from legacy-ready driver: %v", err)
+	}
+	if err := legacyQueue.Ready(context.Background()); !errors.Is(err, preflightErr) {
+		t.Fatalf("legacy readiness = %v, want %v", err, preflightErr)
+	}
+	if legacy.calls != 1 {
+		t.Fatalf("legacy readiness calls = %d, want 1", legacy.calls)
+	}
+
+	readyErr := errors.New("backend not ready")
+	canonical := &readyBackendStub{
+		preflightBackendStub: preflightBackendStub{
+			externalBackendStub: externalBackendStub{driver: queue.DriverDatabase},
+			err:                 errors.New("legacy readiness must not run"),
+		},
+		readyErr: readyErr,
+	}
+	canonicalQueue, err := NewQueueFromDriver(
+		queue.Config{Driver: queue.DriverDatabase},
+		canonical,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("new queue from canonical-ready driver: %v", err)
+	}
+	if err := canonicalQueue.Ready(context.Background()); !errors.Is(err, readyErr) {
+		t.Fatalf("canonical readiness = %v, want %v", err, readyErr)
+	}
+	if canonical.readyCalls != 1 || canonical.calls != 0 {
+		t.Fatalf("readiness calls = canonical:%d legacy:%d, want 1/0", canonical.readyCalls, canonical.calls)
+	}
 }
 
 func TestNewQueueFromDriver_ExternalWorkerFactoryAndOptionalCapabilities(t *testing.T) {

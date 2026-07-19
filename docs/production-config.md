@@ -125,7 +125,10 @@ Transition receipts are not settlement outboxes or durable continuation intents.
 
 Schema migration ownership:
 
-- queue-table startup migrations are enabled by default; set `DisableAutoMigrate: true` on `sqlitequeue.Config`, `mysqlqueue.Config`, `postgresqueue.Config`, or the advanced `queue.DatabaseConfig` when deployment tooling owns queue tables, and startup then performs no queue DDL
+- queue-table startup migrations are enabled by default; set `DisableAutoMigrate: true` on `sqlitequeue.Config`, `mysqlqueue.Config`, `postgresqueue.Config`, or the advanced `queue.DatabaseConfig` when deployment tooling owns queue tables
+- in managed queue mode, readiness and startup perform no queue DDL and require `queue_jobs` and `queue_unique_locks` to be base-table relations, including PostgreSQL partitioned tables, with every column the current runtime reads or writes; empty, view-backed, and incomplete schemas fail before workers poll
+- managed queue validation checks presence, not write permissions, exact SQL types, constraints, or performance indexes; install the complete dialect-correct canonical schema rather than treating a successful check as a schema-lint or query-performance guarantee
+- a failed managed queue check is retryable on the same runtime after deployment tooling installs or repairs the schema; canonical preprovisioned schemas are exercised through readiness, uniqueness, dispatch, and consumption on SQLite, MySQL, and PostgreSQL
 - workflow-store migration policy is constructor-selected: `queue.NewSQLStore` preserves legacy migration-on-first-use behavior, including when compatibility field `SQLStoreConfig.AutoMigrate` is false; `queue.NewSQLStoreWithManagedSchema` performs no workflow DDL
 - when deployment tooling owns workflow schema, create every dialect-correct workflow table before constructing the store with `queue.NewSQLStoreWithManagedSchema`; `bus_workflow_transition_receipts` must include non-null `receipt_version` and `event_schema_version` integer columns as well as its ownership fields
 - keep either migration-on-start default only when the runtime identity has DDL permission and concurrent application startup is coordinated

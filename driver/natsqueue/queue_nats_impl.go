@@ -13,7 +13,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-const natsPublishFlushTimeout = 5 * time.Second
+const natsRoundTripTimeout = 5 * time.Second
 
 type natsMessage struct {
 	Type          string          `json:"type"`
@@ -81,7 +81,9 @@ func (q *natsQueue) Preflight(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return nc.FlushWithContext(ctx)
+	flushCtx, cancel := natsRoundTripContext(ctx)
+	defer cancel()
+	return nc.FlushWithContext(flushCtx)
 }
 
 func newNATSQueue(url string) *natsQueue {
@@ -168,7 +170,7 @@ func (q *natsQueue) Dispatch(ctx context.Context, job queue.Job) error {
 		q.unique.Release(uniqueKey, uniqueToken)
 		return err
 	}
-	flushCtx, cancel := natsPublishContext(ctx)
+	flushCtx, cancel := natsRoundTripContext(ctx)
 	defer cancel()
 	// A flush proves only that the Core NATS server observed this ephemeral publish, not durable storage.
 	return nc.FlushWithContext(flushCtx)
@@ -218,10 +220,10 @@ func natsSubject(queueName string) string {
 	return "queue." + queueName
 }
 
-// natsPublishContext bounds server-roundtrip latency while retaining a shorter caller deadline.
-func natsPublishContext(ctx context.Context) (context.Context, context.CancelFunc) {
+// natsRoundTripContext supplies the deadline required by NATS while retaining a shorter caller deadline.
+func natsRoundTripContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithTimeout(ctx, natsPublishFlushTimeout)
+	return context.WithTimeout(ctx, natsRoundTripTimeout)
 }
