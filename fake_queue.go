@@ -193,9 +193,6 @@ func (f *FakeQueue) BusRegister(string, busruntime.Handler) {}
 func (f *FakeQueue) BusDispatch(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
 	job := fakeBusJob(jobType, payload, opts, true)
 	if fakeWorkflowDeliverySuppressed(ctx, jobType) {
-		if ctx == nil {
-			ctx = context.Background()
-		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
