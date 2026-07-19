@@ -152,6 +152,31 @@ func TestNATSIntegration_ShutdownDrainsQueuedCallbacks(t *testing.T) {
 	}
 }
 
+// TestNATSIntegration_InvalidSubscriptionSubjectFailsCleanly verifies a
+// subscription setup failure is returned without poisoning a later startup.
+func TestNATSIntegration_InvalidSubscriptionSubjectFailsCleanly(t *testing.T) {
+	if !integrationBackendEnabled(testenv.BackendNATS) {
+		t.Skip("nats integration backend not selected")
+	}
+	q, err := newQueueRuntime(withDefaultQueue(natsCfg(ensureNATS(t)), "invalid subject"))
+	if err != nil {
+		t.Fatalf("new nats queue failed: %v", err)
+	}
+	worker := withWorkers(q, 1)
+	for attempt := 1; attempt <= 2; attempt++ {
+		err := worker.StartWorkers(context.Background())
+		if err == nil {
+			t.Fatalf("startup attempt %d accepted an invalid NATS subject", attempt)
+		}
+		if errors.Is(err, queue.ErrQueuerShuttingDown) {
+			t.Fatalf("startup attempt %d retained failed lifecycle state: %v", attempt, err)
+		}
+	}
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown after failed startup: %v", err)
+	}
+}
+
 func TestNATSIntegration_OptionBehavior(t *testing.T) {
 	if !integrationBackendEnabled(testenv.BackendNATS) {
 		t.Skip("nats integration backend not selected")

@@ -407,6 +407,28 @@ func TestNATSWorkerShutdownDrainDiagnosticConverges(t *testing.T) {
 	}
 }
 
+// TestNATSWorkerShutdownConnectionDrainDiagnosticConverges verifies a completed
+// connection drain is reported once without poisoning later root cleanup.
+func TestNATSWorkerShutdownConnectionDrainDiagnosticConverges(t *testing.T) {
+	w := newNATSWorker("nats://example:4222")
+	connection, subscription := newNATSWorkerLifecycleStubs()
+	drainErr := errors.New("connection drain diagnostic")
+	connection.drainErr = drainErr
+	w.conn = connection
+	w.sub = subscription
+	w.started = true
+
+	if err := w.Shutdown(context.Background()); !errors.Is(err, drainErr) {
+		t.Fatalf("first shutdown error = %v, want %v", err, drainErr)
+	}
+	if !connection.closed {
+		t.Fatal("connection remained open after its drain diagnostic")
+	}
+	if err := w.Shutdown(context.Background()); err != nil {
+		t.Fatalf("completed connection cleanup remained poisoned: %v", err)
+	}
+}
+
 // TestNATSWorkerShutdownWaitsForInFlightRepublish verifies the connection remains open through a handler's best-effort Core NATS retry publication.
 func TestNATSWorkerShutdownWaitsForInFlightRepublish(t *testing.T) {
 	w := newNATSWorker("nats://example:4222")
@@ -490,6 +512,29 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 			t.Fatalf("marshal: %v", err)
 		}
 		w.processMessage(&nats.Msg{Data: body})
+	})
+
+	t.Run("expired availability processes immediately", func(t *testing.T) {
+		w := newNATSWorker("nats://example:4222")
+		var calls int
+		w.Register("job:ready", func(context.Context, queue.Job) error {
+			calls++
+			return nil
+		})
+		body, err := json.Marshal(natsMessage{
+			Type:          "job:ready",
+			Queue:         "default",
+			AvailableAtMS: time.Now().Add(-time.Second).UnixMilli(),
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		w.processMessage(&nats.Msg{Data: body})
+
+		if calls != 1 {
+			t.Fatalf("immediate handler calls = %d, want 1", calls)
+		}
 	})
 
 	t.Run("success uses timeout and job options", func(t *testing.T) {
@@ -650,6 +695,38 @@ func TestNATSWorker_AttemptDecisionSettlement(t *testing.T) {
 		}
 		if events[0].Attempt != 1 || events[0].MaxRetry != 4 {
 			t.Fatalf("uncommitted republish consumed an application attempt: %+v", events[0])
+		}
+	})
+
+	t.Run("successful uncommitted republish preserves attempt and clears delay", func(t *testing.T) {
+		connection := &natsConnectionStub{}
+		w := newNATSWorker("nats://example:4222")
+		w.conn = connection
+		w.Register("job:uncommitted", func(context.Context, queue.Job) error {
+			return busruntime.Uncommitted(errors.New("store unavailable"))
+		})
+		body, err := json.Marshal(natsMessage{
+			Type:          "job:uncommitted",
+			Queue:         "default",
+			Attempt:       1,
+			MaxRetry:      4,
+			AvailableAtMS: time.Now().Add(-time.Minute).UnixMilli(),
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		w.processMessage(&nats.Msg{Data: body})
+
+		if connection.publishN != 1 || connection.flushN != 1 {
+			t.Fatalf("republish calls = publish:%d flush:%d, want 1/1", connection.publishN, connection.flushN)
+		}
+		var republished natsMessage
+		if err := json.Unmarshal(connection.published[0], &republished); err != nil {
+			t.Fatalf("decode republished message: %v", err)
+		}
+		if republished.Attempt != 1 || republished.AvailableAtMS != 0 {
+			t.Fatalf("republished attempt/delay = %d/%d, want 1/0", republished.Attempt, republished.AvailableAtMS)
 		}
 	})
 }
