@@ -92,11 +92,11 @@ INTEGRATION_BACKEND=redis scripts/coverage-codecov.sh integration
 
 Current role:
 
-- unit mode runs the root module and every buildable nested module independently with `GOWORK=off`; the tooling-only `docs` module is inventory-checked but has no package to cover
+- unit mode runs the root module and every buildable nested module independently with `GOWORK=off`; it also executes the root module's lightweight integration-tagged `bus` fixture tests, while the tooling-only `docs` module is inventory-checked but has no package to cover
 - integration mode runs the tagged tests from the actual `integration` module and instruments repository root, integration, and driver packages
 - CI runs one integration coverage command in each existing backend matrix leg, then fans the unit profile and all ten backend profiles into one guarded Codecov upload
 - emitted atomic text profiles use module-qualified source paths and collapse duplicate source ranges produced by broad `-coverpkg` runs
-- the fan-in guard requires every expected unit/backend artifact, all buildable module records, and covered representative root, driver, and integration-module source before upload
+- the fan-in guard requires every expected unit/backend artifact, all buildable module records, the root integration-tagged bus fixture, and covered representative root, driver, and integration-module source before upload
 - Codecov upload errors fail CI; project and patch status checks compare to the base at the repository's established 1% threshold
 - tracks broad regressions
 - not used as a substitute for guarantee validation

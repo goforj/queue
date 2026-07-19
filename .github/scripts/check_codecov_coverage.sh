@@ -121,6 +121,7 @@ done
 require_path "$unit_profile" "^${ROOT_MODULE//./[.]}/integration/.*[.]go:" "integration-module source"
 
 require_covered_path "^${ROOT_MODULE//./[.]}/queue[.]go:" "representative root source" "${expected_profiles[@]}"
+require_covered_path "^${ROOT_MODULE//./[.]}/bus/testhooks_integration[.]go:" "root integration-tagged bus fixture" "$unit_profile"
 for driver in "${driver_modules[@]}"; do
   require_covered_path "^${ROOT_MODULE//./[.]}/driver/$driver/.*[.]go:" "driver/$driver source" "${expected_profiles[@]}"
 done
