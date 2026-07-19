@@ -1357,18 +1357,201 @@ func TestNativeRuntimeStartWorkersErrorPath(t *testing.T) {
 	}
 }
 
-func TestQueueCommonWrapRegisteredHandlerWithoutObserver(t *testing.T) {
+// TestQueueCommonWrapRegisteredHandlerPreservesContextOnNilDecoration verifies a decorator can decline replacement without erasing the original context.
+func TestQueueCommonWrapRegisteredHandlerPreservesContextOnNilDecoration(t *testing.T) {
+	type contextKey struct{}
+	key := contextKey{}
+	const want = "original"
+
+	for _, withObserver := range []bool{false, true} {
+		name := "without observer"
+		if withObserver {
+			name = "with observer"
+		}
+		t.Run(name, func(t *testing.T) {
+			original := context.WithValue(context.Background(), key, want)
+			var observed int
+			observer := ensureObserverSink(nil)
+			if withObserver {
+				observer = ensureObserverSink(ObserverFunc(func(ctx context.Context, event Event) {
+					if event.Kind != EventProcessStarted && event.Kind != EventProcessSucceeded {
+						return
+					}
+					observed++
+					if ctx != original {
+						t.Errorf("observer context changed after nil decorator result")
+					}
+				}))
+			}
+			decoratorCalls := 0
+			common := &queueCommon{
+				cfg: Config{Driver: DriverSync, Observer: observer},
+				handlerContextDecorator: func(context.Context) context.Context {
+					decoratorCalls++
+					return nil
+				},
+			}
+			handlerCalls := 0
+			wrapped := common.wrapRegisteredHandler("job:nil-decoration", func(ctx context.Context, _ Job) error {
+				handlerCalls++
+				if ctx != original {
+					t.Error("handler context changed after nil decorator result")
+				}
+				if got, _ := ctx.Value(key).(string); got != want {
+					t.Errorf("handler context value = %q, want %q", got, want)
+				}
+				return nil
+			})
+			if err := wrapped(original, NewJob("job:nil-decoration")); err != nil {
+				t.Fatalf("wrapped handler: %v", err)
+			}
+			if decoratorCalls != 1 || handlerCalls != 1 {
+				t.Fatalf("decorator/handler calls = %d/%d, want 1/1", decoratorCalls, handlerCalls)
+			}
+			wantObserved := 0
+			if withObserver {
+				wantObserved = 2
+			}
+			if observed != wantObserved {
+				t.Fatalf("observed process events = %d, want %d", observed, wantObserved)
+			}
+		})
+	}
+
 	common := &queueCommon{cfg: Config{Driver: DriverSync}}
-	h := func(context.Context, Job) error { return nil }
-	if got := common.wrapRegisteredHandler("job:x", h); got == nil {
-		t.Fatal("expected non-nil passthrough handler")
+	if got := common.wrapRegisteredHandler("job:nil-handler", nil); got != nil {
+		t.Fatal("expected nil handler to remain nil")
 	}
-	if got := common.wrapRegisteredHandler("job:x", nil); got != nil {
-		t.Fatal("expected nil passthrough handler")
+}
+
+// TestRuntimeHandlerContextDecoratorNativeExternalParity verifies both runtime registration paths decorate handlers regardless of observer recipients.
+func TestRuntimeHandlerContextDecoratorNativeExternalParity(t *testing.T) {
+	type contextKey struct{}
+	key := contextKey{}
+	const want = "decorated"
+
+	for _, runtimeShape := range []string{"native", "external"} {
+		for _, withObserver := range []bool{false, true} {
+			name := runtimeShape + "/without observer"
+			if withObserver {
+				name = runtimeShape + "/with observer"
+			}
+			t.Run(name, func(t *testing.T) {
+				backend := &runtimeBackendStub{}
+				var observed int
+				observer := ensureObserverSink(nil)
+				if withObserver {
+					observer = ensureObserverSink(ObserverFunc(func(ctx context.Context, event Event) {
+						if event.Kind != EventProcessStarted && event.Kind != EventProcessSucceeded {
+							return
+						}
+						observed++
+						if got, _ := ctx.Value(key).(string); got != want {
+							t.Errorf("observer context value = %q, want %q", got, want)
+						}
+					}))
+				}
+
+				driver := DriverSync
+				common := &queueCommon{
+					inner:  backend,
+					cfg:    Config{Driver: driver, DefaultQueue: "default", Observer: observer},
+					driver: driver,
+				}
+				var runtime queueRuntime = &nativeQueueRuntime{
+					common:  common,
+					runtime: backend,
+					nativeQueueRuntimeState: &nativeQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+				if runtimeShape == "external" {
+					driver = DriverSQS
+					common.inner = &queueBackendRecorder{}
+					common.cfg.Driver = driver
+					common.driver = driver
+					runtime = &externalQueueRuntime{
+						common: common,
+						newWorker: func(int) (driverWorkerBackend, error) {
+							return backend, nil
+						},
+						externalQueueRuntimeState: &externalQueueRuntimeState{
+							registered: map[string]Handler{},
+						},
+					}
+				}
+
+				decoratorCalls := 0
+				runtime.setHandlerContextDecorator(func(ctx context.Context) context.Context {
+					decoratorCalls++
+					return context.WithValue(ctx, key, want)
+				})
+				handlerCalls := 0
+				runtime.Register("job:parity", func(ctx context.Context, _ Job) error {
+					handlerCalls++
+					if got, _ := ctx.Value(key).(string); got != want {
+						t.Errorf("handler context value = %q, want %q", got, want)
+					}
+					return nil
+				})
+				if err := runtime.StartWorkers(context.Background()); err != nil {
+					t.Fatalf("start workers: %v", err)
+				}
+				registered := backend.registered["job:parity"]
+				if registered == nil {
+					t.Fatal("backend did not receive registered handler")
+				}
+				if err := registered(context.Background(), NewJob("job:parity")); err != nil {
+					t.Fatalf("registered handler: %v", err)
+				}
+				if err := runtime.Shutdown(context.Background()); err != nil {
+					t.Fatalf("shutdown runtime: %v", err)
+				}
+
+				if decoratorCalls != 1 || handlerCalls != 1 {
+					t.Fatalf("decorator/handler calls = %d/%d, want 1/1", decoratorCalls, handlerCalls)
+				}
+				wantObserved := 0
+				if withObserver {
+					wantObserved = 2
+				}
+				if observed != wantObserved {
+					t.Fatalf("observed process events = %d, want %d", observed, wantObserved)
+				}
+			})
+		}
 	}
-	common.cfg.Observer = ObserverFunc(func(context.Context, Event) {})
-	if wrapped := common.wrapRegisteredHandler("job:x", h); wrapped == nil {
-		t.Fatal("expected wrapped handler")
+}
+
+// TestQueueCommonWrapRegisteredHandlerDefersRedisDecoration verifies the shared wrapper leaves Redis's native handler boundary untouched.
+func TestQueueCommonWrapRegisteredHandlerDefersRedisDecoration(t *testing.T) {
+	decoratorCalls := 0
+	observerCalls := 0
+	common := &queueCommon{
+		cfg: Config{
+			Driver: DriverRedis,
+			Observer: ObserverFunc(func(context.Context, Event) {
+				observerCalls++
+			}),
+		},
+		handlerContextDecorator: func(ctx context.Context) context.Context {
+			decoratorCalls++
+			return context.WithValue(ctx, "decorated", true)
+		},
+	}
+	handlerCalls := 0
+	wrapped := common.wrapRegisteredHandler("job:redis", func(ctx context.Context, _ Job) error {
+		handlerCalls++
+		if ctx.Value("decorated") != nil {
+			t.Fatal("shared wrapper decorated Redis handler context")
+		}
+		return nil
+	})
+	if err := wrapped(context.Background(), NewJob("job:redis")); err != nil {
+		t.Fatalf("wrapped Redis handler: %v", err)
+	}
+	if decoratorCalls != 0 || observerCalls != 0 || handlerCalls != 1 {
+		t.Fatalf("decorator/observer/handler calls = %d/%d/%d, want 0/0/1", decoratorCalls, observerCalls, handlerCalls)
 	}
 }
 

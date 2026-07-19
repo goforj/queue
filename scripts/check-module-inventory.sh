@@ -7,24 +7,27 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 RELEASE_VERSION=""
 TAG_VERSION=""
+EXCLUDES=()
 
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/check-module-inventory.sh [--release-version <vX.Y.Z>] [--tag-version <vX.Y.Z>]
+  scripts/check-module-inventory.sh [--release-version <vX.Y.Z>] [--exclude <module-dir>]... [--tag-version <vX.Y.Z>]
 
 Checks:
   - every go.mod has the expected repository module path and Go version
   - go.work contains every discovered module exactly once
   - the CI race matrix contains root and every discovered driver module exactly once
   - sibling requirements use one version and resolve through local replacements
-  - the release script discovers every module and computes the documented tag
+  - the release tag planner discovers every module and computes the documented tag
   - --release-version rejects sibling dependency pins that would not resolve after release
+  - --exclude omits matching module owners but rejects an incomplete dependency tag set
   - --tag-version verifies an existing synchronized tag family at one commit
 
 Examples:
   scripts/check-module-inventory.sh
   scripts/check-module-inventory.sh --release-version v0.3.0
+  scripts/check-module-inventory.sh --release-version v0.3.0 --exclude examples
   scripts/check-module-inventory.sh --tag-version v0.2.1
 USAGE
 }
@@ -36,8 +39,8 @@ fail() {
 
 require_version() {
   local version="$1"
-  if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-    fail "invalid semantic version: $version"
+  if ! validate_release_version "$version"; then
+    fail "$RELEASE_VERSION_ERROR"
   fi
 }
 
@@ -49,6 +52,17 @@ normalize_dir() {
     dir="."
   fi
   printf '%s\n' "$dir"
+}
+
+module_is_excluded() {
+  local dir="$1"
+  local excluded
+  for excluded in "${EXCLUDES[@]}"; do
+    if [[ "$dir" == "$excluded" ]] || [[ "$dir" == "$excluded/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 json_value() {
@@ -148,6 +162,11 @@ parse_edges() {
   '
 }
 
+VERSION_VALIDATOR="$ROOT_DIR/scripts/release-version.sh"
+[[ -r "$VERSION_VALIDATOR" ]] || fail "scripts/release-version.sh is missing or unreadable"
+# shellcheck source=scripts/release-version.sh
+source "$VERSION_VALIDATOR"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
@@ -166,15 +185,26 @@ while [[ $# -gt 0 ]]; do
       require_version "$TAG_VERSION"
       shift 2
       ;;
+    --exclude)
+      excluded="${2:-}"
+      [[ -n "$excluded" ]] || fail "--exclude requires a module directory value"
+      EXCLUDES+=("$(normalize_dir "$excluded")")
+      shift 2
+      ;;
     *)
       fail "unknown argument: $1"
       ;;
   esac
 done
 
+if [[ ${#EXCLUDES[@]} -gt 0 && -z "$RELEASE_VERSION" ]]; then
+  fail "--exclude requires --release-version"
+fi
+
 [[ -f "$ROOT_DIR/go.mod" ]] || fail "root go.mod is missing"
 [[ -f "$ROOT_DIR/go.work" ]] || fail "go.work is missing"
 [[ -x "$ROOT_DIR/scripts/tag-all-modules.sh" ]] || fail "scripts/tag-all-modules.sh is missing or not executable"
+[[ -x "$ROOT_DIR/scripts/plan-module-release-tags.sh" ]] || fail "scripts/plan-module-release-tags.sh is missing or not executable"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -231,6 +261,12 @@ while IFS=$'\t' read -r dir module_path go_version; do
   fi
   [[ "$module_path" == "$expected_path" ]] || fail "$dir declares $module_path; expected $expected_path"
   [[ "$go_version" == "$root_go_version" ]] || fail "$dir uses Go $go_version; root uses Go $root_go_version"
+  module_release_version="${RELEASE_VERSION:-$TAG_VERSION}"
+  if [[ -n "$module_release_version" ]] && ! module_is_excluded "$dir"; then
+    if ! validate_release_module_path "$module_path" "$module_release_version"; then
+      fail "$RELEASE_VERSION_ERROR"
+    fi
+  fi
   printf '%s\n' "$dir" >>"$EXPECTED_DIRS_FILE"
 done <"$MODULES_FILE"
 sort -u -o "$EXPECTED_DIRS_FILE" "$EXPECTED_DIRS_FILE"
@@ -338,8 +374,17 @@ while IFS='|' read -r kind owner required_path required_version; do
   expected_target_path="$(cd "$expected_target_path" && pwd -P)"
   [[ "$replacement_path" == "$expected_target_path" ]] || fail "$owner replacement for $required_path points to $new_path, not $target_dir"
 
-  if [[ -n "$RELEASE_VERSION" && "$required_version" != "$RELEASE_VERSION" ]]; then
-    fail "$owner requires sibling $required_path at $required_version; release $RELEASE_VERSION requires a resolvable $RELEASE_VERSION pin"
+  if [[ -n "$RELEASE_VERSION" ]] && ! module_is_excluded "$owner"; then
+    if [[ "$required_version" != "$RELEASE_VERSION" ]]; then
+      fail "$owner requires sibling $required_path at $required_version; release $RELEASE_VERSION requires a resolvable $RELEASE_VERSION pin"
+    fi
+    if module_is_excluded "$target_dir"; then
+      required_tag="$RELEASE_VERSION"
+      if [[ "$target_dir" != "." ]]; then
+        required_tag="$target_dir/$RELEASE_VERSION"
+      fi
+      fail "$owner is included but requires excluded sibling $required_path; release $RELEASE_VERSION would omit required tag $required_tag"
+    fi
   fi
 done <"$REQUIRES_FILE"
 
@@ -380,11 +425,20 @@ while IFS='|' read -r kind owner old_path old_version new_path new_version; do
   [[ "$replacement_path" == "$expected_target_path" ]] || fail "$owner replacement for $old_path points to $new_path, not $target_dir"
 done <"$REPLACEMENTS_FILE"
 
-guard_version="${RELEASE_VERSION:-v999.999.999-module-inventory-guard}"
+guard_version="${RELEASE_VERSION:-$TAG_VERSION}"
+if [[ -z "$guard_version" ]]; then
+  guard_major="0"
+  if [[ "$root_module" == gopkg.in/* && "$root_module" =~ \.v(0|[1-9][0-9]*)$ ]]; then
+    guard_major="${BASH_REMATCH[1]}"
+  elif [[ "$root_module" =~ /v([2-9][0-9]*)$ ]]; then
+    guard_major="${BASH_REMATCH[1]}"
+  fi
+  guard_version="v$guard_major.0.0-module-inventory-guard"
+fi
 release_output="$TMP_DIR/release-output.txt"
-if ! "$ROOT_DIR/scripts/tag-all-modules.sh" "$guard_version" --dry-run --allow-dirty >"$release_output" 2>&1; then
+if ! "$ROOT_DIR/scripts/plan-module-release-tags.sh" "$guard_version" >"$release_output" 2>&1; then
   cat "$release_output" >&2
-  fail "release script dry-run failed"
+  fail "release tag planner failed"
 fi
 
 EXPECTED_TAGS_FILE="$TMP_DIR/expected-tags.txt"
@@ -396,11 +450,11 @@ while IFS=$'\t' read -r dir _; do
     printf '%s/%s\n' "$dir" "$guard_version" >>"$EXPECTED_TAGS_FILE"
   fi
 done <"$MODULES_FILE"
-awk '/^  - / { sub(/^  - /, ""); print }' "$release_output" | sort -u >"$ACTUAL_TAGS_FILE"
+sort -u "$release_output" >"$ACTUAL_TAGS_FILE"
 sort -u -o "$EXPECTED_TAGS_FILE" "$EXPECTED_TAGS_FILE"
 if ! diff -u "$EXPECTED_TAGS_FILE" "$ACTUAL_TAGS_FILE" >"$TMP_DIR/tags.diff"; then
   cat "$TMP_DIR/tags.diff" >&2
-  fail "release script does not cover the discovered module inventory"
+  fail "release tag planner does not cover the discovered module inventory"
 fi
 
 if [[ -n "$TAG_VERSION" ]]; then

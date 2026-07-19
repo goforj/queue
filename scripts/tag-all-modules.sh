@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+VERSION_VALIDATOR="$SCRIPT_DIR/release-version.sh"
+if [[ ! -r "$VERSION_VALIDATOR" ]]; then
+  echo "error: release version validator is missing or unreadable: $VERSION_VALIDATOR" >&2
+  exit 1
+fi
+# shellcheck source=scripts/release-version.sh
+source "$VERSION_VALIDATOR"
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -15,7 +24,9 @@ Examples:
 Behavior:
   - Tags root module as: vX.Y.Z
   - Tags each submodule as: <relative/module/path>/vX.Y.Z
-  - Uses the current HEAD commit for all tags
+  - Validates and tags one captured HEAD commit; dry runs preview the working tree
+  - Refuses to tag modules whose sibling requirements are not pinned to the release version
+  - --allow-dirty is accepted only with --dry-run because real tags always target HEAD
   - --exclude supports exact module dirs and prefixes (for example: driver excludes all driver/* modules)
 USAGE
 }
@@ -32,6 +43,14 @@ dry_run=0
 allow_dirty=0
 skip_existing=0
 excludes=()
+release_view_dir=""
+
+cleanup() {
+  if [[ -n "$release_view_dir" && -d "$release_view_dir" ]]; then
+    rm -rf -- "$release_view_dir"
+  fi
+}
+trap cleanup EXIT
 
 normalize_module_dir() {
   local dir="$1"
@@ -43,21 +62,53 @@ normalize_module_dir() {
   printf '%s\n' "$dir"
 }
 
-module_is_excluded() {
-  local dir="$1"
-  local ex
-  for ex in "${excludes[@]-}"; do
-    if [[ "$dir" == "$ex" ]] || [[ "$dir" == "$ex/"* ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
+REMOTE_TAG_EXISTS=0
+REMOTE_TAG_COMMIT=""
 
-remote_tag_exists() {
+inspect_remote_tag() {
   local remote_name="$1"
   local tag="$2"
-  git ls-remote --exit-code --tags --refs "$remote_name" "refs/tags/$tag" >/dev/null 2>&1
+  local output
+  local status
+  local direct_ref="refs/tags/$tag"
+  local peeled_ref="refs/tags/$tag^{}"
+
+  REMOTE_TAG_EXISTS=0
+  REMOTE_TAG_COMMIT=""
+  if output="$(git ls-remote --exit-code --tags "$remote_name" "$direct_ref" "$peeled_ref")"; then
+    REMOTE_TAG_EXISTS=1
+  else
+    status=$?
+    if [[ "$status" -eq 2 ]]; then
+      return 0
+    fi
+    echo "error: failed to query remote for tag $tag (git ls-remote exit $status)" >&2
+    return "$status"
+  fi
+
+  REMOTE_TAG_COMMIT="$(awk -v ref="$peeled_ref" '$2 == ref { print $1; exit }' <<<"$output")"
+  if [[ -z "$REMOTE_TAG_COMMIT" ]]; then
+    REMOTE_TAG_COMMIT="$(awk -v ref="$direct_ref" '$2 == ref { print $1; exit }' <<<"$output")"
+  fi
+  if [[ -z "$REMOTE_TAG_COMMIT" ]]; then
+    echo "error: remote returned no resolvable object for tag $tag" >&2
+    return 1
+  fi
+}
+
+WORKTREE_STATUS=""
+
+capture_worktree_status() {
+  local phase="$1"
+  local status
+
+  if WORKTREE_STATUS="$(git status --porcelain)"; then
+    return 0
+  else
+    status=$?
+  fi
+  echo "error: failed to inspect working tree $phase (git status exit $status)" >&2
+  return "$status"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -120,8 +171,13 @@ if [[ -z "$version" ]]; then
   exit 1
 fi
 
-if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-  echo "error: version must look like vX.Y.Z (optionally with -prerelease and/or +build suffix)" >&2
+if ! validate_release_version "$version"; then
+  echo "error: $RELEASE_VERSION_ERROR" >&2
+  exit 1
+fi
+
+if [[ "$allow_dirty" -eq 1 && "$dry_run" -eq 0 ]]; then
+  echo "error: --allow-dirty is only supported with --dry-run; real tags must be validated from HEAD" >&2
   exit 1
 fi
 
@@ -133,55 +189,102 @@ if [[ ! -f go.mod ]]; then
   exit 1
 fi
 
-if [[ "$allow_dirty" -eq 0 ]] && [[ -n "$(git status --porcelain)" ]]; then
-  echo "error: working tree is dirty. commit/stash or pass --allow-dirty" >&2
+if [[ "$allow_dirty" -eq 0 ]]; then
+  if capture_worktree_status "before release planning"; then
+    if [[ -n "$WORKTREE_STATUS" ]]; then
+      echo "error: working tree is dirty. commit/stash before tagging or pass --allow-dirty with --dry-run" >&2
+      exit 1
+    fi
+  else
+    exit $?
+  fi
+fi
+
+head_commit="$(git rev-parse --verify HEAD)"
+
+release_root="$root"
+if [[ "$dry_run" -eq 0 ]]; then
+  release_view_dir="$(mktemp -d "${TMPDIR:-/tmp}/queue-release-head.XXXXXX")"
+  if ! git archive --format=tar "$head_commit" | tar -xf - -C "$release_view_dir"; then
+    echo "error: failed to extract captured HEAD $head_commit for release validation" >&2
+    exit 1
+  fi
+  release_root="$release_view_dir"
+fi
+
+inventory_guard="$release_root/scripts/check-module-inventory.sh"
+if [[ ! -x "$inventory_guard" ]]; then
+  echo "error: release preflight is missing or not executable: $inventory_guard" >&2
   exit 1
 fi
 
-module_dirs=()
-while IFS= read -r dir; do
-  dir="$(normalize_module_dir "$dir")"
-  module_dirs+=("$dir")
-done <<EOF_MODULES
-$(find . -name go.mod -type f \
-  -not -path './.git/*' \
-  -not -path './*/.git/*' \
-  -not -path './*/vendor/*' \
-  -exec dirname {} \; | sed 's#^\./##' | sort)
-EOF_MODULES
-
-if [[ ${#module_dirs[@]} -eq 0 ]]; then
-  echo "error: no modules discovered" >&2
+tag_planner="$release_root/scripts/plan-module-release-tags.sh"
+if [[ ! -x "$tag_planner" ]]; then
+  echo "error: release tag planner is missing or not executable: $tag_planner" >&2
   exit 1
+fi
+
+preflight_args=(--release-version "$version")
+tag_plan_args=("$version")
+for excluded in "${excludes[@]}"; do
+  preflight_args+=(--exclude "$excluded")
+  tag_plan_args+=(--exclude "$excluded")
+done
+if ! preflight_output="$("$inventory_guard" "${preflight_args[@]}" 2>&1)"; then
+  printf '%s\n' "$preflight_output" >&2
+  exit 1
+fi
+
+if ! tag_plan="$("$tag_planner" "${tag_plan_args[@]}")"; then
+  exit 1
+fi
+
+planned_tags=()
+if [[ -n "$tag_plan" ]]; then
+  while IFS= read -r tag; do
+    planned_tags+=("$tag")
+  done <<<"$tag_plan"
 fi
 
 tags_to_create=()
 tags_to_push=()
-for dir in "${module_dirs[@]}"; do
-  if module_is_excluded "$dir"; then
-    continue
-  fi
-
-  if [[ "$dir" == "." ]]; then
-    tag="$version"
-  else
-    tag="$dir/$version"
-  fi
-
+for tag in "${planned_tags[@]}"; do
   if ! git check-ref-format "refs/tags/$tag" >/dev/null 2>&1; then
-    echo "error: computed invalid tag ref: $tag (from module dir: $dir)" >&2
+    echo "error: computed invalid tag ref: $tag" >&2
     exit 1
   fi
 
   local_exists=0
+  local_tag_commit=""
   remote_exists=0
+  remote_tag_commit=""
 
   if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
     local_exists=1
+    if [[ "$skip_existing" -eq 1 ]]; then
+      if ! local_tag_commit="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then
+        echo "error: local tag $tag does not resolve to a commit" >&2
+        exit 1
+      fi
+      if [[ "$local_tag_commit" != "$head_commit" ]]; then
+        echo "error: local tag $tag resolves to $local_tag_commit; --skip-existing requires HEAD $head_commit" >&2
+        exit 1
+      fi
+    fi
   fi
 
-  if [[ "$push" -eq 1 ]] && remote_tag_exists "$remote" "$tag"; then
-    remote_exists=1
+  if [[ "$push" -eq 1 ]]; then
+    if inspect_remote_tag "$remote" "$tag"; then
+      remote_exists="$REMOTE_TAG_EXISTS"
+      remote_tag_commit="$REMOTE_TAG_COMMIT"
+    else
+      remote_status=$?
+      exit "$remote_status"
+    fi
+    if [[ "$remote_exists" -eq 1 && "$skip_existing" -eq 1 && "$remote_tag_commit" != "$head_commit" ]]; then
+      echo "error: remote tag $tag resolves to $remote_tag_commit; --skip-existing requires HEAD $head_commit" >&2
+      exit 1
+    fi
   fi
 
   if [[ "$local_exists" -eq 1 ]] || [[ "$remote_exists" -eq 1 ]]; then
@@ -215,7 +318,7 @@ if [[ ${#tags_to_create[@]} -eq 0 ]] && [[ ${#tags_to_push[@]} -eq 0 ]]; then
 fi
 
 echo "repo: $root"
-echo "head: $(git rev-parse --short HEAD)"
+echo "head: $(git rev-parse --short "$head_commit")"
 echo "version: $version"
 if [[ ${#excludes[@]} -gt 0 ]]; then
   echo "excluded modules: ${excludes[*]}"
@@ -238,9 +341,23 @@ if [[ "$dry_run" -eq 1 ]]; then
   exit 0
 fi
 
+current_head="$(git rev-parse --verify HEAD)"
+if [[ "$current_head" != "$head_commit" ]]; then
+  echo "error: HEAD changed during release planning; expected $head_commit, found $current_head" >&2
+  exit 1
+fi
+if capture_worktree_status "immediately before tag mutation"; then
+  if [[ -n "$WORKTREE_STATUS" ]]; then
+    echo "error: working tree changed during release planning; refusing to mutate tags" >&2
+    exit 1
+  fi
+else
+  exit $?
+fi
+
 if [[ ${#tags_to_create[@]} -gt 0 ]]; then
   for t in "${tags_to_create[@]}"; do
-    git tag -a "$t" -m "release $t"
+    git tag -a "$t" -m "release $t" "$head_commit"
   done
 fi
 
@@ -249,7 +366,11 @@ if [[ ${#tags_to_create[@]} -gt 0 ]]; then
 fi
 
 if [[ "$push" -eq 1 ]]; then
-  git push "$remote" "${tags_to_push[@]}"
+  tag_refspecs=()
+  for t in "${tags_to_push[@]}"; do
+    tag_refspecs+=("refs/tags/$t:refs/tags/$t")
+  done
+  git push --atomic "$remote" "${tag_refspecs[@]}"
   echo "pushed ${#tags_to_push[@]} tags to $remote"
 else
   echo "not pushed (use --push)"

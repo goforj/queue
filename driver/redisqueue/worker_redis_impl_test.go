@@ -395,6 +395,7 @@ func TestRedisWorker_ObserverSeesDecoratedContext(t *testing.T) {
 
 	var observed []string
 	var handled []string
+	decoratorCalls := 0
 	observer := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
 		if event.Kind != queue.EventProcessStarted && event.Kind != queue.EventProcessSucceeded {
 			return
@@ -404,6 +405,7 @@ func TestRedisWorker_ObserverSeesDecoratedContext(t *testing.T) {
 	})
 	w := newRedisWorker(server, backend.NewServeMux(), observer)
 	w.SetHandlerContextDecorator(func(ctx context.Context) context.Context {
+		decoratorCalls++
 		return context.WithValue(ctx, key, want)
 	})
 
@@ -429,5 +431,8 @@ func TestRedisWorker_ObserverSeesDecoratedContext(t *testing.T) {
 	}
 	if len(handled) != 1 || handled[0] != want {
 		t.Fatalf("expected handler to see %q, got %#v", want, handled)
+	}
+	if decoratorCalls != 1 {
+		t.Fatalf("expected decorator called once, got %d", decoratorCalls)
 	}
 }

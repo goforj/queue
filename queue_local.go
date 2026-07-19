@@ -29,7 +29,11 @@ type localQueue struct {
 	resizeBuffer bool
 	shutdownOnce sync.Once
 	workerWG     sync.WaitGroup
-	delayedWG    sync.WaitGroup
+
+	syncWorkMu      sync.Mutex
+	syncWorkPending int
+	syncWorkIdle    chan struct{}
+
 	shuttingDown atomic.Bool
 	enqueued     atomic.Int64
 	started      atomic.Int64
@@ -155,8 +159,8 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 	})
 
 	if d.driver == DriverSync {
-		if err := waitGroupWithContext(ctx, &d.delayedWG); err != nil {
-			return fmt.Errorf("sync delayed jobs drain failed: %w (%s)", err, d.shutdownStats())
+		if err := d.waitForSyncWork(ctx); err != nil {
+			return fmt.Errorf("sync jobs drain failed: %w (%s)", err, d.shutdownStats())
 		}
 		return nil
 	}
@@ -164,10 +168,6 @@ func (d *localQueue) Shutdown(ctx context.Context) error {
 	if err := d.closeWorkerQueueWhenIdle(ctx); err != nil {
 		return fmt.Errorf("workerpool queued jobs drain failed: %w (%s)", err, d.shutdownStats())
 	}
-	if err := waitGroupWithContext(ctx, &d.delayedWG); err != nil {
-		return fmt.Errorf("workerpool delayed jobs drain failed: %w (%s)", err, d.shutdownStats())
-	}
-
 	if err := waitGroupWithContext(ctx, &d.workerWG); err != nil {
 		return fmt.Errorf("workerpool active jobs drain failed: %w (%s)", err, d.shutdownStats())
 	}
@@ -231,6 +231,13 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 		}
 	}
 	if parsed.delay <= 0 {
+		if d.driver == DriverSync {
+			if err := d.reserveSyncWork(ctx); err != nil {
+				d.unique.Release(uniqueKey, uniqueToken)
+				return err
+			}
+			defer d.finishSyncWork()
+		}
 		err := d.enqueueNow(ctx, job, parsed)
 		if err != nil && !acceptance.isAccepted() {
 			d.unique.Release(uniqueKey, uniqueToken)
@@ -238,15 +245,20 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 		return err
 	}
 	var reservedQueue chan queuedJob
-	if d.driver == DriverWorkerpool {
+	switch d.driver {
+	case DriverWorkerpool:
 		var reserveErr error
-		reservedQueue, reserveErr = d.reserveWorkerQueue()
+		reservedQueue, reserveErr = d.reserveWorkerQueue(ctx)
 		if reserveErr != nil {
 			d.unique.Release(uniqueKey, uniqueToken)
 			return reserveErr
 		}
+	case DriverSync:
+		if err := d.reserveSyncWork(ctx); err != nil {
+			d.unique.Release(uniqueKey, uniqueToken)
+			return err
+		}
 	}
-	d.delayedWG.Add(1)
 	d.delayed.Add(1)
 	d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
 		metrics.Delayed++
@@ -256,7 +268,9 @@ func (d *localQueue) Dispatch(ctx context.Context, job Job) error {
 	}
 	delayedCtx := context.WithoutCancel(ctx)
 	go func() {
-		defer d.delayedWG.Done()
+		if d.driver == DriverSync {
+			defer d.finishSyncWork()
+		}
 		defer d.delayed.Add(-1)
 		defer d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
 			if metrics.Delayed > 0 {
@@ -306,13 +320,10 @@ func (d *localQueue) enqueueNow(ctx context.Context, job Job, parsed jobOptions)
 }
 
 func (d *localQueue) enqueueAsync(ctx context.Context, job Job, parsed jobOptions) error {
-	if d.shuttingDown.Load() && !d.continuation.Owns(ctx) {
-		return ErrQueuerShuttingDown
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	workQueue, err := d.reserveWorkerQueue()
+	workQueue, err := d.reserveWorkerQueue(ctx)
 	if err != nil {
 		return err
 	}
@@ -366,9 +377,12 @@ func (d *localQueue) recordQueuedJob(parsed jobOptions, acceptance *dispatchAcce
 }
 
 // reserveWorkerQueue keeps the channel open until this queued or active job and all descendants finish.
-func (d *localQueue) reserveWorkerQueue() (chan queuedJob, error) {
+func (d *localQueue) reserveWorkerQueue(ctx context.Context) (chan queuedJob, error) {
 	d.queueMu.Lock()
 	defer d.queueMu.Unlock()
+	if d.shuttingDown.Load() && !d.continuation.Owns(ctx) {
+		return nil, ErrQueuerShuttingDown
+	}
 	if d.workQueue == nil {
 		if d.shuttingDown.Load() {
 			return nil, ErrWorkerpoolQueueNotInitialized
@@ -383,6 +397,51 @@ func (d *localQueue) reserveWorkerQueue() (chan queuedJob, error) {
 	}
 	d.workPending++
 	return d.workQueue, nil
+}
+
+// reserveSyncWork keeps shutdown attached to the current Sync work generation, including descendants admitted by a live handler.
+func (d *localQueue) reserveSyncWork(ctx context.Context) error {
+	d.syncWorkMu.Lock()
+	defer d.syncWorkMu.Unlock()
+	if d.shuttingDown.Load() && !d.continuation.Owns(ctx) {
+		return ErrQueuerShuttingDown
+	}
+	if d.syncWorkPending == 0 {
+		d.syncWorkIdle = make(chan struct{})
+	}
+	d.syncWorkPending++
+	return nil
+}
+
+// finishSyncWork releases one Sync job only after its handler can no longer admit descendants.
+func (d *localQueue) finishSyncWork() {
+	d.syncWorkMu.Lock()
+	d.syncWorkPending--
+	if d.syncWorkPending == 0 && d.syncWorkIdle != nil {
+		close(d.syncWorkIdle)
+	}
+	d.syncWorkMu.Unlock()
+}
+
+// waitForSyncWork waits on the stable channel for the active Sync work generation without creating shutdown waiter goroutines.
+func (d *localQueue) waitForSyncWork(ctx context.Context) error {
+	d.syncWorkMu.Lock()
+	if d.syncWorkPending == 0 {
+		d.syncWorkMu.Unlock()
+		return nil
+	}
+	idle := d.syncWorkIdle
+	d.syncWorkMu.Unlock()
+	if ctx == nil {
+		<-idle
+		return nil
+	}
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // finishQueuedWork releases one accepted workerpool job after its handler can no longer enqueue descendants.

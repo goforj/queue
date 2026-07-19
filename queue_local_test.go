@@ -60,6 +60,218 @@ func TestLocalQueue_DispatchDelayed(t *testing.T) {
 	}
 }
 
+// TestLocalQueueSyncShutdownSucceedsWhenCanceledAndIdle prevents an expired caller budget from failing already-complete cleanup.
+func TestLocalQueueSyncShutdownSucceedsWhenCanceledAndIdle(t *testing.T) {
+	d := newLocalQueue(DriverSync)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := d.Shutdown(ctx); err != nil {
+		t.Fatalf("idle sync shutdown failed: %v", err)
+	}
+	if !d.shuttingDown.Load() {
+		t.Fatal("idle sync shutdown did not latch shutdown state")
+	}
+
+	d.Register("job:after-idle-shutdown", func(context.Context, Job) error { return nil })
+	err := d.Dispatch(context.Background(), NewJob("job:after-idle-shutdown"))
+	if !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("dispatch after idle shutdown error = %v, want %v", err, ErrQueuerShuttingDown)
+	}
+}
+
+// TestLocalQueueSyncShutdownHonorsCancellationWithPendingWork keeps a pending drain generation bounded and retryable.
+func TestLocalQueueSyncShutdownHonorsCancellationWithPendingWork(t *testing.T) {
+	d := newLocalQueue(DriverSync)
+	if err := d.reserveSyncWork(context.Background()); err != nil {
+		t.Fatalf("reserve sync work: %v", err)
+	}
+	pending := true
+	t.Cleanup(func() {
+		if pending {
+			d.finishSyncWork()
+		}
+	})
+	d.syncWorkMu.Lock()
+	sharedDone := d.syncWorkIdle
+	d.syncWorkMu.Unlock()
+	if sharedDone == nil {
+		t.Fatal("pending sync work did not open a drain generation")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := d.Shutdown(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pending sync shutdown error = %v, want %v", err, context.Canceled)
+	}
+	for range 32 {
+		if err := d.Shutdown(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("repeated pending sync shutdown error = %v, want %v", err, context.Canceled)
+		}
+		d.syncWorkMu.Lock()
+		currentDone := d.syncWorkIdle
+		d.syncWorkMu.Unlock()
+		if currentDone != sharedDone {
+			t.Fatal("pending sync shutdown retry replaced the work drain generation")
+		}
+	}
+	if !d.shuttingDown.Load() {
+		t.Fatal("canceled sync shutdown did not latch shutdown state")
+	}
+	d.Register("job:after-canceled-shutdown", func(context.Context, Job) error { return nil })
+	if err := d.Dispatch(context.Background(), NewJob("job:after-canceled-shutdown")); !errors.Is(err, ErrQueuerShuttingDown) {
+		t.Fatalf("dispatch after canceled shutdown error = %v, want %v", err, ErrQueuerShuttingDown)
+	}
+
+	d.finishSyncWork()
+	pending = false
+	if err := d.Shutdown(context.Background()); err != nil {
+		t.Fatalf("sync shutdown retry failed after work completed: %v", err)
+	}
+	select {
+	case <-sharedDone:
+	default:
+		t.Fatal("completed sync work did not close its drain generation")
+	}
+}
+
+// continuationGateContext reports when Dispatch has observed its initial live continuation permit.
+type continuationGateContext struct {
+	context.Context
+	passed chan<- struct{}
+}
+
+// Value preserves the wrapped context while exposing the otherwise internal continuation lookup as a deterministic test seam.
+func (c continuationGateContext) Value(key any) any {
+	value := c.Context.Value(key)
+	if value != nil {
+		select {
+		case c.passed <- struct{}{}:
+		default:
+		}
+	}
+	return value
+}
+
+// TestLocalQueueRejectsContinuationThatEscapesBeforeReservation verifies shutdown cannot be overtaken by a child that passed the initial permit gate but lost ownership before reserving work.
+func TestLocalQueueRejectsContinuationThatEscapesBeforeReservation(t *testing.T) {
+	tests := []struct {
+		name    string
+		driver  Driver
+		delayed bool
+	}{
+		{name: "sync immediate", driver: DriverSync},
+		{name: "sync delayed", driver: DriverSync, delayed: true},
+		{name: "workerpool immediate", driver: DriverWorkerpool},
+		{name: "workerpool delayed", driver: DriverWorkerpool, delayed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			d := newLocalQueueWithConfig(test.driver, WorkerpoolConfig{Workers: 1, QueueCapacity: 1})
+			var handlerCalls atomic.Int64
+			jobType := "job:escaped:" + test.name
+			d.Register(jobType, func(context.Context, Job) error {
+				handlerCalls.Add(1)
+				return nil
+			})
+
+			parentPending := true
+			switch test.driver {
+			case DriverSync:
+				if err := d.reserveSyncWork(context.Background()); err != nil {
+					t.Fatalf("reserve parent Sync work: %v", err)
+				}
+			case DriverWorkerpool:
+				if _, err := d.reserveWorkerQueue(context.Background()); err != nil {
+					t.Fatalf("reserve parent Workerpool work: %v", err)
+				}
+			}
+
+			permitCtx, releasePermit := d.continuation.Permit(context.Background())
+			permitActive := true
+			muHeld := false
+			t.Cleanup(func() {
+				if permitActive {
+					releasePermit()
+				}
+				if muHeld {
+					d.mu.Unlock()
+				}
+				if parentPending {
+					if test.driver == DriverSync {
+						d.finishSyncWork()
+					} else {
+						d.finishQueuedWork()
+					}
+				}
+				if err := d.Shutdown(context.Background()); err != nil {
+					t.Errorf("cleanup shutdown: %v", err)
+				}
+			})
+
+			canceledCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := d.Shutdown(canceledCtx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("establish draining state error = %v, want %v", err, context.Canceled)
+			}
+
+			passedInitialGate := make(chan struct{}, 1)
+			childResult := make(chan error, 1)
+			job := NewJob(jobType).
+				Payload([]byte(test.name)).
+				OnQueue("default").
+				UniqueFor(time.Hour)
+			if test.delayed {
+				job = job.Delay(time.Millisecond)
+			}
+
+			d.mu.Lock()
+			muHeld = true
+			go func() {
+				childResult <- d.Dispatch(continuationGateContext{Context: permitCtx, passed: passedInitialGate}, job)
+			}()
+			select {
+			case <-passedInitialGate:
+			case <-time.After(5 * time.Second):
+				t.Fatal("child did not pass the initial continuation gate")
+			}
+
+			releasePermit()
+			permitActive = false
+			if test.driver == DriverSync {
+				d.finishSyncWork()
+			} else {
+				d.finishQueuedWork()
+			}
+			parentPending = false
+			if err := d.Shutdown(context.Background()); err != nil {
+				t.Fatalf("finish parent drain: %v", err)
+			}
+			d.mu.Unlock()
+			muHeld = false
+
+			select {
+			case err := <-childResult:
+				if !errors.Is(err, ErrQueuerShuttingDown) {
+					t.Fatalf("escaped continuation error = %v, want %v", err, ErrQueuerShuttingDown)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("escaped continuation did not finish")
+			}
+			if got := handlerCalls.Load(); got != 0 {
+				t.Fatalf("escaped continuation handler calls = %d, want 0", got)
+			}
+			if got := d.delayed.Load(); got != 0 {
+				t.Fatalf("escaped continuation delayed jobs = %d, want 0", got)
+			}
+			key := DriverUniqueKey(job, "default")
+			if _, ok := d.unique.Acquire(key, time.Hour); !ok {
+				t.Fatal("escaped continuation retained its uniqueness claim")
+			}
+		})
+	}
+}
+
 func TestLocalQueue_DispatchMissingHandlerFails(t *testing.T) {
 	d := newLocalQueue(DriverSync)
 	err := d.Dispatch(context.Background(), NewJob("missing").OnQueue("default"))

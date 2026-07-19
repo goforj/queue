@@ -1200,16 +1200,36 @@ func (q *externalQueueRuntime) Ready(ctx context.Context) error {
 	return q.common.Ready(ctx)
 }
 
+// wrapRegisteredHandler keeps each backend's context decoration and process
+// observation at a single execution boundary.
 func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Handler {
-	if handler == nil || !observerHasRecipients(q.cfg.Observer) {
+	if handler == nil {
 		return handler
 	}
 	// Redis worker emits process lifecycle events natively.
-	// Skip shared handler wrapping to avoid duplicate process_* events.
+	// Skip shared handler wrapping and decoration to avoid duplicate process_* events
+	// and context decoration.
 	if q.cfg.Driver == DriverRedis {
 		return handler
 	}
+	if !observerHasRecipients(q.cfg.Observer) {
+		return wrapHandlerContext(q.handlerContextDecorator, handler)
+	}
 	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, q.handlerContextDecorator, handler)
+}
+
+// wrapHandlerContext applies optional execution context decoration while
+// preserving the original context when the decorator returns nil.
+func wrapHandlerContext(decorator func(context.Context) context.Context, handler Handler) Handler {
+	if decorator == nil || handler == nil {
+		return handler
+	}
+	return func(ctx context.Context, job Job) error {
+		if decorated := decorator(ctx); decorated != nil {
+			ctx = decorated
+		}
+		return handler(ctx, job)
+	}
 }
 
 // dispatchBusJob preserves workflow policy and logical identity while adapting onto the canonical root job.

@@ -54,6 +54,7 @@ run_tooling_module() {
 }
 
 "$ROOT_DIR/scripts/check-module-inventory.sh"
+"$ROOT_DIR/scripts/test-release-scripts.sh"
 "$ROOT_DIR/scripts/check-generated-docs.sh"
 run_root
 run_module "driver/redisqueue"
