@@ -65,7 +65,8 @@ What is not yet sufficient for a GA claim:
   - Scenarios:
     - `scenario_dispatch_during_broker_fault`
     - `scenario_consume_after_broker_recovery`
-  - Acceptance: failures are surfaced during broker outage and recovery path processes jobs after broker restoration.
+    - `TestIntegrationChaos_RedisBrokerDisconnectRedelivery`
+  - Acceptance: failures are surfaced during broker outage, recovery processes work after restoration, and Redis redelivers a handler-time lost acknowledgement without consuming the application retry budget.
 
 - [x] Duplicate-delivery idempotency scenario remains green.
   - Scenario: `scenario_duplicate_delivery_idempotency`

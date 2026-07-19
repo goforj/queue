@@ -40,7 +40,7 @@ These are the primary shared-scenario proofs for the matrix above.
 | Dispatch context cancellation | `scenario_dispatch_context_cancellation` parent with `scenario_dispatch_context_precanceled`, `scenario_dispatch_context_deadline_exceeded`, and `scenario_dispatch_context_followup_health` |
 | No-duplicate processing under fixture conditions | `scenario_multi_worker_contention`; `scenario_duplicate_delivery_idempotency`. Public logical `Job.UniqueFor` behavior is separately exercised through `TestIntegrationQueue_AllBackends` in `integration/all/runtime_integration_test.go`. |
 | Ordering contract (suite-level capability) | `scenario_ordering_contract` parent with `scenario_ordering_single_worker_fifo`; concurrent non-guarantee covered by `scenario_ordering_multi_worker_best_effort`; reordering behavior probed by `scenario_ordering_delayed_immediate_mix` and `scenario_ordering_retry_reorder_allowed` |
-| Broker fault handling | `scenario_dispatch_during_broker_fault`; `scenario_consume_after_broker_recovery` |
+| Broker fault handling | `scenario_dispatch_during_broker_fault`; `scenario_consume_after_broker_recovery`; Redis lost-ack recovery in `TestIntegrationChaos_RedisBrokerDisconnectRedelivery` |
 | Shutdown during delay/retry workloads | `scenario_shutdown_during_delay_retry` |
 | Pause/Resume capability behavior | `TestObservabilityIntegration_PauseResumeSupport_AllBackends` (`integration/root/observability_integration_test.go`) |
 | Native stats capability behavior | `TestObservabilityIntegration_AllBackends` (`integration/root/observability_integration_test.go`) |

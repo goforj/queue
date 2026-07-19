@@ -143,12 +143,10 @@ This section is the core of the plan. Each area should have:
 - duplicate-delivery idempotency scenario
 - restart recovery scenarios
 - broker fault / recovery scenarios (capability-gated)
+- Redis handler-time disconnect, lost acknowledgement, and same-task redelivery with one idempotent side effect
 
 ### Gaps to add
 
-- Explicit ack-boundary invariants under worker interruption
-  - example: handler side effect committed, ack path interrupted, duplicate delivery occurs; verify idempotency pattern and state consistency
-- “success exactly once” is not promised; test and document “side-effect idempotency required” with reference scenario
 - Delayed job + restart + recovery invariants for all backends that claim durable delay/retry behavior
 
 ## B. Retry, Delay, and Scheduling Semantics
@@ -508,7 +506,7 @@ Why:
   - scenario results are visible in CI artifacts/logs with backend + scenario naming
 - Notes:
   - capability-gate unsupported fault injection paths explicitly
-  - Implemented in `.github/workflows/soak.yml` `integration-chaos` subset with shared scenario names aligned to current suite (`scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, `scenario_worker_restart_recovery`, `scenario_worker_restart_delay_recovery`, plus contention/shutdown race probes); results are emitted with backend+scenario duration lines and uploaded per-backend logs
+  - Implemented in the scheduled and manually runnable `.github/workflows/soak.yml` `integration-chaos` subset. `TestIntegrationChaos_RedisBrokerDisconnectRedelivery` stops Redis while an idempotent handler is active, proves its successful return cannot be acknowledged, retains the same active task, and exercises Asynq lease recovery without consuming the application's zero-retry budget. The subset also runs `scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, `scenario_worker_restart_recovery`, `scenario_worker_restart_delay_recovery`, and contention/shutdown race probes. Results include backend and scenario duration lines and per-backend log artifacts.
 
 Expand scheduled integration scenarios for:
 
@@ -531,10 +529,11 @@ Why:
 - Acceptance:
   - selected scenarios run repeatedly per backend (or backend subsets)
   - flake rate is recorded by backend/scenario
+  - capability-gated scenarios are recorded as skips, while a missing expected scenario event fails the repeat job
   - release candidates require manual review of recent flake results
 - Notes:
   - focus on contention, retry timing, shutdown races, ordering
-  - Implemented via `.github/workflows/soak.yml` `integration-flake-repeat` (scheduled + manual) using `scripts/integration-flake-repeat.sh`; current backend subset is `redis`, `rabbitmq`, `sqs` with per-scenario flake-rate summaries/artifacts in `docs/flake-log.md` review format
+  - Implemented via `.github/workflows/soak.yml` `integration-flake-repeat` (scheduled + manual) using `scripts/integration-flake-repeat.sh`; current backend subset is `redis`, `rabbitmq`, `sqs` with per-scenario executed pass/fail and explicit capability-skip summaries/artifacts in `docs/flake-log.md` review format
 
 Run critical scenarios repeatedly (nightly/RC gate):
 
