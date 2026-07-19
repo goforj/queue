@@ -16,6 +16,7 @@ Usage:
 Checks:
   - every go.mod has the expected repository module path and Go version
   - go.work contains every discovered module exactly once
+  - the CI race matrix contains root and every discovered driver module exactly once
   - sibling requirements use one version and resolve through local replacements
   - the release script discovers every module and computes the documented tag
   - --release-version rejects sibling dependency pins that would not resolve after release
@@ -185,6 +186,9 @@ REPLACEMENTS_FILE="$TMP_DIR/replacements.tsv"
 EXPECTED_DIRS_FILE="$TMP_DIR/expected-dirs.txt"
 WORKSPACE_DIRS_FILE="$TMP_DIR/workspace-dirs.txt"
 WORKSPACE_DIRS_RAW_FILE="$TMP_DIR/workspace-dirs-raw.txt"
+EXPECTED_RACE_DIRS_FILE="$TMP_DIR/expected-race-dirs.txt"
+RACE_DIRS_FILE="$TMP_DIR/race-dirs.txt"
+RACE_DIRS_RAW_FILE="$TMP_DIR/race-dirs-raw.txt"
 
 while IFS= read -r mod_file; do
   rel_file="${mod_file#./}"
@@ -262,6 +266,44 @@ workspace_unique_count="$(wc -l <"$WORKSPACE_DIRS_FILE" | tr -d ' ')"
 if ! diff -u "$EXPECTED_DIRS_FILE" "$WORKSPACE_DIRS_FILE" >"$TMP_DIR/workspace.diff"; then
   cat "$TMP_DIR/workspace.diff" >&2
   fail "go.work membership differs from the discovered module inventory"
+fi
+
+RACE_WORKFLOW="$ROOT_DIR/.github/workflows/test.yml"
+[[ -f "$RACE_WORKFLOW" ]] || fail ".github/workflows/test.yml is missing"
+{
+  printf '.\n'
+  awk -F '\t' 'index($1, "driver/") == 1 { print $1 }' "$MODULES_FILE"
+} | sort -u >"$EXPECTED_RACE_DIRS_FILE"
+
+if ! awk '
+  /race_module:[[:space:]]*\[/ {
+    line = $0
+    sub(/^.*race_module:[[:space:]]*\[/, "", line)
+    sub(/\].*$/, "", line)
+    count = split(line, entries, ",")
+    for (i = 1; i <= count; i++) {
+      value = entries[i]
+      gsub(/^[[:space:]\"]+|[[:space:]\"]+$/, "", value)
+      if (value != "") {
+        print value
+      }
+    }
+    found = 1
+    exit
+  }
+  END { if (!found) exit 1 }
+' "$RACE_WORKFLOW" >"$RACE_DIRS_RAW_FILE"; then
+  fail ".github/workflows/test.yml has no inline race_module matrix"
+fi
+
+sort -u "$RACE_DIRS_RAW_FILE" >"$RACE_DIRS_FILE"
+race_entry_count="$(wc -l <"$RACE_DIRS_RAW_FILE" | tr -d ' ')"
+race_unique_count="$(wc -l <"$RACE_DIRS_FILE" | tr -d ' ')"
+[[ "$race_entry_count" -eq "$race_unique_count" ]] || fail "CI race matrix contains duplicate module entries"
+
+if ! diff -u "$EXPECTED_RACE_DIRS_FILE" "$RACE_DIRS_FILE" >"$TMP_DIR/race-matrix.diff"; then
+  cat "$TMP_DIR/race-matrix.diff" >&2
+  fail "CI race matrix must contain root and every discovered driver module"
 fi
 
 LOCAL_VERSIONS_FILE="$TMP_DIR/local-versions.txt"
@@ -373,7 +415,7 @@ if [[ -n "$TAG_VERSION" ]]; then
   done <"$MODULES_FILE"
 fi
 
-echo "module inventory guard: $module_count modules, Go $root_go_version, workspace/replacements/release coverage OK"
+echo "module inventory guard: $module_count modules, Go $root_go_version, workspace/race/replacements/release coverage OK"
 if [[ -s "$LOCAL_VERSIONS_FILE" ]]; then
   echo "module inventory guard: sibling requirement version $(head -n 1 "$LOCAL_VERSIONS_FILE")"
 fi

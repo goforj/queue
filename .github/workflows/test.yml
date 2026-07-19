@@ -87,11 +87,17 @@ jobs:
           overwrite: true
           retention-days: 1
 
-  race:
+  race_modules:
+    name: Race (${{ matrix.race_module }})
     runs-on: ubuntu-latest
     env:
       GOCACHE: /tmp/gocache
       GOMODCACHE: /tmp/gomodcache
+      GOWORK: "off"
+    strategy:
+      fail-fast: false
+      matrix:
+        race_module: [".", "driver/mysqlqueue", "driver/natsqueue", "driver/postgresqueue", "driver/rabbitmqqueue", "driver/redisqueue", "driver/sqlitequeue", "driver/sqlqueuecore", "driver/sqsqueue"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -100,12 +106,28 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
+          cache-dependency-path: |
+            go.sum
+            driver/*/go.sum
 
-      - name: Install dependencies
+      - name: Install module dependencies
+        working-directory: ${{ matrix.race_module }}
         run: go mod download
 
-      - name: Run race tests (root module scope)
-        run: go test -race ./...
+      - name: Run race tests
+        working-directory: ${{ matrix.race_module }}
+        run: go test -race ./... -count=1
+
+  race:
+    name: race
+    needs: race_modules
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every race module
+        env:
+          RACE_RESULT: ${{ needs.race_modules.result }}
+        run: test "$RACE_RESULT" = "success"
 
   integration-all:
     needs: [integration-matrix-guard, integration-scenarios-contract-guard]

@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -12,19 +15,47 @@ import (
 	"github.com/goforj/queue"
 )
 
+// TestReadmeManualSnippetsCompile prevents curated README examples from drifting beyond public API signatures.
 func TestReadmeManualSnippetsCompile(t *testing.T) {
-	// Compile-check only. The helpers mirror curated manual README snippets that
-	// have drifted before (Dispatch/WithContext(ctx).Dispatch and handler signatures).
+	// The helpers mirror curated manual README snippets that have drifted before,
+	// including Dispatch/WithContext(ctx).Dispatch and handler signatures.
 	_ = []any{
 		compileQuickStartQueueSnippet,
 		compileQuickStartWorkflowSnippet,
 		compileRunAsWorkerServiceSnippet,
 		compileJobBuilderOptionsSnippet,
 		compileMiddlewareSnippet,
+		compileObservabilitySnippet,
+		compileComposeObserversSnippet,
 		compileFakeQueueSnippet,
+	}
+	assertReadmeObserverSignatures(t)
+}
+
+// assertReadmeObserverSignatures keeps the manual observer snippets tied to the compiled helpers.
+func assertReadmeObserverSignatures(t *testing.T) {
+	t.Helper()
+	readmePath := filepath.Join("..", "..", "README.md")
+	contents, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", readmePath, err)
+	}
+	manual, _, found := strings.Cut(string(contents), "<!-- api:embed:start -->")
+	if !found {
+		t.Fatal("README is missing the generated API start marker")
+	}
+
+	for _, signature := range []string{
+		"queue.ObserverFunc(func(_ context.Context, event queue.Event)",
+		"queue.ObserverFunc(func(_ context.Context, e queue.Event)",
+	} {
+		if !strings.Contains(manual, signature) {
+			t.Fatalf("README manual observer snippet is missing compiled signature %q", signature)
+		}
 	}
 }
 
+// compileQuickStartQueueSnippet pins the queue quick start to the supported dispatch and handler signatures.
 func compileQuickStartQueueSnippet(q *queue.Queue) {
 	if q == nil {
 		return
@@ -48,6 +79,7 @@ func compileQuickStartQueueSnippet(q *queue.Queue) {
 	)
 }
 
+// compileQuickStartWorkflowSnippet pins the workflow quick start to the supported builder signatures.
 func compileQuickStartWorkflowSnippet(q *queue.Queue) {
 	q, _ = queue.NewWorkerpool(queue.WithWorkers(2))
 
@@ -73,6 +105,7 @@ func compileQuickStartWorkflowSnippet(q *queue.Queue) {
 	_ = chainID
 }
 
+// compileRunAsWorkerServiceSnippet pins the worker-service example to the supported lifecycle signatures.
 func compileRunAsWorkerServiceSnippet(q *queue.Queue) {
 	if q == nil {
 		return
@@ -88,6 +121,7 @@ func compileRunAsWorkerServiceSnippet(q *queue.Queue) {
 	}
 }
 
+// compileJobBuilderOptionsSnippet pins the job-options example to the supported fluent builder API.
 func compileJobBuilderOptionsSnippet(q *queue.Queue) {
 	if q == nil {
 		return
@@ -115,6 +149,7 @@ func compileJobBuilderOptionsSnippet(q *queue.Queue) {
 	})
 }
 
+// compileMiddlewareSnippet pins the middleware example to the supported middleware contracts.
 func compileMiddlewareSnippet() {
 	var errValidation = errors.New("validation failed")
 	maintenanceMode := false
@@ -145,6 +180,46 @@ func compileMiddlewareSnippet() {
 	_ = q
 }
 
+// compileObservabilitySnippet mirrors the README's basic observer composition example.
+func compileObservabilitySnippet() {
+	collector := queue.NewStatsCollector()
+	observer := queue.MultiObserver(
+		collector,
+		queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+			_ = event.Kind
+		}),
+	)
+
+	q, _ := queue.New(queue.Config{
+		Driver:   queue.DriverWorkerpool,
+		Observer: observer,
+	})
+	_ = q
+}
+
+// compileComposeObserversSnippet mirrors the README's multi-observer example.
+func compileComposeObserversSnippet() {
+	events := make(chan queue.Event, 100)
+	collector := queue.NewStatsCollector()
+	observer := queue.MultiObserver(
+		collector,
+		queue.ChannelObserver{
+			Events:     events,
+			DropIfFull: true,
+		},
+		queue.ObserverFunc(func(_ context.Context, e queue.Event) {
+			_ = e
+		}),
+	)
+
+	q, _ := queue.New(queue.Config{
+		Driver:   queue.DriverWorkerpool,
+		Observer: observer,
+	})
+	_ = q
+}
+
+// compileFakeQueueSnippet pins the fake-queue example to the supported testing API.
 func compileFakeQueueSnippet() {
 	fake := queue.NewFake()
 	fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
