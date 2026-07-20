@@ -13,9 +13,9 @@ import (
 )
 
 func main() {
-	// Paused returns paused count for a queue.
+	// Paused returns the observed pause state for a queue as zero or one.
 
-	// Example: paused count getter
+	// Example: pause state getter
 	collector := queue.NewStatsCollector()
 	collector.Observe(context.Background(), queue.Event{
 		Kind:   queue.EventQueuePaused,

@@ -22,7 +22,7 @@ type processEventRecorder struct {
 
 func (r *processEventRecorder) Observe(_ context.Context, event queue.Event) {
 	switch event.Kind {
-	case queue.EventProcessStarted, queue.EventProcessSucceeded, queue.EventProcessFailed:
+	case queue.EventProcessStarted, queue.EventProcessSucceeded, queue.EventProcessFailed, queue.EventProcessArchived:
 		r.mu.Lock()
 		r.events = append(r.events, event)
 		r.mu.Unlock()
@@ -54,10 +54,11 @@ func (r *processEventRecorder) has(kind queue.EventKind, predicate func(queue.Ev
 
 func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 	fixtures := []struct {
-		name     string
-		queue    string
-		workers  int
-		newQueue func(t *testing.T, observer queue.Observer) QueueRuntime
+		name             string
+		queue            string
+		workers          int
+		confirmsArchives bool
+		newQueue         func(t *testing.T, observer queue.Observer) QueueRuntime
 	}{
 		{
 			name:    testenv.BackendRedis,
@@ -73,9 +74,10 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    testenv.BackendMySQL,
-			queue:   "obs_events_mysql",
-			workers: 2,
+			name:             testenv.BackendMySQL,
+			queue:            "obs_events_mysql",
+			workers:          2,
+			confirmsArchives: true,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
 				ensureMySQLDB(t)
 				q, err := newQueueRuntime(withObserver(withDefaultQueue(mysqlCfg(mysqlDSN(integrationMySQL.addr)), "obs_events_mysql"), observer))
@@ -86,9 +88,10 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    testenv.BackendPostgres,
-			queue:   "obs_events_postgres",
-			workers: 2,
+			name:             testenv.BackendPostgres,
+			queue:            "obs_events_postgres",
+			workers:          2,
+			confirmsArchives: true,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
 				ensurePostgresDB(t)
 				q, err := newQueueRuntime(withObserver(withDefaultQueue(postgresCfg(postgresDSN(integrationPostgres.addr)), "obs_events_postgres"), observer))
@@ -99,9 +102,10 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 			},
 		},
 		{
-			name:    testenv.BackendSQLite,
-			queue:   "obs_events_sqlite",
-			workers: 2,
+			name:             testenv.BackendSQLite,
+			queue:            "obs_events_sqlite",
+			workers:          2,
+			confirmsArchives: true,
 			newQueue: func(t *testing.T, observer queue.Observer) QueueRuntime {
 				dsn := fmt.Sprintf("%s/obs-events-%d.db", t.TempDir(), time.Now().UnixNano())
 				q, err := newQueueRuntime(withObserver(withDefaultQueue(sqliteCfg(dsn), "obs_events_sqlite"), observer))
@@ -209,6 +213,11 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 					recorder.count(queue.EventProcessSucceeded) >= 1 &&
 					recorder.count(queue.EventProcessFailed) >= 1
 			})
+			if fx.confirmsArchives {
+				waitForObservabilityScenario(t, "process_archive", 12*time.Second, func() bool {
+					return recorder.count(queue.EventProcessArchived) >= 1
+				})
+			}
 
 			requireScenarioTrue(t, "process_started_queue",
 				recorder.has(queue.EventProcessStarted, func(event queue.Event) bool {
@@ -228,6 +237,15 @@ func TestObservabilityIntegration_ProcessEvents_AllBackends(t *testing.T) {
 				}),
 				"expected process_failed with queue=%q type=%q max_retry=0", fx.queue, failType,
 			)
+			if fx.confirmsArchives {
+				requireScenarioTrue(t, "process_archived_fields",
+					recorder.has(queue.EventProcessArchived, func(event queue.Event) bool {
+						return event.Layer == queue.EventLayerWorker && event.Queue == fx.queue && event.JobType == failType &&
+							event.MaxRetry == 0 && event.Err != nil
+					}),
+					"expected process_archived with queue=%q type=%q max_retry=0", fx.queue, failType,
+				)
+			}
 		})
 	}
 }

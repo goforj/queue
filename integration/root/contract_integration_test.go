@@ -207,6 +207,8 @@ func TestQueueContract_RabbitMQ(t *testing.T) {
 		assertMissingHandlerErr:  false,
 		supportsPause:            false,
 		supportsNativeStats:      false,
+		uniqueTTL:                time.Second,
+		uniqueExpiryWait:         1200 * time.Millisecond,
 	}
 	runQueueContractSuite(t, factory)
 }
