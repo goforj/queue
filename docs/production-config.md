@@ -96,14 +96,16 @@ Starting points:
 - keep worker concurrency modest initially (`1-4` per process)
 - monitor query latency and stale-processing recovery events (`process_recovered`)
 
-Important DB recovery knobs (`queue.Config`):
+Important DB recovery settings (`mysqlqueue.Config`, `postgresqueue.Config`, or `sqlitequeue.Config`, passed to the corresponding `NewWithConfig` constructor):
 
-- `DatabaseProcessingRecoveryGrace`
-  - grace period before reclaiming stale `processing` jobs
-  - start with default unless you have proven false-positive recovery under your handler latencies
-- `DatabaseProcessingLeaseNoTimeout`
-  - fallback lease for jobs without explicit timeout
-  - increase for very long-running jobs if you observe premature stale recovery
+- `ProcessingRecoveryGrace` (default `2s` when non-positive)
+  - added to a job's positive timeout before its `processing` row is eligible for stale recovery
+  - increase only if timed-out handlers may still be settling when recovery begins
+- `ProcessingLeaseNoTimeout` (default `5m` when non-positive)
+  - minimum processing age before a job with no positive timeout is eligible for stale recovery
+  - increase for longer-running jobs that intentionally omit a timeout
+
+The same fields are available on the advanced `queue.DatabaseConfig`; they are not fields of `queue.Config`.
 
 Every SQL processing claim has an opaque generation ID. When infrastructure keeps the row pending for the same numbered attempt, SQL normally retains inherited recovery provenance. If that delivery durably owns a new built-in workflow transition receipt and subsequent workflow infrastructure still requires redelivery, the workflow engine marks application state committed on the delivery-settlement boundary. SQL then retains the current generation rather than the older inherited generation, so the next claimant can match the receipt that actually owns the transition. The signal does not mean the queue row settled, observer callbacks ran, or continuation work completed. An application retry advances the attempt and clears every old link. Generation provenance is not an application error, does not redefine the admin-visible `last_error` field, and cannot be forged through error text.
 

@@ -698,7 +698,11 @@ func (q *externalQueueRuntime) continuationScopeLocked() *busruntime.Continuatio
 	return q.continuation
 }
 
+// Register linearizes logical and physical state so an activating backend cannot consume a newly registered type without its handler.
 func (q *nativeQueueRuntime) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.registered == nil {
@@ -707,12 +711,16 @@ func (q *nativeQueueRuntime) Register(jobType string, handler Handler) {
 	q.registered[jobType] = handler
 	var slot *runtimeHandlerSlot
 	q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
-	if q.started && !q.draining {
+	if !q.draining && (q.start != nil || q.started) {
 		q.runtimeRegistrations = installRuntimeHandler(q.runtime, q.common, q.runtimeRegistrations, jobType, handler, slot)
 	}
 }
 
+// Register linearizes logical and physical state once the external worker generation has been published for activation.
 func (q *externalQueueRuntime) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.registered == nil {
@@ -721,7 +729,7 @@ func (q *externalQueueRuntime) Register(jobType string, handler Handler) {
 	q.registered[jobType] = handler
 	var slot *runtimeHandlerSlot
 	q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
-	if q.started && !q.draining && q.worker != nil {
+	if !q.draining && q.worker != nil && (q.start != nil || q.started) {
 		q.workerRegistrations = installRuntimeHandler(q.worker, q.common, q.workerRegistrationsLocked(), jobType, handler, slot)
 	}
 }
@@ -734,7 +742,7 @@ func (q *externalQueueRuntime) workerRegistrationsLocked() map[string]struct{} {
 	return q.workerRegistrations
 }
 
-// StartWorkers serializes backend startup with concurrent start and shutdown calls.
+// StartWorkers installs the current handler generation before activating the backend and serializes concurrent lifecycle calls.
 func (q *nativeQueueRuntime) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -755,32 +763,16 @@ func (q *nativeQueueRuntime) StartWorkers(ctx context.Context) error {
 	}
 	attempt := &runtimeStartAttempt{done: make(chan struct{})}
 	q.start = attempt
-	registered := make(map[string]Handler, len(q.registered))
-	slots := make(map[string]*runtimeHandlerSlot, len(q.registered))
 	for jobType, handler := range q.registered {
-		registered[jobType] = handler
 		var slot *runtimeHandlerSlot
 		q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
-		slots[jobType] = slot
-	}
-	registeredOnRuntime := make(map[string]struct{}, len(q.runtimeRegistrations))
-	for jobType := range q.runtimeRegistrations {
-		registeredOnRuntime[jobType] = struct{}{}
+		q.runtimeRegistrations = installRuntimeHandler(q.runtime, q.common, q.runtimeRegistrations, jobType, handler, slot)
 	}
 	q.mu.Unlock()
 
-	for jobType, handler := range registered {
-		registeredOnRuntime = installRuntimeHandler(q.runtime, q.common, registeredOnRuntime, jobType, handler, slots[jobType])
-	}
 	err := q.runtime.StartWorkers(ctx)
 	q.mu.Lock()
-	q.runtimeRegistrations = registeredOnRuntime
 	if err == nil {
-		for jobType, handler := range q.registered {
-			var slot *runtimeHandlerSlot
-			q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
-			q.runtimeRegistrations = installRuntimeHandler(q.runtime, q.common, q.runtimeRegistrations, jobType, handler, slot)
-		}
 		q.started = true
 	}
 	attempt.err = err
@@ -790,7 +782,7 @@ func (q *nativeQueueRuntime) StartWorkers(ctx context.Context) error {
 	return err
 }
 
-// StartWorkers serializes worker construction with concurrent start and shutdown calls.
+// StartWorkers publishes and catches up a worker before activation so registrations cannot complete against a stale startup snapshot.
 func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -813,23 +805,10 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	q.start = attempt
 	w := q.worker
 	workers := q.workers
-	registered := make(map[string]Handler, len(q.registered))
-	slots := make(map[string]*runtimeHandlerSlot, len(q.registered))
-	for jobType, handler := range q.registered {
-		registered[jobType] = handler
-		var slot *runtimeHandlerSlot
-		q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
-		slots[jobType] = slot
-	}
-	registeredOnWorker := make(map[string]struct{}, len(q.workerRegistrations))
-	for jobType := range q.workerRegistrations {
-		registeredOnWorker[jobType] = struct{}{}
-	}
 	q.mu.Unlock()
 
 	var err error
 	if w == nil {
-		registeredOnWorker = make(map[string]struct{})
 		if q.newWorker != nil {
 			driverWorker, e := q.newWorker(defaultWorkerCount(workers))
 			if e != nil {
@@ -842,31 +821,25 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 		}
 	}
 	if err == nil {
+		q.mu.Lock()
+		q.worker = w
 		if setter, ok := w.(runtimeWorkerContextDecoratorSetter); ok {
 			setter.SetHandlerContextDecorator(q.common.handlerContextDecorator)
 		}
-		for jobType, handler := range registered {
-			if _, exists := registeredOnWorker[jobType]; exists {
-				continue
-			}
-			registeredOnWorker = installRuntimeHandler(w, q.common, registeredOnWorker, jobType, handler, slots[jobType])
+		for jobType, handler := range q.registered {
+			var slot *runtimeHandlerSlot
+			q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
+			q.workerRegistrations = installRuntimeHandler(w, q.common, q.workerRegistrationsLocked(), jobType, handler, slot)
 		}
+		q.mu.Unlock()
 		err = w.StartWorkers(ctx)
 	}
 	q.mu.Lock()
 	if w != nil {
 		// A partially started worker remains owned so Shutdown can finish cleanup instead of leaking factory resources.
 		q.worker = w
-		q.workerRegistrations = registeredOnWorker
 	}
 	if err == nil {
-		for jobType, handler := range q.registered {
-			var slot *runtimeHandlerSlot
-			q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
-			registeredOnWorker = installRuntimeHandler(w, q.common, registeredOnWorker, jobType, handler, slot)
-		}
-		q.worker = w
-		q.workerRegistrations = registeredOnWorker
 		q.started = true
 	}
 	attempt.err = err

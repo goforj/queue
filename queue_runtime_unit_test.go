@@ -29,6 +29,13 @@ type blockingRuntimeBackendStub struct {
 	startOnce    sync.Once
 }
 
+type blockingStrictRegistrationRuntimeBackendStub struct {
+	strictRegistrationRuntimeBackendStub
+	startEntered chan struct{}
+	releaseStart chan struct{}
+	startOnce    sync.Once
+}
+
 type blockingReadyRuntimeBackendStub struct {
 	runtimeBackendStub
 	readyEntered chan struct{}
@@ -103,6 +110,14 @@ func (s *blockingReadyRuntimeBackendStub) Ready(ctx context.Context) error {
 
 // StartWorkers exposes a deterministic startup boundary for lifecycle race tests.
 func (s *blockingRuntimeBackendStub) StartWorkers(context.Context) error {
+	s.startCalls++
+	s.startOnce.Do(func() { close(s.startEntered) })
+	<-s.releaseStart
+	return s.startErr
+}
+
+// StartWorkers exposes the live-start boundary while retaining strict registration counts across retries.
+func (s *blockingStrictRegistrationRuntimeBackendStub) StartWorkers(context.Context) error {
 	s.startCalls++
 	s.startOnce.Do(func() { close(s.startEntered) })
 	<-s.releaseStart
@@ -487,7 +502,7 @@ func TestRuntimeSameKeyReplacementDuringBlockedStart(t *testing.T) {
 			name = "external"
 		}
 		t.Run(name, func(t *testing.T) {
-			worker := &blockingRuntimeBackendStub{
+			worker := &blockingStrictRegistrationRuntimeBackendStub{
 				startEntered: make(chan struct{}),
 				releaseStart: make(chan struct{}),
 			}
@@ -540,6 +555,211 @@ func TestRuntimeSameKeyReplacementDuringBlockedStart(t *testing.T) {
 				t.Fatalf("shutdown: %v", err)
 			}
 		})
+	}
+}
+
+// TestRuntimeNewRegistrationIsLiveDuringBlockedStart verifies Register cannot complete while a consuming backend still lacks the new type.
+func TestRuntimeNewRegistrationIsLiveDuringBlockedStart(t *testing.T) {
+	startErr := errors.New("worker start failed")
+	tests := []struct {
+		name       string
+		external   bool
+		startFails bool
+	}{
+		{name: "native_success"},
+		{name: "native_failed_start_retry", startFails: true},
+		{name: "external_success", external: true},
+		{name: "external_failed_start_retry", external: true, startFails: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker := &blockingStrictRegistrationRuntimeBackendStub{
+				startEntered: make(chan struct{}),
+				releaseStart: make(chan struct{}),
+			}
+			if test.startFails {
+				worker.startErr = startErr
+			}
+			var runtime queueRuntime
+			if test.external {
+				runtime = &externalQueueRuntime{
+					common: &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+					newWorker: func(int) (driverWorkerBackend, error) {
+						return worker, nil
+					},
+					externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+				}
+			} else {
+				runtime = &nativeQueueRuntime{
+					common:  &queueCommon{inner: worker, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+					runtime: worker,
+					nativeQueueRuntimeState: &nativeQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+			}
+
+			startResult := make(chan error, 1)
+			go func() { startResult <- runtime.StartWorkers(context.Background()) }()
+			<-worker.startEntered
+
+			var firstCalls, replacementCalls int
+			registrationRuntime := runtime.WithContext(context.Background())
+			registrationRuntime.Register("job:late", func(context.Context, Job) error {
+				firstCalls++
+				return nil
+			})
+			handler := worker.registered["job:late"]
+			if handler == nil {
+				t.Fatal("Register returned while the live backend still lacked the new handler")
+			}
+			if err := handler(context.Background(), NewJob("job:late")); err != nil {
+				t.Fatalf("invoke late handler: %v", err)
+			}
+			registrationRuntime.Register("job:late", func(context.Context, Job) error {
+				replacementCalls++
+				return nil
+			})
+			if err := handler(context.Background(), NewJob("job:late")); err != nil {
+				t.Fatalf("invoke replacement handler: %v", err)
+			}
+			if firstCalls != 1 || replacementCalls != 1 {
+				t.Fatalf("late handler calls = first:%d replacement:%d, want 1/1", firstCalls, replacementCalls)
+			}
+			if registrations := worker.registrations["job:late"]; registrations != 1 {
+				t.Fatalf("late backend registrations = %d, want 1", registrations)
+			}
+			for _, jobType := range []string{"job:late:second", "job:late:third"} {
+				registrationRuntime.Register(jobType, func(context.Context, Job) error { return nil })
+				if registrations := worker.registrations[jobType]; registrations != 1 {
+					t.Fatalf("backend registrations for %q = %d, want 1", jobType, registrations)
+				}
+			}
+
+			close(worker.releaseStart)
+			err := <-startResult
+			if test.startFails {
+				if !errors.Is(err, startErr) {
+					t.Fatalf("first start error = %v, want %v", err, startErr)
+				}
+				worker.startErr = nil
+				if err := runtime.StartWorkers(context.Background()); err != nil {
+					t.Fatalf("retry start: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("start workers: %v", err)
+			}
+			if registrations := worker.registrations["job:late"]; registrations != 1 {
+				t.Fatalf("late backend registrations after start retry = %d, want 1", registrations)
+			}
+			if err := runtime.Shutdown(context.Background()); err != nil {
+				t.Fatalf("shutdown: %v", err)
+			}
+		})
+	}
+}
+
+// TestRuntimeConcurrentStartWaiterPreservesLateRegistration verifies a canceled waiter cannot create or disturb the active startup generation.
+func TestRuntimeConcurrentStartWaiterPreservesLateRegistration(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		name := "native"
+		if external {
+			name = "external"
+		}
+		t.Run(name, func(t *testing.T) {
+			worker := &blockingStrictRegistrationRuntimeBackendStub{
+				startEntered: make(chan struct{}),
+				releaseStart: make(chan struct{}),
+			}
+			var runtime queueRuntime
+			if external {
+				runtime = &externalQueueRuntime{
+					common: &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+					newWorker: func(int) (driverWorkerBackend, error) {
+						return worker, nil
+					},
+					externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+				}
+			} else {
+				runtime = &nativeQueueRuntime{
+					common:  &queueCommon{inner: worker, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+					runtime: worker,
+					nativeQueueRuntimeState: &nativeQueueRuntimeState{
+						registered: map[string]Handler{},
+					},
+				}
+			}
+
+			firstResult := make(chan error, 1)
+			go func() { firstResult <- runtime.StartWorkers(context.Background()) }()
+			<-worker.startEntered
+			secondCtx, cancelSecond := context.WithCancel(context.Background())
+			secondResult := make(chan error, 1)
+			go func() {
+				secondResult <- runtime.StartWorkers(secondCtx)
+			}()
+			cancelSecond()
+			if err := <-secondResult; !errors.Is(err, context.Canceled) {
+				t.Fatalf("concurrent start waiter error = %v, want context canceled", err)
+			}
+			runtime.Register("job:shared-start", func(context.Context, Job) error { return nil })
+			if worker.registered["job:shared-start"] == nil {
+				t.Fatal("late registration was absent from the shared startup generation")
+			}
+			close(worker.releaseStart)
+			if err := <-firstResult; err != nil {
+				t.Fatalf("first start: %v", err)
+			}
+			if worker.startCalls != 1 {
+				t.Fatalf("backend start calls = %d, want 1", worker.startCalls)
+			}
+			if registrations := worker.registrations["job:shared-start"]; registrations != 1 {
+				t.Fatalf("shared-start backend registrations = %d, want 1", registrations)
+			}
+			if err := runtime.Shutdown(context.Background()); err != nil {
+				t.Fatalf("shutdown: %v", err)
+			}
+		})
+	}
+}
+
+// TestExternalRuntimeRegistrationDuringWorkerConstructionIsInstalledBeforeStart verifies factory latency cannot exclude a completed registration from startup.
+func TestExternalRuntimeRegistrationDuringWorkerConstructionIsInstalledBeforeStart(t *testing.T) {
+	worker := &blockingStrictRegistrationRuntimeBackendStub{
+		startEntered: make(chan struct{}),
+		releaseStart: make(chan struct{}),
+	}
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	runtime := &externalQueueRuntime{
+		common: &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{DefaultQueue: "default"}, driver: DriverSQS},
+		newWorker: func(int) (driverWorkerBackend, error) {
+			close(factoryEntered)
+			<-releaseFactory
+			return worker, nil
+		},
+		externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+	}
+
+	startResult := make(chan error, 1)
+	go func() { startResult <- runtime.StartWorkers(context.Background()) }()
+	<-factoryEntered
+	runtime.Register("job:during-factory", func(context.Context, Job) error { return nil })
+	runtime.Register("job:during-factory", nil)
+	close(releaseFactory)
+	<-worker.startEntered
+	if worker.registered["job:during-factory"] == nil {
+		t.Fatal("registration completed during worker construction but was absent when the worker started")
+	}
+	if registrations := worker.registrations["job:during-factory"]; registrations != 1 {
+		t.Fatalf("factory-window backend registrations = %d, want 1", registrations)
+	}
+	close(worker.releaseStart)
+	if err := <-startResult; err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
 	}
 }
 
@@ -675,6 +895,10 @@ func TestExternalRuntimeShutdownLatchesIntentDuringStart(t *testing.T) {
 	startResult := make(chan error, 1)
 	go func() { startResult <- runtime.StartWorkers(context.Background()) }()
 	<-worker.startEntered
+	runtime.Register("job:before-startup-drain", func(context.Context, Job) error { return nil })
+	if worker.registered["job:before-startup-drain"] == nil {
+		t.Fatal("pre-drain registration was absent during external startup")
+	}
 	shutdownResult := make(chan error, 1)
 	go func() { shutdownResult <- runtime.Shutdown(context.Background()) }()
 	waitForRuntimeDraining(t, func() bool {
@@ -682,6 +906,10 @@ func TestExternalRuntimeShutdownLatchesIntentDuringStart(t *testing.T) {
 		defer runtime.mu.Unlock()
 		return runtime.draining
 	})
+	runtime.Register("job:after-startup-drain", func(context.Context, Job) error { return nil })
+	if worker.registered["job:after-startup-drain"] != nil {
+		t.Fatal("post-drain registration reached the external worker")
+	}
 	if err := runtime.Dispatch(NewJob("job:rejected").OnQueue("default")); !errors.Is(err, ErrQueuerShuttingDown) {
 		t.Fatalf("dispatch during startup drain = %v, want ErrQueuerShuttingDown", err)
 	}
@@ -719,6 +947,10 @@ func TestNativeRuntimeShutdownLatchesIntentDuringStart(t *testing.T) {
 	startResult := make(chan error, 1)
 	go func() { startResult <- runtime.StartWorkers(context.Background()) }()
 	<-worker.startEntered
+	runtime.Register("job:before-startup-drain", func(context.Context, Job) error { return nil })
+	if worker.registered["job:before-startup-drain"] == nil {
+		t.Fatal("pre-drain registration was absent during native startup")
+	}
 	shutdownResult := make(chan error, 1)
 	go func() { shutdownResult <- runtime.Shutdown(context.Background()) }()
 	waitForRuntimeDraining(t, func() bool {
@@ -726,6 +958,10 @@ func TestNativeRuntimeShutdownLatchesIntentDuringStart(t *testing.T) {
 		defer runtime.mu.Unlock()
 		return runtime.draining
 	})
+	runtime.Register("job:after-startup-drain", func(context.Context, Job) error { return nil })
+	if worker.registered["job:after-startup-drain"] != nil {
+		t.Fatal("post-drain registration reached the native backend")
+	}
 	if err := runtime.Dispatch(NewJob("job:rejected")); !errors.Is(err, ErrQueuerShuttingDown) {
 		t.Fatalf("dispatch during startup drain = %v, want ErrQueuerShuttingDown", err)
 	}
@@ -1190,11 +1426,19 @@ func TestRuntimeBusWrappers_NilRegisterAndDispatch(t *testing.T) {
 
 	native.BusRegister("job:nil:native", nil)
 	external.BusRegister("job:nil:external", nil)
-	if _, ok := native.registered["job:nil:native"]; !ok {
-		t.Fatal("expected native BusRegister(nil) to store registration")
+	native.Register("", func(context.Context, Job) error { return nil })
+	external.Register("", func(context.Context, Job) error { return nil })
+	if _, ok := native.registered["job:nil:native"]; ok {
+		t.Fatal("native BusRegister(nil) mutated logical registrations")
 	}
-	if h, ok := externalWorker.registered["job:nil:external"]; !ok || h != nil {
-		t.Fatal("expected external BusRegister(nil) to forward nil handler")
+	if _, ok := externalWorker.registered["job:nil:external"]; ok {
+		t.Fatal("external BusRegister(nil) reached the worker")
+	}
+	if _, ok := native.registered[""]; ok {
+		t.Fatal("native empty registration mutated logical registrations")
+	}
+	if _, ok := externalWorker.registered[""]; ok {
+		t.Fatal("external empty registration reached the worker")
 	}
 
 	opts := busruntime.JobOptions{
