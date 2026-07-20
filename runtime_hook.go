@@ -30,8 +30,11 @@ func buildQueueFromDriverHook(cfgv any, observerv any, backendv any, workerFacto
 	if workerFactoryv != nil {
 		workerFactory = func(workers int) (driverWorkerBackend, error) {
 			v, err := workerFactoryv(workers)
-			if err != nil || v == nil {
+			if err != nil {
 				return nil, err
+			}
+			if v == nil {
+				return nil, fmt.Errorf("driver worker factory returned nil")
 			}
 			w, ok := v.(driverWorkerBackend)
 			if !ok {
