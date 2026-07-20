@@ -2,19 +2,26 @@ package bus
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/goforj/queue"
 )
 
+// Fake preserves the legacy bus testing surface as a thin view of the
+// concurrency-safe root queue fake.
+//
+// Deprecated: use queue.NewFake.
 type Fake struct {
-	dispatched []Job
-	chains     [][]Job
-	batches    [][]Job
+	queue *queue.FakeQueue
 }
 
 var _ Bus = (*Fake)(nil)
 
-// NewFake creates a bus fake that records dispatch, chain, and batch calls.
+var fakeInitializationMu sync.Mutex
+
+// NewFake creates a legacy workflow view over one canonical root fake.
 // @group Constructors
 //
 // Example: new bus fake
@@ -22,237 +29,179 @@ var _ Bus = (*Fake)(nil)
 //	fake := bus.NewFake()
 //	_, _ = fake.Dispatch(context.Background(), bus.NewJob("monitor:poll", nil))
 func NewFake() *Fake {
-	return &Fake{}
+	return &Fake{queue: queue.NewFake()}
 }
 
+// Queue returns the canonical root fake shared by this compatibility view.
+// @group Testing
+func (f *Fake) Queue() *queue.FakeQueue {
+	return f.canonicalQueue()
+}
+
+// canonicalQueue lazily initializes the historical zero value under a package
+// lock while keeping Fake values safe to copy after construction.
+func (f *Fake) canonicalQueue() *queue.FakeQueue {
+	fakeInitializationMu.Lock()
+	defer fakeInitializationMu.Unlock()
+	if f.queue == nil {
+		f.queue = queue.NewFake()
+	}
+	return f.queue
+}
+
+// Register is inert because Fake records accepted intent instead of executing handlers.
 func (f *Fake) Register(string, Handler) {}
 
-// Dispatch records a dispatched job.
+// Dispatch converts and records a legacy job through the canonical fake.
 // @group Testing
 //
 // Example: record dispatch
 //
 //	fake := bus.NewFake()
 //	_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-func (f *Fake) Dispatch(_ context.Context, job Job) (DispatchResult, error) {
-	f.dispatched = append(f.dispatched, job)
+func (f *Fake) Dispatch(ctx context.Context, job Job) (DispatchResult, error) {
+	converted, err := toQueueJob(job)
+	if err != nil {
+		return DispatchResult{}, err
+	}
+	if err := f.canonicalQueue().WithContext(ctx).Dispatch(converted); err != nil {
+		return DispatchResult{}, err
+	}
 	return DispatchResult{DispatchID: "fake"}, nil
 }
 
-// Chain records a chain specification.
+// Chain snapshots legacy jobs and delegates execution-time conversion to the
+// same compatibility builder used by a production queue facade.
 // @group Testing
-//
-// Example: record chain
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Chain(
-//		bus.NewJob("a", nil),
-//		bus.NewJob("b", nil),
-//	).Dispatch(context.Background())
 func (f *Fake) Chain(jobs ...Job) ChainBuilder {
-	f.chains = append(f.chains, append([]Job(nil), jobs...))
-	return &fakeChain{fake: f}
+	return &queueChainBuilder{
+		queue: f.canonicalQueue(),
+		jobs:  append([]Job(nil), jobs...),
+	}
 }
 
-// Batch records a batch specification.
+// Batch snapshots legacy jobs and delegates execution-time conversion to the
+// same compatibility builder used by a production queue facade.
 // @group Testing
-//
-// Example: record batch
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Batch(
-//		bus.NewJob("a", nil),
-//		bus.NewJob("b", nil),
-//	).Dispatch(context.Background())
 func (f *Fake) Batch(jobs ...Job) BatchBuilder {
-	f.batches = append(f.batches, append([]Job(nil), jobs...))
-	return &fakeBatch{fake: f}
+	return &queueBatchBuilder{
+		queue: f.canonicalQueue(),
+		jobs:  append([]Job(nil), jobs...),
+	}
 }
 
-func (f *Fake) StartWorkers(context.Context) error { return nil }
-func (f *Fake) Shutdown(context.Context) error     { return nil }
-func (f *Fake) FindBatch(context.Context, string) (BatchState, error) {
-	return BatchState{}, ErrNotFound
+// StartWorkers delegates the inert lifecycle contract to the canonical fake.
+func (f *Fake) StartWorkers(ctx context.Context) error {
+	if f == nil {
+		return nil
+	}
+	return f.canonicalQueue().StartWorkers(ctx)
 }
-func (f *Fake) FindChain(context.Context, string) (ChainState, error) {
-	return ChainState{}, ErrNotFound
-}
-func (f *Fake) Prune(context.Context, time.Time) error { return nil }
 
-// AssertNothingDispatched fails if any job was dispatched.
+// Shutdown delegates the inert lifecycle contract to the canonical fake.
+func (f *Fake) Shutdown(ctx context.Context) error {
+	if f == nil {
+		return nil
+	}
+	return f.canonicalQueue().Shutdown(ctx)
+}
+
+// FindBatch returns state created by an accepted fake batch.
+func (f *Fake) FindBatch(ctx context.Context, batchID string) (BatchState, error) {
+	if f == nil {
+		return BatchState{}, ErrNotFound
+	}
+	return f.canonicalQueue().FindBatch(ctx, batchID)
+}
+
+// FindChain returns state created by an accepted fake chain.
+func (f *Fake) FindChain(ctx context.Context, chainID string) (ChainState, error) {
+	if f == nil {
+		return ChainState{}, ErrNotFound
+	}
+	return f.canonicalQueue().FindChain(ctx, chainID)
+}
+
+// Prune applies workflow retention to the canonical fake store.
+func (f *Fake) Prune(ctx context.Context, before time.Time) error {
+	if f == nil {
+		return nil
+	}
+	return f.canonicalQueue().Prune(ctx, before)
+}
+
+// AssertNothingDispatched fails if any direct job was accepted.
 // @group Testing
-//
-// Example: assert no dispatch
-//
-//	fake := bus.NewFake()
-//	fake.AssertNothingDispatched(nil)
 func (f *Fake) AssertNothingDispatched(t testing.TB) {
 	t.Helper()
-	if len(f.dispatched) != 0 {
-		t.Fatalf("expected no dispatched jobs, got %d", len(f.dispatched))
-	}
+	f.canonicalQueue().AssertNothingDispatched(t)
 }
 
-// AssertDispatched fails if the given job type was never dispatched.
+// AssertDispatched fails if the given job type was never accepted.
 // @group Testing
-//
-// Example: assert dispatched
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-//	fake.AssertDispatched(nil, "emails:send")
 func (f *Fake) AssertDispatched(t testing.TB, jobType string) {
 	t.Helper()
-	for _, j := range f.dispatched {
-		if j.Type == jobType {
-			return
-		}
-	}
-	t.Fatalf("expected dispatched job %q", jobType)
+	f.canonicalQueue().AssertDispatched(t, jobType)
 }
 
-// AssertDispatchedTimes fails if dispatched count for job type does not match n.
+// AssertDispatchedTimes fails if the accepted count for jobType does not match n.
 // @group Testing
-//
-// Example: assert dispatch count by type
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-//	_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-//	fake.AssertDispatchedTimes(nil, "emails:send", 2)
 func (f *Fake) AssertDispatchedTimes(t testing.TB, jobType string, n int) {
 	t.Helper()
-	var got int
-	for _, j := range f.dispatched {
-		if j.Type == jobType {
-			got++
-		}
-	}
-	if got != n {
-		t.Fatalf("expected job %q dispatched %d times, got %d", jobType, n, got)
-	}
+	f.canonicalQueue().AssertDispatchedTimes(t, jobType, n)
 }
 
-// AssertNotDispatched fails if the given job type was dispatched.
+// AssertNotDispatched fails if the given job type was accepted.
 // @group Testing
-//
-// Example: assert not dispatched
-//
-//	fake := bus.NewFake()
-//	fake.AssertNotDispatched(nil, "emails:send")
 func (f *Fake) AssertNotDispatched(t testing.TB, jobType string) {
 	t.Helper()
-	for _, j := range f.dispatched {
-		if j.Type == jobType {
-			t.Fatalf("expected job %q not dispatched", jobType)
-		}
-	}
+	f.canonicalQueue().AssertNotDispatched(t, jobType)
 }
 
-// AssertCount fails if total dispatched count does not match n.
+// AssertCount fails if the total direct dispatch count does not match n.
 // @group Testing
-//
-// Example: assert dispatch count
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil))
-//	fake.AssertCount(nil, 1)
 func (f *Fake) AssertCount(t testing.TB, n int) {
 	t.Helper()
-	if len(f.dispatched) != n {
-		t.Fatalf("expected dispatched count %d, got %d", n, len(f.dispatched))
-	}
+	f.canonicalQueue().AssertCount(t, n)
 }
 
-// AssertDispatchedOn fails if a job type was not dispatched on queueName.
+// AssertDispatchedOn fails if a job type was not accepted on queueName.
 // @group Testing
-//
-// Example: assert dispatched on queue
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Dispatch(context.Background(), bus.NewJob("emails:send", nil).OnQueue("critical"))
-//	fake.AssertDispatchedOn(nil, "critical", "emails:send")
 func (f *Fake) AssertDispatchedOn(t testing.TB, queueName, jobType string) {
 	t.Helper()
-	for _, j := range f.dispatched {
-		if j.Type == jobType && j.Options.Queue == queueName {
-			return
-		}
-	}
-	t.Fatalf("expected job %q dispatched on queue %q", jobType, queueName)
+	f.canonicalQueue().AssertDispatchedOn(t, queueName, jobType)
 }
 
-// AssertChained fails if no recorded chain matches expected job type order.
+// AssertChained fails if no accepted chain matches the expected job order.
 // @group Testing
-//
-// Example: assert chain
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Chain(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
-//	fake.AssertChained(nil, []string{"a", "b"})
 func (f *Fake) AssertChained(t testing.TB, expected []string) {
 	t.Helper()
-	for _, chain := range f.chains {
-		if len(chain) != len(expected) {
-			continue
-		}
-		ok := true
-		for i := range chain {
-			if chain[i].Type != expected[i] {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			return
-		}
-	}
-	t.Fatalf("expected chain %v", expected)
+	f.canonicalQueue().AssertChained(t, expected)
 }
 
-// AssertBatchCount fails if total recorded batch count does not match n.
+// AssertBatchCount fails if the accepted batch count does not match n.
 // @group Testing
-//
-// Example: assert batch count
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Batch(bus.NewJob("a", nil)).Dispatch(context.Background())
-//	fake.AssertBatchCount(nil, 1)
 func (f *Fake) AssertBatchCount(t testing.TB, n int) {
 	t.Helper()
-	if len(f.batches) != n {
-		t.Fatalf("expected batch count %d, got %d", n, len(f.batches))
-	}
+	f.canonicalQueue().AssertBatchCount(t, n)
 }
 
-// AssertNothingBatched fails if any batch was recorded.
+// AssertNothingBatched fails if any batch was accepted.
 // @group Testing
-//
-// Example: assert no batches
-//
-//	fake := bus.NewFake()
-//	fake.AssertNothingBatched(nil)
 func (f *Fake) AssertNothingBatched(t testing.TB) {
 	t.Helper()
-	if len(f.batches) != 0 {
-		t.Fatalf("expected no batches, got %d", len(f.batches))
-	}
+	f.canonicalQueue().AssertNothingBatched(t)
 }
 
-// AssertBatched fails unless at least one recorded batch matches predicate.
+// AssertBatched fails unless one canonical batch matches the legacy projection.
+// The predicate runs outside recorder locks.
 // @group Testing
-//
-// Example: assert batch predicate
-//
-//	fake := bus.NewFake()
-//	_, _ = fake.Batch(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(context.Background())
-//	fake.AssertBatched(nil, func(spec bus.BatchSpec) bool { return len(spec.JobTypes) == 2 })
 func (f *Fake) AssertBatched(t testing.TB, predicate func(spec BatchSpec) bool) {
 	t.Helper()
-	for _, b := range f.batches {
-		spec := BatchSpec{JobTypes: make([]string, 0, len(b))}
-		for _, job := range b {
-			spec.JobTypes = append(spec.JobTypes, job.Type)
+	for _, record := range f.canonicalQueue().BatchRecords() {
+		spec := BatchSpec{JobTypes: make([]string, 0, len(record.Jobs))}
+		for _, job := range record.Jobs {
+			spec.JobTypes = append(spec.JobTypes, job.Job.Type)
 		}
 		if predicate(spec) {
 			return
@@ -261,28 +210,7 @@ func (f *Fake) AssertBatched(t testing.TB, predicate func(spec BatchSpec) bool) 
 	t.Fatalf("expected at least one batch to match predicate")
 }
 
+// BatchSpec is the frozen assertion projection retained for legacy source compatibility.
 type BatchSpec struct {
 	JobTypes []string
 }
-
-type fakeChain struct{ fake *Fake }
-
-func (f *fakeChain) OnQueue(string) ChainBuilder { return f }
-func (f *fakeChain) Catch(func(context.Context, ChainState, error) error) ChainBuilder {
-	return f
-}
-func (f *fakeChain) Finally(func(context.Context, ChainState) error) ChainBuilder { return f }
-func (f *fakeChain) Dispatch(context.Context) (string, error)                     { return "fake-chain", nil }
-
-type fakeBatch struct{ fake *Fake }
-
-func (f *fakeBatch) Name(string) BatchBuilder                                      { return f }
-func (f *fakeBatch) OnQueue(string) BatchBuilder                                   { return f }
-func (f *fakeBatch) AllowFailures() BatchBuilder                                   { return f }
-func (f *fakeBatch) Progress(func(context.Context, BatchState) error) BatchBuilder { return f }
-func (f *fakeBatch) Then(func(context.Context, BatchState) error) BatchBuilder     { return f }
-func (f *fakeBatch) Catch(func(context.Context, BatchState, error) error) BatchBuilder {
-	return f
-}
-func (f *fakeBatch) Finally(func(context.Context, BatchState) error) BatchBuilder { return f }
-func (f *fakeBatch) Dispatch(context.Context) (string, error)                     { return "fake-batch", nil }

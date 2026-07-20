@@ -6,104 +6,59 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/goforj/queue/bus"
+	"github.com/goforj/queue/busruntime"
+	"github.com/goforj/queue/internal/workflow"
 )
 
-// Message is the handler message passed to the high-level queue runtime.
-// It exposes workflow/job metadata and payload binding helpers.
-// @group Queue
-type Message = bus.Context
-
-// DispatchResult describes a high-level dispatch operation.
-// @group Queue
-type DispatchResult = bus.DispatchResult
-
-// ChainState is the persisted view of a chain workflow.
-// @group Queue
-type ChainState = bus.ChainState
-
-// BatchState is the persisted view of a batch workflow.
-// @group Queue
-type BatchState = bus.BatchState
-
 // WorkflowEventKind identifies high-level workflow runtime lifecycle events.
+//
+// Deprecated: use EventKind. Delivery and workflow facts now share one event model.
 // @group Queue
-type WorkflowEventKind = bus.EventKind
+type WorkflowEventKind = EventKind
 
 // WorkflowEvent is emitted by the high-level workflow runtime observer hooks.
+//
+// Deprecated: use Event. Delivery and workflow facts now share one event model.
 // @group Queue
-type WorkflowEvent = bus.Event
+type WorkflowEvent = Event
 
 // WorkflowObserver receives high-level workflow runtime events.
+//
+// Deprecated: use Observer. A single observer now receives every event layer.
 // @group Queue
-type WorkflowObserver = bus.Observer
+type WorkflowObserver = Observer
 
 // WorkflowObserverFunc adapts a function to a workflow observer.
+//
+// Deprecated: use ObserverFunc. A single observer now receives every event layer.
 // @group Queue
-type WorkflowObserverFunc = bus.ObserverFunc
+type WorkflowObserverFunc = ObserverFunc
 
-// Next invokes the next middleware/handler in the queue middleware chain.
+// Permanent marks an error as terminal so workers do not spend the remaining application retry budget on it.
 // @group Queue
-type Next = bus.Next
+func Permanent(err error) error {
+	return busruntime.Permanent(err)
+}
 
-// Middleware applies behavior around high-level workflow/job execution.
+// IsPermanent reports whether an error requests terminal application settlement.
 // @group Queue
-type Middleware = bus.Middleware
+func IsPermanent(err error) bool {
+	return busruntime.IsPermanent(err)
+}
 
-// MiddlewareFunc adapts a function to queue middleware.
-// @group Queue
-type MiddlewareFunc = bus.MiddlewareFunc
-
-// RetryPolicy is a pass-through middleware policy helper.
-// @group Queue
-type RetryPolicy = bus.RetryPolicy
-
-// SkipWhen skips execution when the predicate matches.
-// @group Queue
-type SkipWhen = bus.SkipWhen
-
-// FailOnError converts matched errors into fatal (non-retryable) failures.
-// @group Queue
-type FailOnError = bus.FailOnError
-
-// RateLimiter is used by RateLimit middleware.
-// @group Queue
-type RateLimiter = bus.RateLimiter
-
-// RateLimit applies rate limiting before job execution.
-// @group Queue
-type RateLimit = bus.RateLimit
-
-// Lock is used by overlap prevention middleware.
-// @group Queue
-type Lock = bus.Lock
-
-// Locker acquires locks for overlap prevention middleware.
-// @group Queue
-type Locker = bus.Locker
-
-// WithoutOverlapping prevents concurrent execution for the same key.
-// @group Queue
-type WithoutOverlapping = bus.WithoutOverlapping
-
-// WorkflowStore is the orchestration state store used for chains/batches/callbacks.
-// @group Queue
-type WorkflowStore = bus.Store
-
-// ErrWorkflowNotFound indicates a workflow state record is not present.
-// @group Queue
-var ErrWorkflowNotFound = bus.ErrNotFound
-
-// Option configures the high-level workflow runtime.
+// Option configures the high-level queue and workflow runtime.
 // @group Queue
 type Option func(*runtimeOptions)
 
 type runtimeOptions struct {
-	busOpts []bus.Option
-	workers int
+	workflowOpts            []workflow.Option
+	workers                 int
+	observer                Observer
 	handlerContextDecorator func(context.Context) context.Context
+	legacyDirectEnvelope    bool
 }
 
+// apply ignores nil options so optional configuration slices compose safely.
 func (o *runtimeOptions) apply(opts []Option) {
 	for _, opt := range opts {
 		if opt != nil {
@@ -112,12 +67,12 @@ func (o *runtimeOptions) apply(opts []Option) {
 	}
 }
 
-// WithObserver installs a workflow lifecycle observer.
+// WithObserver installs one observer for queue, worker, and workflow lifecycle events.
 // @group Queue
 //
-// Example: workflow observer
+// Example: observe all queue activity
 //
-//	observer := queue.WorkflowObserverFunc(func(_ context.Context, event queue.WorkflowEvent) {
+//	observer := queue.ObserverFunc(func(_ context.Context, event queue.Event) {
 //		_ = event.Kind
 //	})
 //	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))
@@ -125,9 +80,16 @@ func (o *runtimeOptions) apply(opts []Option) {
 //		return
 //	}
 //	_ = q
-func WithObserver(observer WorkflowObserver) Option {
+func WithObserver(observer Observer) Option {
 	return func(o *runtimeOptions) {
-		o.busOpts = append(o.busOpts, bus.WithObserver(observer))
+		if observer == nil {
+			return
+		}
+		if o.observer == nil {
+			o.observer = observer
+			return
+		}
+		o.observer = MultiObserver(o.observer, observer)
 	}
 }
 
@@ -144,7 +106,7 @@ func WithObserver(observer WorkflowObserver) Option {
 //	_ = q
 func WithStore(store WorkflowStore) Option {
 	return func(o *runtimeOptions) {
-		o.busOpts = append(o.busOpts, bus.WithStore(store))
+		o.workflowOpts = append(o.workflowOpts, workflow.WithStore(workflowStoreFromRoot(store)))
 	}
 }
 
@@ -163,7 +125,7 @@ func WithStore(store WorkflowStore) Option {
 //	_ = q
 func WithClock(clock func() time.Time) Option {
 	return func(o *runtimeOptions) {
-		o.busOpts = append(o.busOpts, bus.WithClock(clock))
+		o.workflowOpts = append(o.workflowOpts, workflow.WithClock(clock))
 	}
 }
 
@@ -182,7 +144,7 @@ func WithClock(clock func() time.Time) Option {
 //	_ = q
 func WithMiddleware(middlewares ...Middleware) Option {
 	return func(o *runtimeOptions) {
-		o.busOpts = append(o.busOpts, bus.WithMiddleware(middlewares...))
+		o.workflowOpts = append(o.workflowOpts, workflow.WithMiddleware(middlewaresToWorkflow(middlewares)...))
 	}
 }
 
@@ -230,15 +192,30 @@ func WithHandlerContextDecorator(fn func(context.Context) context.Context) Optio
 	}
 }
 
+// WithLegacyDirectEnvelope keeps ordinary dispatches on the version-one
+// `bus:job` wire route during a workers-first migration. Remove this option only
+// after every consumer can process canonical direct deliveries. See the
+// [direct delivery migration guide] for backend-specific rollout and rollback.
+//
+// [direct delivery migration guide]: https://github.com/goforj/queue/blob/main/docs/direct-delivery-migration.md
+// @group Queue
+func WithLegacyDirectEnvelope() Option {
+	return func(o *runtimeOptions) {
+		o.legacyDirectEnvelope = true
+	}
+}
+
 // Queue is the high-level user-facing queue API.
 // It composes the queue runtime with the internal orchestration engine.
 // @group Queue
 type Queue struct {
-	q   queueRuntime
-	b   bus.Bus
-	ctx context.Context
+	q                    queueRuntime
+	b                    workflow.Engine
+	ctx                  context.Context
+	legacyDirectEnvelope bool
 }
 
+// newHighLevelQueue constructs the selected physical runtime before attaching the canonical workflow engine.
 func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 	q, err := newRuntime(cfg)
 	if err != nil {
@@ -247,20 +224,88 @@ func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 	return newQueueFromRuntime(q, opts...)
 }
 
+// newQueueFromRuntime applies root configuration once before registering the single internal workflow engine.
 func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
+	observer := attachRuntimeObserver(q, ro.observer)
 	if ro.workers > 0 && q != nil {
 		q = q.Workers(ro.workers)
 	}
 	if ro.handlerContextDecorator != nil && q != nil {
 		q.setHandlerContextDecorator(ro.handlerContextDecorator)
 	}
-	b, err := bus.New(q, ro.busOpts...)
+	if observer != nil {
+		driver := Driver("")
+		resolveQueueName := func(queueName string) string {
+			return PhysicalQueueName("default", queueName)
+		}
+		if q != nil {
+			driver = q.Driver()
+			resolveQueueName = func(queueName string) string {
+				if queueName == "" {
+					return "default"
+				}
+				return q.physicalQueueNameOrDefault(queueName)
+			}
+		}
+		ro.workflowOpts = append(ro.workflowOpts, workflow.WithObserver(workflowObserverAdapter{
+			driver:           driver,
+			resolveQueueName: resolveQueueName,
+			observer:         observer,
+		}))
+	}
+	b, err := workflow.New(q, ro.workflowOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return &Queue{q: q, b: b}, nil
+	return &Queue{q: q, b: b, legacyDirectEnvelope: ro.legacyDirectEnvelope}, nil
+}
+
+// attachRuntimeObserver composes constructor and option observers before the workflow runtime is built so every layer shares one sink.
+func attachRuntimeObserver(q queueRuntime, observer Observer) Observer {
+	switch runtime := q.(type) {
+	case *nativeQueueRuntime:
+		runtime.common.addObserver(observer)
+		return runtime.common.observer()
+	case *externalQueueRuntime:
+		runtime.common.addObserver(observer)
+		return runtime.common.observer()
+	default:
+		return observer
+	}
+}
+
+type workflowObserverAdapter struct {
+	driver           Driver
+	resolveQueueName func(string) string
+	observer         Observer
+}
+
+// Observe converts workflow facts into the canonical event envelope without exposing the internal engine model to applications.
+func (a workflowObserverAdapter) Observe(ctx context.Context, event workflow.Event) {
+	queueName := PhysicalQueueName("default", event.Queue)
+	if a.resolveQueueName != nil {
+		queueName = a.resolveQueueName(event.Queue)
+	}
+	safeObserve(ctx, a.observer, Event{
+		SchemaVersion: event.SchemaVersion,
+		EventID:       event.EventID,
+		Layer:         eventLayerForKind(EventKind(event.Kind)),
+		Kind:          EventKind(event.Kind),
+		Driver:        a.driver,
+		Queue:         queueName,
+		JobType:       event.JobType,
+		JobKey:        event.JobKey,
+		DispatchID:    event.DispatchID,
+		JobID:         event.JobID,
+		ChainID:       event.ChainID,
+		BatchID:       event.BatchID,
+		Attempt:       event.Attempt,
+		Duration:      event.Duration,
+		Err:           event.Err,
+		Time:          event.Time,
+	})
 }
 
 // NewNull creates a Queue on the null backend.
@@ -326,10 +371,12 @@ func NewWorkerpool(opts ...Option) (*Queue, error) {
 //		return nil
 //	})
 func (r *Queue) Register(jobType string, handler func(context.Context, Message) error) {
-	if r == nil {
+	if r == nil || handler == nil {
 		return
 	}
-	r.b.Register(jobType, handler)
+	r.b.Register(jobType, func(ctx context.Context, message workflow.Context) error {
+		return handler(ctx, messageFromWorkflow(message))
+	})
 }
 
 // Driver reports the configured backend driver for the underlying queue runtime.
@@ -379,7 +426,8 @@ func (r *Queue) WithContext(ctx context.Context) *Queue {
 	return &clone
 }
 
-// Dispatch enqueues a high-level job using the queue's bound context.
+// Dispatch enqueues a high-level job using its application type and exact
+// payload bytes together with the queue's bound context.
 // @group Queue
 //
 // Example: dispatch
@@ -389,21 +437,62 @@ func (r *Queue) WithContext(ctx context.Context) *Queue {
 //		return
 //	}
 //	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+//	if err := q.StartWorkers(context.Background()); err != nil {
+//		return
+//	}
+//	defer q.Shutdown(context.Background())
 //	job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
 //	_, _ = q.Dispatch(job)
 func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
 	if r == nil {
 		return DispatchResult{}, fmt.Errorf("runtime is nil")
 	}
-	bj, err := toBusJob(job)
-	if err != nil {
-		return DispatchResult{}, err
-	}
 	ctx := r.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return r.b.Dispatch(ctx, bj)
+	if r.legacyDirectEnvelope {
+		legacy, legacyErr := toWorkflowJob(job)
+		if legacyErr != nil {
+			return DispatchResult{}, legacyErr
+		}
+		result, dispatchErr := r.b.Dispatch(ctx, legacy)
+		return dispatchResultFromWorkflow(result), dispatchErr
+	}
+	bj, err := toDirectWorkflowJob(job)
+	if err != nil {
+		return DispatchResult{}, err
+	}
+	result, err := r.b.DispatchDirect(ctx, bj)
+	return dispatchResultFromWorkflow(result), err
+}
+
+// toDirectWorkflowJob freezes the canonical root job as exact application
+// bytes, avoiding the legacy workflow payload marshaling boundary.
+func toDirectWorkflowJob(job Job) (workflow.StoredJob, error) {
+	if err := job.validate(); err != nil {
+		return workflow.StoredJob{}, err
+	}
+	var timeout time.Duration
+	if job.options.timeout != nil {
+		timeout = *job.options.timeout
+	}
+	var backoff time.Duration
+	if job.options.backoff != nil {
+		backoff = *job.options.backoff
+	}
+	return workflow.StoredJob{
+		Type:    job.Type,
+		Payload: job.PayloadBytes(),
+		Options: workflow.JobOptions{
+			Queue:     job.options.queueName,
+			Delay:     job.options.delay,
+			Timeout:   timeout,
+			Retry:     optionInt(job.options.maxRetry),
+			Backoff:   backoff,
+			UniqueFor: job.options.uniqueTTL,
+		},
+	}, nil
 }
 
 // Chain creates a chain builder for sequential workflow execution.
@@ -417,6 +506,10 @@ func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
 //	}
 //	q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
 //	q.Register("second", func(ctx context.Context, m queue.Message) error { return nil })
+//	if err := q.StartWorkers(context.Background()); err != nil {
+//		return
+//	}
+//	defer q.Shutdown(context.Background())
 //	_, _ = q.Chain(
 //		queue.NewJob("first"),
 //		queue.NewJob("second"),
@@ -425,15 +518,11 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 	if r == nil {
 		return &chainBuilderAdapter{}
 	}
-	busJobs := make([]bus.Job, 0, len(jobs))
-	for _, job := range jobs {
-		bj, err := toBusJob(job)
-		if err != nil {
-			return &chainBuilderAdapter{err: err}
-		}
-		busJobs = append(busJobs, bj)
+	workflowJobs, err := toWorkflowJobs(jobs)
+	if err != nil {
+		return &chainBuilderAdapter{err: err}
 	}
-	return &chainBuilderAdapter{inner: r.b.Chain(busJobs...)}
+	return &chainBuilderAdapter{inner: r.b.Chain(workflowJobs...)}
 }
 
 // Batch creates a batch builder for fan-out workflow execution.
@@ -446,6 +535,10 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 //		return
 //	}
 //	q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+//	if err := q.StartWorkers(context.Background()); err != nil {
+//		return
+//	}
+//	defer q.Shutdown(context.Background())
 //	_, _ = q.Batch(
 //		queue.NewJob("emails:send").Payload(map[string]any{"id": 1}),
 //		queue.NewJob("emails:send").Payload(map[string]any{"id": 2}),
@@ -454,15 +547,11 @@ func (r *Queue) Batch(jobs ...Job) BatchBuilder {
 	if r == nil {
 		return &batchBuilderAdapter{}
 	}
-	busJobs := make([]bus.Job, 0, len(jobs))
-	for _, job := range jobs {
-		bj, err := toBusJob(job)
-		if err != nil {
-			return &batchBuilderAdapter{err: err}
-		}
-		busJobs = append(busJobs, bj)
+	workflowJobs, err := toWorkflowJobs(jobs)
+	if err != nil {
+		return &batchBuilderAdapter{err: err}
 	}
-	return &batchBuilderAdapter{inner: r.b.Batch(busJobs...)}
+	return &batchBuilderAdapter{inner: r.b.Batch(workflowJobs...)}
 }
 
 // StartWorkers starts worker processing.
@@ -551,7 +640,8 @@ func (r *Queue) FindChain(ctx context.Context, chainID string) (ChainState, erro
 	if r == nil {
 		return ChainState{}, fmt.Errorf("runtime is nil")
 	}
-	return r.b.FindChain(ctx, chainID)
+	state, err := r.b.FindChain(ctx, chainID)
+	return chainStateFromWorkflow(state), err
 }
 
 // FindBatch returns current batch state by ID.
@@ -573,7 +663,8 @@ func (r *Queue) FindBatch(ctx context.Context, batchID string) (BatchState, erro
 	if r == nil {
 		return BatchState{}, fmt.Errorf("runtime is nil")
 	}
-	return r.b.FindBatch(ctx, batchID)
+	state, err := r.b.FindBatch(ctx, batchID)
+	return batchStateFromWorkflow(state), err
 }
 
 // Prune deletes old workflow state records.
@@ -689,17 +780,26 @@ func (r *Queue) Ready(ctx context.Context) error {
 // ChainBuilder is the high-level chain workflow builder.
 // @group Queue
 type ChainBuilder interface {
+	// OnQueue applies a default queue to chain jobs without an explicit target.
 	OnQueue(queue string) ChainBuilder
+	// Catch registers the explicitly ephemeral chain failure callback.
 	Catch(fn func(ctx context.Context, st ChainState, err error) error) ChainBuilder
+	// Finally registers the explicitly ephemeral chain terminal callback.
 	Finally(fn func(ctx context.Context, st ChainState) error) ChainBuilder
+	// Dispatch persists and starts the chain workflow.
 	Dispatch(ctx context.Context) (string, error)
 }
 
 type chainBuilderAdapter struct {
-	inner bus.ChainBuilder
-	err   error
+	inner           workflow.ChainBuilder
+	err             error
+	dispatchGuard   func() func()
+	dispatchContext func(context.Context) context.Context
+	onAccepted      func(string)
+	onRejected      func(string)
 }
 
+// OnQueue forwards fluent queue selection while preserving any earlier conversion failure.
 func (b *chainBuilderAdapter) OnQueue(queue string) ChainBuilder {
 	if b.inner != nil {
 		b.inner = b.inner.OnQueue(queue)
@@ -707,20 +807,23 @@ func (b *chainBuilderAdapter) OnQueue(queue string) ChainBuilder {
 	return b
 }
 
+// Catch forwards the explicitly ephemeral chain failure callback.
 func (b *chainBuilderAdapter) Catch(fn func(ctx context.Context, st ChainState, err error) error) ChainBuilder {
 	if b.inner != nil {
-		b.inner = b.inner.Catch(fn)
+		b.inner = b.inner.Catch(chainCatchToWorkflow(fn))
 	}
 	return b
 }
 
+// Finally forwards the explicitly ephemeral chain terminal callback.
 func (b *chainBuilderAdapter) Finally(fn func(ctx context.Context, st ChainState) error) ChainBuilder {
 	if b.inner != nil {
-		b.inner = b.inner.Finally(fn)
+		b.inner = b.inner.Finally(chainFinallyToWorkflow(fn))
 	}
 	return b
 }
 
+// Dispatch returns deferred builder errors before asking the internal engine to create state.
 func (b *chainBuilderAdapter) Dispatch(ctx context.Context) (string, error) {
 	if b.err != nil {
 		return "", b.err
@@ -728,27 +831,53 @@ func (b *chainBuilderAdapter) Dispatch(ctx context.Context) (string, error) {
 	if b.inner == nil {
 		return "", fmt.Errorf("chain builder is nil")
 	}
-	return b.inner.Dispatch(ctx)
+	if b.dispatchGuard != nil {
+		release := b.dispatchGuard()
+		defer release()
+	}
+	if b.dispatchContext != nil {
+		ctx = b.dispatchContext(ctx)
+	}
+	chainID, err := b.inner.Dispatch(ctx)
+	if err == nil && b.onAccepted != nil {
+		b.onAccepted(chainID)
+	} else if err != nil && chainID != "" && b.onRejected != nil {
+		b.onRejected(chainID)
+	}
+	return chainID, err
 }
 
 // BatchBuilder is the high-level batch workflow builder.
 // @group Queue
 type BatchBuilder interface {
+	// Name assigns an application-facing label to the batch.
 	Name(name string) BatchBuilder
+	// OnQueue applies a default queue to batch jobs without an explicit target.
 	OnQueue(queue string) BatchBuilder
+	// AllowFailures keeps remaining members active after a terminal member failure.
 	AllowFailures() BatchBuilder
+	// Progress registers the explicitly ephemeral batch progress callback.
 	Progress(fn func(ctx context.Context, st BatchState) error) BatchBuilder
+	// Then registers the explicitly ephemeral batch success callback.
 	Then(fn func(ctx context.Context, st BatchState) error) BatchBuilder
+	// Catch registers the explicitly ephemeral batch failure callback.
 	Catch(fn func(ctx context.Context, st BatchState, err error) error) BatchBuilder
+	// Finally registers the explicitly ephemeral batch terminal callback.
 	Finally(fn func(ctx context.Context, st BatchState) error) BatchBuilder
+	// Dispatch persists and starts the batch workflow.
 	Dispatch(ctx context.Context) (string, error)
 }
 
 type batchBuilderAdapter struct {
-	inner bus.BatchBuilder
-	err   error
+	inner           workflow.BatchBuilder
+	err             error
+	dispatchGuard   func() func()
+	dispatchContext func(context.Context) context.Context
+	onAccepted      func(string)
+	onRejected      func(string)
 }
 
+// Name forwards the application-facing batch label while preserving any earlier conversion failure.
 func (b *batchBuilderAdapter) Name(name string) BatchBuilder {
 	if b.inner != nil {
 		b.inner = b.inner.Name(name)
@@ -756,6 +885,7 @@ func (b *batchBuilderAdapter) Name(name string) BatchBuilder {
 	return b
 }
 
+// OnQueue forwards fluent queue selection while preserving any earlier conversion failure.
 func (b *batchBuilderAdapter) OnQueue(queue string) BatchBuilder {
 	if b.inner != nil {
 		b.inner = b.inner.OnQueue(queue)
@@ -763,6 +893,7 @@ func (b *batchBuilderAdapter) OnQueue(queue string) BatchBuilder {
 	return b
 }
 
+// AllowFailures forwards the aggregate failure policy to the internal engine.
 func (b *batchBuilderAdapter) AllowFailures() BatchBuilder {
 	if b.inner != nil {
 		b.inner = b.inner.AllowFailures()
@@ -770,34 +901,39 @@ func (b *batchBuilderAdapter) AllowFailures() BatchBuilder {
 	return b
 }
 
+// Progress forwards the explicitly ephemeral batch progress callback.
 func (b *batchBuilderAdapter) Progress(fn func(ctx context.Context, st BatchState) error) BatchBuilder {
 	if b.inner != nil {
-		b.inner = b.inner.Progress(fn)
+		b.inner = b.inner.Progress(batchStateCallbackToWorkflow(fn))
 	}
 	return b
 }
 
+// Then forwards the explicitly ephemeral batch success callback.
 func (b *batchBuilderAdapter) Then(fn func(ctx context.Context, st BatchState) error) BatchBuilder {
 	if b.inner != nil {
-		b.inner = b.inner.Then(fn)
+		b.inner = b.inner.Then(batchStateCallbackToWorkflow(fn))
 	}
 	return b
 }
 
+// Catch forwards the explicitly ephemeral batch failure callback.
 func (b *batchBuilderAdapter) Catch(fn func(ctx context.Context, st BatchState, err error) error) BatchBuilder {
 	if b.inner != nil {
-		b.inner = b.inner.Catch(fn)
+		b.inner = b.inner.Catch(batchCatchToWorkflow(fn))
 	}
 	return b
 }
 
+// Finally forwards the explicitly ephemeral batch terminal callback.
 func (b *batchBuilderAdapter) Finally(fn func(ctx context.Context, st BatchState) error) BatchBuilder {
 	if b.inner != nil {
-		b.inner = b.inner.Finally(fn)
+		b.inner = b.inner.Finally(batchStateCallbackToWorkflow(fn))
 	}
 	return b
 }
 
+// Dispatch returns deferred builder errors before asking the internal engine to create state.
 func (b *batchBuilderAdapter) Dispatch(ctx context.Context) (string, error) {
 	if b.err != nil {
 		return "", b.err
@@ -805,22 +941,50 @@ func (b *batchBuilderAdapter) Dispatch(ctx context.Context) (string, error) {
 	if b.inner == nil {
 		return "", fmt.Errorf("batch builder is nil")
 	}
-	return b.inner.Dispatch(ctx)
+	if b.dispatchGuard != nil {
+		release := b.dispatchGuard()
+		defer release()
+	}
+	if b.dispatchContext != nil {
+		ctx = b.dispatchContext(ctx)
+	}
+	batchID, err := b.inner.Dispatch(ctx)
+	if err == nil && b.onAccepted != nil {
+		b.onAccepted(batchID)
+	} else if err != nil && batchID != "" && b.onRejected != nil {
+		b.onRejected(batchID)
+	}
+	return batchID, err
 }
 
-func toBusJob(job Job) (bus.Job, error) {
+// toWorkflowJobs converts a canonical job slice once so production and fake
+// workflow builders share validation and payload ownership rules.
+func toWorkflowJobs(jobs []Job) ([]workflow.Job, error) {
+	converted := make([]workflow.Job, 0, len(jobs))
+	for _, job := range jobs {
+		workflowJob, err := toWorkflowJob(job)
+		if err != nil {
+			return nil, err
+		}
+		converted = append(converted, workflowJob)
+	}
+	return converted, nil
+}
+
+// toWorkflowJob converts the canonical root job into the engine's private compatibility model without changing payload bytes.
+func toWorkflowJob(job Job) (workflow.Job, error) {
 	if err := job.validate(); err != nil {
-		return bus.Job{}, err
+		return workflow.Job{}, err
 	}
 	if job.Type == "" {
-		return bus.Job{}, fmt.Errorf("job type is required")
+		return workflow.Job{}, fmt.Errorf("job type is required")
 	}
 	payload := job.PayloadBytes()
 	var busPayload any
 	if payload != nil {
 		busPayload = json.RawMessage(payload)
 	}
-	j := bus.NewJob(job.Type, busPayload)
+	j := workflow.NewJob(job.Type, busPayload)
 	if job.options.queueName != "" {
 		j = j.OnQueue(job.options.queueName)
 	}

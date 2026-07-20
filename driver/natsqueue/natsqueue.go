@@ -54,17 +54,18 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("nats url is required")
 	}
+	observer := driverbridge.NewObserverSink(cfg.Observer)
 	rootCfg := queue.Config{
 		Driver:       queue.DriverNATS,
 		DefaultQueue: cfg.DefaultQueue,
-		Observer:     cfg.Observer,
+		Observer:     observer,
 	}
 	return driverbridge.NewQueueFromDriver(rootCfg, newNATSQueue(cfg.URL), func(workers int) (any, error) {
 		return newNATSWorkerWithConfig(natsWorkerConfig{
 			URL:          cfg.URL,
 			DefaultQueue: queue.PhysicalQueueName(cfg.DefaultQueue, cfg.DefaultQueue),
 			Workers:      workers,
-			Observer:     cfg.Observer,
+			Observer:     observer,
 		}), nil
 	}, opts...)
 }

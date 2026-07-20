@@ -65,7 +65,8 @@ What is not yet sufficient for a GA claim:
   - Scenarios:
     - `scenario_dispatch_during_broker_fault`
     - `scenario_consume_after_broker_recovery`
-  - Acceptance: failures are surfaced during broker outage and recovery path processes jobs after broker restoration.
+    - `TestIntegrationChaos_RedisBrokerDisconnectRedelivery`
+  - Acceptance: failures are surfaced during broker outage, recovery processes work after restoration, and Redis redelivers a handler-time lost acknowledgement without consuming the application retry budget.
 
 - [x] Duplicate-delivery idempotency scenario remains green.
   - Scenario: `scenario_duplicate_delivery_idempotency`
@@ -137,8 +138,8 @@ What is not yet sufficient for a GA claim:
 
 - [ ] Canonical metrics/events contract is documented.
   - Acceptance: names, labels/fields, and semantics are documented and versioned.
-  - Must include recovery/failure events (for example `republish_failed`, `process_recovered`).
-  - Progress (2026-02-23): baseline contract added in `docs/metrics-contract.md` and baseline ops guidance added in `docs/ops-alerts.md` (includes `republish_failed` and `process_recovered` coverage).
+  - Must include recovery/failure events (for example `republish_failed`, `settlement_failed`, `process_recovered`).
+  - Progress (2026-02-23): baseline contract added in `docs/metrics-contract.md` and baseline ops guidance added in `docs/ops-alerts.md` (includes `republish_failed`, `settlement_failed`, and `process_recovered` coverage).
   - Remaining: pin a contract version, define required fields precisely, and align emitted metrics/log labels in production instrumentation.
 
 - [ ] Alerts and dashboards exist for core operations.
@@ -194,6 +195,8 @@ What is not yet sufficient for a GA claim:
   - README testing guidance no longer requires `bus.NewFake()`
 
 ## 7. Coverage and Test Debt (should complete)
+
+Coverage reporting now includes the root module, every buildable driver/example/integration module, and the tagged integration suite across the parallel backend matrix. CI rejects incomplete or ambiguous profile fan-in before its single required Codecov upload. This fixes reporting scope; it does not by itself close the test-debt items below.
 
 - [ ] Close remaining low-value 0% helper branches where practical.
   - Acceptance: no easy/uncontroversial 0% branches remain in core runtime paths.

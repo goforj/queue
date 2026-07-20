@@ -27,19 +27,33 @@ jobs:
           set -euo pipefail
           matrix_line="$(awk '/backend: \[/{print; exit}' .github/workflows/test.yml)"
           test -n "$matrix_line"
-          for backend in null sync workerpool redis mysql postgres sqlite nats sqs rabbitmq; do
-            if ! echo "$matrix_line" | grep -Eq "(^|[^a-z])${backend}([^a-z]|$)"; then
-              echo "missing required integration backend in matrix: ${backend}"
+          matrix_values="${matrix_line#*[}"
+          matrix_values="${matrix_values%%]*}"
+          IFS=',' read -r -a configured_backends <<< "$matrix_values"
+          required_backends=(null sync workerpool redis mysql postgres sqlite nats sqs rabbitmq)
+          if [[ "${#configured_backends[@]}" -ne "${#required_backends[@]}" ]]; then
+            echo "integration matrix has ${#configured_backends[@]} backends, want ${#required_backends[@]}"
+            exit 1
+          fi
+          for backend in "${required_backends[@]}"; do
+            if ! grep -Fq "\"${backend}\"" <<< "$matrix_line"; then
+              echo "missing explicitly quoted integration backend in matrix: ${backend}"
               exit 1
             fi
           done
 
   unit:
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: /tmp/gocache
+      GOMODCACHE: /tmp/gomodcache
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify Codecov report freshness guard
+        run: .github/scripts/test_wait_codecov_report.sh
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -48,6 +62,9 @@ jobs:
 
       - name: Install dependencies
         run: go mod download
+
+      - name: Verify generated docs are current and idempotent
+        run: ./scripts/check-generated-docs.sh
 
       - name: Verify curated README manual snippets compile
         run: ./scripts/check-readme-snippets.sh
@@ -56,19 +73,93 @@ jobs:
         working-directory: examples
         run: go test ./... -run TestExamplesBuild -count=1
 
-      - name: Run unit tests
-        run: go test ./... -v
+      - name: Run all module unit tests and vet
+        run: FULL=1 VET=1 ./scripts/test-all-modules.sh
 
       - name: Run unit tests with coverage
-        run: ./scripts/coverage-codecov.sh
+        run: ./scripts/coverage-codecov.sh unit
 
-      - name: Upload results to Codecov
-        uses: codecov/codecov-action@v5
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Preserve multi-module unit coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: |
+            coverage/coverage-unit.out
+            coverage/coverage-unit-modules.tsv
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
 
-  race:
+  minimum-go:
+    name: Minimum Go (${{ matrix.minimum_go_version }})
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: /tmp/gocache
+      GOMODCACHE: /tmp/gomodcache
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+    strategy:
+      fail-fast: false
+      matrix:
+        minimum_go_version: ["1.24.4", "1.25.0"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.minimum_go_version }}
+          cache-dependency-path: |
+            go.sum
+            docs/go.sum
+            driver/*/go.sum
+            examples/go.sum
+            integration/go.sum
+
+      - name: Compile modules at their declared minimum
+        env:
+          MODULE_GO_VERSION: ${{ matrix.minimum_go_version }}
+        run: |
+          set -euo pipefail
+          matched=0
+          while read -r module go_version extra; do
+            [[ "$module" != \#* && -n "$module" ]] || continue
+            [[ -z "$extra" ]] || { echo "invalid module Go policy row for $module"; exit 1; }
+            [[ "$go_version" == "$MODULE_GO_VERSION" ]] || continue
+            matched=$((matched + 1))
+            case "$module" in
+              docs)
+                (cd "$module" && go mod verify)
+                (cd "$module" && go test ./readme/main.go)
+                (cd "$module" && go test ./examplegen/main.go)
+                (cd "$module" && go test -tags=testcounts ./readme/testcounts -run '^$' -count=1)
+                (cd "$module" && go test -tags=benchrender ./bench -run '^$' -count=1)
+                ;;
+              examples)
+                (cd "$module" && go test ./... -run '^TestExamplesBuild$' -count=1)
+                ;;
+              integration)
+                (cd "$module" && INTEGRATION_BACKEND=sync go test -tags=integration ./... -run '^$' -count=1)
+                ;;
+              *)
+                (cd "$module" && go test ./... -run '^$' -count=1)
+                ;;
+            esac
+          done < scripts/module-go-versions.tsv
+          [[ "$matched" -gt 0 ]] || { echo "no modules declare Go $MODULE_GO_VERSION"; exit 1; }
+
+  race_modules:
+    name: Race (${{ matrix.race_module }})
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: /tmp/gocache
+      GOMODCACHE: /tmp/gomodcache
+      GOWORK: "off"
+    strategy:
+      fail-fast: false
+      matrix:
+        race_module: [".", "driver/mysqlqueue", "driver/natsqueue", "driver/postgresqueue", "driver/rabbitmqqueue", "driver/redisqueue", "driver/sqlitequeue", "driver/sqlqueuecore", "driver/sqsqueue"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -77,20 +168,39 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
+          cache-dependency-path: |
+            go.sum
+            driver/*/go.sum
 
-      - name: Install dependencies
+      - name: Install module dependencies
+        working-directory: ${{ matrix.race_module }}
         run: go mod download
 
-      - name: Run race tests (root module scope)
-        run: go test -race ./...
+      - name: Run race tests
+        working-directory: ${{ matrix.race_module }}
+        run: go test -race ./... -count=1
+
+  race:
+    name: race
+    needs: race_modules
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every race module
+        env:
+          RACE_RESULT: ${{ needs.race_modules.result }}
+        run: test "$RACE_RESULT" = "success"
 
   integration-all:
     needs: [integration-matrix-guard, integration-scenarios-contract-guard]
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: /tmp/gocache
+      GOMODCACHE: /tmp/gomodcache
     strategy:
       fail-fast: false
       matrix:
-        backend: [null, sync, workerpool, redis, mysql, postgres, sqlite, nats, sqs, rabbitmq]
+        backend: ["null", "sync", "workerpool", "redis", "mysql", "postgres", "sqlite", "nats", "sqs", "rabbitmq"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,9 +211,67 @@ jobs:
           go-version: "stable"
 
       - name: Install dependencies
+        working-directory: integration
         run: go mod download
 
-      - name: Run integration tests
+      - name: Run integration tests with coverage
         env:
           INTEGRATION_BACKEND: ${{ matrix.backend }}
-        run: go test -p=1 -tags integration ./integration/...
+        run: ./scripts/coverage-codecov.sh integration
+
+      - name: Preserve integration coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration-${{ matrix.backend }}
+          path: coverage/coverage-integration-${{ matrix.backend }}.out
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  coverage:
+    needs: [unit, integration-all]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage-artifacts
+          merge-multiple: false
+
+      - name: Verify complete coverage fan-in
+        id: coverage-files
+        run: |
+          set -euo pipefail
+          .github/scripts/check_codecov_coverage.sh coverage-artifacts
+          profiles="$(find coverage-artifacts -type f -name '*.out' -print | LC_ALL=C sort | paste -sd, -)"
+          test -n "$profiles"
+          echo "files=$profiles" >> "$GITHUB_OUTPUT"
+
+      - name: Upload complete coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ${{ steps.coverage-files.outputs.files }}
+          disable_search: true
+          fail_ci_if_error: true
+          name: complete-test-suite-${{ github.run_id }}-${{ github.run_attempt }}
+          override_build: ${{ github.run_id }}-${{ github.run_attempt }}
+          override_commit: ${{ github.event.pull_request.head.sha || github.sha }}
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Wait for the exact Codecov report
+        env:
+          CODECOV_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CODECOV_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CODECOV_UPLOAD_NAME: complete-test-suite-${{ github.run_id }}-${{ github.run_attempt }}
+        run: .github/scripts/wait_codecov_report.sh

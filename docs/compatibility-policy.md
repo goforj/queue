@@ -6,6 +6,8 @@ This document defines how queue backend compatibility is communicated for releas
 
 - The project documents backend/runtime compatibility expectations in release notes and supporting docs.
 - Capability differences are documented separately (see `docs/backend-guarantees.md`).
+- Release notes classify source/API, configuration, persisted-data, runtime-behavior, operational-rollout, and minimum-Go-version changes independently.
+- A worker-first wire rollout or uniqueness quiescence window is an operational migration even when source APIs remain compatible.
 
 ## What "supported" means here
 

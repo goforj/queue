@@ -1,0 +1,18 @@
+codecov:
+  require_ci_to_pass: true
+
+# Go text profiles use repository module import paths. This deterministic fix
+# maps every root, driver, and integration module record to its checked-in path.
+fixes:
+  - "github.com/goforj/queue/::"
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 1%

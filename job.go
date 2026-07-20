@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"reflect"
 	"time"
+
+	"github.com/goforj/queue/busruntime"
 )
 
 // Job is a pure queue payload value plus enqueue metadata.
@@ -27,14 +29,31 @@ type Job struct {
 }
 
 type jobOptions struct {
-	queueName string
-	timeout   *time.Duration
-	maxRetry  *int
-	attempt   int
-	backoff   *time.Duration
-	delay     time.Duration
-	uniqueTTL time.Duration
+	queueName      string
+	timeout        *time.Duration
+	maxRetry       *int
+	attempt        int
+	backoff        *time.Duration
+	delay          time.Duration
+	uniqueTTL      time.Duration
+	logicalType    string
+	logicalPayload []byte
+	logicalSet     bool
+	metadata       DriverJobMetadata
 }
+
+// DriverJobMetadataVersion identifies the direct-delivery metadata understood by
+// this version of the driver integration contract.
+// @group Driver Integration
+const DriverJobMetadataVersion = busruntime.DeliveryMetadataVersion
+
+// DriverJobMetadata carries stable correlation separately from an application's
+// job type and payload. Drivers persist this metadata alongside their native
+// delivery representation so ordinary jobs do not require a workflow envelope.
+//
+// This is an advanced type intended for optional driver integrations.
+// @group Driver Integration
+type DriverJobMetadata = busruntime.DeliveryMetadata
 
 // DriverJobOptions exposes parsed job enqueue metadata for driver-module implementations.
 //
@@ -317,6 +336,34 @@ func DriverOptions(job Job) DriverJobOptions {
 	}
 }
 
+// DriverMetadata returns supported direct-delivery correlation attached to job.
+// Unknown metadata versions are intentionally hidden so older workers do not
+// trust fields whose semantics they cannot validate.
+//
+// This is an advanced helper intended for driver-module implementations.
+// @group Driver Integration
+func DriverMetadata(job Job) DriverJobMetadata {
+	metadata := job.options.metadata
+	if metadata.SchemaVersion != DriverJobMetadataVersion {
+		return DriverJobMetadata{}
+	}
+	return metadata
+}
+
+// DriverWithMetadata returns a job carrying supported direct-delivery
+// correlation. Unknown versions are ignored while the application payload and
+// delivery policy remain usable.
+//
+// This is an advanced helper intended for driver-module implementations.
+// @group Driver Integration
+func DriverWithMetadata(job Job, metadata DriverJobMetadata) Job {
+	if metadata.SchemaVersion != DriverJobMetadataVersion {
+		return job
+	}
+	job.options.metadata = metadata
+	return job
+}
+
 func (t Job) withBuildErr(err error) Job {
 	if t.buildErr == nil {
 		t.buildErr = err
@@ -326,6 +373,14 @@ func (t Job) withBuildErr(err error) Job {
 
 func (t Job) withAttempt(attempt int) Job {
 	t.options.attempt = attempt
+	return t
+}
+
+// withLogicalIdentity carries application bytes separately from their physical delivery envelope.
+func (t Job) withLogicalIdentity(jobType string, payload []byte) Job {
+	t.options.logicalType = jobType
+	t.options.logicalPayload = append([]byte(nil), payload...)
+	t.options.logicalSet = true
 	return t
 }
 

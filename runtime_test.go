@@ -3,11 +3,10 @@ package queue
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/goforj/queue/bus"
 )
 
 func TestRuntime_DispatchChainBatch_Sync(t *testing.T) {
@@ -167,6 +166,170 @@ func TestNew_WithObserver(t *testing.T) {
 	}
 }
 
+// TestQueueHandlerContextDecoratorWithAndWithoutObserver verifies context decoration does not depend on observation being enabled.
+func TestQueueHandlerContextDecoratorWithAndWithoutObserver(t *testing.T) {
+	type contextKey struct{}
+	key := contextKey{}
+	const want = "jobs"
+
+	for _, withObserver := range []bool{false, true} {
+		name := "without observer"
+		if withObserver {
+			name = "with observer"
+		}
+		t.Run(name, func(t *testing.T) {
+			var decoratorCalls atomic.Int32
+			var observedCalls atomic.Int32
+			var observerSawWrongContext atomic.Bool
+			opts := []Option{
+				WithHandlerContextDecorator(func(ctx context.Context) context.Context {
+					decoratorCalls.Add(1)
+					return context.WithValue(ctx, key, want)
+				}),
+			}
+			if withObserver {
+				opts = append(opts, WithObserver(ObserverFunc(func(ctx context.Context, event Event) {
+					if event.Kind != EventProcessStarted && event.Kind != EventProcessSucceeded {
+						return
+					}
+					observedCalls.Add(1)
+					if got, _ := ctx.Value(key).(string); got != want {
+						observerSawWrongContext.Store(true)
+					}
+				})))
+			}
+
+			q, err := NewSync(opts...)
+			if err != nil {
+				t.Fatalf("new sync queue: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := q.Shutdown(context.Background()); err != nil {
+					t.Errorf("shutdown sync queue: %v", err)
+				}
+			})
+			q.Register("job:decorated", func(ctx context.Context, _ Message) error {
+				if got, _ := ctx.Value(key).(string); got != want {
+					return errors.New("handler context was not decorated")
+				}
+				return nil
+			})
+			if err := q.StartWorkers(context.Background()); err != nil {
+				t.Fatalf("start workers: %v", err)
+			}
+			if _, err := q.Dispatch(NewJob("job:decorated")); err != nil {
+				t.Fatalf("dispatch decorated job: %v", err)
+			}
+
+			if got := decoratorCalls.Load(); got != 1 {
+				t.Fatalf("decorator calls = %d, want 1", got)
+			}
+			wantObserved := int32(0)
+			if withObserver {
+				wantObserved = 2
+			}
+			if got := observedCalls.Load(); got != wantObserved {
+				t.Fatalf("observed process events = %d, want %d", got, wantObserved)
+			}
+			if observerSawWrongContext.Load() {
+				t.Fatal("observer received a process event without the decorated context")
+			}
+		})
+	}
+}
+
+// TestQueueSyncShutdownRetriesReuseWorkDrainGeneration verifies public retries
+// cannot accumulate goroutines while one delayed Sync handler is still active.
+func TestQueueSyncShutdownRetriesReuseWorkDrainGeneration(t *testing.T) {
+	q, err := NewSync()
+	if err != nil {
+		t.Fatalf("new sync queue: %v", err)
+	}
+	handlerEntered := make(chan struct{}, 1)
+	releaseHandler := make(chan struct{})
+	release := func() {
+		select {
+		case <-releaseHandler:
+		default:
+			close(releaseHandler)
+		}
+	}
+	t.Cleanup(func() {
+		release()
+		if err := q.Shutdown(context.Background()); err != nil {
+			t.Errorf("cleanup sync queue: %v", err)
+		}
+	})
+
+	q.Register("job:delayed-shutdown", func(context.Context, Message) error {
+		handlerEntered <- struct{}{}
+		<-releaseHandler
+		return nil
+	})
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	if _, err := q.Dispatch(NewJob("job:delayed-shutdown").Delay(time.Nanosecond)); err != nil {
+		t.Fatalf("dispatch delayed job: %v", err)
+	}
+	select {
+	case <-handlerEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("delayed handler did not start")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := q.Shutdown(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first canceled shutdown error = %v, want %v", err, context.Canceled)
+	}
+	native, ok := q.q.(*nativeQueueRuntime)
+	if !ok {
+		t.Fatalf("sync queue runtime = %T, want *nativeQueueRuntime", q.q)
+	}
+	local, ok := native.runtime.(*localQueue)
+	if !ok {
+		t.Fatalf("sync backend = %T, want *localQueue", native.runtime)
+	}
+	local.syncWorkMu.Lock()
+	sharedDone := local.syncWorkIdle
+	local.syncWorkMu.Unlock()
+	if sharedDone == nil {
+		t.Fatal("first canceled shutdown did not retain a Sync work generation")
+	}
+	goroutinesAfterFirstCancel := runtime.NumGoroutine()
+	for range 64 {
+		if err := q.Shutdown(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("repeated canceled shutdown error = %v, want %v", err, context.Canceled)
+		}
+		local.syncWorkMu.Lock()
+		currentDone := local.syncWorkIdle
+		local.syncWorkMu.Unlock()
+		if currentDone != sharedDone {
+			t.Fatal("public shutdown retry replaced the Sync work generation")
+		}
+	}
+	runtime.Gosched()
+	if got := runtime.NumGoroutine(); got > goroutinesAfterFirstCancel+2 {
+		t.Fatalf("canceled shutdown retries grew goroutines from %d to %d", goroutinesAfterFirstCancel, got)
+	}
+	select {
+	case <-sharedDone:
+		t.Fatal("Sync work generation completed while its handler was blocked")
+	default:
+	}
+
+	release()
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown after handler completion: %v", err)
+	}
+	select {
+	case <-sharedDone:
+	default:
+		t.Fatal("completed public shutdown did not close the shared Sync work generation")
+	}
+}
+
 func TestQueue_Run_WorkerpoolStartsAndShutsDownOnCancel(t *testing.T) {
 	q, err := NewWorkerpool(WithWorkers(2))
 	if err != nil {
@@ -226,7 +389,7 @@ func TestNew_WithStoreClockMiddlewareAndPrune(t *testing.T) {
 
 	q, err := New(
 		Config{Driver: DriverSync},
-		WithStore(bus.NewMemoryStore()),
+		WithStore(NewMemoryStore()),
 		WithClock(func() time.Time { return fixedNow }),
 		WithObserver(WorkflowObserverFunc(func(context.Context, WorkflowEvent) { observed.Add(1) })),
 		WithMiddleware(MiddlewareFunc(func(ctx context.Context, m Message, next Next) error {

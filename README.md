@@ -10,12 +10,12 @@
     <a href="https://pkg.go.dev/github.com/goforj/queue"><img src="https://pkg.go.dev/badge/github.com/goforj/queue.svg" alt="Go Reference"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
     <a href="https://github.com/goforj/queue/actions"><img src="https://github.com/goforj/queue/actions/workflows/test.yml/badge.svg" alt="Go Test"></a>
-    <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.23+-blue?logo=go" alt="Go version"></a>
+    <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.24.4+-blue?logo=go" alt="Go version"></a>
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/unit_tests-274-brightgreen" alt="Unit tests (executed count)">
-    <img src="https://img.shields.io/badge/integration_tests-552-blue" alt="Integration tests (executed count)">
+    <img src="https://img.shields.io/badge/unit_tests-970-brightgreen" alt="Unit tests (executed count)">
+    <img src="https://img.shields.io/badge/integration_tests-631-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
 
@@ -24,6 +24,10 @@
 ```bash
 go get github.com/goforj/queue
 ```
+
+Existing deployments upgrading to application-type direct delivery must replace workers before switching producers. Follow the [direct delivery migration guide](docs/direct-delivery-migration.md), including its SQL schema step and backend-specific rollback constraints.
+
+The root queue module and non-PostgreSQL driver modules require Go 1.24.4 or newer. The PostgreSQL driver requires Go 1.25 or newer so it can use pgx 5.9.2, the first release containing the [GO-2026-5004 security fix](https://pkg.go.dev/vuln/GO-2026-5004).
 
 ## Quick Start
 
@@ -64,18 +68,20 @@ func main() {
 
 | Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout | Native Stats | Queue Admin |
 | ---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched jobs; useful for disabled queue modes and smoke tests. | - | - | - | - | - | - | - | - |
-| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | ✓ | - | ✓ | - | - |
-| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL durable queue | MySQL driver module (`driver/mysqlqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="Postgres"> | SQL durable queue | Postgres driver module (`driver/postgresqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL durable queue | SQLite driver module (`driver/sqlitequeue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - |
-| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend (Asynq semantics). | ✓ | ✓ | ✓ | ✓ | - | ✓ | ✓ | ✓ |
-| <img src="https://img.shields.io/badge/nats-%23007ACC?style=flat" alt="NATS"> | Broker target | NATS transport with queue-subject routing. | - | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/sqs-%23FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
-| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched jobs; useful for disabled queue modes and smoke tests. | - | - | - | Instance | - | - | - | - |
+| <img src="https://img.shields.io/badge/sync-%23999999?logo=gnometerminal&logoColor=white" alt="Sync"> | Inline (caller) | Deterministic local execution with no external infra. | - | - | - | Instance | - | ✓ | - | - |
+| <img src="https://img.shields.io/badge/workerpool-%23696969?logo=clockify&logoColor=white" alt="Workerpool"> | In-process pool | Local async behavior without external broker/database. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/mysql-%234479A1?logo=mysql&logoColor=white" alt="MySQL"> | SQL durable queue | MySQL driver module (`driver/mysqlqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | Backend | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/postgres-%23336791?logo=postgresql&logoColor=white" alt="Postgres"> | SQL durable queue | Postgres driver module (`driver/postgresqueue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | Backend | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/sqlite-%23003B57?logo=sqlite&logoColor=white" alt="SQLite"> | SQL durable queue | SQLite driver module (`driver/sqlitequeue`) built on shared SQL queue core. | ✓ | ✓ | ✓ | Backend | ✓ | ✓ | ✓ | - |
+| <img src="https://img.shields.io/badge/redis-%23DC382D?logo=redis&logoColor=white" alt="Redis"> | Redis/Asynq | Production Redis backend (Asynq semantics). | ✓ | ✓ | ✓ | Backend | - | ✓ | ✓ | ✓ |
+| <img src="https://img.shields.io/badge/nats-%23007ACC?style=flat" alt="NATS"> | Ephemeral broker | Core NATS subject routing; every plain subscription can receive a broadcast copy. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/sqs-%23FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
 
 > SQL-backed queues (`sqlite`, `mysql`, `postgres`) are durable and convenient, but they trade throughput for operational simplicity. They default to `1` worker, and increasing concurrency may require DB tuning (indexes, connection pool, lock contention). Prefer broker-backed drivers for higher-throughput workloads.
+>
+> **Unique scope:** `Instance` suppresses duplicates only within one queue runtime instance; `Backend` shares claims through the configured database or Redis service. Identity is the effective queue, logical application job type, and canonical serialized payload. Absent, zero-byte, and exact JSON `null` payloads share one absence identity; generated workflow IDs and delivery options do not change it. See [`docs/backend-guarantees.md`](docs/backend-guarantees.md) for acceptance, rollout, and failure-boundary details.
 >
 > **Queue Admin status:** the cross-driver admin contract is defined in core (`ListJobs`, `RetryJob`, `CancelJob`, `DeleteJob`, `ClearQueue`, `QueueHistory`), but **full queue admin operations are currently implemented only for Redis**. Other drivers return `ErrQueueAdminUnsupported` for unsupported admin actions.
 
@@ -218,7 +224,9 @@ _, _ = q.Chain(
 _, _ = q.Batch(
 	queue.NewJob("emails:send"),
 	queue.NewJob("sms:send"),
-).Then(queue.NewJob("notifications:done")).Dispatch(context.Background())
+).Then(func(context.Context, queue.BatchState) error {
+	return nil
+}).Dispatch(context.Background())
 ```
 
 **Middleware**: Cross-cutting execution policy.
@@ -385,7 +393,7 @@ Use `queue.Observer` implementations to capture normalized runtime events across
 collector := queue.NewStatsCollector()
 observer := queue.MultiObserver(
     collector,
-    queue.ObserverFunc(func(event queue.Event) {
+    queue.ObserverFunc(func(_ context.Context, event queue.Event) {
         _ = event.Kind
     }),
 )
@@ -416,7 +424,7 @@ observer := queue.MultiObserver(
         Events:     events,
         DropIfFull: true,
     },
-    queue.ObserverFunc(func(e queue.Event) {
+    queue.ObserverFunc(func(_ context.Context, e queue.Event) {
         _ = e
     }),
 )
@@ -428,89 +436,58 @@ q, _ := queue.New(queue.Config{
 _ = q
 ```
 
-### Kitchen sink event logging (runtime + workflow)
+### Kitchen sink event logging
 
 Runnable example: `examples/observeall/main.go`
 
 ```go
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-runtimeObserver := queue.ObserverFunc(func(event queue.Event) {
-	attemptInfo := fmt.Sprintf("attempt=%d/%d", event.Attempt, event.MaxRetry+1)
-	jobInfo := fmt.Sprintf("job=%s key=%s queue=%s driver=%s", event.JobType, event.JobKey, event.Queue, event.Driver)
-
-	switch event.Kind {
-	case queue.EventEnqueueAccepted:
-		logger.Info("Accepted dispatch", "msg", fmt.Sprintf("Accepted %s", jobInfo), "scheduled", event.Scheduled, "at", event.Time.Format(time.RFC3339Nano))
-	case queue.EventEnqueueRejected:
-		logger.Error("Dispatch failed", "msg", fmt.Sprintf("Rejected %s", jobInfo), "error", event.Err)
-	case queue.EventEnqueueDuplicate:
-		logger.Warn("Skipped duplicate job", "msg", fmt.Sprintf("Duplicate %s", jobInfo))
-	case queue.EventEnqueueCanceled:
-		logger.Warn("Canceled dispatch", "msg", fmt.Sprintf("Canceled %s", jobInfo), "error", event.Err)
-	case queue.EventProcessStarted:
-		logger.Info("Started processing job", "msg", fmt.Sprintf("Started %s (%s)", jobInfo, attemptInfo), "at", event.Time.Format(time.RFC3339Nano))
-	case queue.EventProcessSucceeded:
-		logger.Info("Processed job", "msg", fmt.Sprintf("Processed %s in %s (%s)", jobInfo, event.Duration, attemptInfo))
-	case queue.EventProcessFailed:
-		logger.Error("Processing failed", "msg", fmt.Sprintf("Failed %s after %s (%s)", jobInfo, event.Duration, attemptInfo), "error", event.Err)
-	case queue.EventProcessRetried:
-		logger.Warn("Retrying job", "msg", fmt.Sprintf("Retry scheduled for %s (%s)", jobInfo, attemptInfo), "error", event.Err)
-	case queue.EventProcessArchived:
-		logger.Error("Archived failed job", "msg", fmt.Sprintf("Archived %s after final failure (%s)", jobInfo, attemptInfo), "error", event.Err)
-	case queue.EventQueuePaused:
-		logger.Info("Paused queue", "msg", fmt.Sprintf("Paused queue=%s driver=%s", event.Queue, event.Driver))
-	case queue.EventQueueResumed:
-		logger.Info("Resumed queue", "msg", fmt.Sprintf("Resumed queue=%s driver=%s", event.Queue, event.Driver))
-	default:
-		logger.Info("Queue event", "msg", fmt.Sprintf("kind=%s %s", event.Kind, jobInfo))
-	}
-})
-workflowObserver := queue.WorkflowObserverFunc(func(event queue.WorkflowEvent) {
-	logger.Info("workflow event",
+observer := queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+	logger.InfoContext(ctx, "queue event",
+		"layer", event.Layer,
 		"kind", event.Kind,
+		"driver", event.Driver,
+		"queue", event.Queue,
 		"dispatch_id", event.DispatchID,
 		"job_id", event.JobID,
 		"chain_id", event.ChainID,
 		"batch_id", event.BatchID,
 		"job_type", event.JobType,
-		"queue", event.Queue,
 		"attempt", event.Attempt,
+		"max_retry", event.MaxRetry,
 		"duration", event.Duration,
 		"err", event.Err,
 	)
 })
 
 q, _ := queue.New(
-	queue.Config{
-		Driver:   queue.DriverSync,
-		Observer: runtimeObserver,
-	},
-	queue.WithObserver(workflowObserver),
+	queue.Config{Driver: queue.DriverSync},
+	queue.WithObserver(observer),
 )
 _ = q
 ```
 
 ### Events reference
 
-| Type | EventKind | Meaning |
+| Layer | EventKind | Meaning |
 | ---: | --- | --- |
+| **queue** | dispatch_started | Public dispatch began. |
+| **queue** | dispatch_succeeded | Backend acceptance completed; synchronous execution may still return an application error. |
+| **queue** | dispatch_failed | Public dispatch failed before backend acceptance. |
 | **queue** | enqueue_accepted | Job accepted by driver for enqueue. |
 | **queue** | enqueue_rejected | Job enqueue failed. |
 | **queue** | enqueue_duplicate | Duplicate job rejected due to uniqueness key. |
 | **queue** | enqueue_canceled | Context cancellation prevented enqueue. |
-| **queue** | process_started | Worker began processing job. |
-| **queue** | process_succeeded | Handler returned success. |
-| **queue** | process_failed | Handler returned error. |
-| **queue** | process_retried | Driver scheduled retry attempt. |
-| **queue** | process_archived | Job moved to terminal failure state. |
+| **worker** | process_started | Worker began processing job. |
+| **worker** | process_succeeded | Handler returned success. |
+| **worker** | process_failed | Handler returned an error or panicked. |
+| **worker** | process_retried | A numbered application retry attempt began; infrastructure redelivery may repeat the fact. |
+| **worker** | process_archived | Driver confirmed terminal settlement; unsupported paths omit this fact. |
 | **queue** | queue_paused | Queue was paused (driver supports pause). |
 | **queue** | queue_resumed | Queue was resumed. |
-| **workflow** | dispatch_started | Workflow runtime accepted a dispatch request and created a dispatch record. |
-| **workflow** | dispatch_succeeded | Dispatch was successfully enqueued to the underlying queue runtime. |
-| **workflow** | dispatch_failed | Dispatch failed before job execution could start. |
 | **workflow** | job_started | A workflow job handler started execution. |
 | **workflow** | job_succeeded | A workflow job handler completed successfully. |
-| **workflow** | job_failed | A workflow job handler returned an error. |
+| **workflow** | job_failed | A logical job reached permanent or exhausted failure. |
 | **workflow** | chain_started | A chain workflow was created and started. |
 | **workflow** | chain_advanced | Chain progressed from one node to the next node. |
 | **workflow** | chain_completed | Chain reached terminal success. |
@@ -523,6 +500,8 @@ _ = q
 | **workflow** | callback_started | Chain/batch callback execution started. |
 | **workflow** | callback_succeeded | Chain/batch callback completed successfully. |
 | **workflow** | callback_failed | Chain/batch callback returned an error. |
+
+Handler panics now emit `process_failed` before the original panic value is rethrown. This adds truthful failure telemetry without changing backend panic recovery or retry behavior.
 
 ## Examples
 
@@ -546,13 +525,13 @@ The API section below is autogenerated; do not edit between the markers.
 | Group | Functions |
 |------:|:-----------|
 | **Admin** | [CancelJob](#queue-canceljob) · [Queue.CancelJob](#queue-queue-canceljob) · [ClearQueue](#queue-clearqueue) · [Queue.ClearQueue](#queue-queue-clearqueue) · [DeleteJob](#queue-deletejob) · [Queue.DeleteJob](#queue-queue-deletejob) · [History](#queue-queue-history) · [ListJobs](#queue-listjobs) · [Queue.ListJobs](#queue-queue-listjobs) · [Normalize](#queue-listjobsoptions-normalize) · [QueueHistory](#queue-queuehistory) · [RetryJob](#queue-retryjob) · [Queue.RetryJob](#queue-queue-retryjob) · [SinglePointHistory](#queue-singlepointhistory) · [SupportsQueueAdmin](#queue-supportsqueueadmin) · [TimelineHistoryFromSnapshot](#queue-timelinehistoryfromsnapshot) |
-| **Constructors** | [New](#queue-new) · [NewNull](#queue-newnull) · [NewStatsCollector](#queue-newstatscollector) · [NewSync](#queue-newsync) · [NewWorkerpool](#queue-newworkerpool) |
+| **Constructors** | [New](#queue-new) · [NewMemoryStore](#queue-newmemorystore) · [NewMessage](#queue-newmessage) · [NewNull](#queue-newnull) · [NewSQLStore](#queue-newsqlstore) · [NewSQLStoreWithManagedSchema](#queue-newsqlstorewithmanagedschema) · [NewStatsCollector](#queue-newstatscollector) · [NewSync](#queue-newsync) · [NewWorkerpool](#queue-newworkerpool) |
 | **Job** | [Backoff](#queue-job-backoff) · [Bind](#queue-job-bind) · [Delay](#queue-job-delay) · [NewJob](#queue-newjob) · [OnQueue](#queue-job-onqueue) · [Payload](#queue-job-payload) · [PayloadBytes](#queue-job-payloadbytes) · [PayloadJSON](#queue-job-payloadjson) · [Retry](#queue-job-retry) · [Timeout](#queue-job-timeout) · [UniqueFor](#queue-job-uniquefor) |
 | **Observability** | [Active](#queue-statssnapshot-active) · [Archived](#queue-statssnapshot-archived) · [Failed](#queue-statssnapshot-failed) · [MultiObserver](#queue-multiobserver) · [ChannelObserver.Observe](#queue-channelobserver-observe) · [Observer.Observe](#queue-observer-observe) · [ObserverFunc.Observe](#queue-observerfunc-observe) · [StatsCollector.Observe](#queue-statscollector-observe) · [Pause](#queue-pause) · [Paused](#queue-statssnapshot-paused) · [Pending](#queue-statssnapshot-pending) · [Processed](#queue-statssnapshot-processed) · [Queue](#queue-statssnapshot-queue) · [Queues](#queue-statssnapshot-queues) · [Ready](#queue-ready) · [Resume](#queue-resume) · [RetryCount](#queue-statssnapshot-retrycount) · [SafeObserve](#queue-safeobserve) · [Scheduled](#queue-statssnapshot-scheduled) · [Snapshot](#queue-snapshot) · [StatsCollector.Snapshot](#queue-statscollector-snapshot) · [SupportsNativeStats](#queue-supportsnativestats) · [SupportsPause](#queue-supportspause) · [Throughput](#queue-statssnapshot-throughput) |
-| **Other** | [PhysicalQueueName](#queue-physicalqueuename) · [PhysicalQueueWeights](#queue-physicalqueueweights) · [ResolveObservedJobType](#queue-resolveobservedjobtype) |
-| **Queue** | [Batch](#queue-queue-batch) · [Chain](#queue-queue-chain) · [Dispatch](#queue-queue-dispatch) · [Driver](#queue-queue-driver) · [FindBatch](#queue-queue-findbatch) · [FindChain](#queue-queue-findchain) · [Pause](#queue-queue-pause) · [Prune](#queue-queue-prune) · [Ready](#queue-queue-ready) · [Register](#queue-queue-register) · [Resume](#queue-queue-resume) · [Run](#queue-queue-run) · [Shutdown](#queue-queue-shutdown) · [StartWorkers](#queue-queue-startworkers) · [Stats](#queue-queue-stats) · [WithClock](#queue-withclock) · [WithContext](#queue-queue-withcontext) · [WithHandlerContextDecorator](#queue-withhandlercontextdecorator) · [WithMiddleware](#queue-withmiddleware) · [WithObserver](#queue-withobserver) · [WithStore](#queue-withstore) · [WithWorkers](#queue-withworkers) · [Queue.WithWorkers](#queue-queue-withworkers) |
+| **Other** | [Acquire](#queue-locker-acquire) · [AdvanceChain](#queue-workflowstore-advancechain) · [Allow](#queue-ratelimiter-allow) · [AllowFailures](#queue-batchbuilder-allowfailures) · [CancelBatch](#queue-workflowstore-cancelbatch) · [BatchBuilder.Catch](#queue-batchbuilder-catch) · [ChainBuilder.Catch](#queue-chainbuilder-catch) · [CreateBatch](#queue-workflowstore-createbatch) · [CreateChain](#queue-workflowstore-createchain) · [BatchBuilder.Dispatch](#queue-batchbuilder-dispatch) · [ChainBuilder.Dispatch](#queue-chainbuilder-dispatch) · [FailChain](#queue-workflowstore-failchain) · [FailChainNode](#queue-workflowoutcomestore-failchainnode) · [BatchBuilder.Finally](#queue-batchbuilder-finally) · [ChainBuilder.Finally](#queue-chainbuilder-finally) · [GetBatch](#queue-workflowstore-getbatch) · [GetChain](#queue-workflowstore-getchain) · [FailOnError.Handle](#queue-failonerror-handle) · [Middleware.Handle](#queue-middleware-handle) · [MiddlewareFunc.Handle](#queue-middlewarefunc-handle) · [RateLimit.Handle](#queue-ratelimit-handle) · [RetryPolicy.Handle](#queue-retrypolicy-handle) · [SkipWhen.Handle](#queue-skipwhen-handle) · [WithoutOverlapping.Handle](#queue-withoutoverlapping-handle) · [MarkBatchJobFailed](#queue-workflowstore-markbatchjobfailed) · [MarkBatchJobStarted](#queue-workflowstore-markbatchjobstarted) · [MarkBatchJobSucceeded](#queue-workflowstore-markbatchjobsucceeded) · [MarkCallbackInvoked](#queue-workflowstore-markcallbackinvoked) · [Name](#queue-batchbuilder-name) · [BatchBuilder.OnQueue](#queue-batchbuilder-onqueue) · [ChainBuilder.OnQueue](#queue-chainbuilder-onqueue) · [PhysicalQueueName](#queue-physicalqueuename) · [PhysicalQueueWeights](#queue-physicalqueueweights) · [Progress](#queue-batchbuilder-progress) · [Prune](#queue-workflowstore-prune) · [Release](#queue-lock-release) · [ResolveObservedJobType](#queue-resolveobservedjobtype) · [SettleBatchJob](#queue-workflowoutcomestore-settlebatchjob) · [Then](#queue-batchbuilder-then) |
+| **Queue** | [Batch](#queue-queue-batch) · [Bind](#queue-message-bind) · [Chain](#queue-queue-chain) · [Dispatch](#queue-queue-dispatch) · [Driver](#queue-queue-driver) · [FindBatch](#queue-queue-findbatch) · [FindChain](#queue-queue-findchain) · [IsPermanent](#queue-ispermanent) · [Pause](#queue-queue-pause) · [PayloadBytes](#queue-message-payloadbytes) · [Permanent](#queue-permanent) · [Prune](#queue-queue-prune) · [Ready](#queue-queue-ready) · [Register](#queue-queue-register) · [Resume](#queue-queue-resume) · [Run](#queue-queue-run) · [Shutdown](#queue-queue-shutdown) · [StartWorkers](#queue-queue-startworkers) · [Stats](#queue-queue-stats) · [WithClock](#queue-withclock) · [WithContext](#queue-queue-withcontext) · [WithHandlerContextDecorator](#queue-withhandlercontextdecorator) · [WithLegacyDirectEnvelope](#queue-withlegacydirectenvelope) · [WithMiddleware](#queue-withmiddleware) · [WithObserver](#queue-withobserver) · [WithStore](#queue-withstore) · [WithWorkers](#queue-withworkers) · [Queue.WithWorkers](#queue-queue-withworkers) |
 | **Driver Constructors** | [mysqlqueue.New](#mysqlqueue-new) · [mysqlqueue.NewWithConfig](#mysqlqueue-newwithconfig) · [natsqueue.New](#natsqueue-new) · [natsqueue.NewWithConfig](#natsqueue-newwithconfig) · [postgresqueue.New](#postgresqueue-new) · [postgresqueue.NewWithConfig](#postgresqueue-newwithconfig) · [rabbitmqqueue.New](#rabbitmqqueue-new) · [rabbitmqqueue.NewWithConfig](#rabbitmqqueue-newwithconfig) · [redisqueue.New](#redisqueue-new) · [redisqueue.NewWithConfig](#redisqueue-newwithconfig) · [sqlitequeue.New](#sqlitequeue-new) · [sqlitequeue.NewWithConfig](#sqlitequeue-newwithconfig) · [sqsqueue.New](#sqsqueue-new) · [sqsqueue.NewWithConfig](#sqsqueue-newwithconfig) |
-| **Testing** | [AssertBatchCount](#queuefake-fake-assertbatchcount) · [AssertBatched](#queuefake-fake-assertbatched) · [AssertChained](#queuefake-fake-assertchained) · [AssertCount](#queuefake-fake-assertcount) · [AssertDispatched](#queuefake-fake-assertdispatched) · [AssertDispatchedOn](#queuefake-fake-assertdispatchedon) · [AssertDispatchedTimes](#queuefake-fake-assertdispatchedtimes) · [AssertNotDispatched](#queuefake-fake-assertnotdispatched) · [AssertNothingBatched](#queuefake-fake-assertnothingbatched) · [AssertNothingDispatched](#queuefake-fake-assertnothingdispatched) · [AssertNothingWorkflowDispatched](#queuefake-fake-assertnothingworkflowdispatched) · [AssertWorkflowDispatched](#queuefake-fake-assertworkflowdispatched) · [AssertWorkflowDispatchedOn](#queuefake-fake-assertworkflowdispatchedon) · [AssertWorkflowDispatchedTimes](#queuefake-fake-assertworkflowdispatchedtimes) · [AssertWorkflowNotDispatched](#queuefake-fake-assertworkflownotdispatched) · [Count](#queuefake-fake-count) · [CountJob](#queuefake-fake-countjob) · [CountOn](#queuefake-fake-counton) · [New](#queuefake-new) · [Queue](#queuefake-fake-queue) · [Records](#queuefake-fake-records) · [Reset](#queuefake-fake-reset) · [Workflow](#queuefake-fake-workflow) |
+| **Testing** | [AssertBatchCount](#queue-fakequeue-assertbatchcount) · [AssertBatched](#queue-fakequeue-assertbatched) · [AssertChained](#queue-fakequeue-assertchained) · [AssertCount](#queue-fakequeue-assertcount) · [AssertDispatched](#queue-fakequeue-assertdispatched) · [AssertDispatchedOn](#queue-fakequeue-assertdispatchedon) · [AssertDispatchedTimes](#queue-fakequeue-assertdispatchedtimes) · [AssertNotDispatched](#queue-fakequeue-assertnotdispatched) · [AssertNothingBatched](#queue-fakequeue-assertnothingbatched) · [AssertNothingDispatched](#queue-fakequeue-assertnothingdispatched) · [Batch](#queue-fakequeue-batch) · [BatchRecords](#queue-fakequeue-batchrecords) · [Chain](#queue-fakequeue-chain) · [ChainRecords](#queue-fakequeue-chainrecords) · [Dispatch](#queue-fakequeue-dispatch) · [Driver](#queue-fakequeue-driver) · [FindBatch](#queue-fakequeue-findbatch) · [FindChain](#queue-fakequeue-findchain) · [NewFake](#queue-newfake) · [Prune](#queue-fakequeue-prune) · [Ready](#queue-fakequeue-ready) · [Records](#queue-fakequeue-records) · [Register](#queue-fakequeue-register) · [Reset](#queue-fakequeue-reset) · [Shutdown](#queue-fakequeue-shutdown) · [StartWorkers](#queue-fakequeue-startworkers) · [WithContext](#queue-fakequeue-withcontext) · [Workers](#queue-fakequeue-workers) |
 
 
 
@@ -821,6 +800,16 @@ _, _ = q.Dispatch(
 )
 ```
 
+#### <a id="queue-newmemorystore"></a>NewMemoryStore
+
+NewMemoryStore creates an in-memory workflow state store. It copies chain
+nodes and payload bytes on creation and return so callers retain independent ownership.
+
+#### <a id="queue-newmessage"></a>NewMessage
+
+NewMessage creates a logical queue message from an application job type and exact payload bytes.
+The payload is copied so callers can safely reuse or mutate their input buffer.
+
 #### <a id="queue-newnull"></a>NewNull
 
 NewNull creates a Queue on the null backend.
@@ -831,6 +820,16 @@ if err != nil {
 	return
 }
 ```
+
+#### <a id="queue-newsqlstore"></a>NewSQLStore
+
+NewSQLStore creates a SQL-backed workflow state store.
+
+#### <a id="queue-newsqlstorewithmanagedschema"></a>NewSQLStoreWithManagedSchema
+
+NewSQLStoreWithManagedSchema creates a SQL-backed workflow state store
+without executing schema DDL. The supplied database must already contain the
+dialect-correct workflow tables, including transition receipts.
 
 #### <a id="queue-newstatscollector"></a>NewStatsCollector
 
@@ -872,7 +871,7 @@ Backoff sets delay between retries.
 job := queue.NewJob("emails:send").Backoff(500 * time.Millisecond)
 ```
 
-#### <a id="queue-job-bind"></a>Bind
+#### <a id="queue-job-bind"></a>Job.Bind
 
 Bind unmarshals job payload JSON into dst.
 
@@ -908,7 +907,7 @@ NewJob creates a job value with a required job type.
 job := queue.NewJob("emails:send")
 ```
 
-#### <a id="queue-job-onqueue"></a>OnQueue
+#### <a id="queue-job-onqueue"></a>Job.OnQueue
 
 OnQueue sets the target queue name.
 
@@ -954,7 +953,7 @@ jobMap := queue.NewJob("emails:send").Payload(map[string]any{
 })
 ```
 
-#### <a id="queue-job-payloadbytes"></a>PayloadBytes
+#### <a id="queue-job-payloadbytes"></a>Job.PayloadBytes
 
 PayloadBytes returns a copy of job payload bytes.
 
@@ -1175,7 +1174,7 @@ fmt.Println(snapshot.Processed("default"))
 // Output: 11
 ```
 
-#### <a id="queue-statssnapshot-queue"></a>StatsSnapshot.Queue
+#### <a id="queue-statssnapshot-queue"></a>Queue
 
 Queue returns queue counters for a queue name.
 
@@ -1359,6 +1358,137 @@ fmt.Printf("ok=%v hour=%+v day=%+v week=%+v\n", ok, throughput.Hour, throughput.
 
 #### Other
 
+#### <a id="queue-locker-acquire"></a>Acquire
+
+Acquire attempts to hold key for ttl.
+
+#### <a id="queue-workflowstore-advancechain"></a>AdvanceChain
+
+AdvanceChain atomically claims completedNode and returns the current successor.
+Repeating the same (chainID, completedNode) claim must not advance again.
+When done is true, GetChain must immediately expose Completed or Failed state.
+
+#### <a id="queue-ratelimiter-allow"></a>Allow
+
+Allow returns whether key may execute and any suggested retry delay.
+
+#### <a id="queue-batchbuilder-allowfailures"></a>AllowFailures
+
+AllowFailures keeps remaining members active after a terminal member failure.
+
+#### <a id="queue-workflowstore-cancelbatch"></a>CancelBatch
+
+CancelBatch commits aggregate batch cancellation.
+
+#### <a id="queue-batchbuilder-catch"></a>BatchBuilder.Catch
+
+Catch registers the explicitly ephemeral batch failure callback.
+
+#### <a id="queue-chainbuilder-catch"></a>ChainBuilder.Catch
+
+Catch registers the explicitly ephemeral chain failure callback.
+
+#### <a id="queue-workflowstore-createbatch"></a>CreateBatch
+
+CreateBatch persists a newly accepted batch. BatchID and every JobID must
+be non-empty, Jobs must contain at least one entry, and JobIDs must be unique.
+
+#### <a id="queue-workflowstore-createchain"></a>CreateChain
+
+CreateChain persists a newly accepted chain. ChainID and every NodeID must
+be non-empty, Nodes must contain at least one entry, and NodeIDs must be unique.
+
+#### <a id="queue-batchbuilder-dispatch"></a>BatchBuilder.Dispatch
+
+Dispatch persists and starts the batch workflow.
+
+#### <a id="queue-chainbuilder-dispatch"></a>ChainBuilder.Dispatch
+
+Dispatch persists and starts the chain workflow.
+
+#### <a id="queue-workflowstore-failchain"></a>FailChain
+
+FailChain commits terminal failure without replacing completed state.
+
+#### <a id="queue-workflowoutcomestore-failchainnode"></a>FailChainNode
+
+FailChainNode commits failure only while nodeID is the current unsettled node.
+owned remains true on replay while that node's failure owns the chain.
+
+#### <a id="queue-batchbuilder-finally"></a>BatchBuilder.Finally
+
+Finally registers the explicitly ephemeral batch terminal callback.
+
+#### <a id="queue-chainbuilder-finally"></a>ChainBuilder.Finally
+
+Finally registers the explicitly ephemeral chain terminal callback.
+
+#### <a id="queue-workflowstore-getbatch"></a>GetBatch
+
+GetBatch returns current batch state.
+
+#### <a id="queue-workflowstore-getchain"></a>GetChain
+
+GetChain returns current chain state.
+
+#### <a id="queue-failonerror-handle"></a>FailOnError.Handle
+
+Handle wraps matched errors as fatal errors to stop retries.
+
+#### <a id="queue-middleware-handle"></a>Middleware.Handle
+
+Handle wraps the remaining middleware and handler chain.
+
+#### <a id="queue-middlewarefunc-handle"></a>MiddlewareFunc.Handle
+
+Handle calls the wrapped middleware function.
+
+#### <a id="queue-ratelimit-handle"></a>RateLimit.Handle
+
+Handle applies limiter checks before executing the next handler.
+
+#### <a id="queue-retrypolicy-handle"></a>RetryPolicy.Handle
+
+Handle passes execution through without modification.
+
+#### <a id="queue-skipwhen-handle"></a>SkipWhen.Handle
+
+Handle skips job execution when Predicate returns true.
+
+#### <a id="queue-withoutoverlapping-handle"></a>WithoutOverlapping.Handle
+
+Handle acquires a lock and prevents concurrent overlap for the same key.
+
+#### <a id="queue-workflowstore-markbatchjobfailed"></a>MarkBatchJobFailed
+
+MarkBatchJobFailed commits the first outcome for (batchID, jobID).
+Duplicate outcomes must return current state without changing counters.
+
+#### <a id="queue-workflowstore-markbatchjobstarted"></a>MarkBatchJobStarted
+
+MarkBatchJobStarted records that one batch member began execution.
+
+#### <a id="queue-workflowstore-markbatchjobsucceeded"></a>MarkBatchJobSucceeded
+
+MarkBatchJobSucceeded commits the first outcome for (batchID, jobID).
+Duplicate outcomes must return current state without changing counters.
+
+#### <a id="queue-workflowstore-markcallbackinvoked"></a>MarkCallbackInvoked
+
+MarkCallbackInvoked atomically claims one callback idempotency key.
+
+#### <a id="queue-batchbuilder-name"></a>Name
+
+Name assigns an application-facing label to the batch.
+
+#### <a id="queue-batchbuilder-onqueue"></a>BatchBuilder.OnQueue
+
+OnQueue applies a default queue to batch jobs without an explicit target.
+
+#### <a id="queue-chainbuilder-onqueue"></a>ChainBuilder.OnQueue
+
+OnQueue applies a default queue to chain jobs without an explicit target.
+
 #### <a id="queue-physicalqueuename"></a>PhysicalQueueName
 
 PhysicalQueueName maps a logical queue name into the physical name used by the backing queue driver.
@@ -1367,17 +1497,39 @@ PhysicalQueueName maps a logical queue name into the physical name used by the b
 
 PhysicalQueueWeights maps logical weighted queue names into their physical backend names.
 
+#### <a id="queue-batchbuilder-progress"></a>Progress
+
+Progress registers the explicitly ephemeral batch progress callback.
+
+#### <a id="queue-workflowstore-prune"></a>WorkflowStore.Prune
+
+Prune removes terminal workflow state older than before.
+
+#### <a id="queue-lock-release"></a>Release
+
+Release relinquishes the acquired lease.
+
 #### <a id="queue-resolveobservedjobtype"></a>ResolveObservedJobType
 
 ResolveObservedJobType returns the effective application job type that should
-be emitted to observers. External workers may process internal bus wrapper
-jobs (for example, "bus:job") whose payload embeds the real application job
+be emitted to observers. External workers may process private workflow delivery
+envelopes (for example, "bus:job") whose payload embeds the real application job
 type. When possible, this helper unwraps that payload so dashboards and
 metrics reflect the user-facing job type instead of the transport wrapper.
 
+#### <a id="queue-workflowoutcomestore-settlebatchjob"></a>SettleBatchJob
+
+SettleBatchJob returns the first committed outcome for one batch member.
+owned remains true on same-outcome replay and false when the opposite outcome won.
+Ownership covers the outcome category; BatchState does not retain a per-member cause.
+
+#### <a id="queue-batchbuilder-then"></a>Then
+
+Then registers the explicitly ephemeral batch success callback.
+
 #### Queue
 
-#### <a id="queue-queue-batch"></a>Batch
+#### <a id="queue-queue-batch"></a>Queue.Batch
 
 Batch creates a batch builder for fan-out workflow execution.
 
@@ -1387,13 +1539,21 @@ if err != nil {
 	return
 }
 q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+if err := q.StartWorkers(context.Background()); err != nil {
+	return
+}
+defer q.Shutdown(context.Background())
 _, _ = q.Batch(
 	queue.NewJob("emails:send").Payload(map[string]any{"id": 1}),
 	queue.NewJob("emails:send").Payload(map[string]any{"id": 2}),
 ).Name("send-emails").OnQueue("default").Dispatch(context.Background())
 ```
 
-#### <a id="queue-queue-chain"></a>Chain
+#### <a id="queue-message-bind"></a>Message.Bind
+
+Bind unmarshals the raw job payload into dst.
+
+#### <a id="queue-queue-chain"></a>Queue.Chain
 
 Chain creates a chain builder for sequential workflow execution.
 
@@ -1404,6 +1564,10 @@ if err != nil {
 }
 q.Register("first", func(ctx context.Context, m queue.Message) error { return nil })
 q.Register("second", func(ctx context.Context, m queue.Message) error { return nil })
+if err := q.StartWorkers(context.Background()); err != nil {
+	return
+}
+defer q.Shutdown(context.Background())
 _, _ = q.Chain(
 	queue.NewJob("first"),
 	queue.NewJob("second"),
@@ -1412,7 +1576,8 @@ _, _ = q.Chain(
 
 #### <a id="queue-queue-dispatch"></a>Queue.Dispatch
 
-Dispatch enqueues a high-level job using the queue's bound context.
+Dispatch enqueues a high-level job using its application type and exact
+payload bytes together with the queue's bound context.
 
 ```go
 q, err := queue.NewSync()
@@ -1420,6 +1585,10 @@ if err != nil {
 	return
 }
 q.Register("emails:send", func(ctx context.Context, m queue.Message) error { return nil })
+if err := q.StartWorkers(context.Background()); err != nil {
+	return
+}
+defer q.Shutdown(context.Background())
 job := queue.NewJob("emails:send").Payload(map[string]any{"id": 1}).OnQueue("default")
 _, _ = q.Dispatch(job)
 ```
@@ -1437,7 +1606,7 @@ fmt.Println(q.Driver())
 // Output: sync
 ```
 
-#### <a id="queue-queue-findbatch"></a>FindBatch
+#### <a id="queue-queue-findbatch"></a>Queue.FindBatch
 
 FindBatch returns current batch state by ID.
 
@@ -1454,7 +1623,7 @@ if err != nil {
 _, _ = q.FindBatch(context.Background(), batchID)
 ```
 
-#### <a id="queue-queue-findchain"></a>FindChain
+#### <a id="queue-queue-findchain"></a>Queue.FindChain
 
 FindChain returns current chain state by ID.
 
@@ -1470,6 +1639,10 @@ if err != nil {
 }
 _, _ = q.FindChain(context.Background(), chainID)
 ```
+
+#### <a id="queue-ispermanent"></a>IsPermanent
+
+IsPermanent reports whether an error requests terminal application settlement.
 
 #### <a id="queue-queue-pause"></a>Queue.Pause
 
@@ -1487,7 +1660,15 @@ if queue.SupportsPause(q) {
 }
 ```
 
-#### <a id="queue-queue-prune"></a>Prune
+#### <a id="queue-message-payloadbytes"></a>Message.PayloadBytes
+
+PayloadBytes returns an isolated copy of the raw job payload.
+
+#### <a id="queue-permanent"></a>Permanent
+
+Permanent marks an error as terminal so workers do not spend the remaining application retry budget on it.
+
+#### <a id="queue-queue-prune"></a>Queue.Prune
 
 Prune deletes old workflow state records.
 
@@ -1641,6 +1822,15 @@ if err != nil {
 }
 ```
 
+#### <a id="queue-withlegacydirectenvelope"></a>WithLegacyDirectEnvelope
+
+WithLegacyDirectEnvelope keeps ordinary dispatches on the version-one
+`bus:job` wire route during a workers-first migration. Remove this option only
+after every consumer can process canonical direct deliveries. See the
+[direct delivery migration guide] for backend-specific rollout and rollback.
+
+[direct delivery migration guide]: https://github.com/goforj/queue/blob/main/docs/direct-delivery-migration.md
+
 #### <a id="queue-withmiddleware"></a>WithMiddleware
 
 WithMiddleware appends queue workflow middleware.
@@ -1657,10 +1847,10 @@ if err != nil {
 
 #### <a id="queue-withobserver"></a>WithObserver
 
-WithObserver installs a workflow lifecycle observer.
+WithObserver installs one observer for queue, worker, and workflow lifecycle events.
 
 ```go
-observer := queue.WorkflowObserverFunc(func(_ context.Context, event queue.WorkflowEvent) {
+observer := queue.ObserverFunc(func(_ context.Context, event queue.Event) {
 	_ = event.Kind
 })
 q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))
@@ -1707,184 +1897,6 @@ if err != nil {
 q.WithWorkers(4) // optional; default: runtime.NumCPU() (min 1)
 ```
 
-#### Testing
-
-#### <a id="queue-fakequeue-assertcount"></a>FakeQueue.AssertCount
-
-AssertCount fails when dispatch count is not expected.
-
-```go
-fake := queue.NewFake()
-_ = fake.Dispatch(queue.NewJob("emails:send"))
-fake.AssertCount(t, 1)
-```
-
-#### <a id="queue-fakequeue-assertdispatched"></a>FakeQueue.AssertDispatched
-
-AssertDispatched fails when jobType was not dispatched.
-
-```go
-fake := queue.NewFake()
-_ = fake.Dispatch(queue.NewJob("emails:send"))
-fake.AssertDispatched(t, "emails:send")
-```
-
-#### <a id="queue-fakequeue-assertdispatchedon"></a>FakeQueue.AssertDispatchedOn
-
-AssertDispatchedOn fails when jobType was not dispatched on queueName.
-
-```go
-fake := queue.NewFake()
-_ = fake.Dispatch(
-	queue.NewJob("emails:send").
-		OnQueue("critical"),
-)
-fake.AssertDispatchedOn(t, "critical", "emails:send")
-```
-
-#### <a id="queue-fakequeue-assertdispatchedtimes"></a>FakeQueue.AssertDispatchedTimes
-
-AssertDispatchedTimes fails when jobType dispatch count does not match expected.
-
-```go
-fake := queue.NewFake()
-_ = fake.Dispatch(queue.NewJob("emails:send"))
-_ = fake.Dispatch(queue.NewJob("emails:send"))
-fake.AssertDispatchedTimes(t, "emails:send", 2)
-```
-
-#### <a id="queue-fakequeue-assertnotdispatched"></a>FakeQueue.AssertNotDispatched
-
-AssertNotDispatched fails when jobType was dispatched.
-
-```go
-fake := queue.NewFake()
-_ = fake.Dispatch(queue.NewJob("emails:send"))
-fake.AssertNotDispatched(t, "emails:cancel")
-```
-
-#### <a id="queue-fakequeue-assertnothingdispatched"></a>FakeQueue.AssertNothingDispatched
-
-AssertNothingDispatched fails when any dispatch was recorded.
-
-```go
-fake := queue.NewFake()
-fake.AssertNothingDispatched(t)
-```
-
-#### <a id="queue-fakequeue-dispatch"></a>FakeQueue.Dispatch
-
-Dispatch records a typed job payload in-memory using the fake default queue.
-
-```go
-fake := queue.NewFake()
-err := fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
-```
-
-#### <a id="queue-fakequeue-driver"></a>FakeQueue.Driver
-
-Driver returns the active queue driver.
-
-```go
-fake := queue.NewFake()
-driver := fake.Driver()
-```
-
-#### <a id="queue-newfake"></a>NewFake
-
-NewFake creates a queue fake that records dispatches and provides assertions.
-
-```go
-fake := queue.NewFake()
-_ = fake.Dispatch(
-	queue.NewJob("emails:send").
-		Payload(map[string]any{"id": 1}).
-		OnQueue("critical"),
-)
-records := fake.Records()
-fmt.Println(len(records), records[0].Queue, records[0].Job.Type)
-// Output: 1 critical emails:send
-```
-
-#### <a id="queue-fakequeue-ready"></a>FakeQueue.Ready
-
-Ready validates fake queue readiness.
-
-```go
-fake := queue.NewFake()
-fmt.Println(fake.Ready(context.Background()) == nil)
-// true
-```
-
-#### <a id="queue-fakequeue-records"></a>FakeQueue.Records
-
-Records returns a copy of all dispatch records.
-
-```go
-fake := queue.NewFake()
-_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
-records := fake.Records()
-fmt.Println(len(records), records[0].Job.Type)
-// Output: 1 emails:send
-```
-
-#### <a id="queue-fakequeue-register"></a>FakeQueue.Register
-
-Register associates a handler with a job type.
-
-```go
-fake := queue.NewFake()
-fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
-```
-
-#### <a id="queue-fakequeue-reset"></a>FakeQueue.Reset
-
-Reset clears all recorded dispatches.
-
-```go
-fake := queue.NewFake()
-_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
-fmt.Println(len(fake.Records()))
-fake.Reset()
-fmt.Println(len(fake.Records()))
-// Output:
-// 1
-// 0
-```
-
-#### <a id="queue-fakequeue-shutdown"></a>FakeQueue.Shutdown
-
-Shutdown drains running work and releases resources.
-
-```go
-fake := queue.NewFake()
-err := fake.Shutdown(context.Background())
-```
-
-#### <a id="queue-fakequeue-startworkers"></a>FakeQueue.StartWorkers
-
-StartWorkers starts worker execution.
-
-```go
-fake := queue.NewFake()
-err := fake.StartWorkers(context.Background())
-```
-
-#### <a id="queue-fakequeue-withcontext"></a>FakeQueue.WithContext
-
-WithContext returns a derived fake queue handle bound to ctx.
-
-#### <a id="queue-fakequeue-workers"></a>FakeQueue.Workers
-
-Workers sets desired worker concurrency before StartWorkers.
-
-```go
-fake := queue.NewFake()
-q := fake.Workers(4)
-fmt.Println(q != nil)
-// Output: true
-```
-
 
 ## Driver Constructors
 
@@ -1917,6 +1929,7 @@ q, err := mysqlqueue.NewWithConfig(
 		},
 		DB: nil, // optional; provide *sql.DB instead of DSN
 		DSN: "user:pass@tcp(127.0.0.1:3306)/queue?parseTime=true", // optional if DB is set
+		DisableAutoMigrate: false, // set true when schema migrations are managed externally
 		ProcessingRecoveryGrace:  2 * time.Second, // default if <=0: 2s
 		ProcessingLeaseNoTimeout: 5 * time.Minute, // default if <=0: 5m
 	},
@@ -1994,6 +2007,7 @@ q, err := postgresqueue.NewWithConfig(
 		},
 		DB: nil, // optional; provide *sql.DB instead of DSN
 		DSN: "postgres://user:pass@127.0.0.1:5432/queue?sslmode=disable", // optional if DB is set
+		DisableAutoMigrate: false, // set true when schema migrations are managed externally
 		ProcessingRecoveryGrace:  2 * time.Second, // default if <=0: 2s
 		ProcessingLeaseNoTimeout: 5 * time.Minute, // default if <=0: 5m
 	},
@@ -2112,6 +2126,7 @@ q, err := sqlitequeue.NewWithConfig(
 		},
 		DB: nil, // optional; provide *sql.DB instead of DSN
 		DSN: "file:queue.db?_busy_timeout=5000", // optional if DB is set
+		DisableAutoMigrate: false, // set true when schema migrations are managed externally
 		ProcessingRecoveryGrace:  2 * time.Second, // default if <=0: 2s
 		ProcessingLeaseNoTimeout: 5 * time.Minute, // default if <=0: 5m
 	},
@@ -2165,250 +2180,279 @@ if err != nil {
 
 ## Testing API
 
+`queue.NewFake` is a recording fake with its established `Dispatch(any) error` surface. Inject it where `*queue.FakeQueue` or that recording contract is accepted; it is not a drop-in `*queue.Queue`.
+
 Examples in this section assume they are used inside tests and `t` is a `*testing.T` (or `testing.TB`).
 
-#### <a id="queuefake-fake-assertbatchcount"></a>Fake.AssertBatchCount
+#### <a id="queue-fakequeue-assertbatchcount"></a>FakeQueue.AssertBatchCount
 
-AssertBatchCount fails if total recorded workflow batch count does not match n.
-
-```go
-f := queuefake.New()
-_, _ = f.Workflow().Batch(bus.NewJob("a", nil)).Dispatch(nil)
-f.AssertBatchCount(t, 1)
-```
-
-#### <a id="queuefake-fake-assertbatched"></a>Fake.AssertBatched
-
-AssertBatched fails unless at least one recorded workflow batch matches predicate.
+AssertBatchCount fails unless the accepted batch count equals expected.
 
 ```go
-f := queuefake.New()
-_, _ = f.Workflow().Batch(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(nil)
-f.AssertBatched(t, func(spec bus.BatchSpec) bool { return len(spec.JobTypes) == 2 })
+fake := queue.NewFake()
+_, _ = fake.Batch(queue.NewJob("emails:send")).Dispatch(context.Background())
+fake.AssertBatchCount(t, 1)
 ```
 
-#### <a id="queuefake-fake-assertchained"></a>Fake.AssertChained
+#### <a id="queue-fakequeue-assertbatched"></a>FakeQueue.AssertBatched
 
-AssertChained fails if no recorded workflow chain matches expected job type order.
+AssertBatched fails unless an accepted canonical batch matches predicate.
+The predicate runs outside the recorder lock so it may safely inspect the fake.
 
 ```go
-f := queuefake.New()
-_, _ = f.Workflow().Chain(bus.NewJob("a", nil), bus.NewJob("b", nil)).Dispatch(nil)
-f.AssertChained(t, []string{"a", "b"})
+fake := queue.NewFake()
+_, _ = fake.Batch(queue.NewJob("emails:send")).Name("nightly").Dispatch(context.Background())
+fake.AssertBatched(t, func(record queue.BatchRecord) bool { return record.Name == "nightly" })
 ```
 
-#### <a id="queuefake-fake-assertcount"></a>Fake.AssertCount
+#### <a id="queue-fakequeue-assertchained"></a>FakeQueue.AssertChained
 
-AssertCount fails when total dispatch count is not expected.
+AssertChained fails unless an accepted chain has the expected ordered job types.
 
 ```go
-f := queuefake.New()
-q := f.Queue()
-_ = q.Dispatch(queue.NewJob("a"))
-_ = q.Dispatch(queue.NewJob("b"))
-f.AssertCount(t, 2)
+fake := queue.NewFake()
+_, _ = fake.Chain(
+	queue.NewJob("reports:build"),
+	queue.NewJob("reports:publish"),
+).Dispatch(context.Background())
+fake.AssertChained(t, []string{"reports:build", "reports:publish"})
 ```
 
-#### <a id="queuefake-fake-assertdispatched"></a>Fake.AssertDispatched
+#### <a id="queue-fakequeue-assertcount"></a>FakeQueue.AssertCount
+
+AssertCount fails when the direct dispatch count is not expected.
+
+```go
+fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send"))
+fake.AssertCount(t, 1)
+```
+
+#### <a id="queue-fakequeue-assertdispatched"></a>FakeQueue.AssertDispatched
 
 AssertDispatched fails when jobType was not dispatched.
 
 ```go
-f := queuefake.New()
-_ = f.Queue().Dispatch(queue.NewJob("emails:send"))
-f.AssertDispatched(t, "emails:send")
+fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send"))
+fake.AssertDispatched(t, "emails:send")
 ```
 
-#### <a id="queuefake-fake-assertdispatchedon"></a>Fake.AssertDispatchedOn
+#### <a id="queue-fakequeue-assertdispatchedon"></a>FakeQueue.AssertDispatchedOn
 
 AssertDispatchedOn fails when jobType was not dispatched on queueName.
 
 ```go
-f := queuefake.New()
-_ = f.Queue().Dispatch(queue.NewJob("emails:send").OnQueue("critical"))
-f.AssertDispatchedOn(t, "critical", "emails:send")
+fake := queue.NewFake()
+_ = fake.Dispatch(
+	queue.NewJob("emails:send").
+		OnQueue("critical"),
+)
+fake.AssertDispatchedOn(t, "critical", "emails:send")
 ```
 
-#### <a id="queuefake-fake-assertdispatchedtimes"></a>Fake.AssertDispatchedTimes
+#### <a id="queue-fakequeue-assertdispatchedtimes"></a>FakeQueue.AssertDispatchedTimes
 
 AssertDispatchedTimes fails when jobType dispatch count does not match expected.
 
 ```go
-f := queuefake.New()
-q := f.Queue()
-_ = q.Dispatch(queue.NewJob("emails:send"))
-_ = q.Dispatch(queue.NewJob("emails:send"))
-f.AssertDispatchedTimes(t, "emails:send", 2)
+fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send"))
+_ = fake.Dispatch(queue.NewJob("emails:send"))
+fake.AssertDispatchedTimes(t, "emails:send", 2)
 ```
 
-#### <a id="queuefake-fake-assertnotdispatched"></a>Fake.AssertNotDispatched
+#### <a id="queue-fakequeue-assertnotdispatched"></a>FakeQueue.AssertNotDispatched
 
 AssertNotDispatched fails when jobType was dispatched.
 
 ```go
-f := queuefake.New()
-f.AssertNotDispatched(t, "emails:send")
+fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send"))
+fake.AssertNotDispatched(t, "emails:cancel")
 ```
 
-#### <a id="queuefake-fake-assertnothingbatched"></a>Fake.AssertNothingBatched
+#### <a id="queue-fakequeue-assertnothingbatched"></a>FakeQueue.AssertNothingBatched
 
-AssertNothingBatched fails if any workflow batch was recorded.
+AssertNothingBatched fails when any accepted batch was recorded.
+
+#### <a id="queue-fakequeue-assertnothingdispatched"></a>FakeQueue.AssertNothingDispatched
+
+AssertNothingDispatched fails when any direct dispatch was recorded.
 
 ```go
-f := queuefake.New()
-f.AssertNothingBatched(t)
+fake := queue.NewFake()
+fake.AssertNothingDispatched(t)
 ```
 
-#### <a id="queuefake-fake-assertnothingdispatched"></a>Fake.AssertNothingDispatched
+#### <a id="queue-fakequeue-batch"></a>FakeQueue.Batch
 
-AssertNothingDispatched fails when any dispatch was recorded.
+Batch creates a fake batch backed by the production workflow builder and
+records it only when Dispatch accepts all initial member deliveries. Fluent
+function callbacks are accepted for compatibility but are not retained in
+fake runtime state or executed.
+
+#### <a id="queue-fakequeue-batchrecords"></a>FakeQueue.BatchRecords
+
+BatchRecords returns isolated creation records for accepted fake batches.
 
 ```go
-f := queuefake.New()
-f.AssertNothingDispatched(t)
+fake := queue.NewFake()
+_, _ = fake.Batch(
+	queue.NewJob("emails:first"),
+	queue.NewJob("emails:second"),
+).Name("nightly").AllowFailures().Dispatch(context.Background())
+record := fake.BatchRecords()[0]
+fmt.Println(record.Name, len(record.Jobs), record.AllowFailed)
+// Output: nightly 2 true
 ```
 
-#### <a id="queuefake-fake-assertnothingworkflowdispatched"></a>Fake.AssertNothingWorkflowDispatched
+#### <a id="queue-fakequeue-chain"></a>FakeQueue.Chain
 
-AssertNothingWorkflowDispatched fails when any workflow dispatch was recorded.
+Chain creates a fake chain backed by the production workflow builder and
+records it only when Dispatch accepts its initial delivery. Fluent function
+callbacks are accepted for compatibility but are not retained in fake runtime
+state or executed.
+
+#### <a id="queue-fakequeue-chainrecords"></a>FakeQueue.ChainRecords
+
+ChainRecords returns isolated creation records for accepted fake chains.
 
 ```go
-f := queuefake.New()
-f.AssertNothingWorkflowDispatched(t)
+fake := queue.NewFake()
+_, _ = fake.Chain(
+	queue.NewJob("reports:build"),
+	queue.NewJob("reports:publish"),
+).OnQueue("workflow").Dispatch(context.Background())
+record := fake.ChainRecords()[0]
+fmt.Println(len(record.Nodes), record.Queue)
+// Output: 2 workflow
 ```
 
-#### <a id="queuefake-fake-assertworkflowdispatched"></a>Fake.AssertWorkflowDispatched
+#### <a id="queue-fakequeue-dispatch"></a>FakeQueue.Dispatch
 
-AssertWorkflowDispatched fails when jobType was not workflow-dispatched.
+Dispatch records a typed job payload in-memory using the fake default queue.
 
 ```go
-f := queuefake.New()
-_, _ = f.Workflow().Chain(bus.NewJob("a", nil)).Dispatch(nil)
-f.AssertWorkflowDispatched(t, "a")
+fake := queue.NewFake()
+err := fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
 ```
 
-#### <a id="queuefake-fake-assertworkflowdispatchedon"></a>Fake.AssertWorkflowDispatchedOn
+#### <a id="queue-fakequeue-driver"></a>FakeQueue.Driver
 
-AssertWorkflowDispatchedOn fails when jobType was not workflow-dispatched on queueName.
+Driver returns the active queue driver.
 
 ```go
-f := queuefake.New()
-_, _ = f.Workflow().Chain(bus.NewJob("a", nil)).OnQueue("critical").Dispatch(nil)
-f.AssertWorkflowDispatchedOn(t, "critical", "a")
+fake := queue.NewFake()
+driver := fake.Driver()
 ```
 
-#### <a id="queuefake-fake-assertworkflowdispatchedtimes"></a>Fake.AssertWorkflowDispatchedTimes
+#### <a id="queue-fakequeue-findbatch"></a>FakeQueue.FindBatch
 
-AssertWorkflowDispatchedTimes fails when workflow dispatch count for jobType does not match expected.
+FindBatch returns workflow state created by the fake's production engine.
+
+#### <a id="queue-fakequeue-findchain"></a>FakeQueue.FindChain
+
+FindChain returns workflow state created by the fake's production engine.
+
+#### <a id="queue-newfake"></a>NewFake
+
+NewFake creates the canonical fake used directly and by deprecated testing adapters.
 
 ```go
-f := queuefake.New()
-wf := f.Workflow()
-_, _ = wf.Chain(bus.NewJob("a", nil)).Dispatch(nil)
-_, _ = wf.Chain(bus.NewJob("a", nil)).Dispatch(nil)
-f.AssertWorkflowDispatchedTimes(t, "a", 2)
+fake := queue.NewFake()
+_ = fake.Dispatch(
+	queue.NewJob("emails:send").
+		Payload(map[string]any{"id": 1}).
+		OnQueue("critical"),
+)
+records := fake.Records()
+fmt.Println(len(records), records[0].Queue, records[0].Job.Type)
+// Output: 1 critical emails:send
 ```
 
-#### <a id="queuefake-fake-assertworkflownotdispatched"></a>Fake.AssertWorkflowNotDispatched
+#### <a id="queue-fakequeue-prune"></a>FakeQueue.Prune
 
-AssertWorkflowNotDispatched fails when jobType was workflow-dispatched.
+Prune removes terminal workflow state while retaining fake dispatch records.
+
+#### <a id="queue-fakequeue-ready"></a>FakeQueue.Ready
+
+Ready validates fake queue readiness.
 
 ```go
-f := queuefake.New()
-f.AssertWorkflowNotDispatched(t, "emails:send")
+fake := queue.NewFake()
+fmt.Println(fake.Ready(context.Background()) == nil)
+// Output: true
 ```
 
-#### <a id="queuefake-fake-count"></a>Fake.Count
+#### <a id="queue-fakequeue-records"></a>FakeQueue.Records
 
-Count returns the total number of recorded dispatches.
+Records returns isolated records for accepted direct dispatches.
+Chain and batch creation is available through ChainRecords and BatchRecords.
 
 ```go
-f := queuefake.New()
-q := f.Queue()
-_ = q.Dispatch(queue.NewJob("a"))
-_ = q.Dispatch(queue.NewJob("b"))
-_ = f.Count()
+fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
+records := fake.Records()
+fmt.Println(len(records), records[0].Job.Type)
+// Output: 1 emails:send
 ```
 
-#### <a id="queuefake-fake-countjob"></a>Fake.CountJob
+#### <a id="queue-fakequeue-register"></a>FakeQueue.Register
 
-CountJob returns how many times a job type was dispatched.
+Register is a compatibility no-op because the recording fake never executes handlers.
 
 ```go
-f := queuefake.New()
-q := f.Queue()
-_ = q.Dispatch(queue.NewJob("emails:send"))
-_ = q.Dispatch(queue.NewJob("emails:send"))
-_ = f.CountJob("emails:send")
+fake := queue.NewFake()
+fake.Register("emails:send", func(context.Context, queue.Job) error { return nil })
 ```
 
-#### <a id="queuefake-fake-counton"></a>Fake.CountOn
+#### <a id="queue-fakequeue-reset"></a>FakeQueue.Reset
 
-CountOn returns how many times a job type was dispatched on a queue.
+Reset clears direct dispatches and all workflow records through every fake view.
 
 ```go
-f := queuefake.New()
-q := f.Queue()
-_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("critical"))
-_ = f.CountOn("critical", "emails:send")
+fake := queue.NewFake()
+_ = fake.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
+fmt.Println(len(fake.Records()))
+fake.Reset()
+fmt.Println(len(fake.Records()))
+// Output:
+// 1
+// 0
 ```
 
-#### <a id="queuefake-new"></a>queuefake.New
+#### <a id="queue-fakequeue-shutdown"></a>FakeQueue.Shutdown
 
-New creates a fake queue harness backed by queue.NewFake().
+Shutdown is a compatibility no-op because the recording fake owns no worker resources.
 
 ```go
-f := queuefake.New()
-q := f.Queue()
-_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
-f.AssertDispatched(t, "emails:send")
-f.AssertCount(t, 1)
+fake := queue.NewFake()
+err := fake.Shutdown(context.Background())
 ```
 
-#### <a id="queuefake-fake-queue"></a>Fake.Queue
+#### <a id="queue-fakequeue-startworkers"></a>FakeQueue.StartWorkers
 
-Queue returns the queue fake to inject into code under test.
+StartWorkers is a compatibility no-op because the recording fake owns no workers.
 
 ```go
-f := queuefake.New()
-q := f.Queue()
-_ = q.Dispatch(queue.NewJob("emails:send").OnQueue("default"))
+fake := queue.NewFake()
+err := fake.StartWorkers(context.Background())
 ```
 
-#### <a id="queuefake-fake-records"></a>Fake.Records
+#### <a id="queue-fakequeue-withcontext"></a>FakeQueue.WithContext
 
-Records returns a copy of recorded dispatches.
+WithContext returns a derived fake queue handle bound to ctx.
 
-```go
-f := queuefake.New()
-_ = f.Queue().Dispatch(queue.NewJob("emails:send"))
-records := f.Records()
-```
+#### <a id="queue-fakequeue-workers"></a>FakeQueue.Workers
 
-#### <a id="queuefake-fake-reset"></a>Fake.Reset
-
-Reset clears recorded dispatches.
+Workers preserves fluent lifecycle compatibility without creating workers.
 
 ```go
-f := queuefake.New()
-q := f.Queue()
-_ = q.Dispatch(queue.NewJob("emails:send"))
-f.Reset()
-f.AssertNothingDispatched(t)
-```
-
-#### <a id="queuefake-fake-workflow"></a>Fake.Workflow
-
-Workflow returns the workflow/orchestration fake for chain/batch assertions.
-
-```go
-f := queuefake.New()
-wf := f.Workflow()
-_, _ = wf.Chain(
-	bus.NewJob("a", nil),
-	bus.NewJob("b", nil),
-).Dispatch(context.Background())
-f.AssertChained(t, []string{"a", "b"})
+fake := queue.NewFake()
+q := fake.Workers(4)
+fmt.Println(q != nil)
+// Output: true
 ```
 <!-- api:embed:end -->
 

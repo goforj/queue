@@ -20,6 +20,7 @@ type DatabaseConfig struct {
 	PollInterval             time.Duration
 	DefaultQueue             string
 	AutoMigrate              bool
+	DisableAutoMigrate       bool
 	ProcessingRecoveryGrace  time.Duration
 	ProcessingLeaseNoTimeout time.Duration
 	Observer                 Observer
@@ -34,7 +35,9 @@ func (c DatabaseConfig) normalize() DatabaseConfig {
 	if c.DefaultQueue == "" {
 		c.DefaultQueue = "default"
 	}
-	if !c.AutoMigrate {
+	if c.DisableAutoMigrate {
+		c.AutoMigrate = false
+	} else if !c.AutoMigrate {
 		c.AutoMigrate = true
 	}
 	if c.ProcessingRecoveryGrace <= 0 {

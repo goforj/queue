@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestToBusJob_MapsPayloadAndOptions(t *testing.T) {
+func TestToWorkflowJob_MapsPayloadAndOptions(t *testing.T) {
 	type payload struct {
 		ID int `json:"id"`
 	}
@@ -20,9 +20,9 @@ func TestToBusJob_MapsPayloadAndOptions(t *testing.T) {
 		Backoff(500 * time.Millisecond).
 		UniqueFor(30 * time.Second)
 
-	got, err := toBusJob(in)
+	got, err := toWorkflowJob(in)
 	if err != nil {
-		t.Fatalf("toBusJob error: %v", err)
+		t.Fatalf("toWorkflowJob error: %v", err)
 	}
 
 	if got.Type != "emails:send" {
@@ -60,18 +60,18 @@ func TestToBusJob_MapsPayloadAndOptions(t *testing.T) {
 	}
 }
 
-func TestToBusJob_PreservesNilPayload(t *testing.T) {
-	got, err := toBusJob(NewJob("job:nil"))
+func TestToWorkflowJob_PreservesNilPayload(t *testing.T) {
+	got, err := toWorkflowJob(NewJob("job:nil"))
 	if err != nil {
-		t.Fatalf("toBusJob error: %v", err)
+		t.Fatalf("toWorkflowJob error: %v", err)
 	}
 	if got.Payload != nil {
 		t.Fatalf("payload=%T expected nil", got.Payload)
 	}
 }
 
-func TestToBusJob_ValidationError(t *testing.T) {
-	if _, err := toBusJob(NewJob("bad").Retry(-1)); err == nil {
+func TestToWorkflowJob_ValidationError(t *testing.T) {
+	if _, err := toWorkflowJob(NewJob("bad").Retry(-1)); err == nil {
 		t.Fatal("expected validation error")
 	}
 }

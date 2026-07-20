@@ -83,15 +83,21 @@ Related documentation and CI checks:
 
 ## 4. Coverage aggregation (supporting signal)
 
-Script:
+Commands:
 
 ```bash
-scripts/coverage-codecov.sh
+scripts/coverage-codecov.sh unit
+INTEGRATION_BACKEND=redis scripts/coverage-codecov.sh integration
 ```
 
 Current role:
 
-- merges unit + integration-tagged coverage
+- unit mode runs the root module and every buildable nested module independently with `GOWORK=off`; it also executes the root module's lightweight integration-tagged `bus` fixture tests, while the tooling-only `docs` module is inventory-checked but has no package to cover
+- integration mode runs the tagged tests from the actual `integration` module and instruments repository root, integration, and driver packages
+- CI runs one integration coverage command in each existing backend matrix leg, then fans the unit profile and all ten backend profiles into one guarded Codecov upload
+- emitted atomic text profiles use module-qualified source paths and collapse duplicate source ranges produced by broad `-coverpkg` runs
+- the fan-in guard requires every expected unit/backend artifact, all buildable module records, the root integration-tagged bus fixture, and covered representative root, driver, and integration-module source before upload
+- Codecov upload errors fail CI; project and patch status checks compare to the base at the repository's established 1% threshold
 - tracks broad regressions
 - not used as a substitute for guarantee validation
 
@@ -137,12 +143,10 @@ This section is the core of the plan. Each area should have:
 - duplicate-delivery idempotency scenario
 - restart recovery scenarios
 - broker fault / recovery scenarios (capability-gated)
+- Redis handler-time disconnect, lost acknowledgement, and same-task redelivery with one idempotent side effect
 
 ### Gaps to add
 
-- Explicit ack-boundary invariants under worker interruption
-  - example: handler side effect committed, ack path interrupted, duplicate delivery occurs; verify idempotency pattern and state consistency
-- “success exactly once” is not promised; test and document “side-effect idempotency required” with reference scenario
 - Delayed job + restart + recovery invariants for all backends that claim durable delay/retry behavior
 
 ## B. Retry, Delay, and Scheduling Semantics
@@ -316,6 +320,24 @@ This is a trust-critical area. Users will assume high-level workflow helpers enc
 - Fuzz/property tests for payload decoding and queue-name normalization
 - Config defaults invariants (documented defaults should be test-locked)
 
+## J. Public Fake Semantics
+
+### Guarantees enforced today
+
+- `queue.NewFake` is the only fake state owner; deprecated `bus.Fake` and `queuefake.Fake` are compatibility views over it.
+- Direct dispatch uses the same typed-value conversion and `Job` validation as production runtimes.
+- Chain and batch builders use the production workflow engine, record only from `Dispatch`, retain queue/name/failure policy, and expose isolated canonical records plus lookup state.
+- Closure callbacks remain fluent compatibility inputs but are not retained in fake runtime state or executed by the recording fake.
+- Invalid, abandoned, and canceled builders cannot satisfy workflow assertions.
+- Direct, chain, batch, lookup, assertion, Prune, and Reset access is safe across concurrent handles and covered under the race detector.
+- Reset clears direct records, workflow records, and workflow-store state for every shared view.
+
+### Compatibility coverage
+
+- `queue.NewFake() *queue.FakeQueue`, `queuefake.Fake.Queue() *queue.FakeQueue`, `queuefake.Fake.Workflow() *bus.Fake`, and `bus.NewFake() *bus.Fake` retain their established signatures.
+- `bus.Fake` and the one-field `bus.BatchSpec` retain their physical package identity and keyed/unkeyed source forms.
+- Legacy bus builders retain shallow job snapshots and Dispatch-time payload JSON encoding before entering the canonical fake.
+
 ## Test Types We Should Add or Expand (Prioritized)
 
 ## P0 (Before v1 tag)
@@ -412,7 +434,8 @@ Why:
   - no double-advance / double-terminal transition under concurrent processing in covered scenarios
 - Notes:
   - this is a trust-critical P0 item, not optional polish
-  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration now covers chain + batch duplicate callback suppression, callback replay after callback-dispatch fault (chain final callback), and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress)
+  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration covers chain + batch duplicate callback suppression, callback replay after callback-dispatch fault (chain final callback), and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress). Shared public and real-dialect workflow-store contracts prove concurrent duplicate chain advancement, first-writer outcome categories, suppression of contradictory logical facts, and simultaneous batch aggregation without lost state across memory, SQLite, MySQL, and PostgreSQL. Focused private built-in contracts distinguish response-local `claimedNow` from immutable transition receipts and validate receipt identity on memory and SQLite. `TestTransitionReceiptUnknownVersionsFailClosed` and `TestUnknownTransitionReceiptVersionsBlockRecoveredApplicationExecution` prove unsupported `receipt_version` or observer `event_schema_version` values produce an uncommitted outcome without acknowledgement, application execution, state-commit signaling, or facts; the event schema is independent from the workflow-envelope protocol. `TestDeliveryApplicationStateCommittedSignal`, `TestDatabasePendingRecoveryTokenPreservesPendingRecovery`, and `TestChainPostTransitionFailureMarksCurrentGenerationForRecovery` prove that a receipt-owning generation supersedes inherited provenance when later infrastructure requests same-attempt redelivery. `TestChainSuccessorRejectionRecoversWithoutPredecessorReplay` proves active exact-receipt recovery re-dispatches the immediate successor after definite rejection. `TestChainRecoveryWithoutExactReceiptOwnershipPreservesOnlyLiveContinuation` covers receipt absence, a decorated no-capability store, and supported receipts with different or legacy generation provenance: only the live immediate successor is dispatched, predecessor handlers/facts/callbacks remain suppressed, progressed or terminal state is a no-op, and rejection remains uncommitted for retry. `TestChainSuccessRecoveryRejectsInvalidReceiptShapeBeforeLiveness` proves cancellation/completion corruption fails uncommitted before dispatch or effects. These paths retain the documented at-least-once duplicate ambiguity. The SQLite recovery group plus `mysql_workflow_receipt_recovery` and `postgres_workflow_receipt_recovery` prove supported receipts suppress handler replay and exact recovered-generation ownership gates reconstructed success facts. `TestChainCommittedFailureRecoveryPreservesOneApplicationOccurrence`, its invalid/legacy companions, the first-cause store contract, and the receipt rollback test prove failed-chain receipts return authoritative permanent state across generation variants without repeated handlers, callbacks, or facts. `sqlite_failed_chain_recovery_archives_without_reexecution` extends that proof through repeated real archive failure and best-effort lineage restoration to a final `dead` row with the persisted cause. SQLite also covers completed predecessors, aggregate non-inference, later-attempt ownership, two-member completion ownership, and failed-batch generic permanent archive. Driver tests cover the lineage repair's fence, delay, malformed token, stale owner, and inapplicable branches. `mysql_concurrent_batch_receipt_owner` and `postgres_concurrent_batch_receipt_owner` race twelve fail-fast members through separate workers and prove one aggregate-owner receipt and one failed/cancelled terminal fact pair. `TestWorkflowStoreIntegration_MySQLAutoMigratesMissingReceiptAtLegacyWidths` is the real upgrade gate: it drops only the receipt table beside 512-byte legacy state, proves ordinary startup derives 512-byte receipt identities without altering existing tables, and exercises chain, batch, callback, and receipt keys above fresh defaults. The managed-width fixture separately covers a complete pre-existing wider schema. Still open: managed-schema migration/rollback and real cross-dialect pruning/physical-commit-readback coverage, remaining custom/decorated/raw-store fallback contracts, cross-driver provenance, durable callback/continuation intents, exact successor-enqueue ownership, and a settlement outbox for the no-surviving-row window.
+  - Final receipt regression gate: `TestRecoveredTransitionReceiptLogicalValidationSeparatesPhysicalOwnership`, `TestChainSuccessRecoveryAllowsDifferentPhysicalDeliveryIdentity`, `TestChainFailureRecoveryAllowsDifferentPhysicalDeliveryIdentity`, and `TestBatchRecoverySettlesNonFactOwnersWithoutFacts` prove a complete persisted owner must retain a nonnegative attempt while a logical duplicate's current attempt may differ or be negative. Chain physical `JobID` may differ; batch `JobID` remains the logical member key. Logical nonowners do not execute handlers, callbacks, or facts; chain success preserves only the live immediate successor, chain failure returns the persisted permanent cause, batch success settles silently, and batch failure returns a generic permanent cause. Exact recovered generation, current attempt, and physical `JobID` remain mandatory for fact reconstruction. `TestSQLStoreBatchAggregateOwnershipMismatchFailsClosed`, `TestSQLStoreBatchAggregateIncarnationMismatchFailsClosed`, and `TestBatchRecoveryRejectsInvalidAggregateReceiptShape` cover missing completion/member, stale incarnation, success-owned cancellation, owner/outcome mismatch, and aggregate/live-state disagreement; every branch is uncommitted and produces no partial effects.
 
 Extend workflow integration scenarios to cover:
 
@@ -483,7 +506,7 @@ Why:
   - scenario results are visible in CI artifacts/logs with backend + scenario naming
 - Notes:
   - capability-gate unsupported fault injection paths explicitly
-  - Implemented in `.github/workflows/soak.yml` `integration-chaos` subset with shared scenario names aligned to current suite (`scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, `scenario_worker_restart_recovery`, `scenario_worker_restart_delay_recovery`, plus contention/shutdown race probes); results are emitted with backend+scenario duration lines and uploaded per-backend logs
+  - Implemented in the scheduled and manually runnable `.github/workflows/soak.yml` `integration-chaos` subset. `TestIntegrationChaos_RedisBrokerDisconnectRedelivery` stops Redis while an idempotent handler is active, proves its successful return cannot be acknowledged, retains the same active task, and exercises Asynq lease recovery without consuming the application's zero-retry budget. The subset also runs `scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, `scenario_worker_restart_recovery`, `scenario_worker_restart_delay_recovery`, and contention/shutdown race probes. Results include backend and scenario duration lines and per-backend log artifacts.
 
 Expand scheduled integration scenarios for:
 
@@ -506,10 +529,11 @@ Why:
 - Acceptance:
   - selected scenarios run repeatedly per backend (or backend subsets)
   - flake rate is recorded by backend/scenario
+  - capability-gated scenarios are recorded as skips, while a missing expected scenario event fails the repeat job
   - release candidates require manual review of recent flake results
 - Notes:
   - focus on contention, retry timing, shutdown races, ordering
-  - Implemented via `.github/workflows/soak.yml` `integration-flake-repeat` (scheduled + manual) using `scripts/integration-flake-repeat.sh`; current backend subset is `redis`, `rabbitmq`, `sqs` with per-scenario flake-rate summaries/artifacts in `docs/flake-log.md` review format
+  - Implemented via `.github/workflows/soak.yml` `integration-flake-repeat` (scheduled + manual) using `scripts/integration-flake-repeat.sh`; current backend subset is `redis`, `rabbitmq`, `sqs` with per-scenario executed pass/fail and explicit capability-skip summaries/artifacts in `docs/flake-log.md` review format
 
 Run critical scenarios repeatedly (nightly/RC gate):
 
@@ -612,8 +636,8 @@ Minimum gate for a v1 release candidate:
 1. `GOCACHE=/tmp/queue-gocache go test ./...`
 2. `GOCACHE=/tmp/queue-gocache ./scripts/test-all-modules.sh`
 3. `GOCACHE=/tmp/queue-gocache FULL=1 ./scripts/test-all-modules.sh` (or equivalent split full runs)
-4. `INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/... -count=1`
-5. `scripts/coverage-codecov.sh`
+4. `scripts/coverage-codecov.sh unit`
+5. `INTEGRATION_BACKEND=all scripts/coverage-codecov.sh integration` (runs the full integration suite with coverage; CI parallelizes this by backend)
 6. `GOCACHE=/tmp/queue-gocache go run ./docs/readme/main.go`
 7. `GOCACHE=/tmp/queue-gocache go run ./docs/examplegen/main.go`
 8. `cd examples && GOCACHE=/tmp/queue-gocache go test ./... -run '^TestExamplesBuild$' -count=1`

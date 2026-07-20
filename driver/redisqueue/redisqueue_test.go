@@ -1,10 +1,13 @@
 package redisqueue
 
 import (
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queueconfig"
 	backend "github.com/hibiken/asynq"
 )
@@ -80,6 +83,47 @@ func TestServerConfig_ShutdownTimeoutPassthrough(t *testing.T) {
 	cfg := serverConfig(Config{ShutdownTimeout: 5 * time.Second}, 2)
 	if cfg.ShutdownTimeout != 5*time.Second {
 		t.Fatalf("expected shutdown timeout passthrough, got %s", cfg.ShutdownTimeout)
+	}
+}
+
+// TestServerConfig_UncommittedErrorsDoNotCountAsFailures verifies the configured predicate preserves retry count while Asynq still has transport capacity.
+func TestServerConfig_UncommittedErrorsDoNotCountAsFailures(t *testing.T) {
+	isFailure := serverConfig(Config{}, 1).IsFailure
+	if isFailure == nil {
+		t.Fatal("expected failure classifier")
+	}
+	cause := errors.New("outcome store unavailable")
+	if isFailure(nil) {
+		t.Fatal("nil result must not count as a failure")
+	}
+	if !isFailure(cause) {
+		t.Fatal("application error must count as a failure")
+	}
+	if isFailure(busruntime.Uncommitted(cause)) {
+		t.Fatal("uncommitted error must not count as a failure")
+	}
+	if isFailure(fmt.Errorf("commit callback: %w", busruntime.Uncommitted(cause))) {
+		t.Fatal("wrapped uncommitted error must not count as a failure")
+	}
+	if isFailure(backend.ErrLeaseExpired) {
+		t.Fatal("lease recovery must not consume the application retry counter")
+	}
+	if !isFailure(busruntime.Permanent(cause)) {
+		t.Fatal("permanent application error must count as a failure")
+	}
+}
+
+// TestRedisRetryDelaySeparatesInfrastructureFromApplicationBackoff verifies recovery does not inherit randomized application delays.
+func TestRedisRetryDelaySeparatesInfrastructureFromApplicationBackoff(t *testing.T) {
+	cause := errors.New("failed")
+	if got := redisRetryDelay(0, busruntime.Uncommitted(cause), backend.NewTask("job", nil)); got != time.Second {
+		t.Fatalf("uncommitted retry delay = %v, want 1s", got)
+	}
+	if got := redisRetryDelay(0, backend.ErrLeaseExpired, backend.NewTask("job", nil)); got != time.Second {
+		t.Fatalf("lease recovery delay = %v, want 1s", got)
+	}
+	if got := redisRetryDelay(0, cause, backend.NewTask("job", nil)); got < 15*time.Second {
+		t.Fatalf("application retry delay = %v, want Asynq default", got)
 	}
 }
 

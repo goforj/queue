@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	// NewFake creates a queue fake that records dispatches and provides assertions.
+	// NewFake creates the canonical fake used directly and by deprecated testing adapters.
 
 	// Example: fake queue assertions
 	fake := queue.NewFake()

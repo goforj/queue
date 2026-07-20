@@ -7,9 +7,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,7 +63,10 @@ var integrationRabbitMQ struct {
 	url       string
 }
 
-const redisDefaultJobTimeout = 30 * time.Second
+const (
+	redisApplicationMaxRetryHeader = "goforj-queue-application-max-retry"
+	redisDefaultJobTimeout         = 30 * time.Second
+)
 
 type runtimeWorkerBackend interface {
 	Register(jobType string, handler Handler)
@@ -231,6 +236,205 @@ func integrationBackendEnabled(name string) bool {
 	return testenv.BackendEnabled(os.Getenv("INTEGRATION_BACKEND"), name)
 }
 
+// stopRedisBrokerForScenario stops Redis and returns an idempotent recovery function while registering failure-safe cleanup first.
+func stopRedisBrokerForScenario(t *testing.T) func() {
+	t.Helper()
+	recoveryNeeded := true
+	recoverBroker := func() error {
+		if !recoveryNeeded {
+			return nil
+		}
+		if !integrationRedis.container.IsRunning() {
+			if err := integrationRedis.container.Start(context.Background()); err != nil {
+				return fmt.Errorf("start Redis broker: %w", err)
+			}
+		}
+		if err := refreshRedisAddr(context.Background()); err != nil {
+			return fmt.Errorf("refresh Redis address: %w", err)
+		}
+		if err := waitForTCP(integrationRedis.addr, 10*time.Second); err != nil {
+			return fmt.Errorf("wait for Redis broker: %w", err)
+		}
+		recoveryNeeded = false
+		return nil
+	}
+	t.Cleanup(func() {
+		if err := recoverBroker(); err != nil {
+			t.Errorf("restore Redis broker after scenario: %v", err)
+		}
+	})
+
+	stopTimeout := 10 * time.Second
+	if err := integrationRedis.container.Stop(context.Background(), &stopTimeout); err != nil {
+		t.Fatalf("stop Redis broker: %v", err)
+	}
+	return func() {
+		t.Helper()
+		requireScenarioNoErr(t, "restore_redis_broker", recoverBroker())
+	}
+}
+
+// TestIntegrationChaos_RedisBrokerDisconnectRedelivery proves a committed side effect survives lost acknowledgement without consuming the application's retry budget.
+func TestIntegrationChaos_RedisBrokerDisconnectRedelivery(t *testing.T) {
+	if os.Getenv("RUN_CHAOS") != "1" {
+		t.Skip("set RUN_CHAOS=1 to enable broker-disconnect recovery")
+	}
+	if !integrationBackendEnabled(testenv.BackendRedis) {
+		t.Skip("Redis integration backend not selected")
+	}
+
+	start := time.Now()
+	queueName := uniqueQueueName("scenario-redis-lost-ack")
+	jobType := "job:scenario:redis-lost-ack"
+	cfg := withDefaultQueue(redisCfg(integrationRedis.addr), queueName)
+	q, err := newQueueRuntime(cfg)
+	if err != nil {
+		t.Fatalf("new Redis chaos queue: %v", err)
+	}
+	t.Cleanup(func() {
+		if shutdownErr := q.Shutdown(context.Background()); shutdownErr != nil {
+			t.Errorf("shutdown Redis chaos queue: %v", shutdownErr)
+		}
+	})
+
+	w := newQueueBackedWorker(t, cfg, 1)
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if shutdownErr := w.Shutdown(shutdownCtx); shutdownErr != nil {
+			t.Errorf("shutdown Redis chaos worker: %v", shutdownErr)
+		}
+	})
+
+	var attempts atomic.Int32
+	var committed atomic.Int32
+	firstEntered := make(chan struct{}, 1)
+	firstReturned := make(chan struct{}, 1)
+	redelivered := make(chan struct{}, 1)
+	handlerFailure := make(chan error, 1)
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseFirst) })
+	}
+	t.Cleanup(release)
+
+	handler := func(_ context.Context, job Job) error {
+		var payload scenarioPayload
+		if err := job.Bind(&payload); err != nil {
+			handlerFailure <- fmt.Errorf("bind lost-ack payload: %w", err)
+			return err
+		}
+		if payload.ID != 9702 {
+			err := fmt.Errorf("lost-ack payload ID = %d, want 9702", payload.ID)
+			handlerFailure <- err
+			return err
+		}
+		invocation := attempts.Add(1)
+		// The idempotency key prevents the recovered physical delivery from repeating the external effect.
+		committed.CompareAndSwap(0, 1)
+		if invocation == 1 {
+			firstEntered <- struct{}{}
+			<-releaseFirst
+			firstReturned <- struct{}{}
+			return nil
+		}
+		redelivered <- struct{}{}
+		return nil
+	}
+	w.Register(jobType, handler)
+	requireScenarioNoErr(t, "lost_ack_worker_start", w.StartWorkers(context.Background()))
+
+	inspector := newRedisInspector(t)
+	job := NewJob(jobType).
+		Payload(scenarioPayload{ID: 9702, Name: "lost-ack"}).
+		OnQueue(queueName).
+		Retry(0).
+		Timeout(2 * time.Minute)
+	requireScenarioNoErr(t, "lost_ack_dispatch", q.Dispatch(job))
+
+	select {
+	case <-firstEntered:
+	case handlerErr := <-handlerFailure:
+		t.Fatalf("[lost_ack_handler_entered] handler rejected initial delivery: %v", handlerErr)
+	case <-time.After(10 * time.Second):
+		t.Fatal("[lost_ack_handler_entered] handler did not start")
+	}
+	activeBeforeFault := waitForRedisActiveJob(t, inspector, queueName, jobType, 5*time.Second)
+
+	restartBroker := stopRedisBrokerForScenario(t)
+	release()
+	select {
+	case <-firstReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("[lost_ack_handler_returned] handler did not return while Redis was unavailable")
+	}
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 45*time.Second)
+	requireScenarioNoErr(t, "lost_ack_original_worker_shutdown", w.Shutdown(shutdownCtx))
+	cancelShutdown()
+	restartBroker()
+
+	recoveryInspector := newRedisInspector(t)
+	activeAfterFault := waitForRedisActiveJob(t, recoveryInspector, queueName, jobType, 5*time.Second)
+	if activeAfterFault.ID != activeBeforeFault.ID {
+		t.Fatalf("[lost_ack_active_identity] active task ID = %q, want %q", activeAfterFault.ID, activeBeforeFault.ID)
+	}
+	leaseCtx, cancelLease := context.WithTimeout(context.Background(), 5*time.Second)
+	requireScenarioNoErr(t, "lost_ack_expire_lease", expireRedisLeaseForRecovery(leaseCtx, queueName, activeBeforeFault.ID))
+	cancelLease()
+	orphaned := waitForRedisActiveJob(t, recoveryInspector, queueName, jobType, 5*time.Second)
+	if !orphaned.IsOrphaned {
+		t.Fatal("[lost_ack_orphaned] aged active task was not reported as orphaned")
+	}
+
+	recoveryCfg := withDefaultQueue(redisCfg(integrationRedis.addr), queueName)
+	recoveryWorker := newQueueBackedWorker(t, recoveryCfg, 1)
+	recoveryWorker.Register(jobType, handler)
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if shutdownErr := recoveryWorker.Shutdown(shutdownCtx); shutdownErr != nil {
+			t.Errorf("shutdown Redis recovery worker: %v", shutdownErr)
+		}
+	})
+	requireScenarioNoErr(t, "lost_ack_recovery_worker_start", recoveryWorker.StartWorkers(context.Background()))
+
+	retryTask := waitForRedisRetryJob(t, recoveryInspector, queueName, activeBeforeFault.ID, 5*time.Second)
+	if retryTask.Retried != 0 {
+		t.Fatalf("[lost_ack_retry_budget] transport recovery consumed %d application retries, want 0", retryTask.Retried)
+	}
+	if retryTask.MaxRetry != 1 {
+		t.Fatalf("[lost_ack_transport_reserve] transport max retry = %d, want one reserved recovery slot", retryTask.MaxRetry)
+	}
+	if !strings.Contains(retryTask.LastErr, asynq.ErrLeaseExpired.Error()) {
+		t.Fatalf("[lost_ack_recovery_cause] last error = %q, want %q", retryTask.LastErr, asynq.ErrLeaseExpired.Error())
+	}
+
+	select {
+	case <-redelivered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("[lost_ack_redelivered] recovered task was not delivered")
+	}
+
+	settleDeadline := time.Now().Add(10 * time.Second)
+	settled := false
+	for time.Now().Before(settleDeadline) {
+		_, err := recoveryInspector.GetTaskInfo(queueName, activeBeforeFault.ID)
+		if errors.Is(err, asynq.ErrTaskNotFound) {
+			settled = true
+			break
+		}
+		if err != nil {
+			t.Fatalf("[lost_ack_settlement] inspect recovered task: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	requireScenarioTrue(t, "lost_ack_settled", settled, "recovered task remained unsettled")
+	requireScenarioTrue(t, "lost_ack_attempts", attempts.Load() == 2, "attempts=%d expected=2", attempts.Load())
+	requireScenarioTrue(t, "lost_ack_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
+	reportScenarioDuration(t, testenv.BackendRedis, "scenario_broker_disconnect_during_handler_redelivery", time.Since(start))
+}
+
 func TestRedisIntegration_DispatchSmoke(t *testing.T) {
 	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
@@ -261,20 +465,48 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 	if !integrationBackendEnabled(testenv.BackendRedis) {
 		t.Skip("redis integration backend not selected")
 	}
+	const (
+		jobType         = "job:options"
+		deliveryJobType = "job:options:delivery"
+	)
+	queueName := uniqueQueueName("redis-options")
+	attempts := make(chan Event, 1)
+	observer := ObserverFunc(func(_ context.Context, event Event) {
+		if event.Kind == EventProcessStarted && event.JobType == deliveryJobType {
+			select {
+			case attempts <- event:
+			default:
+			}
+		}
+	})
 	inspector := newRedisInspector(t)
-	q, err := newQueueRuntime(redisCfg(integrationRedis.addr))
+	q, err := newQueueRuntime(withObserverAll(
+		withDefaultQueue(redisCfg(integrationRedis.addr), queueName),
+		observer,
+	))
 	if err != nil {
 		t.Fatalf("new redis queue failed: %v", err)
 	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if shutdownErr := q.Shutdown(shutdownCtx); shutdownErr != nil {
+			t.Errorf("shutdown redis option queue: %v", shutdownErr)
+		}
+	})
+	q.Register(jobType, func(context.Context, Job) error { return nil })
+	q.Register(deliveryJobType, func(context.Context, Job) error { return nil })
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start redis option worker: %v", err)
+	}
 
-	queueName := uniqueQueueName("redis-options")
 	delay := 2 * time.Second
 	timeout := 7 * time.Second
 	maxRetry := 4
 	start := time.Now()
 
 	err = q.Dispatch(
-		NewJob("job:options").
+		NewJob(jobType).
 			Payload([]byte("opts")).
 			OnQueue(queueName).
 			Delay(delay).
@@ -292,11 +524,25 @@ func TestRedisIntegration_DispatchMapsOptions(t *testing.T) {
 	if scheduled.Timeout != timeout {
 		t.Fatalf("expected timeout %s, got %s", timeout, scheduled.Timeout)
 	}
-	if scheduled.MaxRetry != maxRetry {
-		t.Fatalf("expected max retry %d, got %d", maxRetry, scheduled.MaxRetry)
+	if scheduled.MaxRetry != maxRetry+1 {
+		t.Fatalf("expected transport max retry %d, got %d", maxRetry+1, scheduled.MaxRetry)
+	}
+	if got := scheduled.Headers[redisApplicationMaxRetryHeader]; got != fmt.Sprintf("%d", maxRetry) {
+		t.Fatalf("expected application max retry header %d, got %q", maxRetry, got)
 	}
 	if scheduled.NextProcessAt.Before(start.Add(delay - time.Second)) {
 		t.Fatalf("expected next process time after delay, got %s", scheduled.NextProcessAt)
+	}
+	if err := q.Dispatch(NewJob(deliveryJobType).OnQueue(queueName).Retry(maxRetry)); err != nil {
+		t.Fatalf("dispatch immediate Redis option probe: %v", err)
+	}
+	select {
+	case event := <-attempts:
+		if event.MaxRetry != maxRetry {
+			t.Fatalf("expected handler-visible max retry %d, got %d", maxRetry, event.MaxRetry)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Redis option delivery")
 	}
 }
 
@@ -718,6 +964,84 @@ func waitForScheduledJob(t *testing.T, inspector *asynq.Inspector, queueName str
 	}
 	t.Fatalf("scheduled job not found for queue %q within %s", queueName, timeout)
 	return nil
+}
+
+// waitForRedisActiveJob returns the matching active task once Asynq has reserved it for a handler.
+func waitForRedisActiveJob(t *testing.T, inspector *asynq.Inspector, queueName, jobType string, timeout time.Duration) *asynq.TaskInfo {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		jobs, err := inspector.ListActiveTasks(queueName)
+		if err != nil {
+			t.Fatalf("list active jobs failed: %v", err)
+		}
+		for _, job := range jobs {
+			if job.Type == jobType {
+				return job
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("active job %q not found for queue %q within %s", jobType, queueName, timeout)
+	return nil
+}
+
+// waitForRedisRetryJob returns the matching recovered task while it still carries Asynq's lease-expiration evidence.
+func waitForRedisRetryJob(t *testing.T, inspector *asynq.Inspector, queueName, jobID string, timeout time.Duration) *asynq.TaskInfo {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		jobs, err := inspector.ListRetryTasks(queueName)
+		if err != nil {
+			t.Fatalf("list retry jobs failed: %v", err)
+		}
+		for _, job := range jobs {
+			if job.ID == jobID {
+				return job
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("retry job %q not found for queue %q within %s", jobID, queueName, timeout)
+	return nil
+}
+
+// expireRedisLeaseForRecovery moves an existing Asynq lease behind its recovery skew window so the test exercises recovery without a minute-scale sleep.
+func expireRedisLeaseForRecovery(ctx context.Context, queueName, jobID string) error {
+	leaseKey := fmt.Sprintf("asynq:{%s}:lease", queueName)
+	leaseScore := strconv.FormatInt(time.Now().Add(-31*time.Second).Unix(), 10)
+	exitCode, output, err := integrationRedis.container.Exec(ctx, []string{
+		"redis-cli", "ZADD", leaseKey, "XX", "CH", leaseScore, jobID,
+	})
+	if err != nil {
+		return fmt.Errorf("age Redis lease: %w", err)
+	}
+	_, err = io.Copy(io.Discard, output)
+	if err != nil {
+		return fmt.Errorf("read Redis lease response: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("age Redis lease exited %d", exitCode)
+	}
+	return nil
+}
+
+// forceRedisRetryReady advances Asynq's real retry entry so this cross-driver contract measures retry behavior without inheriting randomized production backoff.
+func forceRedisRetryReady(t *testing.T, queueName string, timeout time.Duration) {
+	t.Helper()
+	inspector := newRedisInspector(t)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		count, err := inspector.RunAllRetryTasks(queueName)
+		if err != nil {
+			t.Fatalf("run Redis retry tasks failed: %v", err)
+		}
+		if count > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("Redis retry task not found for queue %q within %s", queueName, timeout)
 }
 
 type scenarioFixture struct {
@@ -1635,15 +1959,21 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		idempotencyQ := q
 		idempotencyW := w
 		idempotencyQueueName := fx.queueName
-		if fx.name == testenv.BackendSQS {
-			// SQS can retain invisible deliveries from earlier scenarios long enough to
-			// delay duplicate-processing timing by the queue visibility timeout. Isolate
-			// this subtest to a dedicated physical queue so it measures idempotency logic.
+		var idempotencyCfg any
+		switch fx.name {
+		case testenv.BackendRedis:
+			// A dedicated queue lets the test advance exactly its own Asynq retry entry.
+			idempotencyQueueName = uniqueQueueName("scenario-redis-idempotency")
+			idempotencyCfg = withDefaultQueue(redisCfg(integrationRedis.addr), idempotencyQueueName)
+		case testenv.BackendSQS:
+			// Isolation prevents invisible deliveries from unrelated scenarios from consuming the timing budget.
 			idempotencyQueueName = uniqueQueueName("scenario-sqs-idempotency")
-			idempotencyCfg := withDefaultQueue(
+			idempotencyCfg = withDefaultQueue(
 				sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
 				idempotencyQueueName,
 			)
+		}
+		if idempotencyCfg != nil {
 			var err error
 			idempotencyQ, err = newQueueRuntime(idempotencyCfg)
 			if err != nil {
@@ -1653,11 +1983,11 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			t.Cleanup(func() { _ = idempotencyQ.Shutdown(context.Background()) })
 			t.Cleanup(func() { _ = idempotencyW.Shutdown(context.Background()) })
 		}
-		requireScenarioNoErr(t, "idempotency_worker_start", (idempotencyW).StartWorkers(context.Background()))
 
 		jobType := "job:scenario:idempotency:" + fx.name
 		var attempts atomic.Int32
 		var committed atomic.Int32
+		firstAttemptDone := make(chan struct{}, 1)
 		done := make(chan struct{}, 1)
 		var mu sync.Mutex
 		seen := make(map[int]struct{})
@@ -1675,6 +2005,13 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 				committed.Add(1)
 			}
 			mu.Unlock()
+			if attempt == 1 {
+				select {
+				case firstAttemptDone <- struct{}{}:
+				default:
+				}
+				return errors.New("forced retry after committed side effect")
+			}
 			if attempt >= 2 {
 				select {
 				case done <- struct{}{}:
@@ -1683,31 +2020,40 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 			}
 			return nil
 		})
+		requireScenarioNoErr(t, "idempotency_worker_start", (idempotencyW).StartWorkers(context.Background()))
 
-		first := NewJob(jobType).
+		job := NewJob(jobType).
 			Payload(scenarioPayload{ID: 9600, Name: "idempotency"}).
-			OnQueue(idempotencyQueueName)
-		second := NewJob(jobType).
-			Payload(scenarioPayload{ID: 9600, Name: "idempotency"}).
-			OnQueue(idempotencyQueueName)
-		if fx.forceTimeout {
-			first = first.Timeout(jobTimeout)
-			second = second.Timeout(jobTimeout)
+			OnQueue(idempotencyQueueName).
+			Retry(1)
+		if fx.supportsBackoff {
+			job = job.Backoff(20 * time.Millisecond)
 		}
-		requireScenarioNoErr(t, "idempotency_dispatch_first", idempotencyQ.Dispatch(first))
-		requireScenarioNoErr(t, "idempotency_dispatch_second", idempotencyQ.Dispatch(second))
+		if fx.forceTimeout {
+			job = job.Timeout(jobTimeout)
+		}
+		requireScenarioNoErr(t, "idempotency_dispatch", idempotencyQ.Dispatch(job))
+
+		select {
+		case <-firstAttemptDone:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("[idempotency_first_attempt] initial delivery did not complete")
+		}
+		if fx.name == testenv.BackendRedis {
+			forceRedisRetryReady(t, idempotencyQueueName, 10*time.Second)
+		}
 
 		select {
 		case <-done:
-		case <-time.After(45 * time.Second):
-			t.Fatalf("[idempotency_done] duplicate deliveries did not both complete")
+		case <-time.After(20 * time.Second):
+			t.Fatalf("[idempotency_done] forced retry did not complete")
 		}
 		requireScenarioTrue(t, "idempotency_attempts", attempts.Load() >= 2, "attempts=%d expected>=2", attempts.Load())
 		requireScenarioTrue(t, "idempotency_side_effect_once", committed.Load() == 1, "committed=%d expected=1", committed.Load())
 		elapsed := time.Since(start)
 		reportScenarioDuration(t, fx.name, "scenario_duplicate_delivery_idempotency", elapsed)
-		if fx.name == testenv.BackendSQS {
-			requireScenarioDurationLTE(t, fx.name, "scenario_duplicate_delivery_idempotency", elapsed, 45*time.Second)
+		if fx.name == testenv.BackendRedis || fx.name == testenv.BackendSQS {
+			requireScenarioDurationLTE(t, fx.name, "scenario_duplicate_delivery_idempotency", elapsed, 30*time.Second)
 		}
 	})
 
@@ -1721,8 +2067,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 
 		qFault := fx.newQueue(t)
 		defer func() { _ = qFault.Shutdown(context.Background()) }()
-		stopTimeout := 10 * time.Second
-		requireScenarioNoErr(t, "fault_stop_broker", integrationRedis.container.Stop(context.Background(), &stopTimeout))
+		restartBroker := stopRedisBrokerForScenario(t)
 
 		badCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -1736,9 +2081,7 @@ func runIntegrationScenariosSuite(t *testing.T, fx scenarioFixture) {
 		err := qFault.WithContext(badCtx).Dispatch(job)
 		requireScenarioTrue(t, "fault_dispatch_err", err != nil, "expected dispatch error while broker is down")
 
-		requireScenarioNoErr(t, "fault_start_broker", integrationRedis.container.Start(context.Background()))
-		requireScenarioNoErr(t, "fault_refresh_addr", refreshRedisAddr(context.Background()))
-		requireScenarioNoErr(t, "fault_wait_broker", waitForTCP(integrationRedis.addr, 10*time.Second))
+		restartBroker()
 	})
 
 	t.Run("scenario_consume_after_broker_recovery", func(t *testing.T) {

@@ -10,7 +10,7 @@
 
 - Confirm affected queue(s) and backend (`redis`, `mysql`, `postgres`, `rabbitmq`, `sqs`, etc.)
 - Check worker liveness and recent deploys/restarts
-- Check error/retry rate and `republish_failed` / `process_recovered` event spikes
+- Check error/retry rate and `republish_failed` / `settlement_failed` / `process_recovered` event spikes
 - Check whether the backlog is mostly:
   - pending
   - scheduled/delayed
@@ -43,7 +43,7 @@
 
 - Queue depth trend reverses within expected recovery window
 - Processing throughput increases and retry/failure rate drops
-- No sustained `republish_failed` spikes
+- No sustained `republish_failed` or `settlement_failed` spikes
 
 ## Follow-up
 

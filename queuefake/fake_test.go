@@ -2,6 +2,7 @@ package queuefake_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/goforj/queue"
@@ -76,4 +77,46 @@ func TestFakeHarness_WorkflowAssertions(t *testing.T) {
 	f.AssertBatched(t, func(spec bus.BatchSpec) bool {
 		return len(spec.JobTypes) == 2 && spec.JobTypes[0] == "x"
 	})
+}
+
+// TestFakeHarness_CompatibilityViewsShareState verifies queuefake no longer
+// owns independent queue and workflow recorder models.
+func TestFakeHarness_CompatibilityViewsShareState(t *testing.T) {
+	fake := queuefake.New()
+	if fake.Queue() != fake.Workflow().Queue() {
+		t.Fatal("Queue and Workflow returned different canonical fakes")
+	}
+	if err := fake.Queue().Dispatch(queue.NewJob("queue:direct").OnQueue("root")); err != nil {
+		t.Fatalf("queue dispatch: %v", err)
+	}
+	fake.AssertWorkflowDispatched(t, "queue:direct")
+	if _, err := fake.Workflow().Dispatch(context.Background(), bus.NewJob("workflow:direct", nil).OnQueue("legacy")); err != nil {
+		t.Fatalf("workflow dispatch: %v", err)
+	}
+	fake.AssertDispatched(t, "workflow:direct")
+
+	chainID, err := fake.Queue().Chain(queue.NewJob("chain:shared")).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("chain dispatch: %v", err)
+	}
+	batchID, err := fake.Workflow().Batch(bus.NewJob("batch:shared", nil)).Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("batch dispatch: %v", err)
+	}
+	fake.AssertChained(t, []string{"chain:shared"})
+	fake.AssertBatchCount(t, 1)
+
+	fake.Reset()
+	fake.AssertNothingDispatched(t)
+	fake.AssertNothingWorkflowDispatched(t)
+	fake.AssertNothingBatched(t)
+	if len(fake.Queue().ChainRecords()) != 0 {
+		t.Fatal("Reset retained chain records")
+	}
+	if _, err := fake.Queue().FindChain(context.Background(), chainID); !errors.Is(err, queue.ErrWorkflowNotFound) {
+		t.Fatalf("FindChain after Reset error = %v", err)
+	}
+	if _, err := fake.Workflow().FindBatch(context.Background(), batchID); !errors.Is(err, bus.ErrNotFound) {
+		t.Fatalf("FindBatch after Reset error = %v", err)
+	}
 }

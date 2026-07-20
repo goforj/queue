@@ -15,6 +15,7 @@ import (
 )
 
 func TestObservabilityIntegration_AllBackends(t *testing.T) {
+	sqsQueueName := uniqueQueueName("obs-sqs")
 	fixtures := []struct {
 		name     string
 		queue    string
@@ -93,14 +94,14 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 		},
 		{
 			name:    testenv.BackendSQS,
-			queue:   "obs_sqs",
+			queue:   sqsQueueName,
 			workers: 2,
 			newQueue: func(t *testing.T, collector *queue.StatsCollector) QueueRuntime {
 				ensureSQS(t)
 				q, err := newQueueRuntime(withObserver(
 					withDefaultQueue(
 						sqsCfg(integrationSQS.region, integrationSQS.endpoint, integrationSQS.accessKey, integrationSQS.secretKey),
-						"obs_sqs",
+						sqsQueueName,
 					),
 					collector,
 				))
@@ -171,13 +172,13 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				}
 			})
 
-			t.Run("scenario_dispatch_retry_archive", func(t *testing.T) {
+			t.Run("scenario_dispatch_terminal_failure", func(t *testing.T) {
 				failJob := queue.NewJob(failType).
 					Payload(scenarioPayload{ID: 2, Name: "obs-fail"}).
 					OnQueue(fx.queue).
 					Retry(0)
-				requireScenarioNoErr(t, "dispatch_retry_archive", q.Dispatch(failJob))
-				waitForObservabilityScenario(t, "retry_archive_attempts", 12*time.Second, func() bool {
+				requireScenarioNoErr(t, "dispatch_terminal_failure", q.Dispatch(failJob))
+				waitForObservabilityScenario(t, "terminal_failure_attempts", 12*time.Second, func() bool {
 					return failedCalls.Load() >= 1
 				})
 			})
@@ -206,7 +207,7 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 				})
 				requireScenarioTrue(t, "collector_processed", counters.Processed >= 1, "processed=%d expected>=1", counters.Processed)
 				requireScenarioTrue(t, "collector_failed", counters.Failed >= 1, "failed=%d expected>=1", counters.Failed)
-				requireScenarioTrue(t, "collector_archived", counters.Archived >= 1, "archived=%d expected>=1", counters.Archived)
+				// Archived is intentionally not a cross-driver counter until each settlement owner emits a confirmed terminal fact.
 				if fx.name != testenv.BackendRedis {
 					requireScenarioTrue(t, "collector_retried", counters.Retry >= 1, "retry=%d expected>=1", counters.Retry)
 				}
@@ -237,14 +238,16 @@ func TestObservabilityIntegration_AllBackends(t *testing.T) {
 					return nativeCounters.Pending == 0 && nativeCounters.Active == 0
 				})
 				snapshot := collector.Snapshot()
+				finalCounters, queueOK := snapshot.Queue(fx.queue)
+				requireScenarioTrue(t, "collector_final_counters_present", queueOK, "queue=%q not found in final collector snapshot", fx.queue)
 				throughput, ok := snapshot.Throughput(fx.queue)
 				requireScenarioTrue(t, "collector_throughput_present", ok, "throughput missing for queue=%q", fx.queue)
 				requireScenarioTrue(t, "collector_hour_processed", throughput.Hour.Processed >= 1, "hour_processed=%d expected>=1", throughput.Hour.Processed)
 				requireScenarioTrue(t, "collector_hour_failed", throughput.Hour.Failed >= 1, "hour_failed=%d expected>=1", throughput.Hour.Failed)
-				requireScenarioTrue(t, "collector_getter_processed", snapshot.Processed(fx.queue) == counters.Processed, "getter_processed=%d counters_processed=%d", snapshot.Processed(fx.queue), counters.Processed)
-				requireScenarioTrue(t, "collector_getter_failed", snapshot.Failed(fx.queue) == counters.Failed, "getter_failed=%d counters_failed=%d", snapshot.Failed(fx.queue), counters.Failed)
+				requireScenarioTrue(t, "collector_getter_processed", snapshot.Processed(fx.queue) == finalCounters.Processed, "getter_processed=%d counters_processed=%d", snapshot.Processed(fx.queue), finalCounters.Processed)
+				requireScenarioTrue(t, "collector_getter_failed", snapshot.Failed(fx.queue) == finalCounters.Failed, "getter_failed=%d counters_failed=%d", snapshot.Failed(fx.queue), finalCounters.Failed)
 				if fx.name != testenv.BackendRedis {
-					requireScenarioTrue(t, "collector_getter_retry", snapshot.RetryCount(fx.queue) == counters.Retry, "getter_retry=%d counters_retry=%d", snapshot.RetryCount(fx.queue), counters.Retry)
+					requireScenarioTrue(t, "collector_getter_retry", snapshot.RetryCount(fx.queue) == finalCounters.Retry, "getter_retry=%d counters_retry=%d", snapshot.RetryCount(fx.queue), finalCounters.Retry)
 				}
 			})
 

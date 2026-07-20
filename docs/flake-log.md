@@ -16,7 +16,7 @@ Use this document to review and record timing/concurrency flake evidence from th
   - Includes:
     - `integration-flake-<backend>-summary.md`
     - `integration-flake-<backend>-attempts.tsv`
-    - per-attempt `go test` logs
+    - per-attempt `go test -json` logs
 
 ## Current repeated probes (default)
 
@@ -40,8 +40,8 @@ For a release candidate:
 
 1. Review the most recent `integration-flake-repeat` workflow run.
 2. Open each backend artifact summary (`integration-flake-<backend>-summary.md`).
-3. Check per-scenario fail counts / flake rates.
-4. If any failures occurred:
+3. Check per-scenario pass, fail, capability-skip, and missing-event counts plus flake rates. Skips and missing events are excluded from the flake-rate denominator, and any missing expected scenario event fails the job.
+4. If any failures or missing events occurred:
    - inspect corresponding per-attempt logs
    - classify root cause (`test assumption`, `timing budget`, `driver/backend behavior`, `real regression`)
    - file/fix before GA, or explicitly document/waive with rationale

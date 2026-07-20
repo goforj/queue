@@ -11,10 +11,10 @@ import (
 )
 
 func main() {
-	// WithObserver installs a workflow lifecycle observer.
+	// WithObserver installs one observer for queue, worker, and workflow lifecycle events.
 
-	// Example: workflow observer
-	observer := queue.WorkflowObserverFunc(func(_ context.Context, event queue.WorkflowEvent) {
+	// Example: observe all queue activity
+	observer := queue.ObserverFunc(func(_ context.Context, event queue.Event) {
 		_ = event.Kind
 	})
 	q, err := queue.New(queue.Config{Driver: queue.DriverSync}, queue.WithObserver(observer))

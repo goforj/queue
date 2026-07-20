@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	// Reset clears all recorded dispatches.
+	// Reset clears direct dispatches and all workflow records through every fake view.
 
 	// Example: reset records
 	fake := queue.NewFake()

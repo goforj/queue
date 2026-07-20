@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	// Workers sets desired worker concurrency before StartWorkers.
+	// Workers preserves fluent lifecycle compatibility without creating workers.
 
 	// Example: set worker count
 	fake := queue.NewFake()

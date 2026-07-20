@@ -1,11 +1,13 @@
 package redisqueue
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/internal/driverbridge"
 	"github.com/goforj/queue/queueconfig"
 	"github.com/goforj/queue/queuecore"
@@ -85,10 +87,11 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	if cfg.Addr == "" {
 		return nil, fmt.Errorf("redis addr is required")
 	}
+	observer := driverbridge.NewObserverSink(cfg.Observer)
 	rootCfg := queue.Config{
 		Driver:       queue.DriverRedis,
 		DefaultQueue: cfg.DefaultQueue,
-		Observer:     cfg.Observer,
+		Observer:     observer,
 		Logger:       cfg.Logger,
 	}
 	driverBackend := newRedisQueue(newRedisClient(cfg), newRedisInspector(cfg), newRedisTimelineStore(cfg), true)
@@ -100,7 +103,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 				DB:       cfg.DB,
 			}, serverConfig(cfg, workers)),
 			backend.NewServeMux(),
-			cfg.Observer,
+			observer,
 		), nil
 	}, opts...)
 	if err != nil {
@@ -110,7 +113,11 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 }
 
 func serverConfig(cfg Config, workers int) backend.Config {
-	serverCfg := backend.Config{Concurrency: workers}
+	serverCfg := backend.Config{
+		Concurrency:    workers,
+		IsFailure:      redisAttemptIsFailure,
+		RetryDelayFunc: redisRetryDelay,
+	}
 	if queues := normalizeQueues(cfg.Queues, cfg.DefaultQueue); len(queues) > 0 {
 		serverCfg.Queues = queues
 	}
@@ -126,6 +133,19 @@ func serverConfig(cfg Config, workers int) backend.Config {
 		serverCfg.ShutdownTimeout = cfg.ShutdownTimeout
 	}
 	return serverCfg
+}
+
+// redisAttemptIsFailure keeps workflow mutation and lease-recovery redelivery from consuming the application retry counter.
+func redisAttemptIsFailure(err error) bool {
+	return err != nil && !busruntime.IsUncommitted(err) && !errors.Is(err, backend.ErrLeaseExpired)
+}
+
+// redisRetryDelay keeps infrastructure redelivery responsive without changing application retry backoff.
+func redisRetryDelay(attempt int, err error, task *backend.Task) time.Duration {
+	if busruntime.IsUncommitted(err) || errors.Is(err, backend.ErrLeaseExpired) {
+		return time.Second
+	}
+	return backend.DefaultRetryDelayFunc(attempt, err, task)
 }
 
 func normalizeQueues(raw map[string]int, fallbackDefault string) map[string]int {

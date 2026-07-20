@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	// StartWorkers starts worker execution.
+	// StartWorkers is a compatibility no-op because the recording fake owns no workers.
 
 	// Example: start fake workers
 	fake := queue.NewFake()

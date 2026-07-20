@@ -44,6 +44,15 @@ Local-only compile/smoke checks (no Docker):
 INTEGRATION_BACKEND=null,sync,workerpool GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/... -run '^$'
 ```
 
+Coverage uses the repository collector so root and driver code exercised by this
+module is included. CI runs these backend profiles in parallel; `all` is the slow
+local equivalent and may start every external service container:
+
+```bash
+scripts/coverage-codecov.sh unit
+INTEGRATION_BACKEND=all scripts/coverage-codecov.sh integration
+```
+
 ## Environment
 
 - `INTEGRATION_BACKEND=<list>` filters enabled backends (comma-separated).

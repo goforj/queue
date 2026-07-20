@@ -56,10 +56,11 @@ func New(region string, opts ...queue.Option) (*queue.Queue, error) {
 //	_ = q
 func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	cfg = normalizeConfig(cfg)
+	observer := driverbridge.NewObserverSink(cfg.Observer)
 	rootCfg := queue.Config{
 		Driver:       queue.DriverSQS,
 		DefaultQueue: cfg.DefaultQueue,
-		Observer:     cfg.Observer,
+		Observer:     observer,
 	}
 	defaultQueue := queue.PhysicalQueueName(cfg.DefaultQueue, cfg.DefaultQueue)
 	return driverbridge.NewQueueFromDriver(rootCfg, newSQSQueue(cfg), func(workers int) (any, error) {
@@ -70,7 +71,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 			SQSAccessKey: cfg.AccessKey,
 			SQSSecretKey: cfg.SecretKey,
 			Workers:      workers,
-			Observer:     cfg.Observer,
+			Observer:     observer,
 		}), nil
 	}, opts...)
 }

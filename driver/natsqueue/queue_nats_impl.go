@@ -8,28 +8,62 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/uniqueness"
 	"github.com/goforj/queue/queuecore"
 	"github.com/nats-io/nats.go"
 )
 
+const natsRoundTripTimeout = 5 * time.Second
+
 type natsMessage struct {
-	Type          string `json:"type"`
-	Payload       []byte `json:"payload,omitempty"`
-	Queue         string `json:"queue"`
-	Attempt       int    `json:"attempt,omitempty"`
-	MaxRetry      int    `json:"max_retry,omitempty"`
-	BackoffMillis int64  `json:"backoff_millis,omitempty"`
-	TimeoutMillis int64  `json:"timeout_millis,omitempty"`
-	AvailableAtMS int64  `json:"available_at_ms,omitempty"`
-	PublishedAtMS int64  `json:"published_at_ms,omitempty"`
+	Type          string          `json:"type"`
+	Payload       []byte          `json:"payload,omitempty"`
+	Queue         string          `json:"queue"`
+	Metadata      json.RawMessage `json:"metadata,omitempty"`
+	Attempt       int             `json:"attempt,omitempty"`
+	MaxRetry      int             `json:"max_retry,omitempty"`
+	BackoffMillis int64           `json:"backoff_millis,omitempty"`
+	TimeoutMillis int64           `json:"timeout_millis,omitempty"`
+	AvailableAtMS int64           `json:"available_at_ms,omitempty"`
+	PublishedAtMS int64           `json:"published_at_ms,omitempty"`
+}
+
+type natsConnection interface {
+	Publish(subject string, data []byte) error
+	FlushWithContext(ctx context.Context) error
+	Drain() error
+	Close()
+}
+
+type synchronousNATSConnection struct {
+	*nats.Conn
+}
+
+// Drain waits for the asynchronous Core NATS drain to close the connection.
+func (c *synchronousNATSConnection) Drain() error {
+	if c == nil || c.Conn == nil || c.IsClosed() {
+		return nil
+	}
+	closed := c.StatusChanged(nats.CLOSED)
+	defer c.RemoveStatusListener(closed)
+	if err := c.Conn.Drain(); err != nil {
+		return err
+	}
+	for status := range closed {
+		if status == nats.CLOSED {
+			return nil
+		}
+	}
+	return nil
 }
 
 type natsQueue struct {
 	url string
-	nc  *nats.Conn
 
-	mu     sync.Mutex
-	unique map[string]time.Time
+	mu sync.Mutex
+	nc natsConnection
+
+	unique uniqueness.MemoryStore
 }
 
 func (q *natsQueue) Driver() queue.Driver {
@@ -43,41 +77,60 @@ func (q *natsQueue) Preflight(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := q.ensureConn(); err != nil {
-		return err
-	}
-	return q.nc.FlushWithContext(ctx)
-}
-
-func newNATSQueue(url string) *natsQueue {
-	return &natsQueue{
-		url:    url,
-		unique: make(map[string]time.Time),
-	}
-}
-
-func (q *natsQueue) ensureConn() error {
-	if q.nc != nil {
-		return nil
-	}
-	nc, err := nats.Connect(q.url)
+	nc, err := q.connection()
 	if err != nil {
 		return err
 	}
-	q.nc = nc
-	return nil
+	flushCtx, cancel := natsRoundTripContext(ctx)
+	defer cancel()
+	return nc.FlushWithContext(flushCtx)
+}
+
+func newNATSQueue(url string) *natsQueue {
+	return &natsQueue{url: url}
+}
+
+// ensureConn establishes at most one shared Core NATS connection.
+func (q *natsQueue) ensureConn() error {
+	_, err := q.connection()
+	return err
+}
+
+// connection returns the connection established while holding the same lock used by Shutdown.
+func (q *natsQueue) connection() (natsConnection, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.nc != nil {
+		return q.nc, nil
+	}
+	nc, err := nats.Connect(q.url)
+	if err != nil {
+		return nil, err
+	}
+	q.nc = &synchronousNATSConnection{Conn: nc}
+	return q.nc, nil
 }
 
 func (q *natsQueue) Shutdown(_ context.Context) error {
-	if q.nc != nil {
-		q.nc.Drain()
-		q.nc.Close()
-		q.nc = nil
+	q.mu.Lock()
+	nc := q.nc
+	q.nc = nil
+	q.mu.Unlock()
+	if nc != nil {
+		// Every accepted publish already completed a flush, so producer shutdown only needs to prevent reuse and close the socket.
+		nc.Close()
 	}
 	return nil
 }
 
-func (q *natsQueue) Dispatch(_ context.Context, job queue.Job) error {
+// Dispatch flushes initial publication so acceptance includes a Core NATS server roundtrip.
+func (q *natsQueue) Dispatch(ctx context.Context, job queue.Job) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := queuecore.ValidateDriverJob(job); err != nil {
 		return err
 	}
@@ -85,59 +138,92 @@ func (q *natsQueue) Dispatch(_ context.Context, job queue.Job) error {
 	if parsed.QueueName == "" {
 		return fmt.Errorf("job queue is required")
 	}
-	if q.nc == nil {
-		if err := q.ensureConn(); err != nil {
-			return err
+	nc, err := q.connection()
+	if err != nil {
+		return err
+	}
+	var (
+		uniqueKey   string
+		uniqueToken uint64
+	)
+	if parsed.UniqueTTL > 0 {
+		var acquired bool
+		uniqueKey, uniqueToken, acquired = q.claimUnique(job, parsed.QueueName, parsed.UniqueTTL)
+		if !acquired {
+			return queuecore.ErrDuplicate
 		}
 	}
-	if parsed.UniqueTTL > 0 && !q.claimUnique(job, parsed.QueueName, parsed.UniqueTTL) {
-		return queuecore.ErrDuplicate
-	}
 
-	msg := natsMessage{
-		Type:          job.Type,
-		Payload:       job.PayloadBytes(),
-		Queue:         parsed.QueueName,
-		PublishedAtMS: time.Now().UnixMilli(),
-	}
-	if parsed.MaxRetry != nil {
-		msg.MaxRetry = *parsed.MaxRetry
-	}
-	if parsed.Backoff != nil && *parsed.Backoff > 0 {
-		msg.BackoffMillis = parsed.Backoff.Milliseconds()
-	}
-	if parsed.Timeout != nil && *parsed.Timeout > 0 {
-		msg.TimeoutMillis = parsed.Timeout.Milliseconds()
-	}
-	if parsed.Delay > 0 {
-		msg.AvailableAtMS = time.Now().Add(parsed.Delay).UnixMilli()
+	msg, err := natsMessageForJob(job, parsed)
+	if err != nil {
+		q.unique.Release(uniqueKey, uniqueToken)
+		return err
 	}
 
 	payload, err := json.Marshal(msg)
 	if err != nil {
+		q.unique.Release(uniqueKey, uniqueToken)
 		return err
 	}
-	return q.nc.Publish(natsSubject(parsed.QueueName), payload)
+	err = nc.Publish(natsSubject(parsed.QueueName), payload)
+	if err != nil {
+		q.unique.Release(uniqueKey, uniqueToken)
+		return err
+	}
+	flushCtx, cancel := natsRoundTripContext(ctx)
+	defer cancel()
+	// A flush proves only that the Core NATS server observed this ephemeral publish, not durable storage.
+	return nc.FlushWithContext(flushCtx)
 }
 
-func (q *natsQueue) claimUnique(job queue.Job, queueName string, ttl time.Duration) bool {
-	now := time.Now()
-	key := queueName + ":" + job.Type + ":" + string(job.PayloadBytes())
-
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for candidate, expiresAt := range q.unique {
-		if expiresAt.Before(now) {
-			delete(q.unique, candidate)
+// natsMessageForJob converts one validated queue job into the stable NATS wire
+// representation while keeping direct-delivery metadata optional.
+func natsMessageForJob(job queue.Job, options queue.DriverJobOptions) (natsMessage, error) {
+	message := natsMessage{
+		Type:          job.Type,
+		Payload:       job.PayloadBytes(),
+		Queue:         options.QueueName,
+		PublishedAtMS: time.Now().UnixMilli(),
+	}
+	metadata := queue.DriverMetadata(job)
+	if metadata.SchemaVersion != 0 {
+		encoded, err := json.Marshal(metadata)
+		if err != nil {
+			return natsMessage{}, fmt.Errorf("encode NATS driver job metadata: %w", err)
 		}
+		message.Metadata = encoded
 	}
-	if expiresAt, ok := q.unique[key]; ok && expiresAt.After(now) {
-		return false
+	if options.MaxRetry != nil {
+		message.MaxRetry = *options.MaxRetry
 	}
-	q.unique[key] = now.Add(ttl)
-	return true
+	if options.Backoff != nil && *options.Backoff > 0 {
+		message.BackoffMillis = options.Backoff.Milliseconds()
+	}
+	if options.Timeout != nil && *options.Timeout > 0 {
+		message.TimeoutMillis = options.Timeout.Milliseconds()
+	}
+	if options.Delay > 0 {
+		message.AvailableAtMS = time.Now().Add(options.Delay).UnixMilli()
+	}
+	return message, nil
 }
 
+// claimUnique returns the ownership token needed to compensate a rejected publish.
+func (q *natsQueue) claimUnique(job queue.Job, queueName string, ttl time.Duration) (string, uint64, bool) {
+	key := queuecore.UniqueKey(job, queueName)
+	token, ok := q.unique.Acquire(key, ttl)
+	return key, token, ok
+}
+
+// natsSubject maps one physical queue onto its Core NATS subject.
 func natsSubject(queueName string) string {
 	return "queue." + queueName
+}
+
+// natsRoundTripContext supplies the deadline required by NATS while retaining a shorter caller deadline.
+func natsRoundTripContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, natsRoundTripTimeout)
 }

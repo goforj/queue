@@ -2,6 +2,7 @@ package driverbridge
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/goforj/queue"
@@ -86,9 +87,85 @@ func (b *nativeBackendStub) StartWorkers(context.Context) error {
 	b.started = true
 	return nil
 }
+
+// DrainWorkers completes the native bridge stub's worker-drain phase.
+func (b *nativeBackendStub) DrainWorkers(context.Context) error {
+	return nil
+}
 func (b *nativeBackendStub) Shutdown(context.Context) error {
 	b.stopped = true
 	return nil
+}
+
+type preflightBackendStub struct {
+	externalBackendStub
+	err   error
+	calls int
+}
+
+// Preflight records one legacy backend readiness check.
+func (b *preflightBackendStub) Preflight(context.Context) error {
+	b.calls++
+	return b.err
+}
+
+type readyBackendStub struct {
+	preflightBackendStub
+	readyErr   error
+	readyCalls int
+}
+
+// Ready records one canonical backend readiness check.
+func (b *readyBackendStub) Ready(context.Context) error {
+	b.readyCalls++
+	return b.readyErr
+}
+
+// TestNewQueueFromDriverPreservesReadiness verifies optional health checks
+// survive adaptation and canonical Ready takes precedence over legacy Preflight.
+func TestNewQueueFromDriverPreservesReadiness(t *testing.T) {
+	preflightErr := errors.New("managed schema unavailable")
+	legacy := &preflightBackendStub{
+		externalBackendStub: externalBackendStub{driver: queue.DriverDatabase},
+		err:                 preflightErr,
+	}
+	legacyQueue, err := NewQueueFromDriver(
+		queue.Config{Driver: queue.DriverDatabase},
+		legacy,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("new queue from legacy-ready driver: %v", err)
+	}
+	if err := legacyQueue.Ready(context.Background()); !errors.Is(err, preflightErr) {
+		t.Fatalf("legacy readiness = %v, want %v", err, preflightErr)
+	}
+	if legacy.calls != 1 {
+		t.Fatalf("legacy readiness calls = %d, want 1", legacy.calls)
+	}
+
+	readyErr := errors.New("backend not ready")
+	canonical := &readyBackendStub{
+		preflightBackendStub: preflightBackendStub{
+			externalBackendStub: externalBackendStub{driver: queue.DriverDatabase},
+			err:                 errors.New("legacy readiness must not run"),
+		},
+		readyErr: readyErr,
+	}
+	canonicalQueue, err := NewQueueFromDriver(
+		queue.Config{Driver: queue.DriverDatabase},
+		canonical,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("new queue from canonical-ready driver: %v", err)
+	}
+	if err := canonicalQueue.Ready(context.Background()); !errors.Is(err, readyErr) {
+		t.Fatalf("canonical readiness = %v, want %v", err, readyErr)
+	}
+	if canonical.readyCalls != 1 || canonical.calls != 0 {
+		t.Fatalf("readiness calls = canonical:%d legacy:%d, want 1/0", canonical.readyCalls, canonical.calls)
+	}
 }
 
 func TestNewQueueFromDriver_ExternalWorkerFactoryAndOptionalCapabilities(t *testing.T) {
@@ -214,5 +291,40 @@ func TestNewQueueFromDriver_NativeBackendOptionalCapabilities(t *testing.T) {
 	}
 	if !backend.stopped {
 		t.Fatal("expected native backend shutdown path to be used")
+	}
+}
+
+// TestNewQueueFromDriverSharesObserverSink verifies late root options reach the same sink retained by driver workers.
+func TestNewQueueFromDriverSharesObserverSink(t *testing.T) {
+	var configEvents []queue.Event
+	var optionEvents []queue.Event
+	sink := NewObserverSink(queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+		configEvents = append(configEvents, event)
+	}))
+
+	q, err := NewQueueFromDriver(
+		queue.Config{Driver: queue.DriverNATS, DefaultQueue: "default", Observer: sink},
+		&externalBackendStub{driver: queue.DriverNATS},
+		nil,
+		queue.WithObserver(queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+			optionEvents = append(optionEvents, event)
+		})),
+	)
+	if err != nil {
+		t.Fatalf("new queue from driver failed: %v", err)
+	}
+	if q.Driver() != queue.DriverNATS {
+		t.Fatalf("driver = %q, want nats", q.Driver())
+	}
+
+	queue.SafeObserve(context.Background(), sink, queue.Event{Kind: queue.EventRepublishFailed})
+	if len(configEvents) != 1 || len(optionEvents) != 1 {
+		t.Fatalf("captured sink counts = config:%d option:%d, want 1/1", len(configEvents), len(optionEvents))
+	}
+	if configEvents[0].EventID == "" || configEvents[0].EventID != optionEvents[0].EventID {
+		t.Fatalf("captured sink event identity differs: config=%+v option=%+v", configEvents[0], optionEvents[0])
+	}
+	if configEvents[0].Layer != queue.EventLayerWorker {
+		t.Fatalf("republish_failed layer = %q, want worker", configEvents[0].Layer)
 	}
 }

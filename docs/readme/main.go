@@ -81,7 +81,7 @@ type Example struct {
 }
 
 func includeInReadmeAPI(fd *FuncDoc) bool {
-	if fd.Package == "queue" && fd.Owner == "FakeQueue" && (fd.Name == "BusRegister" || fd.Name == "BusDispatch") {
+	if fd.Package == "queue" && fd.Owner == "FakeQueue" && (fd.Name == "BusRegister" || fd.Name == "BusDispatch" || fd.Name == "BusDispatchDirect") {
 		return false
 	}
 	if fd.Package == "queue" && (fd.Group == "Queue Runtime" || fd.Group == "Driver Integration") {
@@ -111,10 +111,6 @@ func parseFuncs(root string) ([]*FuncDoc, error) {
 		category string
 	}
 	targets := []parseTarget{{dir: root, category: "Core"}}
-	queuefakeDir := filepath.Join(root, "queuefake")
-	if st, err := os.Stat(queuefakeDir); err == nil && st.IsDir() {
-		targets = append(targets, parseTarget{dir: queuefakeDir, category: "Testing"})
-	}
 	driverDirs, err := filepath.Glob(filepath.Join(root, "driver", "*queue"))
 	if err != nil {
 		return nil, err
@@ -129,6 +125,11 @@ func parseFuncs(root string) ([]*FuncDoc, error) {
 		funcs, err := parseFuncsInDir(target.dir, target.category)
 		if err != nil {
 			return nil, err
+		}
+		for _, function := range funcs {
+			if function.Package == "queue" && function.Group == "Testing" {
+				function.Category = "Testing"
+			}
 		}
 		out = append(out, funcs...)
 	}
@@ -257,7 +258,7 @@ func parseFuncsInDir(dir string, category string) ([]*FuncDoc, error) {
 				}
 				for _, spec := range d.Specs {
 					typeSpec, ok := spec.(*ast.TypeSpec)
-					if !ok {
+					if !ok || !ast.IsExported(typeSpec.Name.Name) {
 						continue
 					}
 					iface, ok := typeSpec.Type.(*ast.InterfaceType)
@@ -625,9 +626,9 @@ func renderAPI(funcs []*FuncDoc) string {
 
 	if testingPkgs, ok := byCategoryPackageGroup["Testing"]; ok && len(testingPkgs) > 0 {
 		var links []string
-		if queuefakeGroups, ok := testingPkgs["queuefake"]; ok {
+		if queueGroups, ok := testingPkgs["queue"]; ok {
 			var fns []*FuncDoc
-			for _, groupFns := range queuefakeGroups {
+			for _, groupFns := range queueGroups {
 				fns = append(fns, groupFns...)
 			}
 			sort.Slice(fns, func(i, j int) bool {
@@ -663,6 +664,7 @@ func renderAPI(funcs []*FuncDoc) string {
 		} else {
 			buf.WriteString("## " + category + " API\n\n")
 			if category == "Testing" {
+				buf.WriteString("`queue.NewFake` is a recording fake with its established `Dispatch(any) error` surface. Inject it where `*queue.FakeQueue` or that recording contract is accepted; it is not a drop-in `*queue.Queue`.\n\n")
 				buf.WriteString("Examples in this section assume they are used inside tests and `t` is a `*testing.T` (or `testing.TB`).\n\n")
 			}
 		}
@@ -676,7 +678,7 @@ func renderAPI(funcs []*FuncDoc) string {
 			if category == "Core" && pkg == "queue" {
 				// Preserve original root API detail layout (no extra package heading).
 			} else if category == "Testing" {
-				// Testing API currently renders queuefake only; skip redundant package heading.
+				// The canonical testing API is rooted in queue, so its section needs no redundant package heading.
 			} else {
 				buf.WriteString("### " + packageCategoryLabel(category, pkg) + "\n\n")
 			}

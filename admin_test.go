@@ -114,6 +114,9 @@ func TestQueueAdminHelpersPhysicalizeTargetQueues(t *testing.T) {
 				cfg:    Config{DefaultQueue: "billing_default"},
 				driver: DriverRedis,
 			},
+			externalQueueRuntimeState: &externalQueueRuntimeState{
+				registered: map[string]Handler{},
+			},
 		},
 	}
 

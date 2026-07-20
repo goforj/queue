@@ -2,10 +2,7 @@
 
 This document defines the baseline observability contract for `queue` before GA.
 
-It covers two event streams:
-
-- Queue runtime events (`queue.Event`) via `queue.Observer`
-- Workflow/runtime orchestration events (`queue.WorkflowEvent`) via `queue.WithObserver(...)`
+For the normal root facade, it covers one event stream: `queue.Event` values delivered to the `queue.Observer` installed with `queue.WithObserver(...)`. `Event.Layer` identifies whether a fact came from queueing, worker execution, or workflow orchestration. The deprecated `bus` package translates the same internal producer into its frozen legacy event shape only for compatibility consumers; it no longer owns a second event stream.
 
 This is a baseline contract. Before GA, pin a version and treat field/label changes as compatibility-impacting.
 
@@ -13,18 +10,22 @@ This is a baseline contract. Before GA, pin a version and treat field/label chan
 
 - Common field names across logs/metrics/traces
 - Predictable event semantics across backends
-- Explicit handling of recovery/failure internals (`republish_failed`, `process_recovered`)
+- Explicit handling of recovery/failure internals (`republish_failed`, `settlement_failed`, `process_recovered`)
 - Stable labels for dashboards and alerts
 
-## Event Streams
+## Unified Event Stream
 
-### 1. Queue Runtime Events (`queue.Event`)
+### Queue and Worker Layers
 
 Source:
 
 - `queue.Observer`
 - `queue.ObserverFunc`
-- `queue.Config.Observer`
+- `queue.WithObserver(...)`
+
+`queue.Config.Observer` is a deprecated compatibility path into the same stream.
+
+Queue, worker, and workflow events carry the same applicable dispatch/job/chain/batch correlation IDs. Internal envelope IDs are excluded from `Event.JobKey`, so telemetry grouping follows the logical application job rather than a one-off wrapper delivery. `Event.JobKey` remains an observability field rather than a persisted uniqueness key; both contracts resolve the same logical job type and payload, while uniqueness additionally includes version and effective queue framing.
 
 Event kind type:
 
@@ -32,6 +33,10 @@ Event kind type:
 
 Current runtime event kinds include:
 
+- public dispatch lifecycle:
+  - `dispatch_started`
+  - `dispatch_succeeded`
+  - `dispatch_failed`
 - enqueue lifecycle:
   - `enqueue_accepted`
   - `enqueue_rejected`
@@ -49,15 +54,19 @@ Current runtime event kinds include:
 - internal recovery/failure:
   - `process_recovered`
   - `republish_failed`
+  - `settlement_failed`
 
 Recommended required fields (when available):
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `kind` | string | `queue.EventKind` value |
+| `layer` | string | `queue`, `worker`, or `workflow` |
 | `time` | timestamp | event timestamp |
+| `schema_version` | integer | event envelope schema version |
+| `event_id` | string | unique event identifier |
 | `driver` | string | backend/runtime (`redis`, `sqs`, etc.) |
-| `queue` | string | logical/physical queue name in runtime context |
+| `queue` | string | effective physical backend queue name; omitted targets currently report `default` |
 | `job_type` | string | job type identifier |
 | `job_key` | string | stable job key/idempotency key when available |
 | `attempt` | integer | current attempt number |
@@ -66,24 +75,23 @@ Recommended required fields (when available):
 | `duration_ms` | number | processing duration for completion/failure events |
 | `error` | string | normalized error string/class for failures |
 
-### 2. Workflow Events (`queue.WorkflowEvent`)
+### Workflow Layer
 
 Source:
 
 - `queue.WithObserver(...)`
-- `queue.WorkflowObserver`
-- `queue.WorkflowObserverFunc`
+- events where `event.Layer == queue.EventLayerWorkflow`
 
 Event kind type:
 
-- `queue.WorkflowEventKind`
+- `queue.EventKind`
+
+The deprecated `WorkflowEvent`, `WorkflowEventKind`, `WorkflowObserver`, and `WorkflowObserverFunc` names are aliases of the canonical root model rather than a second stream.
+
+Public dispatch lifecycle facts are intentionally queue-layer events because they bracket queue acceptance. They are not logical workflow transitions, even when a workflow dispatch produced them. A sink migrated from the legacy workflow observer contract must accept `dispatch_started`, `dispatch_succeeded`, and `dispatch_failed` in addition to `EventLayerWorkflow` events to retain its former scope. A filter that accepts only `EventLayerWorkflow` is the narrower job, chain, batch, and callback stream.
 
 Current workflow event kinds (via internal orchestration engine) include:
 
-- dispatch:
-  - `dispatch_started`
-  - `dispatch_succeeded`
-  - `dispatch_failed`
 - job orchestration:
   - `job_started`
   - `job_succeeded`
@@ -108,7 +116,8 @@ Recommended required fields (when available):
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `kind` | string | `queue.WorkflowEventKind` value |
+| `kind` | string | `queue.EventKind` value |
+| `layer` | string | `workflow` |
 | `time` | timestamp | event timestamp |
 | `schema_version` | integer | workflow event schema version |
 | `event_id` | string | unique workflow event identifier |
@@ -116,7 +125,7 @@ Recommended required fields (when available):
 | `job_id` | string | workflow job record ID |
 | `chain_id` | string | chain workflow ID |
 | `batch_id` | string | batch workflow ID |
-| `queue` | string | target queue |
+| `queue` | string | effective physical backend queue name; omitted targets currently report `default` |
 | `job_type` | string | job type |
 | `attempt` | integer | attempt number for job events |
 | `duration_ms` | number | duration for succeeded/failed events |
@@ -148,18 +157,21 @@ For metrics dimensions, keep cardinality bounded:
 
 These may be implemented via logs, counters, histograms, or OTel metrics.
 
-### Queue Runtime Metrics
+### Queue and Worker Metrics
 
 - `queue_events_total{kind,driver,queue}`
+- `queue_dispatch_total{kind,driver,queue}`
 - `queue_process_duration_ms` histogram `{driver,queue,job_type}`
 - `queue_enqueue_failures_total{driver,queue}`
 - `queue_republish_failed_total{driver,queue}` (from `republish_failed`)
+- `queue_settlement_failed_total{driver,queue}` (from `settlement_failed`)
 - `queue_process_recovered_total{driver,queue}` (from `process_recovered`)
+
+For `StatsCollector`, an identity-bearing `settlement_failed` closes the exact active attempt because handler execution has ended, but it increments neither `Processed` nor application `Failed`: the delivery outcome remains unresolved and may redeliver. Current built-in drivers carry the same opaque physical identity through start, process, and settlement facts. An identity-less terminal fact cannot close an identity-bearing start, and an identity-less settlement fact leaves `Active` unchanged, because event fields cannot distinguish a late settlement from a newer execution of the same job. Upgrade settlement-aware driver modules with root, and require custom drivers to forward the handler's settlement context consistently, when exact gauges matter. This deliberately conservative compatibility behavior can overcount outdated drivers instead of undercounting unrelated live work. Track `queue_settlement_failed_total` separately rather than folding it into either terminal counter.
 
 ### Workflow Metrics
 
 - `queue_workflow_events_total{kind,queue}`
-- `queue_workflow_dispatch_total{kind,queue}`
 - `queue_workflow_job_duration_ms` histogram `{kind,queue,job_type}`
 - `queue_workflow_chain_events_total{kind}`
 - `queue_workflow_batch_events_total{kind}`
@@ -178,8 +190,7 @@ After GA (target):
 
 ## Cross-References
 
-- `observability.go` (queue runtime event kinds and `queue.Event`)
-- `runtime.go` (workflow aliases: `queue.WorkflowEvent`, `queue.WorkflowEventKind`)
-- `bus/events.go` (underlying workflow event schema)
+- `observability.go` (canonical `queue.Event`, event layers, kinds, and observer helpers)
+- `runtime.go` (one `queue.WithObserver(...)` attachment path and deprecated workflow aliases)
 - `docs/ops-alerts.md` (dashboard/alert baseline)
 - `docs/runbooks/` (incident response)

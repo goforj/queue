@@ -11,7 +11,8 @@ import (
 )
 
 func main() {
-	// Records returns a copy of all dispatch records.
+	// Records returns isolated records for accepted direct dispatches.
+	// Chain and batch creation is available through ChainRecords and BatchRecords.
 
 	// Example: read records
 	fake := queue.NewFake()

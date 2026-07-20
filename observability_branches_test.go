@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/goforj/queue/busruntime"
 )
 
 type queueBackendStub struct {
@@ -122,8 +124,8 @@ func TestObservedQueue_DispatchClassifiesErrors(t *testing.T) {
 	}
 }
 
-func TestWrapObservedHandler_EmitsRetriedAndArchived(t *testing.T) {
-	t.Run("retry path", func(t *testing.T) {
+func TestWrapObservedHandler_EmitsRetryOnlyWhenAttemptBegins(t *testing.T) {
+	t.Run("initial failure does not claim retry settlement", func(t *testing.T) {
 		recorder := &observerRecorder{}
 		h := wrapObservedHandler(recorder, DriverSync, "", "job:retry", nil, func(context.Context, Job) error {
 			return errors.New("boom")
@@ -133,15 +135,15 @@ func TestWrapObservedHandler_EmitsRetriedAndArchived(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected handler error")
 		}
-		if len(recorder.events) != 3 {
-			t.Fatalf("expected 3 events (started/failed/retried), got %d", len(recorder.events))
+		if len(recorder.events) != 2 {
+			t.Fatalf("expected 2 events (started/failed), got %d", len(recorder.events))
 		}
-		if recorder.events[2].Kind != EventProcessRetried {
-			t.Fatalf("expected retried event, got %q", recorder.events[2].Kind)
+		if recorder.events[0].Kind != EventProcessStarted || recorder.events[1].Kind != EventProcessFailed {
+			t.Fatalf("unexpected initial attempt events: %+v", recorder.events)
 		}
 	})
 
-	t.Run("archive path", func(t *testing.T) {
+	t.Run("later attempt proves retry began", func(t *testing.T) {
 		recorder := &observerRecorder{}
 		h := wrapObservedHandler(recorder, DriverSync, "", "job:archive", nil, func(context.Context, Job) error {
 			return errors.New("boom")
@@ -152,12 +154,76 @@ func TestWrapObservedHandler_EmitsRetriedAndArchived(t *testing.T) {
 			t.Fatal("expected handler error")
 		}
 		if len(recorder.events) != 3 {
-			t.Fatalf("expected 3 events (started/failed/archived), got %d", len(recorder.events))
+			t.Fatalf("expected 3 events (retried/started/failed), got %d", len(recorder.events))
 		}
-		if recorder.events[2].Kind != EventProcessArchived {
-			t.Fatalf("expected archived event, got %q", recorder.events[2].Kind)
+		if recorder.events[0].Kind != EventProcessRetried || recorder.events[1].Kind != EventProcessStarted || recorder.events[2].Kind != EventProcessFailed {
+			t.Fatalf("unexpected later attempt events: %+v", recorder.events)
 		}
 	})
+}
+
+// TestWrapObservedHandlerDefersSuccessUntilSettlement verifies a broker-backed handler cannot report success before acknowledgement.
+func TestWrapObservedHandlerDefersSuccessUntilSettlement(t *testing.T) {
+	recorder := &observerRecorder{}
+	handler := wrapObservedHandler(recorder, DriverSQS, "", "job:settled", nil, func(context.Context, Job) error {
+		return nil
+	})
+	ctx, settlement := busruntime.WithDeliverySettlement(context.Background())
+	if err := handler(ctx, NewJob("job:settled").OnQueue("default")); err != nil {
+		t.Fatalf("wrapped handler returned error: %v", err)
+	}
+	if len(recorder.events) != 1 || recorder.events[0].Kind != EventProcessStarted {
+		t.Fatalf("events before settlement = %+v, want process_started only", recorder.events)
+	}
+	settlement.Commit()
+	if len(recorder.events) != 2 || recorder.events[1].Kind != EventProcessSucceeded {
+		t.Fatalf("events after settlement = %+v, want process_succeeded", recorder.events)
+	}
+}
+
+// TestWrapObservedHandlerReplacementDecoratorPreservesSettlement verifies a
+// decorator cannot replace the driver's settlement boundary with its own.
+func TestWrapObservedHandlerReplacementDecoratorPreservesSettlement(t *testing.T) {
+	recorder := &observerRecorder{}
+	ctx, settlement := busruntime.WithDeliverySettlement(context.Background())
+	wantIdentity, ok := busruntime.DeliverySettlementIdentityFromContext(ctx)
+	if !ok {
+		t.Fatal("driver context did not retain its settlement identity")
+	}
+	var replacementSettlement *busruntime.DeliverySettlement
+	handler := wrapObservedHandler(
+		recorder,
+		DriverSQS,
+		"",
+		"job:settled-replacement",
+		func(context.Context) context.Context {
+			decorated, spoofed := busruntime.WithDeliverySettlement(context.Background())
+			replacementSettlement = spoofed
+			return decorated
+		},
+		func(handlerCtx context.Context, _ Job) error {
+			gotIdentity, identityOK := busruntime.DeliverySettlementIdentityFromContext(handlerCtx)
+			if !identityOK || gotIdentity != wantIdentity {
+				t.Fatalf("handler settlement identity = %+v, %t; want driver identity", gotIdentity, identityOK)
+			}
+			return nil
+		},
+	)
+
+	if err := handler(ctx, NewJob("job:settled-replacement").OnQueue("default")); err != nil {
+		t.Fatalf("wrapped handler returned error: %v", err)
+	}
+	if len(recorder.events) != 1 || recorder.events[0].Kind != EventProcessStarted {
+		t.Fatalf("events before settlement = %+v, want process_started only", recorder.events)
+	}
+	replacementSettlement.Commit()
+	if len(recorder.events) != 1 {
+		t.Fatalf("replacement settlement published driver success: %+v", recorder.events)
+	}
+	settlement.Commit()
+	if len(recorder.events) != 2 || recorder.events[1].Kind != EventProcessSucceeded {
+		t.Fatalf("events after driver settlement = %+v, want process_succeeded", recorder.events)
+	}
 }
 
 func TestWrapObservedHandler_DecoratesObserverContext(t *testing.T) {
@@ -361,7 +427,9 @@ func TestObservabilityHelpers_ResolveAndSnapshotFallbacks(t *testing.T) {
 			cfg:    Config{Driver: DriverNull},
 			driver: DriverNull,
 		},
-		registered: map[string]Handler{},
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: map[string]Handler{},
+		},
 	}
 	if err := Ready(context.Background(), readyRuntime); !errors.Is(err, wantErr) {
 		t.Fatalf("expected ready error %v, got %v", wantErr, err)

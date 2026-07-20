@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/internal/observation"
 	"github.com/goforj/queue/internal/runtimehook"
 )
 
@@ -18,6 +19,7 @@ type runtimeQueueBackend interface {
 	queueBackend
 	Register(jobType string, handler queue.Handler)
 	StartWorkers(ctx context.Context) error
+	DrainWorkers(ctx context.Context) error
 }
 
 type workerBackend interface {
@@ -30,6 +32,26 @@ type workerContextDecoratorSetter interface {
 	SetHandlerContextDecorator(func(context.Context) context.Context)
 }
 
+// NewObserverSink creates the shared observer instance that a driver must pass to its producer, worker, and root configuration.
+func NewObserverSink(observers ...queue.Observer) queue.Observer {
+	if len(observers) == 1 {
+		if sink, ok := observers[0].(interface {
+			queue.Observer
+			Add(func(context.Context, queue.Event))
+			HasObservers() bool
+		}); ok {
+			return sink
+		}
+	}
+	callbacks := make([]func(context.Context, queue.Event), 0, len(observers))
+	for _, observer := range observers {
+		if observer != nil {
+			callbacks = append(callbacks, observer.Observe)
+		}
+	}
+	return observation.NewSink(callbacks...)
+}
+
 // NewQueueFromDriver builds a high-level *queue.Queue from a driver backend.
 //
 // The helper keeps driver modules off the public low-level constructor path while
@@ -40,6 +62,7 @@ func NewQueueFromDriver(
 	workerFactory func(workers int) (any, error),
 	opts ...queue.Option,
 ) (*queue.Queue, error) {
+	cfg.Observer = NewObserverSink(cfg.Observer)
 	driverBackend, err := adaptQueueBackend(backend)
 	if err != nil {
 		return nil, err
@@ -71,6 +94,17 @@ func (a queueBackendAdapter) Dispatch(ctx context.Context, job queue.Job) error 
 	return a.inner.Dispatch(ctx, job)
 }
 func (a queueBackendAdapter) Shutdown(ctx context.Context) error { return a.inner.Shutdown(ctx) }
+
+// Ready preserves an optional backend readiness contract through the internal bridge.
+func (a queueBackendAdapter) Ready(ctx context.Context) error {
+	if checker, ok := a.inner.(interface{ Ready(context.Context) error }); ok {
+		return checker.Ready(ctx)
+	}
+	if checker, ok := a.inner.(interface{ Preflight(context.Context) error }); ok {
+		return checker.Preflight(ctx)
+	}
+	return nil
+}
 func (a queueBackendAdapter) Pause(ctx context.Context, queueName string) error {
 	controller, ok := a.inner.(queue.QueueController)
 	if !ok {
@@ -103,6 +137,11 @@ func (a runtimeQueueBackendAdapter) Register(jobType string, handler queue.Handl
 }
 func (a runtimeQueueBackendAdapter) StartWorkers(ctx context.Context) error {
 	return a.inner.StartWorkers(ctx)
+}
+
+// DrainWorkers forwards the native backend's worker-drain lifecycle phase.
+func (a runtimeQueueBackendAdapter) DrainWorkers(ctx context.Context) error {
+	return a.inner.DrainWorkers(ctx)
 }
 func (a runtimeQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
 	return a.queueBackendAdapter.Pause(ctx, queueName)

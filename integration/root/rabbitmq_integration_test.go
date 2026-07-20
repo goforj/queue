@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/integration/testenv"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/testcontainers/testcontainers-go"
@@ -177,6 +178,114 @@ func TestRabbitMQIntegration_OptionBehavior(t *testing.T) {
 	elapsed := time.Since(started)
 	if elapsed < delay+2*backoff-100*time.Millisecond {
 		t.Fatalf("expected elapsed to include delay and backoff, got %s", elapsed)
+	}
+}
+
+// TestRabbitMQIntegration_ImmediateRetry verifies a retry without backoff advances
+// the physical attempt and commits without leaving an immediate duplicate delivery.
+func TestRabbitMQIntegration_ImmediateRetry(t *testing.T) {
+	if !integrationBackendEnabled(testenv.BackendRabbitMQ) {
+		t.Skip("rabbitmq integration backend not selected")
+	}
+	queueName := uniqueQueueName("rabbitmq-immediate-retry")
+	type deliveryObservation struct {
+		attempt  busruntime.DeliveryAttempt
+		present  bool
+		deferred bool
+	}
+	observations := make(chan deliveryObservation, 3)
+	committed := make(chan struct{}, 1)
+
+	q, err := newQueueRuntime(newRabbitMQIntegrationConfigForQueue(t, queueName))
+	if err != nil {
+		t.Fatalf("new rabbitmq queue failed: %v", err)
+	}
+	q.Register("job:rabbitmq:immediate-retry", func(ctx context.Context, _ queue.Job) error {
+		attempt, ok := busruntime.DeliveryAttemptFromContext(ctx)
+		observation := deliveryObservation{attempt: attempt, present: ok}
+		if !ok {
+			observations <- observation
+			return queue.Permanent(errors.New("rabbitmq delivery did not expose attempt metadata"))
+		}
+		switch attempt.Number {
+		case 0:
+			observations <- observation
+			return errors.New("retry immediately")
+		case 1:
+			observation.deferred = busruntime.DeferUntilDeliveryCommitted(ctx, func() {
+				committed <- struct{}{}
+			})
+			observations <- observation
+			if !observation.deferred {
+				return queue.Permanent(errors.New("rabbitmq delivery did not expose settlement metadata"))
+			}
+			return nil
+		default:
+			observations <- observation
+			return nil
+		}
+	})
+	if err := withWorkers(q, 1).StartWorkers(context.Background()); err != nil {
+		t.Fatalf("rabbitmq queue start failed: %v", err)
+	}
+	defer q.Shutdown(context.Background())
+
+	job := queue.NewJob("job:rabbitmq:immediate-retry").OnQueue(queueName).Retry(1)
+	if err := q.Dispatch(job); err != nil {
+		t.Fatalf("dispatch failed: %v", err)
+	}
+
+	wantAttempts := []busruntime.DeliveryAttempt{
+		{Number: 0, MaxRetry: 1},
+		{Number: 1, MaxRetry: 1},
+	}
+	for index, want := range wantAttempts {
+		select {
+		case observation := <-observations:
+			if !observation.present {
+				t.Fatalf("delivery %d did not expose attempt metadata", index+1)
+			}
+			if observation.attempt != want {
+				t.Fatalf("delivery %d attempt = %+v, want %+v", index+1, observation.attempt, want)
+			}
+			if index == 1 && !observation.deferred {
+				t.Fatal("retry delivery did not expose settlement metadata")
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatalf("timed out waiting for rabbitmq delivery %d", index+1)
+		}
+	}
+
+	select {
+	case <-committed:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for retry delivery acknowledgement")
+	}
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown rabbitmq queue: %v", err)
+	}
+	select {
+	case observation := <-observations:
+		t.Fatalf("unexpected third rabbitmq delivery during shutdown: %+v", observation.attempt)
+	default:
+	}
+
+	inspectionConnection, err := amqp.Dial(integrationRabbitMQ.url)
+	if err != nil {
+		t.Fatalf("dial rabbitmq for retry queue inspection: %v", err)
+	}
+	defer inspectionConnection.Close()
+	inspectionChannel, err := inspectionConnection.Channel()
+	if err != nil {
+		t.Fatalf("open rabbitmq retry inspection channel: %v", err)
+	}
+	defer inspectionChannel.Close()
+	queueState, err := inspectionChannel.QueueInspect(queueName)
+	if err != nil {
+		t.Fatalf("inspect rabbitmq retry queue: %v", err)
+	}
+	if queueState.Messages != 0 || queueState.Consumers != 0 {
+		t.Fatalf("retry queue after shutdown = messages:%d consumers:%d, want empty without consumers", queueState.Messages, queueState.Consumers)
 	}
 }
 

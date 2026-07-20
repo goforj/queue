@@ -1,3 +1,7 @@
+// Package postgresqueue provides the PostgreSQL-backed queue driver.
+//
+// This module requires Go 1.25 or newer because its pgx dependency uses that
+// baseline beginning with the first release that fixes GO-2026-5004.
 package postgresqueue
 
 import (
@@ -10,10 +14,12 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// Config configures the PostgreSQL queue driver.
 type Config struct {
 	queueconfig.DriverBaseConfig
 	DB                       *sql.DB
 	DSN                      string
+	DisableAutoMigrate       bool
 	ProcessingRecoveryGrace  time.Duration
 	ProcessingLeaseNoTimeout time.Duration
 }
@@ -48,6 +54,7 @@ func New(dsn string, opts ...queue.Option) (*queue.Queue, error) {
 //			},
 //			DB: nil, // optional; provide *sql.DB instead of DSN
 //			DSN: "postgres://user:pass@127.0.0.1:5432/queue?sslmode=disable", // optional if DB is set
+//			DisableAutoMigrate: false, // set true when schema migrations are managed externally
 //			ProcessingRecoveryGrace:  2 * time.Second, // default if <=0: 2s
 //			ProcessingLeaseNoTimeout: 5 * time.Minute, // default if <=0: 5m
 //		},
@@ -62,6 +69,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 		DriverBaseConfig:         cfg.DriverBaseConfig,
 		DB:                       cfg.DB,
 		DSN:                      cfg.DSN,
+		DisableAutoMigrate:       cfg.DisableAutoMigrate,
 		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
 		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
 	}, opts...)

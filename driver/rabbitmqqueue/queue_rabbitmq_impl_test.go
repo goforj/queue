@@ -1,7 +1,9 @@
 package rabbitmqqueue
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -9,6 +11,134 @@ import (
 	"github.com/goforj/queue"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+// TestRabbitMQDirectDeliveryMetadataRoundTrip verifies producer framing, worker
+// reconstruction, retry preservation, and legacy-envelope observation.
+func TestRabbitMQDirectDeliveryMetadataRoundTrip(t *testing.T) {
+	wantMetadata := queue.DriverJobMetadata{
+		SchemaVersion: queue.DriverJobMetadataVersion,
+		DispatchID:    "dsp_rabbit_direct",
+		JobID:         "job_rabbit_direct",
+		Queue:         "critical",
+	}
+	wantPayload := []byte(`{"report_id":42}`)
+	job := queue.DriverWithMetadata(
+		queue.NewJob("reports:build").Payload(wantPayload).OnQueue("critical").Retry(3),
+		wantMetadata,
+	)
+	message, err := rabbitMQMessageForJob(job, queue.DriverOptions(job))
+	if err != nil {
+		t.Fatalf("build direct message: %v", err)
+	}
+	var wireMetadata queue.DriverJobMetadata
+	if err := json.Unmarshal(message.Metadata, &wireMetadata); err != nil || wireMetadata != wantMetadata {
+		t.Fatalf("wire metadata = %+v, want %+v (err=%v)", wireMetadata, wantMetadata, err)
+	}
+
+	wire, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal direct message: %v", err)
+	}
+	var decoded rabbitMQMessage
+	if err := json.Unmarshal(wire, &decoded); err != nil {
+		t.Fatalf("unmarshal direct message: %v", err)
+	}
+	delivery := rabbitMQDeliveryJob(decoded)
+	if delivery.Type != "reports:build" || !bytes.Equal(delivery.PayloadBytes(), wantPayload) {
+		t.Fatalf("delivery = type:%q payload:%q", delivery.Type, delivery.PayloadBytes())
+	}
+	if got := queue.DriverMetadata(delivery); got != wantMetadata {
+		t.Fatalf("reconstructed metadata = %+v, want %+v", got, wantMetadata)
+	}
+	observed := queue.ResolveObservedJobMetadataFromJob(delivery)
+	if observed.DispatchID != wantMetadata.DispatchID || observed.JobID != wantMetadata.JobID || observed.JobType != job.Type {
+		t.Fatalf("direct observation = %+v", observed)
+	}
+	var events []queue.Event
+	worker := &rabbitMQWorker{observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+		events = append(events, event)
+	})}
+	worker.observeRepublishFailure(context.Background(), decoded, errors.New("republish failed"))
+	if len(events) != 1 || events[0].DispatchID != wantMetadata.DispatchID || events[0].JobID != wantMetadata.JobID {
+		t.Fatalf("direct republish observation = %+v", events)
+	}
+
+	decoded.Attempt++
+	var retry rabbitMQMessage
+	worker.cfg.DefaultQueue = "default"
+	worker.publishOverride = func(_ context.Context, message rabbitMQMessage) error {
+		retry = message
+		return nil
+	}
+	if err := worker.publish(context.Background(), decoded); err != nil {
+		t.Fatalf("republish direct message: %v", err)
+	}
+	retryJob := rabbitMQDeliveryJob(retry)
+	if got := queue.DriverMetadata(retryJob); got != wantMetadata {
+		t.Fatalf("retry metadata = %+v, want %+v", got, wantMetadata)
+	}
+	if got := queue.DriverOptions(retryJob).Attempt; got != 1 {
+		t.Fatalf("retry attempt = %d, want 1", got)
+	}
+
+	legacyPayload := []byte(`{"schema_version":1,"dispatch_id":"dsp_rabbit_legacy","job_id":"job_rabbit_legacy","job":{"type":"reports:legacy","payload":"e30="}}`)
+	legacy := queue.ResolveObservedJobMetadataFromJob(rabbitMQDeliveryJob(rabbitMQMessage{Type: "bus:job", Payload: legacyPayload}))
+	if legacy.JobType != "reports:legacy" || legacy.DispatchID != "dsp_rabbit_legacy" || legacy.JobID != "job_rabbit_legacy" {
+		t.Fatalf("legacy observation = %+v", legacy)
+	}
+
+	plainJob := queue.NewJob("reports:plain").OnQueue("default")
+	plain, err := rabbitMQMessageForJob(plainJob, queue.DriverOptions(plainJob))
+	if err != nil {
+		t.Fatalf("build metadata-absent message: %v", err)
+	}
+	plainWire, err := json.Marshal(plain)
+	if err != nil {
+		t.Fatalf("marshal metadata-absent message: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(plainWire, &fields); err != nil {
+		t.Fatalf("inspect metadata-absent message: %v", err)
+	}
+	if _, ok := fields["metadata"]; ok {
+		t.Fatalf("metadata-absent wire unexpectedly contains metadata: %s", plainWire)
+	}
+}
+
+// TestRabbitMQUntrustedMetadataRemainsAnOpaqueRetrySidecar verifies valid
+// application bytes survive malformed metadata and future fields survive republish.
+func TestRabbitMQUntrustedMetadataRemainsAnOpaqueRetrySidecar(t *testing.T) {
+	for _, raw := range []string{`"malformed"`, `{"schema_version":"bad","dispatch_id":"spoofed"}`} {
+		wire := []byte(`{"type":"reports:build","payload":"AQI=","queue":"critical","metadata":` + raw + `}`)
+		var message rabbitMQMessage
+		if err := json.Unmarshal(wire, &message); err != nil {
+			t.Fatalf("decode message with metadata %s: %v", raw, err)
+		}
+		delivery := rabbitMQDeliveryJob(message)
+		if delivery.Type != "reports:build" || !bytes.Equal(delivery.PayloadBytes(), []byte{1, 2}) {
+			t.Fatalf("delivery with metadata %s = type:%q payload:%v", raw, delivery.Type, delivery.PayloadBytes())
+		}
+		if metadata := queue.DriverMetadata(delivery); metadata != (queue.DriverJobMetadata{}) {
+			t.Fatalf("untrusted metadata %s became trusted: %+v", raw, metadata)
+		}
+	}
+
+	future := json.RawMessage(`{"schema_version":99,"dispatch_id":"future","future_field":{"id":7}}`)
+	var retry rabbitMQMessage
+	worker := &rabbitMQWorker{publishOverride: func(_ context.Context, message rabbitMQMessage) error {
+		retry = message
+		return nil
+	}}
+	if err := worker.publish(context.Background(), rabbitMQMessage{Type: "reports:build", Queue: "critical", Metadata: future}); err != nil {
+		t.Fatalf("republish future metadata: %v", err)
+	}
+	if !bytes.Equal(retry.Metadata, future) {
+		t.Fatalf("future retry metadata = %s, want %s", retry.Metadata, future)
+	}
+	if metadata := queue.DriverMetadata(rabbitMQDeliveryJob(retry)); metadata != (queue.DriverJobMetadata{}) {
+		t.Fatalf("future metadata became trusted: %+v", metadata)
+	}
+}
 
 func TestRabbitMQQueue_HelperBranches(t *testing.T) {
 	qDefault := newRabbitMQQueue("amqp://example", "")
@@ -33,6 +163,25 @@ func TestRabbitMQQueue_HelperBranches(t *testing.T) {
 	}
 }
 
+// TestRabbitMQQueueDriverAndPreflight verifies driver identity and preflight
+// cancellation before exercising the deterministic connection rejection path.
+func TestRabbitMQQueueDriverAndPreflight(t *testing.T) {
+	q := newRabbitMQQueue("://bad-url", "default")
+	q.dialTimeout = 5 * time.Millisecond
+	if got := q.Driver(); got != queue.DriverRabbitMQ {
+		t.Fatalf("driver = %q, want %q", got, queue.DriverRabbitMQ)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := q.Preflight(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled preflight error = %v, want context.Canceled", err)
+	}
+	if err := q.Preflight(nil); err == nil {
+		t.Fatal("invalid RabbitMQ URL unexpectedly passed preflight")
+	}
+}
+
 func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 	q := newRabbitMQQueue("amqp://example", "default")
 
@@ -44,20 +193,160 @@ func TestRabbitMQQueue_DispatchValidationAndDuplicate(t *testing.T) {
 	}
 
 	job := queue.NewJob("job:dup").Payload([]byte(`{"k":"v"}`)).OnQueue("default").UniqueFor(10 * time.Second)
-	_ = q.claimUnique(job, "default", 10*time.Second)
+	_, _, _ = q.claimUnique(job, "default", 10*time.Second)
 	if err := q.Dispatch(context.Background(), job); !errors.Is(err, queue.ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate before dial path, got %v", err)
 	}
 }
 
+// TestRabbitMQQueueCanceledDispatchStopsBeforeClaim verifies cancellation cannot publish or consume uniqueness state.
+func TestRabbitMQQueueCanceledDispatchStopsBeforeClaim(t *testing.T) {
+	q := newRabbitMQQueue("://bad-url", "default")
+	job := queue.NewJob("job:canceled").OnQueue("default").UniqueFor(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := q.Dispatch(ctx, job); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled dispatch error = %v, want context.Canceled", err)
+	}
+	key, token, acquired := q.claimUnique(job, "default", time.Minute)
+	if !acquired {
+		t.Fatal("canceled dispatch consumed the uniqueness claim")
+	}
+	q.unique.Release(key, token)
+}
+
 func TestRabbitMQQueue_ClaimUniquePrunesExpired(t *testing.T) {
 	q := newRabbitMQQueue("amqp://example", "default")
 	job := queue.NewJob("job:unique").Payload([]byte(`{"id":1}`)).OnQueue("default")
-	key := "default:" + job.Type + ":" + string(job.PayloadBytes())
-	q.unique[key] = time.Now().Add(-time.Second)
-
-	if ok := q.claimUnique(job, "default", 5*time.Second); !ok {
+	if _, _, ok := q.claimUnique(job, "default", time.Millisecond); !ok {
+		t.Fatal("expected initial claim to succeed")
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, _, ok := q.claimUnique(job, "default", 5*time.Second); !ok {
 		t.Fatal("expected expired key to be pruned and claim to succeed")
+	}
+}
+
+// TestRabbitMQQueueRejectedDispatchReleasesUniqueClaim verifies connection rejection cannot retain a false acceptance.
+func TestRabbitMQQueueRejectedDispatchReleasesUniqueClaim(t *testing.T) {
+	q := newRabbitMQQueue("://bad-url", "default")
+	q.dialTimeout = 5 * time.Millisecond
+	job := queue.NewJob("job:unique:rejected").OnQueue("default").UniqueFor(time.Minute)
+	first := q.Dispatch(context.Background(), job)
+	if first == nil || errors.Is(first, queue.ErrDuplicate) {
+		t.Fatalf("first dispatch error = %v, want connection rejection", first)
+	}
+	second := q.Dispatch(context.Background(), job)
+	if second == nil || errors.Is(second, queue.ErrDuplicate) {
+		t.Fatalf("second dispatch error = %v, uniqueness claim was not compensated", second)
+	}
+}
+
+// TestRetryRabbitPublish verifies reconnect decisions without weakening the
+// broker ambiguity rule that prevents duplicate publishes.
+func TestRetryRabbitPublish(t *testing.T) {
+	connectErr := errors.New("connect failed")
+	publishErr := errors.New("publish rejected")
+	reconnectErr := errors.New("reconnect failed")
+	retryErr := errors.New("retry failed")
+	ambiguousCause := errors.New("publish outcome unknown")
+	ambiguousErr := rabbitPublishAmbiguousError{cause: ambiguousCause}
+	tests := []struct {
+		name          string
+		ensureErrors  []error
+		publishErrors []error
+		wantCalls     []string
+		wantErr       error
+	}{
+		{
+			name:         "initial connection rejection",
+			ensureErrors: []error{connectErr},
+			wantCalls:    []string{"ensure"},
+			wantErr:      connectErr,
+		},
+		{
+			name:          "accepted first publish",
+			ensureErrors:  []error{nil},
+			publishErrors: []error{nil},
+			wantCalls:     []string{"ensure", "publish"},
+		},
+		{
+			name:          "ambiguous publish is not repeated",
+			ensureErrors:  []error{nil},
+			publishErrors: []error{ambiguousErr},
+			wantCalls:     []string{"ensure", "publish"},
+			wantErr:       ambiguousCause,
+		},
+		{
+			name:          "non-connection rejection is not repeated",
+			ensureErrors:  []error{nil},
+			publishErrors: []error{publishErr},
+			wantCalls:     []string{"ensure", "publish"},
+			wantErr:       publishErr,
+		},
+		{
+			name:          "reconnect rejection",
+			ensureErrors:  []error{nil, reconnectErr},
+			publishErrors: []error{amqp.ErrClosed},
+			wantCalls:     []string{"ensure", "publish", "close", "ensure"},
+			wantErr:       reconnectErr,
+		},
+		{
+			name:          "accepted retry",
+			ensureErrors:  []error{nil, nil},
+			publishErrors: []error{amqp.ErrClosed, nil},
+			wantCalls:     []string{"ensure", "publish", "close", "ensure", "publish"},
+		},
+		{
+			name:          "retry rejection",
+			ensureErrors:  []error{nil, nil},
+			publishErrors: []error{amqp.ErrClosed, retryErr},
+			wantCalls:     []string{"ensure", "publish", "close", "ensure", "publish"},
+			wantErr:       retryErr,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls []string
+			ensureIndex := 0
+			publishIndex := 0
+			ensureConnected := func() error {
+				calls = append(calls, "ensure")
+				if ensureIndex >= len(test.ensureErrors) {
+					t.Fatal("unexpected ensure call")
+					return nil
+				}
+				err := test.ensureErrors[ensureIndex]
+				ensureIndex++
+				return err
+			}
+			publish := func() error {
+				calls = append(calls, "publish")
+				if publishIndex >= len(test.publishErrors) {
+					t.Fatal("unexpected publish call")
+					return nil
+				}
+				err := test.publishErrors[publishIndex]
+				publishIndex++
+				return err
+			}
+			closeConnection := func() { calls = append(calls, "close") }
+
+			err := retryRabbitPublish(ensureConnected, publish, closeConnection)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("retry error = %v, want %v", err, test.wantErr)
+			}
+			if len(calls) != len(test.wantCalls) {
+				t.Fatalf("calls = %v, want %v", calls, test.wantCalls)
+			}
+			for i := range calls {
+				if calls[i] != test.wantCalls[i] {
+					t.Fatalf("calls = %v, want %v", calls, test.wantCalls)
+				}
+			}
+		})
 	}
 }
 
@@ -91,5 +380,28 @@ func TestRabbitPhysicalQueueName(t *testing.T) {
 	}
 	if got := rabbitPhysicalQueueName("", ""); got != "default" {
 		t.Fatalf("expected hard default fallback, got %q", got)
+	}
+}
+
+// TestRabbitPublishHelpersNormalizeNilContexts verifies optional caller contexts
+// still reach deterministic pre-publish validation.
+func TestRabbitPublishHelpersNormalizeNilContexts(t *testing.T) {
+	if err := publishRabbitConfirmed(nil, nil, "", "default", amqp.Publishing{}); !errors.Is(err, amqp.ErrClosed) {
+		t.Fatalf("nil-channel publish error = %v, want amqp.ErrClosed", err)
+	}
+
+	ctx, cancel, err := rabbitPublishContext(nil)
+	if err != nil {
+		t.Fatalf("nil-context publish boundary: %v", err)
+	}
+	cancel()
+	if ctx == nil {
+		t.Fatal("nil caller context produced a nil bounded context")
+	}
+
+	cause := errors.New("confirmation lost")
+	ambiguous := rabbitPublishAmbiguousError{cause: cause}
+	if got := ambiguous.Error(); got != cause.Error() {
+		t.Fatalf("ambiguous error text = %q, want %q", got, cause.Error())
 	}
 }

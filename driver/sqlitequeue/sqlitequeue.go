@@ -10,10 +10,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Config configures the SQLite queue driver.
 type Config struct {
 	queueconfig.DriverBaseConfig
 	DB                       *sql.DB
 	DSN                      string
+	DisableAutoMigrate       bool
 	ProcessingRecoveryGrace  time.Duration
 	ProcessingLeaseNoTimeout time.Duration
 }
@@ -48,6 +50,7 @@ func New(dsn string, opts ...queue.Option) (*queue.Queue, error) {
 //			},
 //			DB: nil, // optional; provide *sql.DB instead of DSN
 //			DSN: "file:queue.db?_busy_timeout=5000", // optional if DB is set
+//			DisableAutoMigrate: false, // set true when schema migrations are managed externally
 //			ProcessingRecoveryGrace:  2 * time.Second, // default if <=0: 2s
 //			ProcessingLeaseNoTimeout: 5 * time.Minute, // default if <=0: 5m
 //		},
@@ -62,6 +65,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 		DriverBaseConfig:         cfg.DriverBaseConfig,
 		DB:                       cfg.DB,
 		DSN:                      cfg.DSN,
+		DisableAutoMigrate:       cfg.DisableAutoMigrate,
 		ProcessingRecoveryGrace:  cfg.ProcessingRecoveryGrace,
 		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
 	}, opts...)

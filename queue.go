@@ -45,6 +45,9 @@ type queueRuntime interface {
 	// @group Driver Integration
 	Ready(ctx context.Context) error
 
+	// physicalQueueNameOrDefault resolves the effective backend queue name used in canonical events.
+	physicalQueueNameOrDefault(queueName string) string
+
 	// setHandlerContextDecorator decorates handler execution context at registration time.
 	setHandlerContextDecorator(func(context.Context) context.Context)
 }
@@ -68,7 +71,9 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 // Config configures queue creation for New (and advanced driver/runtime interop).
 // @group Config
 type Config struct {
-	Driver   Driver
+	Driver Driver
+	// Observer is a compatibility attachment path for queue lifecycle events.
+	// Deprecated: use WithObserver so all event layers share one constructor option.
 	Observer Observer
 	Logger   Logger
 
@@ -85,6 +90,7 @@ type runtimeQueueBackend interface {
 	queueBackend
 	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
+	DrainWorkers(ctx context.Context) error
 }
 
 func newSyncQueue() queueBackend {
@@ -124,6 +130,7 @@ func New(cfg Config, opts ...Option) (*Queue, error) {
 
 func newRuntime(cfg Config) (queueRuntime, error) {
 	cfg = cfg.normalize()
+	cfg.Observer = ensureObserverSink(cfg.Observer)
 
 	var q queueBackend
 	var err error
@@ -161,14 +168,20 @@ func newRuntime(cfg Config) (queueRuntime, error) {
 	}
 	if runtime != nil {
 		return &nativeQueueRuntime{
-			common:     common,
-			runtime:    runtime,
-			registered: make(map[string]Handler),
+			common:  common,
+			runtime: runtime,
+			nativeQueueRuntimeState: &nativeQueueRuntimeState{
+				registered:   make(map[string]Handler),
+				continuation: busruntime.NewContinuationScope(),
+			},
 		}, nil
 	}
 	return &externalQueueRuntime{
-		common:     common,
-		registered: make(map[string]Handler),
+		common: common,
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered:   make(map[string]Handler),
+			continuation: busruntime.NewContinuationScope(),
+		},
 	}, nil
 }
 
@@ -190,22 +203,135 @@ type queueCommon struct {
 type nativeQueueRuntime struct {
 	common  *queueCommon
 	runtime runtimeQueueBackend
+	*nativeQueueRuntimeState
+}
 
-	mu         sync.Mutex
-	registered map[string]Handler
-	started    bool
-	workers    int
+// nativeQueueRuntimeState stays shared by context-bound handles because worker registration and lifecycle belong to the runtime, not an individual dispatch context.
+type nativeQueueRuntimeState struct {
+	mu                   sync.Mutex
+	registered           map[string]Handler
+	handlerSlots         map[string]*runtimeHandlerSlot
+	runtimeRegistrations map[string]struct{}
+	started              bool
+	draining             bool
+	closed               bool
+	start                *runtimeStartAttempt
+	shutdown             *runtimeShutdownAttempt
+	operations           runtimeOperationState
+	continuation         *busruntime.ContinuationScope
+	workers              int
 }
 
 type externalQueueRuntime struct {
-	common *queueCommon
+	common    *queueCommon
+	newWorker driverWorkerFactory
+	*externalQueueRuntimeState
+}
 
-	mu         sync.Mutex
-	registered map[string]Handler
-	worker     runtimeWorkerBackend
-	started    bool
-	workers    int
-	newWorker  driverWorkerFactory
+// externalQueueRuntimeState keeps the constructed worker and lifecycle state synchronized across derived queue handles.
+type externalQueueRuntimeState struct {
+	mu                  sync.Mutex
+	registered          map[string]Handler
+	handlerSlots        map[string]*runtimeHandlerSlot
+	worker              runtimeWorkerBackend
+	workerRegistrations map[string]struct{}
+	started             bool
+	draining            bool
+	closed              bool
+	start               *runtimeStartAttempt
+	shutdown            *runtimeShutdownAttempt
+	operations          runtimeOperationState
+	continuation        *busruntime.ContinuationScope
+	workers             int
+}
+
+type runtimeOperationState struct {
+	active int
+	idle   chan struct{}
+}
+
+// acquire reserves backend resources while the owning lifecycle mutex is held.
+func (s *runtimeOperationState) acquire() {
+	if s.active == 0 {
+		s.idle = make(chan struct{})
+	}
+	s.active++
+}
+
+// release returns true when the final operation completed and an idle waiter should be released.
+func (s *runtimeOperationState) release() bool {
+	s.active--
+	return s.active == 0 && s.idle != nil
+}
+
+// markIdle closes the current idle generation after release identifies the final operation.
+func (s *runtimeOperationState) markIdle() {
+	close(s.idle)
+	s.idle = nil
+}
+
+type runtimeShutdownAttempt struct {
+	done chan struct{}
+	err  error
+}
+
+type runtimeStartAttempt struct {
+	done chan struct{}
+	err  error
+}
+
+type runtimeHandlerSlot struct {
+	mu      sync.RWMutex
+	handler Handler
+}
+
+// replace changes the application handler behind one stable backend registration.
+func (s *runtimeHandlerSlot) replace(handler Handler) {
+	s.mu.Lock()
+	s.handler = handler
+	s.mu.Unlock()
+}
+
+// invoke resolves the latest handler without holding the slot lock during application execution.
+func (s *runtimeHandlerSlot) invoke(ctx context.Context, job Job) error {
+	s.mu.RLock()
+	handler := s.handler
+	s.mu.RUnlock()
+	return handler(ctx, job)
+}
+
+// updateRuntimeHandlerSlot creates or updates the stable target used for one non-nil job registration.
+func updateRuntimeHandlerSlot(slots map[string]*runtimeHandlerSlot, jobType string, handler Handler) (map[string]*runtimeHandlerSlot, *runtimeHandlerSlot) {
+	if handler == nil {
+		return slots, nil
+	}
+	if slots == nil {
+		slots = make(map[string]*runtimeHandlerSlot)
+	}
+	slot := slots[jobType]
+	if slot == nil {
+		slot = &runtimeHandlerSlot{}
+		slots[jobType] = slot
+	}
+	slot.replace(handler)
+	return slots, slot
+}
+
+// installRuntimeHandler installs one stable trampoline per non-nil job type on a backend.
+func installRuntimeHandler(backend interface{ Register(string, Handler) }, common *queueCommon, registrations map[string]struct{}, jobType string, handler Handler, slot *runtimeHandlerSlot) map[string]struct{} {
+	if handler == nil {
+		backend.Register(jobType, nil)
+		return registrations
+	}
+	if _, installed := registrations[jobType]; installed {
+		return registrations
+	}
+	backend.Register(jobType, common.wrapRegisteredHandler(jobType, slot.invoke))
+	if registrations == nil {
+		registrations = make(map[string]struct{})
+	}
+	registrations[jobType] = struct{}{}
+	return registrations
 }
 
 type runtimeWorkerBackend interface {
@@ -227,6 +353,27 @@ func (q *queueCommon) context() context.Context {
 		return context.Background()
 	}
 	return q.ctx
+}
+
+// addObserver composes observers at construction time so queue and workflow layers publish to the same application sink.
+func (q *queueCommon) addObserver(observer Observer) {
+	if q == nil || observer == nil {
+		return
+	}
+	q.cfg.Observer = addObserverToSink(q.cfg.Observer, observer)
+	if observed, ok := q.inner.(*observedQueue); ok {
+		observed.observer = q.cfg.Observer
+		return
+	}
+	q.inner = newObservedQueue(q.inner, q.driver, q.cfg.Observer)
+}
+
+// observer returns the composed application observer shared by execution and workflow adapters.
+func (q *queueCommon) observer() Observer {
+	if q == nil || !observerHasRecipients(q.cfg.Observer) {
+		return nil
+	}
+	return q.cfg.Observer
 }
 
 func (q *queueCommon) WithContext(ctx context.Context) *queueCommon {
@@ -251,9 +398,12 @@ func (q *queueCommon) Dispatch(job any) error {
 		return err
 	}
 	dispatchJob = q.physicalJob(dispatchJob)
-	return q.inner.Dispatch(q.context(), dispatchJob)
+	ctx, _ := newDispatchAcceptance(q.context())
+	return q.inner.Dispatch(ctx, dispatchJob)
 }
 
+// physicalJob namespaces explicit targets while preserving the current
+// backend-specific contract for jobs that omit a queue.
 func (q *queueCommon) physicalJob(job Job) Job {
 	if job.options.queueName == "" {
 		return job
@@ -269,6 +419,7 @@ func (q *queueCommon) physicalQueueName(queueName string) string {
 	return PhysicalQueueName(q.cfg.DefaultQueue, queueName)
 }
 
+// physicalQueueNameOrDefault resolves the configured default and namespace before a queue name reaches the backend.
 func (q *queueCommon) physicalQueueNameOrDefault(queueName string) string {
 	queueName = strings.TrimSpace(queueName)
 	if queueName == "" && q != nil {
@@ -319,8 +470,26 @@ func queueNamePrefix(defaultQueue string) string {
 	return prefix + "_"
 }
 
-func (q *nativeQueueRuntime) Driver() Driver         { return q.common.Driver() }
-func (q *nativeQueueRuntime) Dispatch(job any) error { return q.common.Dispatch(job) }
+// Driver returns the native runtime's configured backend identifier.
+func (q *nativeQueueRuntime) Driver() Driver { return q.common.Driver() }
+
+// physicalQueueNameOrDefault keeps canonical event labels aligned with native backend queue names.
+func (q *nativeQueueRuntime) physicalQueueNameOrDefault(queueName string) string {
+	if q == nil || q.common == nil {
+		return PhysicalQueueName("default", queueName)
+	}
+	return q.common.physicalQueueNameOrDefault(queueName)
+}
+
+// Dispatch rejects new application work once native runtime draining begins.
+func (q *nativeQueueRuntime) Dispatch(job any) error {
+	release, err := q.acquireOperation(q.common.context(), true)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return q.common.Dispatch(job)
+}
 func (q *nativeQueueRuntime) WithContext(ctx context.Context) queueRuntime {
 	if q == nil {
 		return nil
@@ -330,8 +499,26 @@ func (q *nativeQueueRuntime) WithContext(ctx context.Context) queueRuntime {
 	return &clone
 }
 
-func (q *externalQueueRuntime) Driver() Driver         { return q.common.Driver() }
-func (q *externalQueueRuntime) Dispatch(job any) error { return q.common.Dispatch(job) }
+// Driver returns the external runtime's configured backend identifier.
+func (q *externalQueueRuntime) Driver() Driver { return q.common.Driver() }
+
+// physicalQueueNameOrDefault keeps canonical event labels aligned with external backend queue names.
+func (q *externalQueueRuntime) physicalQueueNameOrDefault(queueName string) string {
+	if q == nil || q.common == nil {
+		return PhysicalQueueName("default", queueName)
+	}
+	return q.common.physicalQueueNameOrDefault(queueName)
+}
+
+// Dispatch rejects new application work once external runtime draining begins.
+func (q *externalQueueRuntime) Dispatch(job any) error {
+	release, err := q.acquireOperation(q.common.context(), true)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return q.common.Dispatch(job)
+}
 func (q *externalQueueRuntime) WithContext(ctx context.Context) queueRuntime {
 	if q == nil {
 		return nil
@@ -360,8 +547,11 @@ func (q *nativeQueueRuntime) BusRegister(jobType string, handler busruntime.Hand
 		q.Register(jobType, nil)
 		return
 	}
+	scope := q.continuationScope()
 	q.Register(jobType, func(ctx context.Context, job Job) error {
-		return handler(ctx, job)
+		handlerCtx, release := withBusDeliveryContext(ctx, job, scope)
+		defer release()
+		return handler(handlerCtx, job)
 	})
 }
 
@@ -370,128 +560,303 @@ func (q *externalQueueRuntime) BusRegister(jobType string, handler busruntime.Ha
 		q.Register(jobType, nil)
 		return
 	}
+	scope := q.continuationScope()
 	q.Register(jobType, func(ctx context.Context, job Job) error {
-		return handler(ctx, job)
+		handlerCtx, release := withBusDeliveryContext(ctx, job, scope)
+		defer release()
+		return handler(handlerCtx, job)
 	})
 }
 
+// withBusDeliveryContext attaches physical attempt and correlation metadata to
+// one invocation while keeping both channels out of the application payload.
+func withBusDeliveryContext(ctx context.Context, job Job, scope *busruntime.ContinuationScope) (context.Context, func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opts := job.jobOptions()
+	ctx, release := scope.Permit(ctx)
+	metadata := DriverMetadata(job)
+	// Every physical invocation shadows parent metadata so nested legacy or
+	// low-level jobs cannot inherit correlation from the job that dispatched them.
+	ctx = busruntime.WithDeliveryMetadata(ctx, metadata)
+	return busruntime.WithDeliveryAttempt(ctx, busruntime.DeliveryAttempt{
+		Number:   opts.attempt,
+		MaxRetry: optionInt(opts.maxRetry),
+	}), release
+}
+
 func (q *nativeQueueRuntime) BusDispatch(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	release, err := q.acquireOperation(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return q.common.dispatchBusJob(ctx, jobType, payload, opts)
 }
 
 func (q *externalQueueRuntime) BusDispatch(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	release, err := q.acquireOperation(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return q.common.dispatchBusJob(ctx, jobType, payload, opts)
 }
 
+// BusDispatchDirect submits an ordinary application job without a workflow envelope.
+func (q *nativeQueueRuntime) BusDispatchDirect(ctx context.Context, jobType string, payload []byte, metadata busruntime.DeliveryMetadata, opts busruntime.JobOptions) error {
+	release, err := q.acquireOperation(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return q.common.dispatchDirectJob(ctx, jobType, payload, metadata, opts)
+}
+
+// BusDispatchDirect submits an ordinary application job without a workflow envelope.
+func (q *externalQueueRuntime) BusDispatchDirect(ctx context.Context, jobType string, payload []byte, metadata busruntime.DeliveryMetadata, opts busruntime.JobOptions) error {
+	release, err := q.acquireOperation(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return q.common.dispatchDirectJob(ctx, jobType, payload, metadata, opts)
+}
+
+// acquireOperation leases native backend resources through one complete operation.
+func (q *nativeQueueRuntime) acquireOperation(ctx context.Context, allowContinuation bool) (func(), error) {
+	q.mu.Lock()
+	scope := q.continuationScopeLocked()
+	if q.closed || (q.draining && (!allowContinuation || !scope.Owns(ctx))) {
+		q.mu.Unlock()
+		return nil, ErrQueuerShuttingDown
+	}
+	q.operations.acquire()
+	q.mu.Unlock()
+	return q.releaseOperation, nil
+}
+
+// releaseOperation ends one native lease and wakes a waiting shutdown when the backend becomes idle.
+func (q *nativeQueueRuntime) releaseOperation() {
+	q.mu.Lock()
+	if q.operations.release() {
+		q.operations.markIdle()
+	}
+	q.mu.Unlock()
+}
+
+// acquireOperation leases external producer resources through one complete operation.
+func (q *externalQueueRuntime) acquireOperation(ctx context.Context, allowContinuation bool) (func(), error) {
+	q.mu.Lock()
+	scope := q.continuationScopeLocked()
+	if q.closed || (q.draining && (!allowContinuation || !scope.Owns(ctx))) {
+		q.mu.Unlock()
+		return nil, ErrQueuerShuttingDown
+	}
+	q.operations.acquire()
+	q.mu.Unlock()
+	return q.releaseOperation, nil
+}
+
+// releaseOperation ends one external lease and wakes a waiting shutdown when the producer becomes idle.
+func (q *externalQueueRuntime) releaseOperation() {
+	q.mu.Lock()
+	if q.operations.release() {
+		q.operations.markIdle()
+	}
+	q.mu.Unlock()
+}
+
+// continuationScope returns the native runtime's stable permission owner.
+func (q *nativeQueueRuntime) continuationScope() *busruntime.ContinuationScope {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.continuationScopeLocked()
+}
+
+// continuationScopeLocked lazily initializes test-constructed native states while the lifecycle mutex is held.
+func (q *nativeQueueRuntime) continuationScopeLocked() *busruntime.ContinuationScope {
+	if q.continuation == nil {
+		q.continuation = busruntime.NewContinuationScope()
+	}
+	return q.continuation
+}
+
+// continuationScope returns the external runtime's stable permission owner.
+func (q *externalQueueRuntime) continuationScope() *busruntime.ContinuationScope {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.continuationScopeLocked()
+}
+
+// continuationScopeLocked lazily initializes test-constructed external states while the lifecycle mutex is held.
+func (q *externalQueueRuntime) continuationScopeLocked() *busruntime.ContinuationScope {
+	if q.continuation == nil {
+		q.continuation = busruntime.NewContinuationScope()
+	}
+	return q.continuation
+}
+
+// Register linearizes logical and physical state so an activating backend cannot consume a newly registered type without its handler.
 func (q *nativeQueueRuntime) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
+		return
+	}
 	q.mu.Lock()
+	defer q.mu.Unlock()
 	if q.registered == nil {
 		q.registered = make(map[string]Handler)
 	}
 	q.registered[jobType] = handler
-	started := q.started
-	q.mu.Unlock()
-
-	if started {
-		q.runtime.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
+	var slot *runtimeHandlerSlot
+	q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
+	if !q.draining && (q.start != nil || q.started) {
+		q.runtimeRegistrations = installRuntimeHandler(q.runtime, q.common, q.runtimeRegistrations, jobType, handler, slot)
 	}
 }
 
+// Register linearizes logical and physical state once the external worker generation has been published for activation.
 func (q *externalQueueRuntime) Register(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
+		return
+	}
 	q.mu.Lock()
+	defer q.mu.Unlock()
 	if q.registered == nil {
 		q.registered = make(map[string]Handler)
 	}
 	q.registered[jobType] = handler
-	w := q.worker
-	started := q.started
-	q.mu.Unlock()
-
-	if started && w != nil {
-		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
+	var slot *runtimeHandlerSlot
+	q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
+	if !q.draining && q.worker != nil && (q.start != nil || q.started) {
+		q.workerRegistrations = installRuntimeHandler(q.worker, q.common, q.workerRegistrationsLocked(), jobType, handler, slot)
 	}
 }
 
+// workerRegistrationsLocked returns the handler types already installed on the retained external worker.
+func (q *externalQueueRuntime) workerRegistrationsLocked() map[string]struct{} {
+	if q.workerRegistrations == nil {
+		q.workerRegistrations = make(map[string]struct{})
+	}
+	return q.workerRegistrations
+}
+
+// StartWorkers installs the current handler generation before activating the backend and serializes concurrent lifecycle calls.
 func (q *nativeQueueRuntime) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	q.mu.Lock()
+	if q.closed || q.draining {
+		q.mu.Unlock()
+		return ErrQueuerShuttingDown
+	}
 	if q.started {
 		q.mu.Unlock()
 		return nil
 	}
-	registered := make(map[string]Handler, len(q.registered))
+	if q.start != nil {
+		attempt := q.start
+		q.mu.Unlock()
+		return waitForRuntimeStart(ctx, attempt)
+	}
+	attempt := &runtimeStartAttempt{done: make(chan struct{})}
+	q.start = attempt
 	for jobType, handler := range q.registered {
-		registered[jobType] = handler
+		var slot *runtimeHandlerSlot
+		q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
+		q.runtimeRegistrations = installRuntimeHandler(q.runtime, q.common, q.runtimeRegistrations, jobType, handler, slot)
 	}
 	q.mu.Unlock()
 
-	for jobType, handler := range registered {
-		q.runtime.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
-	}
-	if err := q.runtime.StartWorkers(ctx); err != nil {
-		return err
-	}
+	err := q.runtime.StartWorkers(ctx)
 	q.mu.Lock()
-	q.started = true
+	if err == nil {
+		q.started = true
+	}
+	attempt.err = err
+	q.start = nil
+	close(attempt.done)
 	q.mu.Unlock()
-	return nil
+	return err
 }
 
+// StartWorkers publishes and catches up a worker before activation so registrations cannot complete against a stale startup snapshot.
 func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	q.mu.Lock()
+	if q.closed || q.draining {
+		q.mu.Unlock()
+		return ErrQueuerShuttingDown
+	}
 	if q.started {
 		q.mu.Unlock()
 		return nil
 	}
-	workers := q.workers
-	registered := make(map[string]Handler, len(q.registered))
-	for jobType, handler := range q.registered {
-		registered[jobType] = handler
+	if q.start != nil {
+		attempt := q.start
+		q.mu.Unlock()
+		return waitForRuntimeStart(ctx, attempt)
 	}
+	attempt := &runtimeStartAttempt{done: make(chan struct{})}
+	q.start = attempt
+	w := q.worker
+	workers := q.workers
 	q.mu.Unlock()
 
-	var (
-		w   runtimeWorkerBackend
-		err error
-	)
-	if q.newWorker != nil {
-		driverWorker, e := q.newWorker(defaultWorkerCount(workers))
-		if e != nil {
-			return e
-		}
-		w = driverWorkerBackendAdapter{driverWorker}
-	} else {
-		w, err = newExternalWorker(q.common.cfg, workers)
-		if err != nil {
-			return err
+	var err error
+	if w == nil {
+		if q.newWorker != nil {
+			driverWorker, e := q.newWorker(defaultWorkerCount(workers))
+			if e != nil {
+				err = e
+			} else {
+				w = driverWorkerBackendAdapter{driverWorker}
+			}
+		} else {
+			w, err = newExternalWorker(q.common.cfg, workers)
 		}
 	}
-	if setter, ok := w.(runtimeWorkerContextDecoratorSetter); ok {
-		setter.SetHandlerContextDecorator(q.common.handlerContextDecorator)
-	}
-	for jobType, handler := range registered {
-		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
-	}
-	if err := w.StartWorkers(ctx); err != nil {
-		return err
+	if err == nil {
+		q.mu.Lock()
+		q.worker = w
+		if setter, ok := w.(runtimeWorkerContextDecoratorSetter); ok {
+			setter.SetHandlerContextDecorator(q.common.handlerContextDecorator)
+		}
+		for jobType, handler := range q.registered {
+			var slot *runtimeHandlerSlot
+			q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
+			q.workerRegistrations = installRuntimeHandler(w, q.common, q.workerRegistrationsLocked(), jobType, handler, slot)
+		}
+		q.mu.Unlock()
+		err = w.StartWorkers(ctx)
 	}
 	q.mu.Lock()
-	q.worker = w
-	q.started = true
+	if w != nil {
+		// A partially started worker remains owned so Shutdown can finish cleanup instead of leaking factory resources.
+		q.worker = w
+	}
+	if err == nil {
+		q.started = true
+	}
+	attempt.err = err
+	q.start = nil
+	close(attempt.done)
 	q.mu.Unlock()
-	return nil
+	return err
 }
 
 func (q *nativeQueueRuntime) Workers(count int) queueRuntime {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if !q.started && count > 0 {
+	if !q.started && !q.draining && !q.closed && q.start == nil && count > 0 {
 		q.workers = count
+		if setter, ok := q.runtime.(interface{ setWorkers(int) }); ok {
+			setter.setWorkers(count)
+		}
 	}
 	return q
 }
@@ -499,46 +864,177 @@ func (q *nativeQueueRuntime) Workers(count int) queueRuntime {
 func (q *externalQueueRuntime) Workers(count int) queueRuntime {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if !q.started && count > 0 {
+	if !q.started && !q.draining && !q.closed && q.start == nil && count > 0 {
 		q.workers = count
 	}
 	return q
 }
 
+// Shutdown retains native runtime state until cleanup succeeds so timed-out drains remain retryable.
 func (q *nativeQueueRuntime) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	q.mu.Lock()
-	wasStarted := q.started
-	q.started = false
+	if q.start != nil {
+		q.draining = true
+		attempt := q.start
+		q.mu.Unlock()
+		if err := waitForRuntimeStartCompletion(ctx, attempt); err != nil {
+			return err
+		}
+		return q.Shutdown(ctx)
+	}
+	if q.shutdown != nil {
+		attempt := q.shutdown
+		q.mu.Unlock()
+		return waitForRuntimeShutdown(ctx, attempt)
+	}
+	if q.closed {
+		q.mu.Unlock()
+		return nil
+	}
+	q.draining = true
+	attempt := &runtimeShutdownAttempt{done: make(chan struct{})}
+	q.shutdown = attempt
+	idle := q.operations.idle
 	q.mu.Unlock()
 
-	if wasStarted {
-		return q.runtime.Shutdown(ctx)
+	err := waitForRuntimeOperations(ctx, idle)
+	if err == nil {
+		err = q.runtime.DrainWorkers(ctx)
 	}
-	return nil
+	if err == nil {
+		// Worker drain expires every handler-issued continuation permit. A second
+		// operation snapshot is therefore stable and must finish before resources close.
+		q.mu.Lock()
+		idle = q.operations.idle
+		q.mu.Unlock()
+		err = waitForRuntimeOperations(ctx, idle)
+	}
+	if err == nil {
+		err = q.common.inner.Shutdown(ctx)
+	}
+	q.mu.Lock()
+	attempt.err = err
+	q.shutdown = nil
+	if err == nil {
+		q.started = false
+		q.draining = false
+		q.closed = true
+	}
+	close(attempt.done)
+	q.mu.Unlock()
+	return err
 }
 
+// Shutdown drains the worker before producer resources and retains both until every cleanup succeeds.
 func (q *externalQueueRuntime) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	q.mu.Lock()
+	if q.start != nil {
+		q.draining = true
+		attempt := q.start
+		q.mu.Unlock()
+		if err := waitForRuntimeStartCompletion(ctx, attempt); err != nil {
+			return err
+		}
+		return q.Shutdown(ctx)
+	}
+	if q.shutdown != nil {
+		attempt := q.shutdown
+		q.mu.Unlock()
+		return waitForRuntimeShutdown(ctx, attempt)
+	}
+	if q.closed {
+		q.mu.Unlock()
+		return nil
+	}
 	w := q.worker
-	wasStarted := q.started
-	q.started = false
-	q.worker = nil
+	q.draining = true
+	attempt := &runtimeShutdownAttempt{done: make(chan struct{})}
+	q.shutdown = attempt
+	idle := q.operations.idle
 	q.mu.Unlock()
 
-	if wasStarted {
-		if w != nil {
-			if err := w.Shutdown(ctx); err != nil {
-				return err
-			}
+	err := waitForRuntimeOperations(ctx, idle)
+	if w != nil {
+		if err == nil {
+			err = w.Shutdown(ctx)
+		}
+		if err == nil {
+			q.mu.Lock()
+			q.worker = nil
+			q.workerRegistrations = nil
+			q.started = false
+			q.mu.Unlock()
 		}
 	}
-	return q.common.inner.Shutdown(ctx)
+	if err == nil {
+		// A handler may admit a descendant after the initial snapshot. Once worker drain returns, its scoped permit has expired, so this generation is stable.
+		q.mu.Lock()
+		idle = q.operations.idle
+		q.mu.Unlock()
+		err = waitForRuntimeOperations(ctx, idle)
+	}
+	if err == nil {
+		err = q.common.inner.Shutdown(ctx)
+	}
+	q.mu.Lock()
+	attempt.err = err
+	q.shutdown = nil
+	if err == nil {
+		q.draining = false
+		q.closed = true
+	}
+	close(attempt.done)
+	q.mu.Unlock()
+	return err
+}
+
+// waitForRuntimeOperations prevents resource cleanup from overtaking an operation that already passed the lifecycle gate.
+func waitForRuntimeOperations(ctx context.Context, idle <-chan struct{}) error {
+	if idle == nil {
+		return nil
+	}
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// waitForRuntimeShutdown lets concurrent callers share one cleanup attempt while honoring their own deadline.
+func waitForRuntimeShutdown(ctx context.Context, attempt *runtimeShutdownAttempt) error {
+	select {
+	case <-attempt.done:
+		return attempt.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// waitForRuntimeStart lets concurrent callers share one startup attempt while honoring their own deadline.
+func waitForRuntimeStart(ctx context.Context, attempt *runtimeStartAttempt) error {
+	select {
+	case <-attempt.done:
+		return attempt.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// waitForRuntimeStartCompletion lets shutdown wait for ownership of any worker that startup creates.
+func waitForRuntimeStartCompletion(ctx context.Context, attempt *runtimeStartAttempt) error {
+	select {
+	case <-attempt.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (q *queueCommon) Pause(ctx context.Context, queueName string) error {
@@ -625,43 +1121,105 @@ func (q *queueCommon) Ready(ctx context.Context) error {
 }
 
 func (q *nativeQueueRuntime) Pause(ctx context.Context, queueName string) error {
+	release, err := q.acquireOperation(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return q.common.Pause(ctx, queueName)
 }
 func (q *nativeQueueRuntime) Resume(ctx context.Context, queueName string) error {
+	release, err := q.acquireOperation(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return q.common.Resume(ctx, queueName)
 }
 func (q *nativeQueueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
+	release, err := q.acquireOperation(ctx, false)
+	if err != nil {
+		return StatsSnapshot{}, err
+	}
+	defer release()
 	return q.common.Stats(ctx)
 }
 func (q *nativeQueueRuntime) Ready(ctx context.Context) error {
+	release, err := q.acquireOperation(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return q.common.Ready(ctx)
 }
 func (q *externalQueueRuntime) Pause(ctx context.Context, queueName string) error {
+	release, err := q.acquireOperation(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return q.common.Pause(ctx, queueName)
 }
 func (q *externalQueueRuntime) Resume(ctx context.Context, queueName string) error {
+	release, err := q.acquireOperation(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return q.common.Resume(ctx, queueName)
 }
 func (q *externalQueueRuntime) Stats(ctx context.Context) (StatsSnapshot, error) {
+	release, err := q.acquireOperation(ctx, false)
+	if err != nil {
+		return StatsSnapshot{}, err
+	}
+	defer release()
 	return q.common.Stats(ctx)
 }
 func (q *externalQueueRuntime) Ready(ctx context.Context) error {
+	release, err := q.acquireOperation(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return q.common.Ready(ctx)
 }
 
+// wrapRegisteredHandler keeps each backend's context decoration and process
+// observation at a single execution boundary.
 func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Handler {
-	if handler == nil || q.cfg.Observer == nil {
+	if handler == nil {
 		return handler
 	}
 	// Redis worker emits process lifecycle events natively.
-	// Skip shared handler wrapping to avoid duplicate process_* events.
+	// Skip shared handler wrapping and decoration to avoid duplicate process_* events
+	// and context decoration.
 	if q.cfg.Driver == DriverRedis {
 		return handler
+	}
+	if !observerHasRecipients(q.cfg.Observer) {
+		return wrapHandlerContext(q.handlerContextDecorator, handler)
 	}
 	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, q.handlerContextDecorator, handler)
 }
 
+// wrapHandlerContext applies optional execution context decoration while
+// preserving the original context when the decorator returns nil.
+func wrapHandlerContext(decorator func(context.Context) context.Context, handler Handler) Handler {
+	if decorator == nil || handler == nil {
+		return handler
+	}
+	return func(ctx context.Context, job Job) error {
+		if decorated := decorator(ctx); decorated != nil {
+			ctx = busruntime.PreserveDeliveryContext(ctx, decorated)
+		}
+		return handler(ctx, job)
+	}
+}
+
+// dispatchBusJob preserves workflow policy and logical identity while adapting onto the canonical root job.
 func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
+	ctx, acceptance := newDispatchAcceptance(ctx)
 	job := NewJob(jobType).Payload(payload)
 	if opts.Queue != "" {
 		job = job.OnQueue(opts.Queue)
@@ -672,16 +1230,58 @@ func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payloa
 	if opts.Timeout > 0 {
 		job = job.Timeout(opts.Timeout)
 	}
-	if opts.Retry > 0 {
-		job = job.Retry(opts.Retry)
+	// Workflow policy always owns the retry budget; omitting zero lets several backends invent a different default.
+	job = job.Retry(opts.Retry)
+	if opts.Backoff > 0 {
+		job = job.Backoff(opts.Backoff)
 	}
+	if opts.UniqueFor > 0 {
+		logical := resolveLogicalJob(jobType, payload)
+		job = job.UniqueFor(opts.UniqueFor).withLogicalIdentity(logical.jobType, logical.payload)
+	}
+	err := q.inner.Dispatch(ctx, q.physicalJob(job))
+	if err == nil {
+		acceptance.markAccepted()
+		return nil
+	}
+	if acceptance.isAccepted() {
+		return acceptedExecutionError{cause: err}
+	}
+	return err
+}
+
+// dispatchDirectJob preserves direct application bytes while attaching
+// correlation through the driver metadata channel instead of a workflow envelope.
+func (q *queueCommon) dispatchDirectJob(ctx context.Context, jobType string, payload []byte, metadata busruntime.DeliveryMetadata, opts busruntime.JobOptions) error {
+	ctx, acceptance := newDispatchAcceptance(ctx)
+	job := NewJob(jobType).Payload(payload)
+	if opts.Queue != "" {
+		job = job.OnQueue(opts.Queue)
+	}
+	if opts.Delay > 0 {
+		job = job.Delay(opts.Delay)
+	}
+	if opts.Timeout > 0 {
+		job = job.Timeout(opts.Timeout)
+	}
+	// Direct workflow policy still owns an explicit zero retry budget.
+	job = job.Retry(opts.Retry)
 	if opts.Backoff > 0 {
 		job = job.Backoff(opts.Backoff)
 	}
 	if opts.UniqueFor > 0 {
 		job = job.UniqueFor(opts.UniqueFor)
 	}
-	return q.inner.Dispatch(ctx, q.physicalJob(job))
+	job = DriverWithMetadata(job, metadata)
+	err := q.inner.Dispatch(ctx, q.physicalJob(job))
+	if err == nil {
+		acceptance.markAccepted()
+		return nil
+	}
+	if acceptance.isAccepted() {
+		return acceptedExecutionError{cause: err}
+	}
+	return err
 }
 
 func newExternalWorker(cfg Config, concurrency int) (runtimeWorkerBackend, error) {
@@ -697,6 +1297,11 @@ type driverQueueBackendAdapter struct {
 
 type driverRuntimeQueueBackendAdapter struct {
 	driverRuntimeQueueBackend
+}
+
+// DrainWorkers forwards the native driver's worker-drain lifecycle phase.
+func (a driverRuntimeQueueBackendAdapter) DrainWorkers(ctx context.Context) error {
+	return a.driverRuntimeQueueBackend.DrainWorkers(ctx)
 }
 
 type driverWorkerBackendAdapter struct {
@@ -889,7 +1494,15 @@ func optionalDriverMovedError(driver Driver) error {
 	}
 }
 
+// jobFromAny applies this runtime's default queue while sharing the canonical
+// value-to-job conversion with the public fake.
 func (q *queueCommon) jobFromAny(job any) (Job, error) {
+	return normalizeDispatchJob(job, q.cfg.DefaultQueue)
+}
+
+// normalizeDispatchJob keeps typed-value inference and default queue selection
+// identical without changing when production backends validate acceptance.
+func normalizeDispatchJob(job any, defaultQueue string) (Job, error) {
 	if job, ok := job.(Job); ok {
 		if job.Type == "" {
 			return Job{}, fmt.Errorf("dispatch job type is required")
@@ -912,9 +1525,11 @@ func (q *queueCommon) jobFromAny(job any) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("marshal dispatch job: %w", err)
 	}
-	return NewJob(jobType).Payload(payload).OnQueue(q.cfg.DefaultQueue), nil
+	return NewJob(jobType).Payload(payload).OnQueue(defaultQueue), nil
 }
 
+// jobTypeFromValue limits implicit names to declared Go types so anonymous
+// payload shapes cannot accidentally become unstable queue contracts.
 func jobTypeFromValue(v any) string {
 	t := reflect.TypeOf(v)
 	if t == nil {

@@ -3,11 +3,13 @@ package rabbitmqqueue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queuecore"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -22,12 +24,14 @@ type rabbitMQWorker struct {
 	started   bool
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
+	stopDone  chan struct{}
 
 	conn *amqp.Connection
 	ch   *amqp.Channel
 
-	pubMu    sync.Mutex
-	observer queue.Observer
+	pubMu           sync.Mutex
+	observer        queue.Observer
+	publishOverride func(context.Context, rabbitMQMessage) error
 }
 
 type rabbitMQWorkerConfig struct {
@@ -84,6 +88,11 @@ func (w *rabbitMQWorker) StartWorkers(ctx context.Context) error {
 		_ = conn.Close()
 		return err
 	}
+	if err := ch.Confirm(false); err != nil {
+		_ = ch.Close()
+		_ = conn.Close()
+		return err
+	}
 	if _, err := ch.QueueDeclare(w.cfg.DefaultQueue, true, false, false, false, nil); err != nil {
 		_ = ch.Close()
 		_ = conn.Close()
@@ -109,29 +118,52 @@ func (w *rabbitMQWorker) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
-func (w *rabbitMQWorker) Shutdown(_ context.Context) error {
+// Shutdown stops intake and keeps settlement resources open until in-flight deliveries drain or the caller deadline expires.
+func (w *rabbitMQWorker) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	w.startStop.Lock()
 	if !w.started {
 		w.startStop.Unlock()
 		return nil
 	}
-	cancel := w.cancel
-	w.started = false
+	if w.stopDone == nil {
+		w.stopDone = make(chan struct{})
+		cancel := w.cancel
+		ch := w.ch
+		conn := w.conn
+		done := w.stopDone
+		if cancel != nil {
+			cancel()
+		}
+		go func() {
+			w.wg.Wait()
+			closeRabbitResources(ch, conn)
+			w.startStop.Lock()
+			if w.ch == ch {
+				w.ch = nil
+			}
+			if w.conn == conn {
+				w.conn = nil
+			}
+			w.started = false
+			w.stopDone = nil
+			w.startStop.Unlock()
+			close(done)
+		}()
+	}
+	done := w.stopDone
 	ch := w.ch
 	conn := w.conn
 	w.startStop.Unlock()
-
-	if cancel != nil {
-		cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		closeRabbitResources(ch, conn)
+		return ctx.Err()
 	}
-	if ch != nil {
-		_ = ch.Close()
-	}
-	if conn != nil {
-		_ = conn.Close()
-	}
-	w.wg.Wait()
-	return nil
 }
 
 func (w *rabbitMQWorker) loop(ctx context.Context, deliveries <-chan amqp.Delivery) {
@@ -149,22 +181,23 @@ func (w *rabbitMQWorker) loop(ctx context.Context, deliveries <-chan amqp.Delive
 	}
 }
 
+// processDelivery commits positive facts only after the original RabbitMQ delivery is acknowledged.
 func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Delivery) {
 	var incoming rabbitMQMessage
 	if err := json.Unmarshal(delivery.Body, &incoming); err != nil {
-		_ = delivery.Ack(false)
+		w.ack(ctx, delivery, incoming)
 		return
 	}
 
 	if incoming.AvailableAtMS > 0 {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
-			if err := w.publish(incoming); err != nil {
+			if err := w.publish(context.Background(), incoming); err != nil {
 				w.observeRepublishFailure(ctx, incoming, err)
-				_ = delivery.Nack(false, true)
+				w.nack(ctx, delivery, incoming, true)
 				return
 			}
-			_ = delivery.Ack(false)
+			w.ack(ctx, delivery, incoming)
 			return
 		}
 		incoming.AvailableAtMS = 0
@@ -174,11 +207,13 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 	handler, ok := w.handlers[incoming.Type]
 	w.mu.RUnlock()
 	if !ok {
-		_ = delivery.Ack(false)
+		w.ack(ctx, delivery, incoming)
 		return
 	}
 
-	runCtx := context.Background()
+	attempt := busruntime.DeliveryAttempt{Number: incoming.Attempt, MaxRetry: incoming.MaxRetry}
+	runCtx := busruntime.WithDeliveryAttempt(context.Background(), attempt)
+	runCtx, settlement := busruntime.WithDeliverySettlement(runCtx)
 	if incoming.TimeoutMillis > 0 {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(runCtx, time.Duration(incoming.TimeoutMillis)*time.Millisecond)
@@ -186,50 +221,120 @@ func (w *rabbitMQWorker) processDelivery(ctx context.Context, delivery amqp.Deli
 	}
 	err := handler(
 		runCtx,
-		queuecore.DriverWithAttempt(
-			queue.NewJob(incoming.Type).
-				Payload(incoming.Payload).
-				OnQueue(incoming.Queue).
-				Retry(incoming.MaxRetry),
-			incoming.Attempt,
-		),
+		rabbitMQDeliveryJob(incoming),
 	)
-	if err == nil {
-		_ = delivery.Ack(false)
+	switch busruntime.ClassifyAttempt(attempt, err) {
+	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
+		if w.ack(runCtx, delivery, incoming) {
+			settlement.Commit()
+		}
 		return
-	}
-	if incoming.Attempt >= incoming.MaxRetry {
-		_ = delivery.Ack(false)
+	case busruntime.AttemptRedeliver:
+		w.nack(runCtx, delivery, incoming, true)
 		return
+	case busruntime.AttemptRetry:
 	}
+	settledMessage := incoming
 	incoming.Attempt++
 	if incoming.BackoffMillis > 0 {
 		incoming.AvailableAtMS = time.Now().Add(time.Duration(incoming.BackoffMillis) * time.Millisecond).UnixMilli()
 	} else {
 		incoming.AvailableAtMS = 0
 	}
-	if err := w.publish(incoming); err != nil {
+	if err := w.publish(context.Background(), incoming); err != nil {
 		w.observeRepublishFailure(runCtx, incoming, err)
-		_ = delivery.Nack(false, true)
+		w.nack(runCtx, delivery, settledMessage, true)
 		return
 	}
-	_ = delivery.Ack(false)
+	if w.ack(runCtx, delivery, settledMessage) {
+		settlement.Commit()
+	}
+}
+
+// ack reports a failed positive settlement and returns whether the broker accepted the acknowledgement.
+func (w *rabbitMQWorker) ack(ctx context.Context, delivery amqp.Delivery, message rabbitMQMessage) bool {
+	if err := delivery.Ack(false); err != nil {
+		w.observeSettlementFailure(ctx, message, fmt.Errorf("ack rabbitmq delivery: %w", err))
+		return false
+	}
+	return true
+}
+
+// nack reports a failed negative settlement because redelivery intent did not reach the broker.
+func (w *rabbitMQWorker) nack(ctx context.Context, delivery amqp.Delivery, message rabbitMQMessage, requeue bool) {
+	if err := delivery.Nack(false, requeue); err != nil {
+		w.observeSettlementFailure(ctx, message, fmt.Errorf("nack rabbitmq delivery: %w", err))
+	}
 }
 
 func (w *rabbitMQWorker) observeRepublishFailure(ctx context.Context, message rabbitMQMessage, err error) {
+	metadata := queue.ResolveObservedJobMetadataFromJob(rabbitMQDeliveryJob(message))
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
-		Kind:     queue.EventRepublishFailed,
-		Driver:   queue.DriverRabbitMQ,
-		Queue:    queuecore.NormalizeQueueName(message.Queue),
-		JobType:  queue.ResolveObservedJobType(message.Type, message.Payload),
-		Attempt:  message.Attempt,
-		MaxRetry: message.MaxRetry,
-		Err:      err,
-		Time:     time.Now(),
+		Kind:       queue.EventRepublishFailed,
+		Driver:     queue.DriverRabbitMQ,
+		Queue:      queuecore.NormalizeQueueName(message.Queue),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		Attempt:    message.Attempt,
+		MaxRetry:   message.MaxRetry,
+		Err:        err,
+		Time:       time.Now(),
 	})
 }
 
-func (w *rabbitMQWorker) publish(message rabbitMQMessage) error {
+// observeSettlementFailure emits the canonical worker fact for an uncommitted RabbitMQ acknowledgement.
+func (w *rabbitMQWorker) observeSettlementFailure(ctx context.Context, message rabbitMQMessage, err error) {
+	metadata := queue.ResolveObservedJobMetadataFromJob(rabbitMQDeliveryJob(message))
+	queuecore.SafeObserve(ctx, w.observer, queue.Event{
+		Kind:       queue.EventSettlementFailed,
+		Driver:     queue.DriverRabbitMQ,
+		Queue:      queuecore.NormalizeQueueName(message.Queue),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		Attempt:    message.Attempt,
+		MaxRetry:   message.MaxRetry,
+		Err:        err,
+		Time:       time.Now(),
+	})
+}
+
+// rabbitMQDeliveryJob reconstructs one RabbitMQ delivery while retaining
+// supported direct-delivery metadata outside the application payload.
+func rabbitMQDeliveryJob(message rabbitMQMessage) queue.Job {
+	job := queuecore.DriverWithAttempt(
+		queue.NewJob(message.Type).
+			Payload(message.Payload).
+			OnQueue(message.Queue).
+			Retry(message.MaxRetry),
+		message.Attempt,
+	)
+	if len(message.Metadata) > 0 {
+		var metadata queue.DriverJobMetadata
+		if err := json.Unmarshal(message.Metadata, &metadata); err == nil {
+			job = queue.DriverWithMetadata(job, metadata)
+		}
+	}
+	return job
+}
+
+// publish declares the destination and waits for broker confirmation before reporting success.
+func (w *rabbitMQWorker) publish(ctx context.Context, message rabbitMQMessage) error {
+	settlementCtx, cancel, err := rabbitPublishContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	if w.publishOverride != nil {
+		return w.publishOverride(settlementCtx, message)
+	}
 	w.startStop.Lock()
 	ch := w.ch
 	w.startStop.Unlock()
@@ -255,7 +360,7 @@ func (w *rabbitMQWorker) publish(message rabbitMQMessage) error {
 		return err
 	}
 	if delay <= 0 {
-		return ch.PublishWithContext(context.Background(), "", queueName, false, false, amqp.Publishing{
+		return publishRabbitConfirmed(settlementCtx, ch, "", queueName, amqp.Publishing{
 			ContentType:  "application/json",
 			Body:         body,
 			DeliveryMode: amqp.Persistent,
@@ -274,7 +379,7 @@ func (w *rabbitMQWorker) publish(message rabbitMQMessage) error {
 	if _, err := ch.QueueDeclare(delayQueue, true, false, false, false, args); err != nil {
 		return err
 	}
-	return ch.PublishWithContext(context.Background(), "", delayQueue, false, false, amqp.Publishing{
+	return publishRabbitConfirmed(settlementCtx, ch, "", delayQueue, amqp.Publishing{
 		ContentType:  "application/json",
 		Body:         body,
 		Expiration:   strconv.FormatInt(delayMS, 10),
@@ -287,4 +392,14 @@ func defaultWorkerCount(n int) int {
 		return 1
 	}
 	return n
+}
+
+// closeRabbitResources closes settlement resources only after a graceful drain or an expired shutdown deadline.
+func closeRabbitResources(ch *amqp.Channel, conn *amqp.Connection) {
+	if ch != nil {
+		_ = ch.Close()
+	}
+	if conn != nil {
+		_ = conn.Close()
+	}
 }

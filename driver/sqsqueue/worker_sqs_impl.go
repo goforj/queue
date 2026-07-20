@@ -3,6 +3,8 @@ package sqsqueue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,8 +12,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/goforj/queue"
+	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/queuecore"
 )
+
+const sqsSettlementTimeout = 15 * time.Second
 
 type sqsWorkerClient interface {
 	GetQueueUrl(ctx context.Context, params *sqs.GetQueueUrlInput, optFns ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error)
@@ -44,6 +49,7 @@ type sqsWorker struct {
 	wg        sync.WaitGroup
 	startStop sync.Mutex
 	observer  queue.Observer
+	stopDone  chan struct{}
 }
 
 func newSQSWorker(cfg sqsWorkerConfig) *sqsWorker {
@@ -104,20 +110,40 @@ func (w *sqsWorker) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
-func (w *sqsWorker) Shutdown(_ context.Context) error {
+// Shutdown stops receive loops while allowing in-flight replacement and deletion calls to finish independently.
+func (w *sqsWorker) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	w.startStop.Lock()
 	if !w.started {
 		w.startStop.Unlock()
 		return nil
 	}
-	cancel := w.cancel
-	w.started = false
-	w.startStop.Unlock()
-	if cancel != nil {
-		cancel()
+	if w.stopDone == nil {
+		w.stopDone = make(chan struct{})
+		cancel := w.cancel
+		done := w.stopDone
+		if cancel != nil {
+			cancel()
+		}
+		go func() {
+			w.wg.Wait()
+			w.startStop.Lock()
+			w.started = false
+			w.stopDone = nil
+			w.startStop.Unlock()
+			close(done)
+		}()
 	}
-	w.wg.Wait()
-	return nil
+	done := w.stopDone
+	w.startStop.Unlock()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (w *sqsWorker) loop(ctx context.Context) {
@@ -146,24 +172,25 @@ func (w *sqsWorker) loop(ctx context.Context) {
 	}
 }
 
+// process commits positive facts only after the original SQS receipt is deleted.
 func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	if message.Body == nil {
-		w.delete(ctx, message)
+		w.deleteAndObserve(ctx, message, sqsMessage{})
 		return
 	}
 	var incoming sqsMessage
 	if err := json.Unmarshal([]byte(*message.Body), &incoming); err != nil {
-		w.delete(ctx, message)
+		w.deleteAndObserve(ctx, message, sqsMessage{})
 		return
 	}
 	if incoming.AvailableAtMS > 0 {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
-			if err := w.republish(ctx, incoming); err != nil {
+			if err := w.republish(incoming); err != nil {
 				w.observeRepublishFailure(ctx, incoming, err)
 				return
 			}
-			w.delete(ctx, message)
+			w.deleteAndObserve(ctx, message, incoming)
 			return
 		}
 	}
@@ -172,10 +199,12 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	handler, ok := w.handlers[incoming.Type]
 	w.mu.RUnlock()
 	if !ok {
-		w.delete(ctx, message)
+		w.deleteAndObserve(ctx, message, incoming)
 		return
 	}
-	runCtx := context.Background()
+	attempt := busruntime.DeliveryAttempt{Number: incoming.Attempt, MaxRetry: incoming.MaxRetry}
+	runCtx := busruntime.WithDeliveryAttempt(context.Background(), attempt)
+	runCtx, settlement := busruntime.WithDeliverySettlement(runCtx)
 	if incoming.TimeoutMillis > 0 {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(runCtx, time.Duration(incoming.TimeoutMillis)*time.Millisecond)
@@ -183,36 +212,37 @@ func (w *sqsWorker) process(ctx context.Context, message sqstypes.Message) {
 	}
 	err := handler(
 		runCtx,
-		queuecore.DriverWithAttempt(
-			queue.NewJob(incoming.Type).
-				Payload(incoming.Payload).
-				OnQueue(incoming.Queue).
-				Retry(incoming.MaxRetry),
-			incoming.Attempt,
-		),
+		sqsDeliveryJob(incoming),
 	)
-	if err == nil {
-		w.delete(ctx, message)
+	switch busruntime.ClassifyAttempt(attempt, err) {
+	case busruntime.AttemptSucceeded, busruntime.AttemptFailed:
+		if w.deleteAndObserve(runCtx, message, incoming) {
+			settlement.Commit()
+		}
 		return
-	}
-	if incoming.Attempt >= incoming.MaxRetry {
-		w.delete(ctx, message)
+	case busruntime.AttemptRedeliver:
+		// Leaving the receipt undeleted lets SQS redeliver the same application attempt after its visibility timeout.
 		return
+	case busruntime.AttemptRetry:
 	}
+	settledMessage := incoming
 	incoming.Attempt++
 	if incoming.BackoffMillis > 0 {
 		incoming.AvailableAtMS = time.Now().Add(time.Duration(incoming.BackoffMillis) * time.Millisecond).UnixMilli()
 	} else {
 		incoming.AvailableAtMS = 0
 	}
-	if err := w.republish(ctx, incoming); err != nil {
+	if err := w.republish(incoming); err != nil {
 		w.observeRepublishFailure(ctx, incoming, err)
 		return
 	}
-	w.delete(ctx, message)
+	if w.deleteAndObserve(runCtx, message, settledMessage) {
+		settlement.Commit()
+	}
 }
 
-func (w *sqsWorker) republish(ctx context.Context, message sqsMessage) error {
+// republish creates a confirmed replacement before the original receipt can be deleted.
+func (w *sqsWorker) republish(message sqsMessage) error {
 	body, err := json.Marshal(message)
 	if err != nil {
 		return err
@@ -231,31 +261,99 @@ func (w *sqsWorker) republish(ctx context.Context, message sqsMessage) error {
 			input.DelaySeconds = seconds
 		}
 	}
-	_, err = w.client.SendMessage(ctx, input)
-	return err
+	ctx, cancel := sqsSettlementContext()
+	defer cancel()
+	output, err := w.client.SendMessage(ctx, input)
+	if err != nil {
+		return err
+	}
+	return sqsSendAccepted(output)
 }
 
-func (w *sqsWorker) delete(ctx context.Context, message sqstypes.Message) {
-	if message.ReceiptHandle == nil {
-		return
+// delete settles one SQS receipt through a bounded context independent of receive-loop cancellation.
+func (w *sqsWorker) delete(message sqstypes.Message) error {
+	if message.ReceiptHandle == nil || strings.TrimSpace(*message.ReceiptHandle) == "" {
+		return fmt.Errorf("sqs receipt handle is required for settlement")
 	}
-	_, _ = w.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
+	ctx, cancel := sqsSettlementContext()
+	defer cancel()
+	_, err := w.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      &w.queueURL,
 		ReceiptHandle: message.ReceiptHandle,
 	})
+	return err
+}
+
+// deleteAndObserve reports deletion ambiguity and returns whether the delivery reached positive settlement.
+func (w *sqsWorker) deleteAndObserve(ctx context.Context, message sqstypes.Message, incoming sqsMessage) bool {
+	if err := w.delete(message); err != nil {
+		w.observeSettlementFailure(ctx, incoming, fmt.Errorf("delete sqs message: %w", err))
+		return false
+	}
+	return true
 }
 
 func (w *sqsWorker) observeRepublishFailure(ctx context.Context, message sqsMessage, err error) {
+	metadata := queue.ResolveObservedJobMetadataFromJob(sqsDeliveryJob(message))
 	queuecore.SafeObserve(ctx, w.observer, queue.Event{
-		Kind:     queue.EventRepublishFailed,
-		Driver:   queue.DriverSQS,
-		Queue:    queuecore.NormalizeQueueName(message.Queue),
-		JobType:  queue.ResolveObservedJobType(message.Type, message.Payload),
-		Attempt:  message.Attempt,
-		MaxRetry: message.MaxRetry,
-		Err:      err,
-		Time:     time.Now(),
+		Kind:       queue.EventRepublishFailed,
+		Driver:     queue.DriverSQS,
+		Queue:      queuecore.NormalizeQueueName(message.Queue),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		Attempt:    message.Attempt,
+		MaxRetry:   message.MaxRetry,
+		Err:        err,
+		Time:       time.Now(),
 	})
+}
+
+// observeSettlementFailure emits the canonical worker fact for an uncommitted SQS deletion.
+func (w *sqsWorker) observeSettlementFailure(ctx context.Context, message sqsMessage, err error) {
+	metadata := queue.ResolveObservedJobMetadataFromJob(sqsDeliveryJob(message))
+	queuecore.SafeObserve(ctx, w.observer, queue.Event{
+		Kind:       queue.EventSettlementFailed,
+		Driver:     queue.DriverSQS,
+		Queue:      queuecore.NormalizeQueueName(message.Queue),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		Attempt:    message.Attempt,
+		MaxRetry:   message.MaxRetry,
+		Err:        err,
+		Time:       time.Now(),
+	})
+}
+
+// sqsDeliveryJob reconstructs one SQS delivery while retaining supported
+// direct-delivery metadata separately from the application payload.
+func sqsDeliveryJob(message sqsMessage) queue.Job {
+	job := queuecore.DriverWithAttempt(
+		queue.NewJob(message.Type).
+			Payload(message.Payload).
+			OnQueue(message.Queue).
+			Retry(message.MaxRetry),
+		message.Attempt,
+	)
+	if len(message.Metadata) > 0 {
+		var metadata queue.DriverJobMetadata
+		if err := json.Unmarshal(message.Metadata, &metadata); err == nil {
+			job = queue.DriverWithMetadata(job, metadata)
+		}
+	}
+	return job
+}
+
+// sqsSettlementContext lets in-flight work finish settlement after the receive loop is canceled without waiting forever.
+func sqsSettlementContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), sqsSettlementTimeout)
 }
 
 func defaultWorkerCount(n int) int {

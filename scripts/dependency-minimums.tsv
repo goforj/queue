@@ -1,0 +1,2 @@
+# Direct dependency floors that protect repository security or compatibility constraints.
+github.com/jackc/pgx/v5 v5.9.2

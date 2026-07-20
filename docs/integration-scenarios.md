@@ -41,6 +41,9 @@ Named scenarios currently enforced:
 Optional long-run scenario (enabled with `RUN_SOAK=1`):
 - `scenario_soak_mixed_load`
 
+Scheduled Redis fault scenario (enabled with `RUN_CHAOS=1`):
+- `TestIntegrationChaos_RedisBrokerDisconnectRedelivery`
+
 ## Latest trust snapshot
 
 Last full run (local, Docker/testcontainers):
@@ -79,6 +82,7 @@ What this proves today:
 - Multi-worker contention is validated for deterministic backends to ensure single successful processing per job.
 - Duplicate-delivery idempotency patterns are validated under forced retry with single side-effect commit.
 - Broker fault injection and consume-after-recovery flow is validated on supported backends.
+- Redis broker disconnect during an active handler is validated through failed acknowledgement, same-task lease recovery, and redelivery without consuming the application's zero-retry budget. The handler's idempotency key keeps its side-effect commit count at one.
 - FIFO ordering is validated only in the constrained `scenario_ordering_single_worker_fifo` sub-scenario for backends marked ordering-capable.
 - `scenario_ordering_multi_worker_best_effort` explicitly treats concurrent-worker ordering as a non-guarantee and only asserts completion/correctness.
 - Delayed/immediate and retry-based reordering behavior is explicitly exercised to avoid over-claiming FIFO semantics.
@@ -131,7 +135,7 @@ Observability contract
 ## Execution model
 
 - `smoke`: always-on integration scenarios (current baseline).
-- `chaos`: scheduled fault-injection and recovery scenarios (`scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, `scenario_worker_restart_recovery`, `scenario_worker_restart_delay_recovery`, and race-heavy scenarios).
+- `chaos`: scheduled fault-injection and recovery scenarios (`TestIntegrationChaos_RedisBrokerDisconnectRedelivery`, `scenario_dispatch_during_broker_fault`, `scenario_consume_after_broker_recovery`, `scenario_worker_restart_recovery`, `scenario_worker_restart_delay_recovery`, and race-heavy scenarios).
 - `soak`: extended runtime scenarios; isolated from normal CI when needed.
 
 ## Timing guardrails

@@ -3,7 +3,6 @@ package bus_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -81,7 +80,8 @@ func TestSkipWhenMiddlewareSkipsHandler(t *testing.T) {
 	}
 }
 
-func TestFailOnErrorWrapsFatal(t *testing.T) {
+// TestFailOnErrorMarksPermanent verifies middleware uses the shared terminal-error contract and stops physical retries.
+func TestFailOnErrorMarksPermanent(t *testing.T) {
 	q, err := newBusTestRuntime(queue.Config{Driver: queue.DriverSync})
 	if err != nil {
 		t.Fatalf("new sync queue: %v", err)
@@ -93,15 +93,24 @@ func TestFailOnErrorWrapsFatal(t *testing.T) {
 	if err := b.StartWorkers(context.Background()); err != nil {
 		t.Fatalf("start workers: %v", err)
 	}
+	cause := errors.New("boom")
+	calls := 0
 	b.Register("monitor:poll", func(context.Context, bus.Context) error {
-		return errors.New("boom")
+		calls++
+		return cause
 	})
-	_, err = b.Dispatch(context.Background(), bus.NewJob("monitor:poll", nil))
+	_, err = b.Dispatch(context.Background(), bus.NewJob("monitor:poll", nil).Retry(4))
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "fatal bus error") {
-		t.Fatalf("expected fatal wrapping, got %v", err)
+	if !queue.IsPermanent(err) || !errors.Is(err, cause) {
+		t.Fatalf("expected permanent error preserving cause, got %v", err)
+	}
+	if err.Error() != "fatal bus error: boom" {
+		t.Fatalf("error text = %q, want compatibility prefix", err.Error())
+	}
+	if calls != 1 {
+		t.Fatalf("handler calls = %d, want 1", calls)
 	}
 }
 
