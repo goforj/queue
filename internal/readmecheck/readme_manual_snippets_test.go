@@ -190,10 +190,7 @@ func compileObservabilitySnippet() {
 		}),
 	)
 
-	q, _ := queue.New(queue.Config{
-		Driver:   queue.DriverWorkerpool,
-		Observer: observer,
-	})
+	q, _ := queue.New(queue.Config{Driver: queue.DriverWorkerpool}, queue.WithObserver(observer))
 	_ = q
 }
 
@@ -212,10 +209,7 @@ func compileComposeObserversSnippet() {
 		}),
 	)
 
-	q, _ := queue.New(queue.Config{
-		Driver:   queue.DriverWorkerpool,
-		Observer: observer,
-	})
+	q, _ := queue.New(queue.Config{Driver: queue.DriverWorkerpool}, queue.WithObserver(observer))
 	_ = q
 }
 

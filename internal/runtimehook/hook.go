@@ -7,7 +7,7 @@ type WorkerFactory func(workers int) (any, error)
 
 // BuildQueueFromDriver builds a high-level *queue.Queue from a private driver
 // backend representation provided by internal/driverbridge.
-type BuildQueueFromDriverFunc func(cfg any, backend any, workerFactory WorkerFactory, opts []any) (any, error)
+type BuildQueueFromDriverFunc func(cfg any, observer any, backend any, workerFactory WorkerFactory, opts []any) (any, error)
 
 // ExtractRuntimeFromQueue exposes the internal runtime from *queue.Queue for
 // test-only bridges (not public API use).

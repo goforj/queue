@@ -42,7 +42,9 @@ func TestServerConfig_Defaults(t *testing.T) {
 func TestServerConfig_LoggerAndLogLevelPassthrough(t *testing.T) {
 	logger := serverLoggerStub{}
 	cfg := serverConfig(Config{
-		ServerLogger:   logger,
+		DriverBaseConfig: queueconfig.DriverBaseConfig{
+			Logger: logger,
+		},
 		ServerLogLevel: ServerLogLevelError,
 		Queues: map[string]int{
 			"critical": 5,

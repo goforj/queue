@@ -34,7 +34,7 @@ type fakeQueueState struct {
 	workflow    *fakeWorkflowRecorder
 }
 
-// NewFake creates the canonical fake used directly and by deprecated testing adapters.
+// NewFake creates the canonical fake for direct and workflow tests.
 // @group Testing
 //
 // Example: fake queue assertions

@@ -58,10 +58,9 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	rootCfg := queue.Config{
 		Driver:       queue.DriverRabbitMQ,
 		DefaultQueue: cfg.DefaultQueue,
-		Observer:     observer,
 	}
 	defaultQueue := queue.PhysicalQueueName(cfg.DefaultQueue, cfg.DefaultQueue)
-	return driverbridge.NewQueueFromDriver(rootCfg, newRabbitMQQueue(cfg.URL, defaultQueue), func(workers int) (any, error) {
+	return driverbridge.NewQueueFromDriver(rootCfg, observer, newRabbitMQQueue(cfg.URL, defaultQueue), func(workers int) (any, error) {
 		return newRabbitMQWorker(rabbitMQWorkerConfig{
 			DefaultQueue: defaultQueue,
 			RabbitMQURL:  cfg.URL,

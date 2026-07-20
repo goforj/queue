@@ -24,7 +24,7 @@ Drivers carry the record using their native transport boundary:
 
 Missing metadata is valid for legacy and low-level deliveries. Version 1 is trusted. Malformed or unknown versions never block application delivery and never supply correlation IDs; workers fall back to the physical application identity or decode a supported version-one workflow envelope.
 
-Chains, batches, and ephemeral callbacks continue to use the version-one workflow envelope because their durable state transitions require orchestration fields. The raw `bus.New(busruntime.Runtime)` compatibility route also retains its exact version-one `bus:job` bytes. New workers keep all four legacy handlers registered, so old backlog remains readable.
+Chains, batches, and ephemeral callbacks continue to use the version-one workflow envelope because their durable state transitions require orchestration fields. New workers keep all four legacy handlers registered, so old backlog remains readable.
 
 Application job types equal to `bus:job`, `bus:chain:node`, `bus:batch:job`, or `bus:callback` continue through the legacy direct envelope. This prevents an application registration from replacing a reserved workflow handler.
 

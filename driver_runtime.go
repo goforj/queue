@@ -28,12 +28,12 @@ type driverWorkerBackend interface {
 
 type driverWorkerFactory func(workers int) (driverWorkerBackend, error)
 
-func newQueueFromDriver(cfg Config, backend driverQueueBackend, workerFactory driverWorkerFactory) (queueRuntime, error) {
+func newQueueFromDriver(cfg Config, observer Observer, backend driverQueueBackend, workerFactory driverWorkerFactory) (queueRuntime, error) {
 	if backend == nil {
 		return nil, fmt.Errorf("driver backend is nil")
 	}
 	cfg = cfg.normalize()
-	cfg.Observer = ensureObserverSink(cfg.Observer)
+	observer = ensureObserverSink(observer)
 
 	var q queueBackend
 	var runtime runtimeQueueBackend
@@ -45,9 +45,10 @@ func newQueueFromDriver(cfg Config, backend driverQueueBackend, workerFactory dr
 	}
 
 	common := &queueCommon{
-		inner:  newObservedQueue(q, cfg.Driver, cfg.Observer),
-		cfg:    cfg,
-		driver: cfg.Driver,
+		inner:        newObservedQueue(q, cfg.Driver, observer),
+		cfg:          cfg,
+		driver:       cfg.Driver,
+		observerSink: observer,
 	}
 	if runtime != nil {
 		return &nativeQueueRuntime{

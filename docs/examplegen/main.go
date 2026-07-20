@@ -53,12 +53,6 @@ func run() error {
 		importPath string
 	}
 	targets := []target{{dir: root, importPath: modPath}}
-	if st, err := os.Stat(filepath.Join(root, "queuefake")); err == nil && st.IsDir() {
-		targets = append(targets, target{
-			dir:        filepath.Join(root, "queuefake"),
-			importPath: modPath + "/queuefake",
-		})
-	}
 
 	for _, target := range targets {
 		fset := token.NewFileSet()
@@ -576,12 +570,6 @@ func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) er
 		}
 		if strings.Contains(ex.Code, "queue.") && importPath != moduleImportPath {
 			imports[moduleImportPath] = true
-		}
-		if strings.Contains(ex.Code, "queuefake.") && importPath != moduleImportPath+"/queuefake" {
-			imports[moduleImportPath+"/queuefake"] = true
-		}
-		if strings.Contains(ex.Code, "bus.") {
-			imports[moduleImportPath+"/bus"] = true
 		}
 		if strings.Contains(ex.Code, "redisqueue.") {
 			imports[moduleImportPath+"/driver/redisqueue"] = true

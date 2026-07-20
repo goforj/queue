@@ -745,6 +745,7 @@ func TestRedisQueue_ShutdownRetryClosesRootRuntime(t *testing.T) {
 	producer := newRedisQueue(client, inspector, state, true)
 	q, err := driverbridge.NewQueueFromDriver(
 		queue.Config{Driver: queue.DriverRedis, DefaultQueue: "default"},
+		nil,
 		producer,
 		nil,
 	)

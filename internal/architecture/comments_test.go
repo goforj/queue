@@ -12,10 +12,10 @@ import (
 	"testing"
 )
 
-// TestWorkflowProductionDeclarationsAreDocumented keeps the extracted engine and compatibility facade aligned with repository comment rules.
+// TestWorkflowProductionDeclarationsAreDocumented keeps the extracted engine aligned with repository comment rules.
 func TestWorkflowProductionDeclarationsAreDocumented(t *testing.T) {
 	repository := repositoryRoot(t)
-	for _, directory := range []string{filepath.Join(repository, "internal", "workflow"), filepath.Join(repository, "bus")} {
+	for _, directory := range []string{filepath.Join(repository, "internal", "workflow")} {
 		for _, missing := range undocumentedProductionDeclarations(t, directory) {
 			t.Errorf("missing name-first declaration comment: %s", missing)
 		}

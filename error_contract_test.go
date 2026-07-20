@@ -18,7 +18,7 @@ func TestQueueErrorContract_DispatchCancellation(t *testing.T) {
 		cfg := (Config{Driver: DriverWorkerpool}).normalize()
 		rt := &nativeQueueRuntime{
 			common: &queueCommon{
-				inner:  newObservedQueue(backend, cfg.Driver, cfg.Observer),
+				inner:  newObservedQueue(backend, cfg.Driver, nil),
 				cfg:    cfg,
 				driver: cfg.Driver,
 			},

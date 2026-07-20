@@ -146,7 +146,7 @@ func TestNew_WithObserver(t *testing.T) {
 	var observed atomic.Int32
 	rt, err := New(
 		Config{Driver: DriverSync},
-		WithObserver(WorkflowObserverFunc(func(context.Context, WorkflowEvent) {
+		WithObserver(ObserverFunc(func(context.Context, Event) {
 			observed.Add(1)
 		})),
 	)
@@ -391,7 +391,7 @@ func TestNew_WithStoreClockMiddlewareAndPrune(t *testing.T) {
 		Config{Driver: DriverSync},
 		WithStore(NewMemoryStore()),
 		WithClock(func() time.Time { return fixedNow }),
-		WithObserver(WorkflowObserverFunc(func(context.Context, WorkflowEvent) { observed.Add(1) })),
+		WithObserver(ObserverFunc(func(context.Context, Event) { observed.Add(1) })),
 		WithMiddleware(MiddlewareFunc(func(ctx context.Context, m Message, next Next) error {
 			mwCalls.Add(1)
 			return next(ctx, m)

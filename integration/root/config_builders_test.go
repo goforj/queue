@@ -14,8 +14,8 @@ import (
 	"github.com/goforj/queue/driver/redisqueue"
 	"github.com/goforj/queue/driver/sqlitequeue"
 	"github.com/goforj/queue/driver/sqsqueue"
-	"github.com/goforj/queue/queueconfig"
 	"github.com/goforj/queue/integration/testenv"
+	"github.com/goforj/queue/queueconfig"
 )
 
 func nullCfg() queue.Config       { return queue.Config{Driver: queue.DriverNull} }
@@ -75,8 +75,6 @@ func withDefaultQueue[T any](cfg T, name string) T {
 
 func withObserver[T any](cfg T, observer queue.Observer) T {
 	switch c := any(&cfg).(type) {
-	case *queue.Config:
-		c.Observer = observer
 	case *redisqueue.Config:
 		c.Observer = observer
 	case *natsqueue.Config:

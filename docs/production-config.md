@@ -223,8 +223,6 @@ At minimum, wire:
 
 - one observer with `queue.WithObserver(...)` for queue, worker, and workflow events
 
-`queue.Config.Observer` remains a compatibility path and feeds the same event stream, but new applications should prefer the constructor option consistently across drivers.
-
 Track and alert on:
 
 - `process_failed`

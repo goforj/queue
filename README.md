@@ -14,8 +14,8 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/unit_tests-978-brightgreen" alt="Unit tests (executed count)">
-    <img src="https://img.shields.io/badge/integration_tests-631-blue" alt="Integration tests (executed count)">
+    <img src="https://img.shields.io/badge/unit_tests-881-brightgreen" alt="Unit tests (executed count)">
+    <img src="https://img.shields.io/badge/integration_tests-610-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
 
@@ -2091,7 +2091,7 @@ q, err := redisqueue.NewWithConfig(
 		Addr: "127.0.0.1:6379", // required
 		Password: "",           // optional; default empty
 		DB: 0,                  // optional; default 0
-		ServerLogger: nil,      // optional; default backend logger
+		Logger: nil,            // optional; default backend logger
 		ServerLogLevel: redisqueue.ServerLogLevelDefault, // optional
 	},
 	queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
@@ -2362,7 +2362,7 @@ FindChain returns workflow state created by the fake's production engine.
 
 #### <a id="queue-newfake"></a>NewFake
 
-NewFake creates the canonical fake used directly and by deprecated testing adapters.
+NewFake creates the canonical fake for direct and workflow tests.
 
 ```go
 fake := queue.NewFake()

@@ -192,7 +192,7 @@ What is not yet sufficient for a GA claim:
 - README/API cleanup:
   - `Testing` group hidden from API index
   - README presents the queue-first constructor path only (no public runtime constructor path)
-  - README testing guidance no longer requires `bus.NewFake()`
+  - README testing guidance uses the canonical `queue.NewFake()` API
 
 ## 7. Coverage and Test Debt (should complete)
 

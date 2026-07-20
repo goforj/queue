@@ -98,8 +98,6 @@ func withDefaultQueueAll[T any](cfg T, name string) T {
 
 func withObserverAll[T any](cfg T, observer Observer) T {
 	switch c := any(&cfg).(type) {
-	case *Config:
-		c.Observer = observer
 	case *redisqueue.Config:
 		c.Observer = observer
 	case *natsqueue.Config:
@@ -130,7 +128,7 @@ func TestIntegrationQueue_HandlerContextDecorator_AllBackends(t *testing.T) {
 		{
 			name: testenv.BackendSync,
 			newQ: func(t *testing.T, observer Observer) (*Queue, string) {
-				q, err := newQueue(withObserverAll(syncCfg(), observer), WithHandlerContextDecorator(func(ctx context.Context) context.Context {
+				q, err := newQueue(syncCfg(), WithObserver(observer), WithHandlerContextDecorator(func(ctx context.Context) context.Context {
 					return context.WithValue(ctx, key, want)
 				}))
 				if err != nil {
@@ -142,7 +140,7 @@ func TestIntegrationQueue_HandlerContextDecorator_AllBackends(t *testing.T) {
 		{
 			name: testenv.BackendWorkerpool,
 			newQ: func(t *testing.T, observer Observer) (*Queue, string) {
-				q, err := newQueue(withObserverAll(workerpoolCfg(), observer), WithHandlerContextDecorator(func(ctx context.Context) context.Context {
+				q, err := newQueue(workerpoolCfg(), WithObserver(observer), WithHandlerContextDecorator(func(ctx context.Context) context.Context {
 					return context.WithValue(ctx, key, want)
 				}))
 				if err != nil {
