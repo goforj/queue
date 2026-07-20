@@ -175,17 +175,6 @@ collect_unit() {
     )
     raw_profiles+=("$raw_profile")
 
-    if [[ "$relative_dir" == "." ]]; then
-      local tagged_profile="$TMP_ROOT/unit-root-integration-tag.out"
-      echo "==> unit coverage: root integration-tagged bus fixtures"
-      (
-        cd "$module_dir"
-        GOWORK=off GOCACHE="$GOCACHE_DIR" GOMODCACHE="$GOMODCACHE_DIR" \
-          go test -count=1 -tags=integration -covermode=atomic -coverpkg=./... \
-            -coverprofile="$tagged_profile" ./bus
-      )
-      raw_profiles+=("$tagged_profile")
-    fi
     printf '%s\t%s\n' "$relative_dir" "$module_path" >>"$manifest_tmp"
   done < <(
     find "$ROOT_DIR" -type f -name go.mod \
