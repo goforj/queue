@@ -90,6 +90,65 @@ jobs:
           overwrite: true
           retention-days: 1
 
+  minimum-go:
+    name: Minimum Go (${{ matrix.minimum_go_version }})
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: /tmp/gocache
+      GOMODCACHE: /tmp/gomodcache
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+    strategy:
+      fail-fast: false
+      matrix:
+        minimum_go_version: ["1.24.4", "1.25.0"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.minimum_go_version }}
+          cache-dependency-path: |
+            go.sum
+            docs/go.sum
+            driver/*/go.sum
+            examples/go.sum
+            integration/go.sum
+
+      - name: Compile modules at their declared minimum
+        env:
+          MODULE_GO_VERSION: ${{ matrix.minimum_go_version }}
+        run: |
+          set -euo pipefail
+          matched=0
+          while read -r module go_version extra; do
+            [[ "$module" != \#* && -n "$module" ]] || continue
+            [[ -z "$extra" ]] || { echo "invalid module Go policy row for $module"; exit 1; }
+            [[ "$go_version" == "$MODULE_GO_VERSION" ]] || continue
+            matched=$((matched + 1))
+            case "$module" in
+              docs)
+                (cd "$module" && go mod verify)
+                (cd "$module" && go test ./readme/main.go)
+                (cd "$module" && go test ./examplegen/main.go)
+                (cd "$module" && go test -tags=testcounts ./readme/testcounts -run '^$' -count=1)
+                (cd "$module" && go test -tags=benchrender ./bench -run '^$' -count=1)
+                ;;
+              examples)
+                (cd "$module" && go test ./... -run '^TestExamplesBuild$' -count=1)
+                ;;
+              integration)
+                (cd "$module" && INTEGRATION_BACKEND=sync go test -tags=integration ./... -run '^$' -count=1)
+                ;;
+              *)
+                (cd "$module" && go test ./... -run '^$' -count=1)
+                ;;
+            esac
+          done < scripts/module-go-versions.tsv
+          [[ "$matched" -gt 0 ]] || { echo "no modules declare Go $MODULE_GO_VERSION"; exit 1; }
+
   race_modules:
     name: Race (${{ matrix.race_module }})
     runs-on: ubuntu-latest

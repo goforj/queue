@@ -63,15 +63,18 @@ EOF_ROOT_MOD
   cat >"$FIXTURE_DIR/driver/mockqueue/go.mod" <<'EOF_DRIVER_MOD'
 module example.com/queue-release-fixture/driver/mockqueue
 
-go 1.24.4
+go 1.25.0
 
-require example.com/queue-release-fixture v0.0.0
+require (
+	example.com/dependency v1.2.3
+	example.com/queue-release-fixture v0.0.0
+)
 
 replace example.com/queue-release-fixture => ../..
 EOF_DRIVER_MOD
 
   cat >"$FIXTURE_DIR/go.work" <<'EOF_WORK'
-go 1.24.4
+go 1.25.0
 
 use (
 	.
@@ -79,8 +82,21 @@ use (
 )
 EOF_WORK
 
+  cat >"$FIXTURE_DIR/scripts/module-go-versions.tsv" <<'EOF_GO_VERSIONS'
+. 1.24.4
+driver/mockqueue 1.25.0
+EOF_GO_VERSIONS
+
+  cat >"$FIXTURE_DIR/scripts/dependency-minimums.tsv" <<'EOF_DEPENDENCIES'
+example.com/dependency v1.2.3
+EOF_DEPENDENCIES
+
   cat >"$FIXTURE_DIR/.github/workflows/test.yml" <<'EOF_WORKFLOW'
 jobs:
+  minimum_go:
+    strategy:
+      matrix:
+        minimum_go_version: ["1.24.4", "1.25.0"]
   race_modules:
     strategy:
       matrix:
@@ -95,6 +111,174 @@ EOF_WORKFLOW
 }
 
 create_fixture
+
+if ! (
+  cd "$FIXTURE_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/mixed-go-policy.log" 2>&1; then
+  cat "$TMP_DIR/mixed-go-policy.log" >&2
+  fail "the inventory guard rejected an explicit mixed module Go policy"
+fi
+
+LOW_WORKSPACE_DIR="$TMP_DIR/low-workspace"
+clone_fixture "$LOW_WORKSPACE_DIR"
+(
+  cd "$LOW_WORKSPACE_DIR"
+  go work edit -go=1.24.4
+)
+if (
+  cd "$LOW_WORKSPACE_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/low-workspace.log" 2>&1; then
+  fail "the inventory guard accepted a workspace below its highest module Go version"
+fi
+if ! grep -Fq "highest module policy requires Go 1.25.0" "$TMP_DIR/low-workspace.log"; then
+  cat "$TMP_DIR/low-workspace.log" >&2
+  fail "the low-workspace rejection omitted the expected diagnostic"
+fi
+
+LOW_MODULE_DIR="$TMP_DIR/low-module"
+clone_fixture "$LOW_MODULE_DIR"
+GOWORK=off go mod edit -go=1.24.4 "$LOW_MODULE_DIR/driver/mockqueue/go.mod"
+if (
+  cd "$LOW_MODULE_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/low-module.log" 2>&1; then
+  fail "the inventory guard accepted a module below its exact Go policy"
+fi
+if ! grep -Fq "driver/mockqueue uses Go 1.24.4; policy requires Go 1.25.0" "$TMP_DIR/low-module.log"; then
+  cat "$TMP_DIR/low-module.log" >&2
+  fail "the low-module rejection omitted the expected diagnostic"
+fi
+
+LOW_DEPENDENCY_DIR="$TMP_DIR/low-dependency"
+clone_fixture "$LOW_DEPENDENCY_DIR"
+GOWORK=off go mod edit -require=example.com/dependency@v1.2.2 "$LOW_DEPENDENCY_DIR/driver/mockqueue/go.mod"
+if (
+  cd "$LOW_DEPENDENCY_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/low-dependency.log" 2>&1; then
+  fail "the inventory guard accepted a dependency below its policy floor"
+fi
+if ! grep -Fq "driver/mockqueue requires example.com/dependency at v1.2.2; policy requires at least v1.2.3" "$TMP_DIR/low-dependency.log"; then
+  cat "$TMP_DIR/low-dependency.log" >&2
+  fail "the dependency-floor rejection omitted the expected diagnostic"
+fi
+
+PRERELEASE_DEPENDENCY_DIR="$TMP_DIR/prerelease-dependency"
+clone_fixture "$PRERELEASE_DEPENDENCY_DIR"
+GOWORK=off go mod edit -require=example.com/dependency@v1.3.0-rc.1 "$PRERELEASE_DEPENDENCY_DIR/driver/mockqueue/go.mod"
+if ! (
+  cd "$PRERELEASE_DEPENDENCY_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/prerelease-dependency.log" 2>&1; then
+  cat "$TMP_DIR/prerelease-dependency.log" >&2
+  fail "the dependency floor rejected a valid newer semantic prerelease"
+fi
+
+INVALID_DEPENDENCY_POLICY_DIR="$TMP_DIR/invalid-dependency-policy"
+clone_fixture "$INVALID_DEPENDENCY_POLICY_DIR"
+cat >"$INVALID_DEPENDENCY_POLICY_DIR/scripts/dependency-minimums.tsv" <<'EOF_INVALID_DEPENDENCY_POLICY'
+example.com/dependency v1.2
+EOF_INVALID_DEPENDENCY_POLICY
+if (
+  cd "$INVALID_DEPENDENCY_POLICY_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/invalid-dependency-policy.log" 2>&1; then
+  fail "the inventory guard accepted a malformed dependency policy floor"
+fi
+if ! grep -Fq "example.com/dependency has invalid policy minimum v1.2" "$TMP_DIR/invalid-dependency-policy.log"; then
+  cat "$TMP_DIR/invalid-dependency-policy.log" >&2
+  fail "the malformed dependency policy rejection omitted the expected diagnostic"
+fi
+
+LARGE_SEMVER_DIR="$TMP_DIR/large-semver"
+clone_fixture "$LARGE_SEMVER_DIR"
+cat >"$LARGE_SEMVER_DIR/scripts/dependency-minimums.tsv" <<'EOF_LARGE_SEMVER_POLICY'
+example.com/dependency v1.9007199254740993.0
+EOF_LARGE_SEMVER_POLICY
+GOWORK=off go mod edit \
+  -require=example.com/dependency@v1.9007199254740992.0 \
+  "$LARGE_SEMVER_DIR/driver/mockqueue/go.mod"
+if (
+  cd "$LARGE_SEMVER_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/large-semver.log" 2>&1; then
+  fail "the dependency floor lost precision for large semantic version components"
+fi
+if ! grep -Fq "policy requires at least v1.9007199254740993.0" "$TMP_DIR/large-semver.log"; then
+  cat "$TMP_DIR/large-semver.log" >&2
+  fail "the large semantic version rejection omitted the expected diagnostic"
+fi
+
+LEXICAL_SEMVER_DIR="$TMP_DIR/lexical-semver"
+clone_fixture "$LEXICAL_SEMVER_DIR"
+cat >"$LEXICAL_SEMVER_DIR/scripts/dependency-minimums.tsv" <<'EOF_LEXICAL_SEMVER_POLICY'
+example.com/dependency v1.2.3-1e3
+EOF_LEXICAL_SEMVER_POLICY
+GOWORK=off go mod edit \
+  -require=example.com/dependency@v1.2.3-1000e0 \
+  "$LEXICAL_SEMVER_DIR/driver/mockqueue/go.mod"
+if (
+  cd "$LEXICAL_SEMVER_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/lexical-semver.log" 2>&1; then
+  fail "the dependency floor compared nonnumeric prerelease identifiers numerically"
+fi
+if ! grep -Fq "policy requires at least v1.2.3-1e3" "$TMP_DIR/lexical-semver.log"; then
+  cat "$TMP_DIR/lexical-semver.log" >&2
+  fail "the lexical semantic version rejection omitted the expected diagnostic"
+fi
+
+REPLACED_DEPENDENCY_DIR="$TMP_DIR/replaced-dependency"
+clone_fixture "$REPLACED_DEPENDENCY_DIR"
+GOWORK=off go mod edit \
+  -replace=example.com/dependency=example.com/dependency@v1.2.2 \
+  "$REPLACED_DEPENDENCY_DIR/driver/mockqueue/go.mod"
+if (
+  cd "$REPLACED_DEPENDENCY_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/replaced-dependency.log" 2>&1; then
+  fail "the inventory guard accepted a replacement below a protected dependency floor"
+fi
+if ! grep -Fq "driver/mockqueue must not replace policy dependency example.com/dependency" "$TMP_DIR/replaced-dependency.log"; then
+  cat "$TMP_DIR/replaced-dependency.log" >&2
+  fail "the protected dependency replacement rejection omitted the expected diagnostic"
+fi
+
+WORKSPACE_REPLACED_DEPENDENCY_DIR="$TMP_DIR/workspace-replaced-dependency"
+clone_fixture "$WORKSPACE_REPLACED_DEPENDENCY_DIR"
+(
+  cd "$WORKSPACE_REPLACED_DEPENDENCY_DIR"
+  go work edit -replace=example.com/dependency=example.com/dependency@v1.2.2
+)
+if (
+  cd "$WORKSPACE_REPLACED_DEPENDENCY_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/workspace-replaced-dependency.log" 2>&1; then
+  fail "the inventory guard accepted a workspace replacement below a protected dependency floor"
+fi
+if ! grep -Fq "go.work must not replace policy dependency example.com/dependency" "$TMP_DIR/workspace-replaced-dependency.log"; then
+  cat "$TMP_DIR/workspace-replaced-dependency.log" >&2
+  fail "the protected workspace replacement rejection omitted the expected diagnostic"
+fi
+
+INCOMPLETE_MINIMUM_GO_DIR="$TMP_DIR/incomplete-minimum-go"
+clone_fixture "$INCOMPLETE_MINIMUM_GO_DIR"
+awk '
+  { gsub(/minimum_go_version: \["1.24.4", "1.25.0"\]/, "minimum_go_version: [\"1.24.4\"]"); print }
+' "$INCOMPLETE_MINIMUM_GO_DIR/.github/workflows/test.yml" >"$INCOMPLETE_MINIMUM_GO_DIR/.github/workflows/test.yml.tmp"
+mv "$INCOMPLETE_MINIMUM_GO_DIR/.github/workflows/test.yml.tmp" "$INCOMPLETE_MINIMUM_GO_DIR/.github/workflows/test.yml"
+if (
+  cd "$INCOMPLETE_MINIMUM_GO_DIR"
+  ./scripts/check-module-inventory.sh
+) >"$TMP_DIR/incomplete-minimum-go.log" 2>&1; then
+  fail "the inventory guard accepted an incomplete minimum Go CI matrix"
+fi
+if ! grep -Fq "CI minimum Go matrix must match the module Go version policy" "$TMP_DIR/incomplete-minimum-go.log"; then
+  cat "$TMP_DIR/incomplete-minimum-go.log" >&2
+  fail "the incomplete minimum Go matrix rejection omitted the expected diagnostic"
+fi
 
 invalid_versions=(
   v01.2.3
@@ -175,14 +359,26 @@ cat >"$V2_DIR/go.mod" <<'EOF_V2_MOD'
 module example.com/queue-release-fixture/v2
 
 go 1.24.4
+
+require example.com/dependency v1.2.3
 EOF_V2_MOD
 cat >"$V2_DIR/go.work" <<'EOF_V2_WORK'
 go 1.24.4
 
 use .
 EOF_V2_WORK
+cat >"$V2_DIR/scripts/module-go-versions.tsv" <<'EOF_V2_GO_VERSIONS'
+. 1.24.4
+EOF_V2_GO_VERSIONS
+cat >"$V2_DIR/scripts/dependency-minimums.tsv" <<'EOF_V2_DEPENDENCIES'
+example.com/dependency v1.2.3
+EOF_V2_DEPENDENCIES
 cat >"$V2_DIR/.github/workflows/test.yml" <<'EOF_V2_WORKFLOW'
 jobs:
+  minimum_go:
+    strategy:
+      matrix:
+        minimum_go_version: ["1.24.4"]
   race_modules:
     strategy:
       matrix:
@@ -671,4 +867,4 @@ if [[ -s "$inventory_stderr" ]]; then
   fail "the ordinary inventory guard emitted non-portable parser diagnostics"
 fi
 
-echo "release script contract: strict versions, path majors, captured-HEAD planning, fail-closed status, final-state checks, dependency closure, dirty-tree safety, remote queries, safe reuse, atomic push, excludes, dry-run, and synchronized tags OK"
+echo "release script contract: strict versions, module compatibility policies, path majors, captured-HEAD planning, fail-closed status, final-state checks, dependency closure, dirty-tree safety, remote queries, safe reuse, atomic push, excludes, dry-run, and synchronized tags OK"

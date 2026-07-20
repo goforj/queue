@@ -27,6 +27,8 @@ go get github.com/goforj/queue
 
 Existing deployments upgrading to application-type direct delivery must replace workers before switching producers. Follow the [direct delivery migration guide](docs/direct-delivery-migration.md), including its SQL schema step and backend-specific rollback constraints.
 
+The root queue module and non-PostgreSQL driver modules require Go 1.24.4 or newer. The PostgreSQL driver requires Go 1.25 or newer so it can use pgx 5.9.2, the first release containing the [GO-2026-5004 security fix](https://pkg.go.dev/vuln/GO-2026-5004).
+
 ## Quick Start
 
 ```go

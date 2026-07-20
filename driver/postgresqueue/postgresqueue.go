@@ -1,3 +1,7 @@
+// Package postgresqueue provides the PostgreSQL-backed queue driver.
+//
+// This module requires Go 1.25 or newer because its pgx dependency uses that
+// baseline beginning with the first release that fixes GO-2026-5004.
 package postgresqueue
 
 import (

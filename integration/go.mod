@@ -1,6 +1,6 @@
 module github.com/goforj/queue/integration
 
-go 1.24.4
+go 1.25.0
 
 replace github.com/goforj/queue => ..
 
@@ -32,7 +32,7 @@ require (
 	github.com/goforj/queue/driver/sqlitequeue v0.0.0
 	github.com/goforj/queue/driver/sqsqueue v0.0.0
 	github.com/hibiken/asynq v0.26.0
-	github.com/jackc/pgx/v5 v5.8.0
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/testcontainers/testcontainers-go v0.39.0
 	modernc.org/sqlite v1.46.0
