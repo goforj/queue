@@ -62,11 +62,11 @@ const (
 	EventQueuePaused EventKind = "queue_paused"
 	// EventQueueResumed indicates queue consumption was resumed.
 	EventQueueResumed EventKind = "queue_resumed"
-	// EventProcessRecovered indicates a stale in-flight job was requeued for recovery.
+	// EventProcessRecovered indicates SQL bulk recovery requeued one stale in-flight claim without loading its identity fields.
 	EventProcessRecovered EventKind = "process_recovered"
 	// EventRepublishFailed indicates an internal delay/retry republish attempt failed.
 	EventRepublishFailed EventKind = "republish_failed"
-	// EventSettlementFailed indicates a broker acknowledgement or deletion failed after handler or replacement work completed.
+	// EventSettlementFailed indicates delivery finalization or broker settlement failed or remained ambiguous.
 	EventSettlementFailed EventKind = "settlement_failed"
 	// EventJobStarted indicates logical job execution began.
 	EventJobStarted EventKind = "job_started"
@@ -547,7 +547,7 @@ func (s StatsSnapshot) Failed(name string) int64 {
 	return counters.Failed
 }
 
-// Paused returns paused count for a queue.
+// Paused returns the observed pause state for a queue as zero or one.
 // @group Observability
 //
 // Example: paused count getter
@@ -768,11 +768,9 @@ func (c *StatsCollector) Observe(ctx context.Context, event Event) {
 	case EventProcessArchived:
 		state.counters.Archived++
 	case EventQueuePaused:
-		state.counters.Paused++
+		state.counters.Paused = 1
 	case EventQueueResumed:
-		if state.counters.Paused > 0 {
-			state.counters.Paused--
-		}
+		state.counters.Paused = 0
 	case EventProcessSucceeded:
 		state.closeActive(ctx, event)
 		state.counters.Processed++
@@ -889,9 +887,10 @@ func countSince(in []time.Time, cutoff time.Time) int64 {
 }
 
 type observedQueue struct {
-	inner    queueBackend
-	driver   Driver
-	observer Observer
+	inner     queueBackend
+	driver    Driver
+	observer  Observer
+	controlMu sync.Mutex
 }
 
 func newObservedQueue(inner queueBackend, driver Driver, observer Observer) queueBackend {
@@ -940,6 +939,9 @@ func (q *observedQueue) Ready(ctx context.Context) error {
 }
 
 func (q *observedQueue) Pause(ctx context.Context, queueName string) error {
+	q.controlMu.Lock()
+	defer q.controlMu.Unlock()
+
 	controller, ok := q.inner.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported
@@ -958,6 +960,9 @@ func (q *observedQueue) Pause(ctx context.Context, queueName string) error {
 }
 
 func (q *observedQueue) Resume(ctx context.Context, queueName string) error {
+	q.controlMu.Lock()
+	defer q.controlMu.Unlock()
+
 	controller, ok := q.inner.(QueueController)
 	if !ok {
 		return ErrPauseUnsupported

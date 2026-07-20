@@ -12,9 +12,9 @@ This document defines the root application facade's unified observability contra
 
 Queue dispatch lifecycle:
 
-- `EventDispatchStarted`: public dispatch began.
+- `EventDispatchStarted`: a public dispatch began after job validation. Jobs rejected during validation emit no dispatch lifecycle facts.
 - `EventDispatchSucceeded`: public dispatch crossed the backend acceptance boundary. A synchronous handler can still return an application error after this fact.
-- `EventDispatchFailed`: public dispatch failed before acceptance.
+- `EventDispatchFailed`: a validated public dispatch failed before acceptance.
 - `EventEnqueueAccepted`: job accepted for dispatch.
 - `EventEnqueueRejected`: dispatch failed with error.
 - `EventEnqueueDuplicate`: dispatch rejected as duplicate (`UniqueFor`).
@@ -26,21 +26,35 @@ Processing lifecycle:
 - `EventProcessSucceeded`: handler attempt succeeded. SQL, SQS, and RabbitMQ emit this only after durable row finalization, deletion, or acknowledgement respectively; backends without a post-handler settlement hook retain their documented weaker boundary.
 - `EventProcessFailed`: handler attempt returned an error or panicked. A panic is reported before the original panic value is rethrown so backend recovery and retry semantics remain unchanged.
 - `EventProcessRetried`: processing began for a numbered application retry attempt. Infrastructure redelivery of that same attempt may repeat the fact.
-- `EventProcessArchived`: the driver confirmed terminal settlement for a failed attempt.
+- `EventProcessArchived`: a driver confirmed terminal settlement of a failed attempt. Built-in support is listed below; unsupported drivers omit it rather than predicting a later backend transition.
+- `EventProcessRecovered`: SQL bulk recovery requeued one stale in-flight claim. The driver emits one countable fact per affected row, but the bulk update does not load identity or correlation fields.
 - `EventRepublishFailed`: an internal delay or retry replacement could not be published.
-- `EventSettlementFailed`: durable SQL finalization, broker acknowledgement, or broker deletion failed after handler or replacement work completed, so redelivery remains possible.
+- `EventSettlementFailed`: delivery finalization, acknowledgement, deletion, or negative settlement failed or was ambiguous, so redelivery remains possible. This includes malformed and unregistered deliveries that fail settlement before handler execution.
 
 Queue control lifecycle:
 
-- `EventQueuePaused`: queue consumption paused.
-- `EventQueueResumed`: queue consumption resumed.
+- `EventQueuePaused`: a supporting driver confirmed that queue consumption was paused.
+- `EventQueueResumed`: a supporting driver confirmed that queue consumption was resumed.
 
 Workflow lifecycle:
 
-- `EventJobStarted`, `EventJobSucceeded`, `EventJobFailed`
-- `EventChainStarted`, `EventChainAdvanced`, `EventChainCompleted`, `EventChainFailed`
-- `EventBatchStarted`, `EventBatchProgressed`, `EventBatchCompleted`, `EventBatchFailed`, `EventBatchCancelled`
-- `EventCallbackStarted`, `EventCallbackSucceeded`, `EventCallbackFailed`
+- `EventJobStarted`: a logical execution attempt began after envelope validation and before handler lookup. A missing handler therefore still has a started fact.
+- `EventJobSucceeded`: logical job success committed. Settlement-aware drivers defer the fact until physical settlement succeeds.
+- `EventJobFailed`: a logical job reached permanent or exhausted failure.
+- `EventChainStarted`: a chain record was created and its initial dispatch began.
+- `EventChainAdvanced`: a committed node outcome advanced the chain to its next node.
+- `EventChainCompleted`: the final chain node committed terminal success.
+- `EventChainFailed`: a chain committed terminal failure.
+- `EventBatchStarted`: a batch record was created and its initial member dispatch began.
+- `EventBatchProgressed`: a batch member committed a terminal outcome.
+- `EventBatchCompleted`: the batch reached terminal success, including completion with allowed member failures.
+- `EventBatchFailed`: an initial member dispatch rejection or a non-allowed member failure committed terminal batch failure.
+- `EventBatchCancelled`: remaining batch work was cancelled after terminal failure.
+- `EventCallbackStarted`: a claimed terminal Catch, Then, or Finally callback began execution after state validation.
+- `EventCallbackSucceeded`: a terminal callback completed successfully across the applicable settlement boundary.
+- `EventCallbackFailed`: a terminal callback was invalid or unavailable, returned an error, or panicked.
+
+Retryable callback store failures remain uncommitted and emit no terminal callback fact. Inline `Batch.Progress` closures do not emit `callback_*` facts.
 
 Positive job, chain, batch, and callback facts use the same SQL/SQS/RabbitMQ settlement boundary as `EventProcessSucceeded`. The SQL queue gives every processing claim an opaque generation ID. Same-attempt infrastructure redelivery normally retains inherited unsettled-generation provenance. When the current generation commits a receipt-backed workflow transition before later infrastructure work requests redelivery, the workflow engine marks application state committed and SQL retains that current generation instead. The signal selects the truthful receipt owner; it does not commit deferred facts or prove observer delivery. An application retry increments the attempt and clears the link, while recovery flags, aggregate state, and application error text do not supply equivalent authority.
 
@@ -76,18 +90,20 @@ Processing events additionally include:
 - `MaxRetry`
 - `Duration` (for `Succeeded` and `Failed`)
 
-Failure/cancel/reject events additionally include:
+Failure, rejection, and enqueue-cancellation events additionally include:
 
 - `Err`
+
+`EventBatchCancelled` omits `Err`; the adjacent `EventBatchFailed` fact carries the terminal cause. `EventProcessRecovered` is intentionally identity-free because SQL proves recovery with one fenced bulk update rather than a pre-update row read that could race ownership.
 
 Every layer includes the applicable `DispatchID`, `JobID`, `ChainID`, and `BatchID` correlation fields when the delivery carries supported metadata. Queue and worker facts read the versioned direct-driver sidecar or decode a retained workflow envelope, so they can be joined to workflow facts without inspecting payloads in application observers.
 
 ## Semantics and guarantees
 
-- Events are per-attempt, not aggregated.
+- Physical processing and logical job-execution events are per-attempt. Dispatch and queue-control facts are operation-scoped, while chain and batch facts describe aggregate transitions.
 - Dispatch, enqueue, and queue-control events use `EventLayerQueue`; physical attempt events use `EventLayerWorker`; logical job, chain, batch, and callback transitions use `EventLayerWorkflow`.
 - `EventProcessRetried` is emitted when processing begins with `Attempt > 0`. It is intentionally not emitted merely because a handler returned an error, and consumers must tolerate a repeated fact when infrastructure redelivers the same numbered attempt.
-- `EventProcessArchived` is reserved for a driver-confirmed terminal settlement; drivers that cannot yet confirm that boundary omit it rather than emitting a prediction.
+- `EventProcessArchived` is reserved for a driver-confirmed terminal settlement. Drivers that cannot confirm that boundary omit it rather than emitting a prediction.
 - `JobKey` is a deterministic hash of the logical job type and payload. Volatile dispatch/workflow IDs are excluded, and the value is not guaranteed globally unique.
 - Correlated recoverable job successes and emitted positive chain or batch transition facts use a deterministic `EventID` for the same logical fact across settlement recovery. Failure EventIDs remain occurrence-based. Deterministic identity supports deduplication; it does not prove that an observer received the fact or make every event exactly-once.
 - `Queue` is the effective physical backend name carried by the dispatch. With a namespaced default such as `billing_default`, an explicit logical queue such as `critical` is reported as `billing_critical`. Jobs that omit a queue continue to report `default`; changing how `Config.DefaultQueue` routes empty targets is a separate targeting decision. Correlated queue, worker, workflow, aggregate, and callback facts always report the same name.
@@ -105,6 +121,17 @@ Driver-specific capabilities:
 - Native snapshot stats: currently supported by Sync, Workerpool, Database, Redis.
 - Pause/resume control: currently supported by Sync, Workerpool, Redis.
 - Other drivers still emit collector-based events when `Observer` is configured.
+
+Built-in `EventProcessArchived` support:
+
+| Runtime | Emits | Confirmed boundary |
+| --- | --- | --- |
+| SQL (SQLite, MySQL, PostgreSQL) | Yes | The fenced transition to `dead` committed. |
+| SQS | No | `DeleteMessage` success cannot prove the receipt was still current or prevent rare standard-queue redelivery. |
+| RabbitMQ | No | Consumer acknowledgement is one-way; channel loss can requeue a delivery before the broker processes it. |
+| Redis | No | Asynq performs archival after the handler returns, outside the observer's confirmed boundary. |
+| NATS | No | Core NATS has no durable terminal archive settlement to confirm. |
+| Sync, Workerpool, Null | No | These runtimes expose no durable archive boundary. |
 
 ## Observer behavior contract
 

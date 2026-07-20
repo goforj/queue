@@ -2,7 +2,7 @@
 
 > **Status:** This is the original bus design record, retained to explain the
 > version-one wire and API constraints. It is not the current architecture or
-> implementation roadmap; use `plan.md` for both.
+> implementation roadmap; use [`docs/plan.md`](./plan.md) for both.
 
 ## Current Ownership
 

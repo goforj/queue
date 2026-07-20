@@ -729,8 +729,12 @@ func (d *databaseQueue) workerLoop() {
 func (d *databaseQueue) processJob(job *dbJob) {
 	handler, ok := d.lookup(job.jobType)
 	if !ok {
-		if err := d.markFailedWithRetry(job, fmt.Errorf("no handler registered for job type %q", job.jobType)); err != nil {
+		runErr := fmt.Errorf("no handler registered for job type %q", job.jobType)
+		if err := d.markFailedWithRetry(job, runErr); err != nil {
 			d.handleSettlementFailure(context.Background(), job, err)
+		} else {
+			// Missing handlers never cross the process wrapper, so the driver owns any terminal archive fact.
+			d.observeConfirmedProcessArchive(context.Background(), job, runErr)
 		}
 		return
 	}
@@ -757,6 +761,9 @@ func (d *databaseQueue) processJob(job *dbJob) {
 		return
 	}
 	settlement.Commit()
+	if err != nil {
+		d.observeConfirmedProcessArchive(ctx, job, err)
+	}
 }
 
 // handleSettlementFailure preserves inherited recovery lineage before reporting
@@ -1231,6 +1238,33 @@ func (d *databaseQueue) observeSettlementFailure(ctx context.Context, job *dbJob
 		Attempt:    job.attempt,
 		MaxRetry:   job.maxRetry,
 		Err:        err,
+		Time:       time.Now(),
+	})
+}
+
+// observeConfirmedProcessArchive publishes terminal failure only after the
+// caller has durably fenced the owned row into its dead state.
+func (d *databaseQueue) observeConfirmedProcessArchive(ctx context.Context, job *dbJob, runErr error) {
+	if job == nil || busruntime.ClassifyAttempt(busruntime.DeliveryAttempt{
+		Number:   job.attempt,
+		MaxRetry: job.maxRetry,
+	}, runErr) != busruntime.AttemptFailed {
+		return
+	}
+	metadata := queue.ResolveObservedJobMetadataFromJob(databaseDeliveryJob(job))
+	queuecore.SafeObserve(ctx, d.observer, queue.Event{
+		Kind:       queue.EventProcessArchived,
+		Driver:     queue.DriverDatabase,
+		Queue:      queuecore.NormalizeQueueName(job.queueName),
+		JobType:    metadata.JobType,
+		JobKey:     metadata.JobKey,
+		DispatchID: metadata.DispatchID,
+		JobID:      metadata.JobID,
+		ChainID:    metadata.ChainID,
+		BatchID:    metadata.BatchID,
+		Attempt:    job.attempt,
+		MaxRetry:   job.maxRetry,
+		Err:        runErr,
 		Time:       time.Now(),
 	})
 }
