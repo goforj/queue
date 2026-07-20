@@ -143,6 +143,26 @@ func TestSQLStoreCallbackMarkerIdempotent(t *testing.T) {
 	}
 }
 
+// TestSQLStoreSchemaInitializationRetriesAfterTransientFailure proves one
+// canceled first use cannot poison an otherwise healthy store instance.
+func TestSQLStoreSchemaInitializationRetriesAfterTransientFailure(t *testing.T) {
+	s := newSQLiteStore(t)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := s.MarkCallbackInvoked(canceled, "first-attempt"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled schema initialization error = %v, want context canceled", err)
+	}
+
+	inserted, err := s.MarkCallbackInvoked(context.Background(), "retry-attempt")
+	if err != nil {
+		t.Fatalf("retry schema initialization: %v", err)
+	}
+	if !inserted {
+		t.Fatal("retry schema initialization did not persist callback marker")
+	}
+}
+
 func TestSQLStorePruneRemovesOldTerminalState(t *testing.T) {
 	s := newSQLiteStore(t)
 	ctx := context.Background()

@@ -74,8 +74,8 @@ type sqlStore struct {
 	autoMigrate   bool
 	mysqlKeyLimit mysqlWorkflowKeyLimits
 
-	ensureOnce sync.Once
-	ensureErr  error
+	ensureMu    sync.Mutex
+	schemaReady bool
 }
 
 // transitionReceiptQueryer lets receipt reads share one implementation across
@@ -117,28 +117,41 @@ type mysqlTransitionReceiptWidths struct {
 	memberID   int64
 }
 
-// ensureSchema runs schema creation once so concurrent first use cannot race the DDL sequence.
+// ensureSchema serializes schema creation and caches only a successful result
+// so transient first-use failures remain retryable without racing the DDL sequence.
 func (s *sqlStore) ensureSchema(ctx context.Context) error {
-	s.ensureOnce.Do(func() {
-		if !s.autoMigrate {
-			if s.driverName == "mysql" {
-				s.mysqlKeyLimit, s.ensureErr = s.loadMySQLWorkflowKeyLimits(ctx)
-			}
-			return
-		}
+	s.ensureMu.Lock()
+	defer s.ensureMu.Unlock()
+	if s.schemaReady {
+		return nil
+	}
+
+	var limits mysqlWorkflowKeyLimits
+	if !s.autoMigrate {
 		if s.driverName == "mysql" {
-			s.mysqlKeyLimit, s.ensureErr = s.ensureMySQLSchema(ctx)
-			return
+			loaded, err := s.loadMySQLWorkflowKeyLimits(ctx)
+			if err != nil {
+				return err
+			}
+			limits = loaded
 		}
-		stmts := s.schemaStatements()
-		for _, stmt := range stmts {
+	} else if s.driverName == "mysql" {
+		loaded, err := s.ensureMySQLSchema(ctx)
+		if err != nil {
+			return err
+		}
+		limits = loaded
+	} else {
+		for _, stmt := range s.schemaStatements() {
 			if _, err := s.db.ExecContext(ctx, s.rebind(stmt)); err != nil {
-				s.ensureErr = err
-				return
+				return err
 			}
 		}
-	})
-	return s.ensureErr
+	}
+
+	s.mysqlKeyLimit = limits
+	s.schemaReady = true
+	return nil
 }
 
 // ensureMySQLSchema creates legacy state tables before deriving a missing
