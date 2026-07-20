@@ -550,7 +550,7 @@ func (s StatsSnapshot) Failed(name string) int64 {
 // Paused returns the observed pause state for a queue as zero or one.
 // @group Observability
 //
-// Example: paused count getter
+// Example: pause state getter
 //
 //	collector := queue.NewStatsCollector()
 //	collector.Observe(context.Background(), queue.Event{
