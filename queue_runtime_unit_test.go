@@ -13,6 +13,7 @@ import (
 type runtimeBackendStub struct {
 	registered      map[string]Handler
 	startCalls      int
+	drainCalls      int
 	stopCalls       int
 	startErr        error
 	stopErr         error
@@ -41,6 +42,13 @@ type blockingShutdownRuntimeBackendStub struct {
 	shutdownEntered chan struct{}
 	releaseShutdown chan struct{}
 	shutdownOnce    sync.Once
+}
+
+type phasedShutdownRuntimeBackendStub struct {
+	runtimeBackendStub
+	drainEntered chan struct{}
+	releaseDrain chan struct{}
+	drainOnce    sync.Once
 }
 
 type strictRegistrationRuntimeBackendStub struct {
@@ -72,6 +80,13 @@ func (s *blockingShutdownRuntimeBackendStub) Shutdown(context.Context) error {
 	s.shutdownOnce.Do(func() { close(s.shutdownEntered) })
 	<-s.releaseShutdown
 	return s.stopErr
+}
+
+// DrainWorkers exposes the pre-resource-close boundary of a native shutdown.
+func (s *phasedShutdownRuntimeBackendStub) DrainWorkers(context.Context) error {
+	s.drainOnce.Do(func() { close(s.drainEntered) })
+	<-s.releaseDrain
+	return nil
 }
 
 // Ready exposes a deterministic producer-resource boundary for shutdown lease tests.
@@ -125,6 +140,12 @@ func (s *runtimeBackendStub) Register(jobType string, handler Handler) {
 func (s *runtimeBackendStub) StartWorkers(context.Context) error {
 	s.startCalls++
 	return s.startErr
+}
+
+// DrainWorkers completes the stub's distinct worker-drain lifecycle phase.
+func (s *runtimeBackendStub) DrainWorkers(context.Context) error {
+	s.drainCalls++
+	return nil
 }
 
 func (s *runtimeBackendStub) Shutdown(context.Context) error {
@@ -205,6 +226,11 @@ func (s *driverRuntimeBackendStub) StartWorkers(context.Context) error {
 	return s.startErr
 }
 
+// DrainWorkers completes the driver stub's distinct worker-drain phase.
+func (s *driverRuntimeBackendStub) DrainWorkers(context.Context) error {
+	return nil
+}
+
 func TestQueueCommon_JobFromAnyAndHelpers(t *testing.T) {
 	common := &queueCommon{cfg: Config{DefaultQueue: "default"}}
 
@@ -273,8 +299,8 @@ func TestQueueCommonDispatchAndNativeRuntimeWrappers(t *testing.T) {
 	if err := q.Shutdown(nil); err != nil {
 		t.Fatalf("shutdown failed: %v", err)
 	}
-	if worker.stopCalls != 1 {
-		t.Fatalf("expected shutdown called once, got %d", worker.stopCalls)
+	if worker.drainCalls != 1 || worker.stopCalls != 0 || inner.shutdowns != 1 {
+		t.Fatalf("native drain/runtime close/inner close calls = %d/%d/%d, want 1/0/1", worker.drainCalls, worker.stopCalls, inner.shutdowns)
 	}
 }
 
@@ -978,6 +1004,63 @@ func TestExternalRuntimeShutdownWaitsForLateContinuationLease(t *testing.T) {
 	}
 	if worker.stopCalls != 1 || producer.shutdowns != 1 {
 		t.Fatalf("worker/producer shutdown calls = %d/%d, want 1/1", worker.stopCalls, producer.shutdowns)
+	}
+}
+
+// TestNativeRuntimeShutdownWaitsForLateContinuationBeforeResourceClose verifies
+// native cleanup takes a stable post-drain lease snapshot before closing resources.
+func TestNativeRuntimeShutdownWaitsForLateContinuationBeforeResourceClose(t *testing.T) {
+	backend := &phasedShutdownRuntimeBackendStub{
+		runtimeBackendStub: runtimeBackendStub{
+			dispatchEntered: make(chan struct{}),
+			releaseDispatch: make(chan struct{}),
+		},
+		drainEntered: make(chan struct{}),
+		releaseDrain: make(chan struct{}),
+	}
+	runtime := &nativeQueueRuntime{
+		common:  &queueCommon{inner: backend, cfg: Config{DefaultQueue: "default"}, driver: DriverSync},
+		runtime: backend,
+		nativeQueueRuntimeState: &nativeQueueRuntimeState{
+			registered:   map[string]Handler{},
+			started:      true,
+			continuation: busruntime.NewContinuationScope(),
+		},
+	}
+
+	shutdownCtx, cancelShutdown := context.WithCancel(context.Background())
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- runtime.Shutdown(shutdownCtx) }()
+	<-backend.drainEntered
+
+	continuationCtx, releaseContinuation := runtime.continuationScope().Permit(context.Background())
+	dispatchResult := make(chan error, 1)
+	go func() {
+		dispatchResult <- runtime.WithContext(continuationCtx).Dispatch(NewJob("job:late-native-continuation"))
+	}()
+	<-backend.dispatchEntered
+	// The originating handler can return after admission while the dispatch
+	// lease continues to protect the backend resource on its behalf.
+	releaseContinuation()
+	close(backend.releaseDrain)
+	cancelShutdown()
+
+	if err := <-shutdownResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown error = %v, want context canceled while continuation is active", err)
+	}
+	if backend.stopCalls != 0 {
+		t.Fatalf("resource close overtook late continuation: calls=%d", backend.stopCalls)
+	}
+
+	close(backend.releaseDispatch)
+	if err := <-dispatchResult; err != nil {
+		t.Fatalf("late continuation dispatch: %v", err)
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown: %v", err)
+	}
+	if backend.stopCalls != 1 {
+		t.Fatalf("resource close calls = %d, want 1", backend.stopCalls)
 	}
 }
 

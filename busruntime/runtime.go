@@ -104,6 +104,56 @@ func (s *ContinuationScope) Owns(ctx context.Context) bool {
 	return false
 }
 
+// PreserveDeliveryContext carries runtime-owned delivery state from source into
+// a replacement context while retaining replacement cancellation, deadlines,
+// and user values. Source runtime values override replacement values, and the
+// same permit pointers are reused so handler return still expires permission.
+func PreserveDeliveryContext(source context.Context, replacement context.Context) context.Context {
+	if replacement == nil {
+		replacement = context.Background()
+	}
+	preserved := replacement
+	if settlement, ok := deliverySettlementFromContext(source); ok {
+		preserved = context.WithValue(preserved, deliverySettlementContextKey{}, settlement)
+	}
+	if provenance, ok := DeliveryProvenanceFromContext(source); ok {
+		preserved = context.WithValue(preserved, deliveryProvenanceContextKey{}, provenance)
+	}
+	if source != nil {
+		if attempt, ok := source.Value(deliveryAttemptContextKey{}).(DeliveryAttempt); ok {
+			preserved = context.WithValue(preserved, deliveryAttemptContextKey{}, attempt)
+		}
+		if metadata, ok := source.Value(deliveryMetadataContextKey{}).(DeliveryMetadata); ok {
+			preserved = context.WithValue(preserved, deliveryMetadataContextKey{}, metadata)
+		}
+	}
+	sourcePermits := continuationPermits(source)
+	if len(sourcePermits) == 0 {
+		return preserved
+	}
+	replacementPermits := continuationPermits(preserved)
+	merged := append(make([]*continuationPermit, 0, len(sourcePermits)+len(replacementPermits)), replacementPermits...)
+	changed := false
+	for _, sourcePermit := range sourcePermits {
+		found := false
+		for _, replacementPermit := range replacementPermits {
+			if sourcePermit == replacementPermit {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		merged = append(merged, sourcePermit)
+		changed = true
+	}
+	if !changed {
+		return preserved
+	}
+	return context.WithValue(preserved, continuationDispatchContextKey{}, merged)
+}
+
 // continuationPermits returns the immutable permit snapshot attached by nested runtime handlers.
 func continuationPermits(ctx context.Context) []*continuationPermit {
 	if ctx == nil {

@@ -87,6 +87,11 @@ func (b *nativeBackendStub) StartWorkers(context.Context) error {
 	b.started = true
 	return nil
 }
+
+// DrainWorkers completes the native bridge stub's worker-drain phase.
+func (b *nativeBackendStub) DrainWorkers(context.Context) error {
+	return nil
+}
 func (b *nativeBackendStub) Shutdown(context.Context) error {
 	b.stopped = true
 	return nil

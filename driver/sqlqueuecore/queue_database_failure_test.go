@@ -59,6 +59,136 @@ func TestDatabaseDispatchPropagatesUniqueTransactionFailures(t *testing.T) {
 	}
 }
 
+// TestLegacyUniqueJobKeyGoldenVector pins the exact persisted identity written
+// by SQL producers before the canonical versioned key was introduced.
+func TestLegacyUniqueJobKeyGoldenVector(t *testing.T) {
+	job := queue.NewJob("reports:build").Payload([]byte(`{"report_id":42}`))
+	const want = "91631af060eb66e8a1fa0473091ca85f7bffb2b29d6552c26344eb011697e6c5"
+	if got := legacyUniqueJobKey(job, "default"); got != want {
+		t.Fatalf("legacy SQL unique key = %q, want %q", got, want)
+	}
+	if want == uniqueJobKey(job, "default") {
+		t.Fatal("legacy and canonical SQL unique keys unexpectedly match")
+	}
+}
+
+// TestDatabaseDispatchRollsBackDualUniqueClaimFailures verifies every SQL
+// dialect abandons the historical claim when either identity or queue-row
+// acquisition cannot commit.
+func TestDatabaseDispatchRollsBackDualUniqueClaimFailures(t *testing.T) {
+	job := queue.NewJob("reports:build").
+		Payload([]byte(`{"report_id":42}`)).
+		OnQueue("default").
+		UniqueFor(time.Minute)
+	legacyKey := legacyUniqueJobKey(job, "default")
+	canonicalKey := uniqueJobKey(job, "default")
+	claimErr := errors.New("claim unavailable")
+	queueErr := errors.New("queue insert unavailable")
+
+	scenarios := []struct {
+		name         string
+		insertErrKey string
+		updateErrKey string
+		collisionKey string
+		queueErr     error
+		want         error
+		wantQueue    bool
+	}{
+		{name: "legacy insert failure", insertErrKey: legacyKey, want: claimErr},
+		{name: "legacy expiry update failure", updateErrKey: legacyKey, want: claimErr},
+		{name: "legacy outstanding", collisionKey: legacyKey, want: queue.ErrDuplicate},
+		{name: "canonical insert failure", insertErrKey: canonicalKey, want: claimErr},
+		{name: "canonical expiry update failure", updateErrKey: canonicalKey, want: claimErr},
+		{name: "canonical outstanding", collisionKey: canonicalKey, want: queue.ErrDuplicate},
+		{name: "queue insert failure", queueErr: queueErr, want: queueErr, wantQueue: true},
+	}
+	drivers := []string{"sqlite", "postgres", "mysql"}
+
+	for _, driverName := range drivers {
+		for _, scenario := range scenarios {
+			t.Run(driverName+"/"+scenario.name, func(t *testing.T) {
+				queueInsert := false
+				claimed := make(map[string]bool)
+				conn := &databaseConnStub{
+					query: func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+						return databaseCountRows(1_000), nil
+					},
+					exec: func(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+						if strings.Contains(query, "INSERT INTO queue_jobs") {
+							queueInsert = true
+							if scenario.queueErr != nil {
+								return nil, scenario.queueErr
+							}
+							return driver.RowsAffected(1), nil
+						}
+						if !strings.Contains(query, "queue_unique_locks") {
+							return nil, fmt.Errorf("unexpected transaction query: %s", query)
+						}
+						if driverName == "mysql" && strings.Contains(query, "INSERT") && !strings.Contains(query, "INSERT IGNORE") {
+							return nil, fmt.Errorf("mysql uniqueness insert did not ignore conflicts: %s", query)
+						}
+						if driverName != "mysql" && strings.Contains(query, "INSERT") && !strings.Contains(query, "ON CONFLICT") {
+							return nil, fmt.Errorf("%s uniqueness insert did not ignore conflicts: %s", driverName, query)
+						}
+
+						keyIndex := 0
+						updating := strings.Contains(query, "UPDATE queue_unique_locks")
+						if updating {
+							keyIndex = 1
+						}
+						key, ok := args[keyIndex].Value.(string)
+						if !ok {
+							return nil, fmt.Errorf("uniqueness key argument = %#v", args[keyIndex].Value)
+						}
+						if updating {
+							if key == scenario.updateErrKey {
+								return nil, claimErr
+							}
+							if key == scenario.collisionKey {
+								return driver.RowsAffected(0), nil
+							}
+							claimed[key] = true
+							return driver.RowsAffected(1), nil
+						}
+						if key == scenario.insertErrKey {
+							return nil, claimErr
+						}
+						if key == scenario.updateErrKey || key == scenario.collisionKey {
+							return driver.RowsAffected(0), nil
+						}
+						claimed[key] = true
+						return driver.RowsAffected(1), nil
+					},
+				}
+				db := newDatabaseStub(conn)
+				defer db.Close()
+				database := &databaseQueue{
+					cfg: localDatabaseConfig{DriverName: driverName, DefaultQueue: "default"},
+					db:  db,
+				}
+
+				err := database.Dispatch(context.Background(), job)
+				if !errors.Is(err, scenario.want) {
+					t.Fatalf("dual unique dispatch error = %v, want %v", err, scenario.want)
+				}
+				if queueInsert != scenario.wantQueue {
+					t.Fatalf("queue insert attempted = %t, want %t", queueInsert, scenario.wantQueue)
+				}
+				if conn.rollbackCalls != 1 {
+					t.Fatalf("transaction rollback calls = %d, want 1", conn.rollbackCalls)
+				}
+				canonicalPhase := scenario.insertErrKey == canonicalKey ||
+					scenario.updateErrKey == canonicalKey ||
+					scenario.collisionKey == canonicalKey ||
+					scenario.queueErr != nil
+				if canonicalPhase && !claimed[legacyKey] {
+					t.Fatal("canonical phase began without first claiming the legacy identity")
+				}
+			})
+		}
+	}
+}
+
 // TestDatabaseClaimRejectsAmbiguousUpdateResults verifies a worker rolls back
 // when the database cannot prove that exactly one pending row was fenced.
 func TestDatabaseClaimRejectsAmbiguousUpdateResults(t *testing.T) {

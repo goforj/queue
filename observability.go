@@ -1095,7 +1095,7 @@ func wrapObservedHandler(observer Observer, driver Driver, queueName string, job
 	return func(ctx context.Context, job Job) error {
 		if ctxDecorator != nil {
 			if decorated := ctxDecorator(ctx); decorated != nil {
-				ctx = decorated
+				ctx = busruntime.PreserveDeliveryContext(ctx, decorated)
 			}
 		}
 		opts := job.jobOptions()

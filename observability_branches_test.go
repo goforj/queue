@@ -181,6 +181,51 @@ func TestWrapObservedHandlerDefersSuccessUntilSettlement(t *testing.T) {
 	}
 }
 
+// TestWrapObservedHandlerReplacementDecoratorPreservesSettlement verifies a
+// decorator cannot replace the driver's settlement boundary with its own.
+func TestWrapObservedHandlerReplacementDecoratorPreservesSettlement(t *testing.T) {
+	recorder := &observerRecorder{}
+	ctx, settlement := busruntime.WithDeliverySettlement(context.Background())
+	wantIdentity, ok := busruntime.DeliverySettlementIdentityFromContext(ctx)
+	if !ok {
+		t.Fatal("driver context did not retain its settlement identity")
+	}
+	var replacementSettlement *busruntime.DeliverySettlement
+	handler := wrapObservedHandler(
+		recorder,
+		DriverSQS,
+		"",
+		"job:settled-replacement",
+		func(context.Context) context.Context {
+			decorated, spoofed := busruntime.WithDeliverySettlement(context.Background())
+			replacementSettlement = spoofed
+			return decorated
+		},
+		func(handlerCtx context.Context, _ Job) error {
+			gotIdentity, identityOK := busruntime.DeliverySettlementIdentityFromContext(handlerCtx)
+			if !identityOK || gotIdentity != wantIdentity {
+				t.Fatalf("handler settlement identity = %+v, %t; want driver identity", gotIdentity, identityOK)
+			}
+			return nil
+		},
+	)
+
+	if err := handler(ctx, NewJob("job:settled-replacement").OnQueue("default")); err != nil {
+		t.Fatalf("wrapped handler returned error: %v", err)
+	}
+	if len(recorder.events) != 1 || recorder.events[0].Kind != EventProcessStarted {
+		t.Fatalf("events before settlement = %+v, want process_started only", recorder.events)
+	}
+	replacementSettlement.Commit()
+	if len(recorder.events) != 1 {
+		t.Fatalf("replacement settlement published driver success: %+v", recorder.events)
+	}
+	settlement.Commit()
+	if len(recorder.events) != 2 || recorder.events[1].Kind != EventProcessSucceeded {
+		t.Fatalf("events after driver settlement = %+v, want process_succeeded", recorder.events)
+	}
+}
+
 func TestWrapObservedHandler_DecoratesObserverContext(t *testing.T) {
 	recorder := &observerContextRecorder{}
 	h := wrapObservedHandler(recorder, DriverSync, "", "job:decorated", func(ctx context.Context) context.Context {

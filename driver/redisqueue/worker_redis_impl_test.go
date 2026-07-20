@@ -436,3 +436,55 @@ func TestRedisWorker_ObserverSeesDecoratedContext(t *testing.T) {
 		t.Fatalf("expected decorator called once, got %d", decoratorCalls)
 	}
 }
+
+// TestRedisWorkerReplacementDecoratorPreservesTransportDelivery verifies
+// replacement application context cannot erase Asynq retry and queue facts.
+func TestRedisWorkerReplacementDecoratorPreservesTransportDelivery(t *testing.T) {
+	type contextKey struct{}
+	key := contextKey{}
+	const decoratedValue = "replacement"
+	wantContextAttempt := busruntime.DeliveryAttempt{Number: 7, MaxRetry: 9}
+	var events []queue.Event
+	w := newRedisWorker(&serverStub{}, backend.NewServeMux(), queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+		events = append(events, event)
+	}))
+	w.SetHandlerContextDecorator(func(context.Context) context.Context {
+		return context.WithValue(context.Background(), key, decoratedValue)
+	})
+	handlerCalls := 0
+	handler := func(ctx context.Context, job queue.Job) error {
+		handlerCalls++
+		if got := ctx.Value(key); got != decoratedValue {
+			t.Fatalf("decorated context value = %v, want %q", got, decoratedValue)
+		}
+		if got, ok := busruntime.DeliveryAttemptFromContext(ctx); !ok || got != wantContextAttempt {
+			t.Fatalf("preserved context attempt = %+v, %t; want %+v", got, ok, wantContextAttempt)
+		}
+		opts := queue.DriverOptions(job)
+		if opts.Attempt != 2 || opts.MaxRetry == nil || *opts.MaxRetry != 4 || opts.QueueName != "critical" {
+			t.Fatalf("delivered transport options = attempt:%d max:%v queue:%q", opts.Attempt, opts.MaxRetry, opts.QueueName)
+		}
+		return nil
+	}
+	ctx := busruntime.WithDeliveryAttempt(context.Background(), wantContextAttempt)
+	err := w.processTask(ctx, backend.NewTask("job:replacement", []byte("ok")), handler, redisTransportDelivery{
+		attempt:  2,
+		maxRetry: 4,
+		queue:    "critical",
+	})
+	if err != nil {
+		t.Fatalf("process replacement task: %v", err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls = %d, want 1", handlerCalls)
+	}
+	wantKinds := []queue.EventKind{queue.EventProcessRetried, queue.EventProcessStarted, queue.EventProcessSucceeded}
+	if len(events) != len(wantKinds) {
+		t.Fatalf("events = %+v, want %d retry/start/success facts", events, len(wantKinds))
+	}
+	for i, event := range events {
+		if event.Kind != wantKinds[i] || event.Attempt != 2 || event.MaxRetry != 4 || event.Queue != "critical" {
+			t.Fatalf("event[%d] = %+v, want kind:%q attempt:2 max:4 queue:critical", i, event, wantKinds[i])
+		}
+	}
+}

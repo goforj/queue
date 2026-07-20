@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // TestDeliveryAttemptContext verifies attempt metadata remains typed and nil-context safe.
@@ -68,6 +69,122 @@ func TestContinuationScope(t *testing.T) {
 	if first.Owns(ctx) {
 		t.Fatal("released or escaped context retained continuation permission")
 	}
+}
+
+// TestPreserveDeliveryContext verifies a replacement retains driver-owned
+// delivery state while using its own cancellation, deadline, and user values.
+func TestPreserveDeliveryContext(t *testing.T) {
+	type contextKey struct{}
+	key := contextKey{}
+	first := NewContinuationScope()
+	second := NewContinuationScope()
+	replacementScope := NewContinuationScope()
+	wantProvenance := DeliveryProvenance{GenerationID: "generation-source", RecoveredGenerationID: "generation-old", Recovered: true}
+	wantAttempt := DeliveryAttempt{Number: 2, MaxRetry: 4}
+	wantMetadata := DeliveryMetadata{
+		SchemaVersion: DeliveryMetadataVersion,
+		DispatchID:    "dispatch-source",
+		JobID:         "job-source",
+		ChainID:       "chain-source",
+		Queue:         "critical",
+	}
+
+	source, cancelSource := context.WithCancel(context.WithValue(context.Background(), key, "source"))
+	cancelSource()
+	source, _ = WithDeliverySettlement(source)
+	sourceIdentity, sourceIdentityOK := DeliverySettlementIdentityFromContext(source)
+	if !sourceIdentityOK {
+		t.Fatal("source context did not retain its settlement identity")
+	}
+	source = WithDeliveryProvenance(source, wantProvenance)
+	source = WithDeliveryAttempt(source, wantAttempt)
+	source = WithDeliveryMetadata(source, wantMetadata)
+	source, releaseFirst := first.Permit(source)
+	source, releaseSecond := second.Permit(source)
+	replacementBase, cancelReplacement := context.WithTimeout(context.WithValue(context.Background(), key, "replacement"), time.Hour)
+	replacement, _ := WithDeliverySettlement(replacementBase)
+	replacementIdentity, replacementIdentityOK := DeliverySettlementIdentityFromContext(replacement)
+	if !replacementIdentityOK || replacementIdentity == sourceIdentity {
+		t.Fatal("replacement context did not begin with an independent settlement")
+	}
+	replacement = WithDeliveryProvenance(replacement, DeliveryProvenance{GenerationID: "spoofed"})
+	replacement = WithDeliveryAttempt(replacement, DeliveryAttempt{Number: 99, MaxRetry: 99})
+	replacement = WithDeliveryMetadata(replacement, DeliveryMetadata{SchemaVersion: DeliveryMetadataVersion, DispatchID: "spoofed"})
+	replacement, releaseReplacement := replacementScope.Permit(replacement)
+	preserved := PreserveDeliveryContext(source, replacement)
+
+	if !first.Owns(preserved) || !second.Owns(preserved) || !replacementScope.Owns(preserved) {
+		t.Fatal("replacement context did not retain every live continuation permit")
+	}
+	if got := preserved.Value(key); got != "replacement" {
+		t.Fatalf("replacement context value = %v, want replacement", got)
+	}
+	if err := preserved.Err(); err != nil {
+		t.Fatalf("preserved context inherited source cancellation: %v", err)
+	}
+	if got, ok := DeliverySettlementIdentityFromContext(preserved); !ok || got != sourceIdentity {
+		t.Fatalf("settlement identity = %+v, %t; want source identity", got, ok)
+	}
+	if got, ok := DeliveryProvenanceFromContext(preserved); !ok || got != wantProvenance {
+		t.Fatalf("delivery provenance = %+v, %t; want %+v", got, ok, wantProvenance)
+	}
+	if got, ok := DeliveryAttemptFromContext(preserved); !ok || got != wantAttempt {
+		t.Fatalf("delivery attempt = %+v, %t; want %+v", got, ok, wantAttempt)
+	}
+	if got, ok := DeliveryMetadataFromContext(preserved); !ok || got != wantMetadata {
+		t.Fatalf("delivery metadata = %+v, %t; want %+v", got, ok, wantMetadata)
+	}
+	wantDeadline, wantDeadlineOK := replacement.Deadline()
+	if gotDeadline, ok := preserved.Deadline(); ok != wantDeadlineOK || !gotDeadline.Equal(wantDeadline) {
+		t.Fatalf("replacement deadline = %v, %t; want %v, %t", gotDeadline, ok, wantDeadline, wantDeadlineOK)
+	}
+
+	derived := context.WithValue(source, key, "derived")
+	derived = PreserveDeliveryContext(source, derived)
+	if !first.Owns(derived) || !second.Owns(derived) || derived.Value(key) != "derived" {
+		t.Fatal("source-derived replacement lost continuation authority or its replacement value")
+	}
+	releaseFirst()
+	releaseSecond()
+	if first.Owns(preserved) || second.Owns(preserved) {
+		t.Fatal("preserved continuation permits survived handler return")
+	}
+	if !replacementScope.Owns(preserved) {
+		t.Fatal("preserving source permits expired replacement-owned authority")
+	}
+	releaseReplacement()
+	if replacementScope.Owns(preserved) {
+		t.Fatal("replacement-owned permit survived its release")
+	}
+	cancelReplacement()
+	if !errors.Is(preserved.Err(), context.Canceled) {
+		t.Fatalf("preserved cancellation = %v, want replacement cancellation", preserved.Err())
+	}
+
+	plain := context.WithValue(context.Background(), key, "plain")
+	if got := PreserveDeliveryContext(context.Background(), plain); got != plain {
+		t.Fatal("permit-free source unnecessarily wrapped the replacement")
+	}
+	if got := PreserveDeliveryContext(nil, nil); got == nil || got.Err() != nil {
+		t.Fatalf("nil source and replacement produced invalid context: %v", got)
+	}
+	futureSource := WithDeliveryMetadata(context.Background(), DeliveryMetadata{
+		SchemaVersion: DeliveryMetadataVersion + 1,
+		DispatchID:    "future-source",
+	})
+	trustedReplacement := WithDeliveryMetadata(context.Background(), DeliveryMetadata{
+		SchemaVersion: DeliveryMetadataVersion,
+		DispatchID:    "trusted-replacement",
+	})
+	if metadata, ok := DeliveryMetadataFromContext(PreserveDeliveryContext(futureSource, trustedReplacement)); ok || metadata != (DeliveryMetadata{}) {
+		t.Fatalf("future source metadata became trusted replacement metadata: %+v, %t", metadata, ok)
+	}
+	permitOnly, releasePermitOnly := first.Permit(context.WithValue(context.Background(), key, "source-only"))
+	withoutReplacement := PreserveDeliveryContext(permitOnly, nil)
+	if !first.Owns(withoutReplacement) || withoutReplacement.Value(key) != nil {
+		t.Fatal("nil replacement did not preserve only runtime-owned source state")
+	}
+	releasePermitOnly()
 }
 
 // TestDeliveryAttemptExhausted verifies MaxRetry counts retries after the initial attempt.

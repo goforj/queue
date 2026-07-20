@@ -19,6 +19,7 @@ type runtimeQueueBackend interface {
 	queueBackend
 	Register(jobType string, handler queue.Handler)
 	StartWorkers(ctx context.Context) error
+	DrainWorkers(ctx context.Context) error
 }
 
 type workerBackend interface {
@@ -136,6 +137,11 @@ func (a runtimeQueueBackendAdapter) Register(jobType string, handler queue.Handl
 }
 func (a runtimeQueueBackendAdapter) StartWorkers(ctx context.Context) error {
 	return a.inner.StartWorkers(ctx)
+}
+
+// DrainWorkers forwards the native backend's worker-drain lifecycle phase.
+func (a runtimeQueueBackendAdapter) DrainWorkers(ctx context.Context) error {
+	return a.inner.DrainWorkers(ctx)
 }
 func (a runtimeQueueBackendAdapter) Pause(ctx context.Context, queueName string) error {
 	return a.queueBackendAdapter.Pause(ctx, queueName)

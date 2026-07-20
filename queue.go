@@ -90,6 +90,7 @@ type runtimeQueueBackend interface {
 	queueBackend
 	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
+	DrainWorkers(ctx context.Context) error
 }
 
 func newSyncQueue() queueBackend {
@@ -928,7 +929,18 @@ func (q *nativeQueueRuntime) Shutdown(ctx context.Context) error {
 
 	err := waitForRuntimeOperations(ctx, idle)
 	if err == nil {
-		err = q.runtime.Shutdown(ctx)
+		err = q.runtime.DrainWorkers(ctx)
+	}
+	if err == nil {
+		// Worker drain expires every handler-issued continuation permit. A second
+		// operation snapshot is therefore stable and must finish before resources close.
+		q.mu.Lock()
+		idle = q.operations.idle
+		q.mu.Unlock()
+		err = waitForRuntimeOperations(ctx, idle)
+	}
+	if err == nil {
+		err = q.common.inner.Shutdown(ctx)
 	}
 	q.mu.Lock()
 	attempt.err = err
@@ -1226,7 +1238,7 @@ func wrapHandlerContext(decorator func(context.Context) context.Context, handler
 	}
 	return func(ctx context.Context, job Job) error {
 		if decorated := decorator(ctx); decorated != nil {
-			ctx = decorated
+			ctx = busruntime.PreserveDeliveryContext(ctx, decorated)
 		}
 		return handler(ctx, job)
 	}
@@ -1312,6 +1324,11 @@ type driverQueueBackendAdapter struct {
 
 type driverRuntimeQueueBackendAdapter struct {
 	driverRuntimeQueueBackend
+}
+
+// DrainWorkers forwards the native driver's worker-drain lifecycle phase.
+func (a driverRuntimeQueueBackendAdapter) DrainWorkers(ctx context.Context) error {
+	return a.driverRuntimeQueueBackend.DrainWorkers(ctx)
 }
 
 type driverWorkerBackendAdapter struct {

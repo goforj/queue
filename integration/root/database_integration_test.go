@@ -4,9 +4,12 @@ package root_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1618,6 +1621,285 @@ func newDatabaseQueueIntegration(t *testing.T, cfg queue.DatabaseConfig) QueueRu
 	return q
 }
 
+// historicalDatabaseUniqueKey reproduces the pre-version SQL lock identity so
+// integration coverage can seed records exactly as an older producer did.
+func historicalDatabaseUniqueKey(job queue.Job, queueName string) string {
+	digest := sha256.Sum256(append([]byte(queueName+":"+job.Type+":"), job.PayloadBytes()...))
+	return hex.EncodeToString(digest[:])
+}
+
+// rebindHistoricalDatabaseQuery preserves the placeholder behavior used by
+// the pre-version SQL producer without importing driver internals into the test.
+func rebindHistoricalDatabaseQuery(query, driverName string) string {
+	if driverName != "pgx" && driverName != testenv.BackendPostgres {
+		return query
+	}
+	var rebound strings.Builder
+	argument := 1
+	for _, char := range query {
+		if char == '?' {
+			fmt.Fprintf(&rebound, "$%d", argument)
+			argument++
+			continue
+		}
+		rebound.WriteRune(char)
+	}
+	return rebound.String()
+}
+
+// historicalDatabaseUniqueConflict matches the constraint classification used
+// by the pre-version SQL producer so the integration path is behaviorally exact.
+func historicalDatabaseUniqueConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "duplicate") ||
+		strings.Contains(message, "unique constraint") ||
+		strings.Contains(message, "unique violation")
+}
+
+// dispatchHistoricalDatabaseJob reproduces origin/main's legacy claim and
+// queue-row writes on a dedicated connection for mixed-version race coverage.
+func dispatchHistoricalDatabaseJob(ctx context.Context, conn *sql.Conn, driverName string, job queue.Job) error {
+	options := queue.DriverOptions(job)
+	now := time.Now()
+	expiresAt := now.Add(options.UniqueTTL).UnixMilli()
+	legacyKey := historicalDatabaseUniqueKey(job, options.QueueName)
+	insertLock := rebindHistoricalDatabaseQuery(
+		`INSERT INTO queue_unique_locks(lock_key, expires_at) VALUES(?, ?)`,
+		driverName,
+	)
+	if _, err := conn.ExecContext(ctx, insertLock, legacyKey, expiresAt); err != nil {
+		if !historicalDatabaseUniqueConflict(err) {
+			return err
+		}
+		updateLock := rebindHistoricalDatabaseQuery(
+			`UPDATE queue_unique_locks SET expires_at=? WHERE lock_key=? AND expires_at <= ?`,
+			driverName,
+		)
+		result, updateErr := conn.ExecContext(ctx, updateLock, expiresAt, legacyKey, now.UnixMilli())
+		if updateErr != nil {
+			return updateErr
+		}
+		rows, _ := result.RowsAffected()
+		if rows != 1 {
+			return queue.ErrDuplicate
+		}
+	}
+
+	payload := job.PayloadBytes()
+	if payload == nil {
+		payload = []byte{}
+	}
+	availableAt := now.Add(options.Delay)
+	maxRetry := 0
+	if options.MaxRetry != nil {
+		maxRetry = *options.MaxRetry
+	}
+	backoffMillis := int64(0)
+	if options.Backoff != nil && *options.Backoff > 0 {
+		backoffMillis = options.Backoff.Milliseconds()
+	}
+	var timeoutSeconds any
+	if options.Timeout != nil {
+		timeoutSeconds = max(1, int64(math.Ceil(options.Timeout.Seconds())))
+	}
+	insertJob := rebindHistoricalDatabaseQuery(
+		`INSERT INTO queue_jobs
+        (queue_name, job_type, payload, timeout_seconds, max_retry, backoff_millis, attempt, available_at, state, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?)`,
+		driverName,
+	)
+	_, err := conn.ExecContext(
+		ctx,
+		insertJob,
+		options.QueueName,
+		job.Type,
+		payload,
+		timeoutSeconds,
+		maxRetry,
+		backoffMillis,
+		availableAt.UnixMilli(),
+		now.UnixMilli(),
+		now.UnixMilli(),
+	)
+	return err
+}
+
+// runDatabaseUniqueKeyTransitionIntegration proves every SQL dialect honors
+// outstanding historical claims and atomically rolls back the companion key
+// when the canonical identity collides.
+func runDatabaseUniqueKeyTransitionIntegration(t *testing.T, cfg queue.DatabaseConfig) {
+	t.Helper()
+	provisionDatabaseIntegrationSchema(t, cfg)
+	db, err := sql.Open(cfg.DriverName, cfg.DSN)
+	if err != nil {
+		t.Fatalf("open %s uniqueness transition database: %v", cfg.DriverName, err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, table := range []string{"queue_jobs", "queue_unique_locks"} {
+		if _, err := db.Exec("DELETE FROM " + table); err != nil {
+			t.Fatalf("clear %s before uniqueness transition: %v", table, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, table := range []string{"queue_jobs", "queue_unique_locks"} {
+			_, _ = db.Exec("DELETE FROM " + table)
+		}
+	})
+
+	firstPlaceholder := "?"
+	secondPlaceholder := "?"
+	if cfg.DriverName == "pgx" || cfg.DriverName == testenv.BackendPostgres {
+		firstPlaceholder = "$1"
+		secondPlaceholder = "$2"
+	}
+	insertLock := func(key string, expiresAt int64) {
+		t.Helper()
+		query := `INSERT INTO queue_unique_locks(lock_key, expires_at) VALUES (` + firstPlaceholder + `, ` + secondPlaceholder + `)`
+		if _, err := db.Exec(query, key, expiresAt); err != nil {
+			t.Fatalf("seed uniqueness transition lock %q: %v", key, err)
+		}
+	}
+	lockCount := func(key string) int {
+		t.Helper()
+		var count int
+		query := `SELECT COUNT(*) FROM queue_unique_locks WHERE lock_key=` + firstPlaceholder
+		if err := db.QueryRow(query, key).Scan(&count); err != nil {
+			t.Fatalf("count uniqueness transition lock %q: %v", key, err)
+		}
+		return count
+	}
+	jobCount := func(jobType string) int {
+		t.Helper()
+		var count int
+		query := `SELECT COUNT(*) FROM queue_jobs WHERE job_type=` + firstPlaceholder
+		if err := db.QueryRow(query, jobType).Scan(&count); err != nil {
+			t.Fatalf("count uniqueness transition jobs %q: %v", jobType, err)
+		}
+		return count
+	}
+	producer := newDatabaseQueueIntegration(t, cfg)
+
+	t.Run("legacy_outstanding", func(t *testing.T) {
+		job := queue.NewJob("job:db:unique:legacy-outstanding").
+			Payload([]byte("same logical work")).
+			OnQueue("default").
+			UniqueFor(time.Minute)
+		legacyKey := historicalDatabaseUniqueKey(job, "default")
+		canonicalKey := queue.DriverUniqueKey(job, "default")
+		insertLock(legacyKey, time.Now().Add(time.Hour).UnixMilli())
+
+		if err := producer.Dispatch(job); !errors.Is(err, queue.ErrDuplicate) {
+			t.Fatalf("dispatch with outstanding legacy lock = %v, want ErrDuplicate", err)
+		}
+		if lockCount(canonicalKey) != 0 || jobCount(job.Type) != 0 {
+			t.Fatal("legacy collision committed a canonical lock or queue row")
+		}
+	})
+
+	t.Run("legacy_expired", func(t *testing.T) {
+		job := queue.NewJob("job:db:unique:legacy-expired").
+			Payload([]byte("same logical work")).
+			OnQueue("default").
+			UniqueFor(time.Minute)
+		legacyKey := historicalDatabaseUniqueKey(job, "default")
+		canonicalKey := queue.DriverUniqueKey(job, "default")
+		insertLock(legacyKey, 0)
+
+		if err := producer.Dispatch(job); err != nil {
+			t.Fatalf("dispatch with expired legacy lock: %v", err)
+		}
+		if lockCount(legacyKey) != 1 || lockCount(canonicalKey) != 1 || jobCount(job.Type) != 1 {
+			t.Fatal("expired legacy lock did not commit both identities with the queue row")
+		}
+		var expiresAt int64
+		query := `SELECT expires_at FROM queue_unique_locks WHERE lock_key=` + firstPlaceholder
+		if err := db.QueryRow(query, legacyKey).Scan(&expiresAt); err != nil {
+			t.Fatalf("read renewed legacy lock: %v", err)
+		}
+		if expiresAt <= 0 {
+			t.Fatalf("renewed legacy lock expiry = %d, want positive database time", expiresAt)
+		}
+	})
+
+	t.Run("canonical_outstanding", func(t *testing.T) {
+		job := queue.NewJob("job:db:unique:canonical-outstanding").
+			Payload([]byte("same logical work")).
+			OnQueue("default").
+			UniqueFor(time.Minute)
+		legacyKey := historicalDatabaseUniqueKey(job, "default")
+		canonicalKey := queue.DriverUniqueKey(job, "default")
+		insertLock(canonicalKey, time.Now().Add(time.Hour).UnixMilli())
+
+		if err := producer.Dispatch(job); !errors.Is(err, queue.ErrDuplicate) {
+			t.Fatalf("dispatch with outstanding canonical lock = %v, want ErrDuplicate", err)
+		}
+		if lockCount(legacyKey) != 0 || jobCount(job.Type) != 0 {
+			t.Fatal("canonical collision committed the preceding legacy lock or queue row")
+		}
+	})
+
+	t.Run("mixed_producer_race", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		legacyConn, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("open dedicated %s legacy producer connection: %v", cfg.DriverName, err)
+		}
+		defer legacyConn.Close()
+		if cfg.DriverName == testenv.BackendSQLite {
+			if _, err := legacyConn.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
+				t.Fatalf("configure legacy SQLite producer lock wait: %v", err)
+			}
+		}
+
+		const rounds = 8
+		for round := range rounds {
+			job := queue.NewJob(fmt.Sprintf("job:db:unique:mixed-producer:%d", round)).
+				Payload([]byte("same logical work")).
+				OnQueue("default").
+				UniqueFor(time.Minute)
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			go func() {
+				<-start
+				results <- dispatchHistoricalDatabaseJob(ctx, legacyConn, cfg.DriverName, job)
+			}()
+			go func() {
+				<-start
+				results <- producer.WithContext(ctx).Dispatch(job)
+			}()
+			close(start)
+
+			accepted := 0
+			duplicates := 0
+			for range 2 {
+				select {
+				case dispatchErr := <-results:
+					switch {
+					case dispatchErr == nil:
+						accepted++
+					case errors.Is(dispatchErr, queue.ErrDuplicate):
+						duplicates++
+					default:
+						t.Fatalf("round %d mixed-version dispatch error: %v", round, dispatchErr)
+					}
+				case <-ctx.Done():
+					t.Fatalf("round %d mixed-version dispatch timed out: %v", round, ctx.Err())
+				}
+			}
+			if accepted != 1 || duplicates != 1 {
+				t.Fatalf("round %d mixed-version accepted/duplicate results = %d/%d, want 1/1", round, accepted, duplicates)
+			}
+			if rows := jobCount(job.Type); rows != 1 {
+				t.Fatalf("round %d mixed-version queue rows = %d, want 1", round, rows)
+			}
+		}
+	})
+}
+
 // managedDatabaseRuntimeConfig preserves each integration suite's physical
 // database while making external schema ownership explicit for the runtime
 // under test.
@@ -1910,6 +2192,10 @@ func runDatabaseIntegrationSuite(t *testing.T, name string, cfg queue.DatabaseCo
 		if !errors.Is(err, queue.ErrDuplicate) {
 			t.Fatalf("expected ErrDuplicate, got %v", err)
 		}
+	})
+
+	t.Run(name+"_unique_rolling_upgrade", func(t *testing.T) {
+		runDatabaseUniqueKeyTransitionIntegration(t, cfg)
 	})
 
 	t.Run(name+"_unique_multi_producer", func(t *testing.T) {

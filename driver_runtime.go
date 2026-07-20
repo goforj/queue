@@ -17,6 +17,7 @@ type driverRuntimeQueueBackend interface {
 	driverQueueBackend
 	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
+	DrainWorkers(ctx context.Context) error
 }
 
 type driverWorkerBackend interface {

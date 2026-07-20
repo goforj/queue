@@ -90,6 +90,66 @@ func TestDatabaseShutdownRetriesShareOneDrain(t *testing.T) {
 	}
 }
 
+// TestDatabaseDrainWorkersSeparatesResourceOwnership verifies native root
+// shutdown can join workers before deciding whether it owns the database close.
+func TestDatabaseDrainWorkersSeparatesResourceOwnership(t *testing.T) {
+	tests := []struct {
+		name   string
+		ownsDB bool
+	}{
+		{name: "owned database", ownsDB: true},
+		{name: "caller-owned database", ownsDB: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			connection := &databaseConnStub{}
+			db := newDatabaseStub(connection)
+			if err := db.PingContext(context.Background()); err != nil {
+				t.Fatalf("open database connection: %v", err)
+			}
+			database := &databaseQueue{
+				db:         db,
+				ownsDB:     test.ownsDB,
+				shutdownCh: make(chan struct{}),
+			}
+
+			if err := database.DrainWorkers(context.Background()); err != nil {
+				t.Fatalf("drain workers: %v", err)
+			}
+			if connection.closeCalls != 0 {
+				t.Fatalf("database close calls during worker drain = %d, want 0", connection.closeCalls)
+			}
+			if err := db.PingContext(context.Background()); err != nil {
+				t.Fatalf("database unavailable after worker drain: %v", err)
+			}
+			if err := database.Shutdown(context.Background()); err != nil {
+				t.Fatalf("shutdown database queue: %v", err)
+			}
+			wantCloses := 0
+			if test.ownsDB {
+				wantCloses = 1
+			}
+			if connection.closeCalls != wantCloses {
+				t.Fatalf("database close calls after shutdown = %d, want %d", connection.closeCalls, wantCloses)
+			}
+			if err := database.Shutdown(context.Background()); err != nil {
+				t.Fatalf("repeat database shutdown: %v", err)
+			}
+			if connection.closeCalls != wantCloses {
+				t.Fatalf("database close calls after repeat = %d, want %d", connection.closeCalls, wantCloses)
+			}
+			if !test.ownsDB {
+				if err := db.PingContext(context.Background()); err != nil {
+					t.Fatalf("caller-owned database unavailable after shutdown: %v", err)
+				}
+				if err := db.Close(); err != nil {
+					t.Fatalf("close caller-owned database: %v", err)
+				}
+			}
+		})
+	}
+}
+
 // TestLocalDatabaseConfigDisableAutoMigrate verifies the additive opt-out preserves the established default while overriding legacy true values.
 func TestLocalDatabaseConfigDisableAutoMigrate(t *testing.T) {
 	if normalized := (localDatabaseConfig{}).normalize(); !normalized.AutoMigrate {

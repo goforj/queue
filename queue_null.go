@@ -54,6 +54,11 @@ func (q *nullQueue) Shutdown(context.Context) error {
 	return nil
 }
 
+// DrainWorkers completes immediately because the null backend executes no work.
+func (q *nullQueue) DrainWorkers(context.Context) error {
+	return nil
+}
+
 func (q *nullQueue) Ready(ctx context.Context) error {
 	if ctx == nil {
 		return nil

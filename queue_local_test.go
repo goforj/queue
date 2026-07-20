@@ -705,7 +705,35 @@ func TestLocalQueue_SyncStatsTrackFailuresPerQueue(t *testing.T) {
 
 // TestWorkerpoolShutdownDrainsWorkflowDescendants verifies channel closure waits until an active chain can enqueue and run its next node.
 func TestWorkerpoolShutdownDrainsWorkflowDescendants(t *testing.T) {
-	q, err := NewWorkerpool(WithWorkers(1))
+	testWorkerpoolShutdownDrainsWorkflowDescendants(t, WithWorkers(1))
+}
+
+// TestWorkerpoolShutdownDrainsWorkflowDescendantsWithReplacementDecorator
+// verifies a replacement handler context cannot discard backend continuation authority.
+func TestWorkerpoolShutdownDrainsWorkflowDescendantsWithReplacementDecorator(t *testing.T) {
+	for _, withObserver := range []bool{false, true} {
+		name := "without observer"
+		opts := []Option{
+			WithWorkers(1),
+			WithHandlerContextDecorator(func(context.Context) context.Context {
+				return context.Background()
+			}),
+		}
+		if withObserver {
+			name = "with observer"
+			opts = append(opts, WithObserver(ObserverFunc(func(context.Context, Event) {})))
+		}
+		t.Run(name, func(t *testing.T) {
+			testWorkerpoolShutdownDrainsWorkflowDescendants(t, opts...)
+		})
+	}
+}
+
+// testWorkerpoolShutdownDrainsWorkflowDescendants exercises workflow drain
+// through the public Queue while using runtime state only as a deterministic gate.
+func testWorkerpoolShutdownDrainsWorkflowDescendants(t *testing.T, opts ...Option) {
+	t.Helper()
+	q, err := NewWorkerpool(opts...)
 	if err != nil {
 		t.Fatalf("new workerpool: %v", err)
 	}
@@ -739,12 +767,16 @@ func TestWorkerpoolShutdownDrainsWorkflowDescendants(t *testing.T) {
 	if local.cfg.Workers != 1 || local.cfg.QueueCapacity != 1 {
 		t.Fatalf("configured workerpool = workers:%d capacity:%d, want 1/1", local.cfg.Workers, local.cfg.QueueCapacity)
 	}
+	drainDeadline := time.Now().Add(2 * time.Second)
 	for {
 		runtime.mu.Lock()
 		draining := runtime.draining
 		runtime.mu.Unlock()
-		if draining {
+		if draining && local.shuttingDown.Load() {
 			break
+		}
+		if time.Now().After(drainDeadline) {
+			t.Fatal("timed out waiting for root and workerpool drain gates")
 		}
 		time.Sleep(time.Millisecond)
 	}

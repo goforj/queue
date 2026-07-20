@@ -150,6 +150,12 @@ func (d *localQueue) StartWorkers(_ context.Context) error {
 //	_ = q.StartWorkers(context.Background())
 //	_ = q.Shutdown(context.Background())
 func (d *localQueue) Shutdown(ctx context.Context) error {
+	return d.DrainWorkers(ctx)
+}
+
+// DrainWorkers stops admission from unrelated callers and waits for the
+// accepted local work tree to finish while handler continuations remain valid.
+func (d *localQueue) DrainWorkers(ctx context.Context) error {
 	if d.driver != DriverWorkerpool && d.driver != DriverSync {
 		return nil
 	}

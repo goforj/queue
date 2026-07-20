@@ -3,6 +3,7 @@ package sqlqueuecore
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -116,6 +117,8 @@ type databaseQueue struct {
 	startMu      sync.Mutex
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
+	closeOnce    sync.Once
+	closeDone    chan struct{}
 	shutdownErr  error
 	workerWG     sync.WaitGroup
 	shutdownCh   chan struct{}
@@ -279,19 +282,20 @@ func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown drains workers and closes only database handles opened by this queue.
+// Shutdown drains workers before closing only database handles opened by this queue.
 func (d *databaseQueue) Shutdown(ctx context.Context) error {
+	if err := d.DrainWorkers(ctx); err != nil {
+		return err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	d.startMu.Lock()
-	d.shutdownOnce.Do(func() {
-		d.shuttingDown.Store(true)
-		close(d.shutdownCh)
-		d.shutdownDone = make(chan struct{})
-		go d.finishShutdown(d.shutdownDone)
+	d.closeOnce.Do(func() {
+		d.closeDone = make(chan struct{})
+		go d.finishResourceClose(d.closeDone)
 	})
-	done := d.shutdownDone
+	done := d.closeDone
 	d.startMu.Unlock()
 	select {
 	case <-done:
@@ -301,10 +305,39 @@ func (d *databaseQueue) Shutdown(ctx context.Context) error {
 	}
 }
 
-// finishShutdown waits once for the worker generation so callers with expired
-// deadlines can retry without creating another goroutine for the same drain.
-func (d *databaseQueue) finishShutdown(done chan struct{}) {
+// DrainWorkers latches shutdown admission and joins the worker generation
+// without closing producer resources that an admitted dispatch may still use.
+func (d *databaseQueue) DrainWorkers(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	d.startMu.Lock()
+	d.shutdownOnce.Do(func() {
+		d.shuttingDown.Store(true)
+		close(d.shutdownCh)
+		d.shutdownDone = make(chan struct{})
+		go d.finishWorkerDrain(d.shutdownDone)
+	})
+	done := d.shutdownDone
+	d.startMu.Unlock()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// finishWorkerDrain waits once for the worker generation so callers with
+// expired deadlines can retry without multiplying drain goroutines.
+func (d *databaseQueue) finishWorkerDrain(done chan struct{}) {
 	d.workerWG.Wait()
+	close(done)
+}
+
+// finishResourceClose releases the owned handle only after worker and root
+// operation drains establish that no admitted dispatch can still use it.
+func (d *databaseQueue) finishResourceClose(done chan struct{}) {
 	var closeErr error
 	if d.ownsDB {
 		closeErr = d.db.Close()
@@ -1234,7 +1267,8 @@ func databasePendingSettlement(job *dbJob, attempt int, now int64) databaseFailu
 	}
 }
 
-// acquireUnique claims the canonical key inside the queue-row transaction using the database clock shared by every producer.
+// acquireUnique claims the exact historical physical identity and canonical
+// logical identity in the queue-row transaction so stable legacy claims remain effective.
 func (d *databaseQueue) acquireUnique(ctx context.Context, tx *sql.Tx, job queue.Job, queueName string, ttl time.Duration) (bool, error) {
 	now, err := d.databaseNowMillis(ctx, tx)
 	if err != nil {
@@ -1249,12 +1283,26 @@ func (d *databaseQueue) acquireUnique(ctx context.Context, tx *sql.Tx, job queue
 	if ttlMillis < 1 {
 		ttlMillis = 1
 	}
-	return d.acquireUniqueKey(ctx, tx, uniqueJobKey(job, queueName), now, now+ttlMillis)
+	expiresAt := now + ttlMillis
+	keys := [...]string{legacyUniqueJobKey(job, queueName), uniqueJobKey(job, queueName)}
+	for _, key := range keys {
+		acquired, acquireErr := d.acquireUniqueKey(ctx, tx, key, now, expiresAt)
+		if acquireErr != nil || !acquired {
+			return false, acquireErr
+		}
+	}
+	return true, nil
 }
 
 // uniqueJobKey preserves the shared versioned identity verbatim for diagnosable SQL state.
 func uniqueJobKey(job queue.Job, queueName string) string {
 	return queuecore.UniqueKey(job, queueName)
+}
+
+// legacyUniqueJobKey reproduces the unversioned SQL identity so a rolling upgrade honors outstanding claims from older producers.
+func legacyUniqueJobKey(job queue.Job, queueName string) string {
+	digest := sha256.Sum256(append([]byte(queueName+":"+job.Type+":"), job.PayloadBytes()...))
+	return hex.EncodeToString(digest[:])
 }
 
 // acquireUniqueKey couples one lock claim to the surrounding queue-row transaction.
