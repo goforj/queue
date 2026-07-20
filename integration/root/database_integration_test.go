@@ -2540,11 +2540,8 @@ func TestDatabaseIntegration_SQLite(t *testing.T) {
 			Workers:      1,
 			PollInterval: 10 * time.Millisecond,
 		}
+		provisionDatabaseIntegrationSchema(t, rollbackCfg)
 		runtime := newDatabaseQueueIntegration(t, rollbackCfg)
-		runtime.Register("job:db:unique:rollback", func(_ context.Context, _ queue.Job) error { return nil })
-		if err := runtime.StartWorkers(context.Background()); err != nil {
-			t.Fatalf("start rollback runtime failed: %v", err)
-		}
 
 		db, err := sql.Open(testenv.BackendSQLite, rollbackCfg.DSN)
 		if err != nil {
