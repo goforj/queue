@@ -291,8 +291,55 @@ func TestObservedQueue_WrapperMethods(t *testing.T) {
 	if oq.Driver() != DriverWorkerpool {
 		t.Fatalf("expected driver %q, got %q", DriverWorkerpool, oq.Driver())
 	}
-	if len(recorder.events) < 2 {
-		t.Fatalf("expected pause/resume events, got %d", len(recorder.events))
+	wantControlEvents := []Event{
+		{Layer: EventLayerQueue, Kind: EventQueuePaused, Driver: DriverWorkerpool, Queue: "critical"},
+		{Layer: EventLayerQueue, Kind: EventQueueResumed, Driver: DriverWorkerpool, Queue: "critical"},
+	}
+	if len(recorder.events) != len(wantControlEvents) {
+		t.Fatalf("control events = %+v, want exactly pause and resume", recorder.events)
+	}
+	for index, want := range wantControlEvents {
+		got := recorder.events[index]
+		if got.Layer != want.Layer || got.Kind != want.Kind || got.Driver != want.Driver || got.Queue != want.Queue {
+			t.Errorf("control event %d = %+v, want layer=%q kind=%q driver=%q queue=%q", index, got, want.Layer, want.Kind, want.Driver, want.Queue)
+		}
+		if got.SchemaVersion == 0 || got.EventID == "" || got.Time.IsZero() {
+			t.Errorf("control event %d is not normalized: %+v", index, got)
+		}
+	}
+}
+
+// TestObservedQueueControlFactsTrackState verifies idempotent control calls
+// remain a gauge instead of accumulating pause and resume deltas.
+func TestObservedQueueControlFactsTrackState(t *testing.T) {
+	collector := NewStatsCollector()
+	overlay := &observedQueue{
+		inner:    &queueBackendStub{},
+		driver:   DriverWorkerpool,
+		observer: collector,
+	}
+	for range 2 {
+		if err := overlay.Pause(context.Background(), "critical"); err != nil {
+			t.Fatalf("pause: %v", err)
+		}
+	}
+	if err := overlay.Resume(context.Background(), "critical"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if paused := collector.Snapshot().Paused("critical"); paused != 0 {
+		t.Fatalf("paused gauge after repeated pause and resume = %d, want 0", paused)
+	}
+
+	for range 2 {
+		if err := overlay.Resume(context.Background(), "critical"); err != nil {
+			t.Fatalf("repeat resume: %v", err)
+		}
+	}
+	if err := overlay.Pause(context.Background(), "critical"); err != nil {
+		t.Fatalf("final pause: %v", err)
+	}
+	if paused := collector.Snapshot().Paused("critical"); paused != 1 {
+		t.Fatalf("paused gauge after repeated resume and pause = %d, want 1", paused)
 	}
 }
 
@@ -315,6 +362,9 @@ func TestObservedQueue_UnsupportedAndErrorBranches(t *testing.T) {
 	if err := oqNoRuntime.Resume(context.Background(), "default"); !errors.Is(err, ErrPauseUnsupported) {
 		t.Fatalf("expected ErrPauseUnsupported, got %v", err)
 	}
+	if len(recorder.events) != 0 {
+		t.Fatalf("unsupported queue controls emitted events: %+v", recorder.events)
+	}
 
 	oqErrs := &observedQueue{
 		inner: &queueBackendStub{
@@ -333,6 +383,9 @@ func TestObservedQueue_UnsupportedAndErrorBranches(t *testing.T) {
 	}
 	if _, err := oqErrs.Stats(context.Background()); err == nil {
 		t.Fatal("expected stats error")
+	}
+	if len(recorder.events) != 0 {
+		t.Fatalf("failed queue controls emitted events: %+v", recorder.events)
 	}
 }
 

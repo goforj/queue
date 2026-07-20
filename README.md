@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/unit_tests-970-brightgreen" alt="Unit tests (executed count)">
+    <img src="https://img.shields.io/badge/unit_tests-978-brightgreen" alt="Unit tests (executed count)">
     <img src="https://img.shields.io/badge/integration_tests-631-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
@@ -471,37 +471,42 @@ _ = q
 
 | Layer | EventKind | Meaning |
 | ---: | --- | --- |
-| **queue** | dispatch_started | Public dispatch began. |
-| **queue** | dispatch_succeeded | Backend acceptance completed; synchronous execution may still return an application error. |
-| **queue** | dispatch_failed | Public dispatch failed before backend acceptance. |
-| **queue** | enqueue_accepted | Job accepted by driver for enqueue. |
-| **queue** | enqueue_rejected | Job enqueue failed. |
-| **queue** | enqueue_duplicate | Duplicate job rejected due to uniqueness key. |
-| **queue** | enqueue_canceled | Context cancellation prevented enqueue. |
-| **worker** | process_started | Worker began processing job. |
-| **worker** | process_succeeded | Handler returned success. |
-| **worker** | process_failed | Handler returned an error or panicked. |
+| **queue** | dispatch_started | After job validation, the root facade began a public dispatch. |
+| **queue** | dispatch_succeeded | The backend accepted the public dispatch; synchronous execution may still return an application error. |
+| **queue** | dispatch_failed | Public dispatch ended before backend acceptance. |
+| **queue** | enqueue_accepted | The driver confirmed enqueue acceptance. |
+| **queue** | enqueue_rejected | The driver rejected enqueue with an error. |
+| **queue** | enqueue_duplicate | Uniqueness policy rejected the logical job as a duplicate. |
+| **queue** | enqueue_canceled | Context cancellation or deadline expiry prevented enqueue. |
+| **worker** | process_started | A physical handler attempt began. |
+| **worker** | process_succeeded | Handler success crossed the driver's settlement boundary; runtimes without a settlement hook emit after handler return. |
+| **worker** | process_failed | A handler attempt returned an error or panicked. |
 | **worker** | process_retried | A numbered application retry attempt began; infrastructure redelivery may repeat the fact. |
-| **worker** | process_archived | Driver confirmed terminal settlement; unsupported paths omit this fact. |
-| **queue** | queue_paused | Queue was paused (driver supports pause). |
-| **queue** | queue_resumed | Queue was resumed. |
-| **workflow** | job_started | A workflow job handler started execution. |
-| **workflow** | job_succeeded | A workflow job handler completed successfully. |
+| **worker** | process_archived | A SQL driver confirmed its fenced transition to terminal `dead` state; other built-in runtimes omit it. |
+| **worker** | process_recovered | SQL bulk recovery requeued one stale in-flight claim; identity fields are unavailable at that boundary. |
+| **worker** | republish_failed | An internal delay or retry replacement could not be published. |
+| **worker** | settlement_failed | Delivery finalization, acknowledgement, deletion, or negative settlement failed or was ambiguous; redelivery remains possible. |
+| **queue** | queue_paused | A supporting driver confirmed queue consumption was paused. |
+| **queue** | queue_resumed | A supporting driver confirmed queue consumption was resumed. |
+| **workflow** | job_started | A logical execution attempt began before handler lookup. |
+| **workflow** | job_succeeded | Logical job success committed; settlement-aware drivers publish the fact only after settlement. |
 | **workflow** | job_failed | A logical job reached permanent or exhausted failure. |
-| **workflow** | chain_started | A chain workflow was created and started. |
-| **workflow** | chain_advanced | Chain progressed from one node to the next node. |
-| **workflow** | chain_completed | Chain reached terminal success. |
-| **workflow** | chain_failed | Chain reached terminal failure. |
-| **workflow** | batch_started | A batch workflow was created and started. |
-| **workflow** | batch_progressed | Batch state changed as jobs completed/failed. |
+| **workflow** | chain_started | A chain record was created and initial dispatch began. |
+| **workflow** | chain_advanced | A committed node outcome advanced the chain to its next node. |
+| **workflow** | chain_completed | The final chain node committed terminal success. |
+| **workflow** | chain_failed | A chain committed terminal failure. |
+| **workflow** | batch_started | A batch record was created and initial member dispatch began. |
+| **workflow** | batch_progressed | A batch member committed a terminal outcome. |
 | **workflow** | batch_completed | Batch reached terminal success (or allowed-failure completion). |
-| **workflow** | batch_failed | Batch reached terminal failure. |
-| **workflow** | batch_cancelled | Batch was cancelled before normal completion. |
-| **workflow** | callback_started | Chain/batch callback execution started. |
-| **workflow** | callback_succeeded | Chain/batch callback completed successfully. |
-| **workflow** | callback_failed | Chain/batch callback returned an error. |
+| **workflow** | batch_failed | A non-allowed member failure or initial member dispatch rejection committed terminal batch failure. |
+| **workflow** | batch_cancelled | Remaining batch work was cancelled after terminal failure. |
+| **workflow** | callback_started | A claimed terminal Catch, Then, or Finally callback began execution. |
+| **workflow** | callback_succeeded | Terminal callback success crossed the applicable settlement boundary. |
+| **workflow** | callback_failed | A terminal callback was invalid or unavailable, returned an error, or panicked. |
 
 Handler panics now emit `process_failed` before the original panic value is rethrown. This adds truthful failure telemetry without changing backend panic recovery or retry behavior.
+
+Callback lifecycle facts cover terminal Catch, Then, and Finally callbacks. Inline `Batch.Progress` closures do not emit `callback_*` facts.
 
 ## Examples
 
@@ -1131,7 +1136,7 @@ fmt.Println(snapshot.Paused("default"))
 
 #### <a id="queue-statssnapshot-paused"></a>Paused
 
-Paused returns paused count for a queue.
+Paused returns the observed pause state for a queue as zero or one.
 
 ```go
 collector := queue.NewStatsCollector()

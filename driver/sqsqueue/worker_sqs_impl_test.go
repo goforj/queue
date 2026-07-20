@@ -513,6 +513,7 @@ func TestSQSWorker_ProcessFailureRetryAndTerminal(t *testing.T) {
 func TestSQSWorker_AttemptDecisionSettlement(t *testing.T) {
 	t.Run("permanent failure deletes without republishing", func(t *testing.T) {
 		stub := &sqsWorkerClientStub{}
+		var events []queue.Event
 		w := &sqsWorker{
 			handlers: map[string]queue.Handler{
 				"job:permanent": func(ctx context.Context, _ queue.Job) error {
@@ -525,6 +526,9 @@ func TestSQSWorker_AttemptDecisionSettlement(t *testing.T) {
 			},
 			client:   stub,
 			queueURL: "https://example.local/queue/default",
+			observer: queue.ObserverFunc(func(_ context.Context, event queue.Event) {
+				events = append(events, event)
+			}),
 		}
 		body, err := json.Marshal(sqsMessage{Type: "job:permanent", Queue: "default", MaxRetry: 3})
 		if err != nil {
@@ -538,6 +542,11 @@ func TestSQSWorker_AttemptDecisionSettlement(t *testing.T) {
 		}
 		if len(stub.deleteInputs) != 1 {
 			t.Fatalf("permanent failure must delete its receipt, got %d deletes", len(stub.deleteInputs))
+		}
+		for _, event := range events {
+			if event.Kind == queue.EventProcessArchived {
+				t.Fatalf("SQS deletion cannot prove terminal archival, got event %+v", event)
+			}
 		}
 	})
 

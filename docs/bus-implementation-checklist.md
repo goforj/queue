@@ -1,7 +1,7 @@
 # Bus Implementation Checklist
 
 > **Status:** Historical checklist for the original independent `bus`
-> implementation. `plan.md` is the current source of truth. The engine now lives
+> implementation. [`docs/plan.md`](./plan.md) is the current source of truth. The engine now lives
 > in `internal/workflow`, root `queue` owns the application surface, and public
 > `bus` is a deprecated forwarding/raw-runtime compatibility facade.
 
