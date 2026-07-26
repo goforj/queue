@@ -348,7 +348,7 @@ Objective: introduce a stable internal architecture while preserving the root ap
 - [x] **M2-07 — Resolve public ownership.** Extracted `internal/workflow`, removed root production imports of public facades, established physical root models, and removed the retired `bus` package. One internal engine owns orchestration while root composes it through physical root messages, middleware, workflow records, and stores. Canonical root contracts cover direct dispatch, chains, batches, events, and backend execution.
 - [ ] **M2-08 — Separate producer and worker lifecycle.** Model start, running, draining, stopped, and failed states without `sync.Once` poisoning.
 - [x] **M2-09 — Collapse root observers.** One root observer receives delivery and workflow events through a shared sink without duplicate execution events. Legacy observer aliases and facade adapters are removed.
-- [x] **M2-10 — Stop enveloping direct jobs as workflows.** Root dispatch now sends the application type and exact payload with versioned out-of-payload correlation. One engine executor still owns middleware, handler lookup, logical events, attempt classification, and settlement deferral. Every backend round-trips supported metadata, old version-one envelopes remain readable, reserved protocol-name applications retain the legacy route, raw-runtime `bus` bytes remain frozen, and `WithLegacyDirectEnvelope` supports a safe workers-first rollout. Direct/envelope uniqueness parity remains on the existing `v1` key. The additive SQL column, asymmetric mixed-worker boundary, exact payload correction, and rollback procedure are documented in `docs/direct-delivery-migration.md`.
+- [x] **M2-10 — Stop enveloping direct jobs as workflows.** Root dispatch now sends the application type and exact payload with versioned out-of-payload correlation. One engine executor still owns middleware, handler lookup, logical events, attempt classification, and settlement deferral. Every backend round-trips supported metadata, old version-one envelopes remain readable, reserved protocol-name applications retain the legacy route, version-one workflow delivery bytes remain frozen, and `WithLegacyDirectEnvelope` supports a safe workers-first rollout. Direct/envelope uniqueness parity remains on the existing `v1` key. The additive SQL column, asymmetric mixed-worker boundary, exact payload correction, and rollback procedure are documented in `docs/direct-delivery-migration.md`.
 
 Exit criteria:
 
@@ -400,8 +400,8 @@ Exit criteria:
 
 Objective: operational surfaces describe real state consistently and testing APIs model production behavior.
 
-- [x] **M5-01 — Define a shared root event envelope.** The normal facade now includes stable correlation, layer/source, queue, logical job, delivery attempt, event identity, and timestamps. Settlement-owner completion remains M1-04, and the legacy `bus` envelope survives only as a translated compatibility shape.
-- [x] **M5-02 — Preserve distinct event vocabularies without duplicate observer models.** The root observer retains effective queue, logical job key/type, delivery attempt, and workflow correlation across queue, worker, aggregate, and callback facts. The legacy `bus.Event` shape is now translated only at the deprecated compatibility boundary; it no longer owns an event producer or orchestration runtime.
+- [x] **M5-01 — Define a shared root event envelope.** The normal facade now includes stable correlation, layer/source, queue, logical job, delivery attempt, event identity, and timestamps. Settlement-owner completion remains M1-04. Persisted version-one workflow deliveries remain readable, while the removed public `bus` event envelope has no application-facing compatibility shape.
+- [x] **M5-02 — Preserve one event vocabulary without duplicate observer models.** The root observer retains effective queue, logical job key/type, delivery attempt, and workflow correlation across queue, worker, aggregate, and callback facts. The retired `bus.Event` adapter was removed with its compatibility package.
 - [x] **M5-03 — Correct event ordering.** Local acceptance callbacks and workerpool delivery gates ensure synchronous/in-process processing cannot begin before enqueue acceptance appears to observers; distributed arrival order remains correlation-based rather than globally ordered.
 - [ ] **M5-04 — Make stats semantically comparable.** Define pending, scheduled, retry, active, processed, failed, and throughput windows for each capability level.
 - [ ] **M5-05 — Make history instance-scoped and truthful.** Do not present process-wide sampled memory as durable backend history.
@@ -419,7 +419,7 @@ Exit criteria:
 
 Objective: documentation and release mechanics accurately describe the implemented system.
 
-- [ ] **M6-01 — Replace stale architecture snapshots.** Reconcile `design.md`, `bus-design.md`, and the one-path rationale; label historical proposals clearly.
+- [ ] **M6-01 — Replace stale architecture snapshots.** Reconcile `design.md` and the one-path rationale, and keep removed compatibility-facade proposals represented only by the decision history in this plan.
 - [ ] **M6-02 — Publish a delivery contract.** Define acceptance, durability, retries, duplicates, ordering, poison handling, and failure boundaries.
 - [ ] **M6-03 — Publish a workflow/store contract.** Define durability modes, callback recovery, retry ownership, concurrency, pruning, and retention.
 - [ ] **M6-04 — Expand compatibility policy.** Cover source API, configuration, persisted data, wire envelopes, SQL schemas, mixed module versions, operations, and minimum Go version.
@@ -566,7 +566,7 @@ Record accepted decisions here using the next stable ID.
 - Restored the repository's established Codecov project and patch status policy, made upload failures fail CI, and documented the multi-module collector without implying that coverage replaces behavioral guarantees.
 - Used the first complete fan-in report to add focused SQL, NATS, Redis, RabbitMQ, and SQS failure-path tests. SQL combined changed-statement coverage reached 98.3%, NATS 93.3%, Redis 95.7%, SQS 96.3%, and RabbitMQ 90.7% without production hooks or local containers.
 - Followed the fan-in report with an honest boundary pass that proves NATS shutdown waits for accepted work, Redis state ownership reaches real command semantics, and RabbitMQ immediate retry advances, commits, and leaves its broker queue empty. Defensive invariant tests verify ambiguous SQL claim results roll back and absent SQS client results fail closed. Fresh-context review separated supported behavior from defensive coverage and removed tests whose only premise was invalid injected collaborators.
-- Added the lightweight root integration-tagged `bus` fixture suite to unit collection and made the fan-in guard require proof that it executed.
+- Previously added the lightweight root integration-tagged `bus` fixture suite to unit collection. The retired fixture was later replaced by root workflow reliability contracts, which the unit collector executes by exact test name before coverage fan-in.
 
 ### 2026-07-18
 

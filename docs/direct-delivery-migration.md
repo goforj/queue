@@ -72,10 +72,10 @@ The current release retains dual claims unconditionally. A future release may st
 
 ## Compatibility Classification
 
-- **Source/API:** Existing root and `bus` calls retain their signatures. Driver metadata helpers and `WithLegacyDirectEnvelope` are additive advanced APIs.
-- **Configuration:** Existing configuration remains valid. The migration option is temporary and opt-in.
+- **Source/API:** Existing root direct-delivery calls retain their signatures. Driver metadata helpers and `WithLegacyDirectEnvelope` are additive advanced APIs. The current release separately removes the retired `bus` package; follow the [legacy API migration guide](legacy-api-migration.md).
+- **Configuration:** Direct-delivery configuration remains valid and the migration option is temporary and opt-in. The current release separately replaces root `Config.Observer` with `queue.WithObserver` as described in the legacy API migration guide.
 - **Persisted data:** SQL adds two nullable columns, `metadata_json` and `processing_token`. Existing rows remain readable and retain `NULL` in both columns; old producers can continue inserting rows that omit them after migration. During the uniqueness transition, each accepted SQL `UniqueFor` dispatch stores both historical and canonical lock rows in the existing table. Existing locks are not rewritten, and expiry pruning removes both formats.
-- **Wire:** New root direct deliveries use the application type and payload plus optional transport metadata. Legacy workflow envelopes remain readable and raw-runtime `bus` emission remains byte-stable.
+- **Wire:** New root direct deliveries use the application type and payload plus optional transport metadata. Persisted version-one workflow envelopes remain readable; the removed public raw-runtime bus emitter has no root replacement.
 - **Runtime behavior:** Exact `Job.PayloadBytes()` are delivered without a JSON re-marshal. Arbitrary bytes now reach the handler; `Message.Bind` reports a JSON error only if the application chooses to bind non-JSON bytes. An absent payload remains absent instead of becoming literal JSON `null`.
 - **Operations:** Worker-first rollout and backlog-aware rollback are required as described above. SQL additionally requires complete old/new worker-fleet separation in both directions.
 - **Minimum Go version:** Unchanged.

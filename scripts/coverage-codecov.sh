@@ -3,11 +3,12 @@ set -euo pipefail
 
 # Collects deterministic Codecov profiles across this repository's Go modules.
 #
-# Unit mode runs every buildable module without crossing go.mod boundaries and
-# emits one profile plus a module manifest. Integration mode runs the real,
-# tagged integration module for one backend (or "all") and emits one profile.
-# Both modes collapse duplicate source ranges produced when -coverpkg spans
-# multiple test binaries.
+# Unit mode runs every buildable module without crossing go.mod boundaries,
+# including the root integration-tagged reliability contracts, and emits one
+# profile plus a module manifest. Integration mode runs the real, tagged
+# integration module for one backend (or "all") and emits one profile. Both
+# modes collapse duplicate source ranges produced when -coverpkg spans multiple
+# test binaries.
 #
 # Usage:
 #   scripts/coverage-codecov.sh unit
@@ -174,6 +175,35 @@ collect_unit() {
         go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$raw_profile" ./...
     )
     raw_profiles+=("$raw_profile")
+
+    if [[ "$relative_dir" == "." ]]; then
+      local tagged_profile="$TMP_ROOT/unit-root-reliability-tag.out"
+      local tagged_log="$TMP_ROOT/unit-root-reliability-tag.json"
+      local reliability_test
+      local reliability_tests=(
+        TestWorkflowReliability_SQLDuplicateCallbacksSuppressed
+        TestWorkflowReliability_SQLCallbackReplayAfterDispatchFault
+        TestWorkflowReliability_SQLInitialChainDispatchFailureStateConsistent
+        TestWorkflowReliability_SQLPartialBatchDispatchFailureStateConsistent
+      )
+      echo "==> unit coverage: root integration-tagged workflow reliability"
+      if ! (
+        cd "$module_dir"
+        GOWORK=off GOCACHE="$GOCACHE_DIR" GOMODCACHE="$GOMODCACHE_DIR" \
+          go test -count=1 -tags=integration -run '^TestWorkflowReliability_' \
+            -covermode=atomic -coverpkg=./... -coverprofile="$tagged_profile" -json .
+      ) >"$tagged_log"; then
+        cat "$tagged_log" >&2
+        fail "root integration-tagged workflow reliability tests failed"
+      fi
+      for reliability_test in "${reliability_tests[@]}"; do
+        awk -v test_name="\"Test\":\"$reliability_test\"" '
+          index($0, "\"Action\":\"run\"") && index($0, test_name) { found = 1 }
+          END { exit !found }
+        ' "$tagged_log" || fail "root reliability test did not execute: $reliability_test"
+      done
+      raw_profiles+=("$tagged_profile")
+    fi
 
     printf '%s\t%s\n' "$relative_dir" "$module_path" >>"$manifest_tmp"
   done < <(

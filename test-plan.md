@@ -36,7 +36,7 @@ GOCACHE=/tmp/queue-gocache go test ./...
 What this currently gives us:
 
 - Core queue API behavior in the root module
-- `bus` workflow runtime/store semantics and callback idempotency tests
+- workflow runtime/store semantics and callback idempotency tests
 - Fake queue behavior used by application tests
 - Internal bridge regressions (`internal/driverbridge`)
 - API-level behavior and option handling
@@ -74,7 +74,7 @@ Current integration coverage is already strong and includes:
 - queue/workflow API integration in `integration/all/runtime_integration_test.go`
 - canonical root workflow integration in `integration/root/workflow_contract_integration_test.go`
 - observability integration in `integration/root/observability_integration_test.go`
-- SQL callback and dispatch-failure reliability tests in `workflow_reliability_integration_test.go`
+- SQL callback and dispatch-failure reliability tests in `workflow_reliability_integration_test.go` (executed by unit coverage with the root `integration` tag)
 
 Related documentation and CI checks:
 
@@ -92,11 +92,11 @@ INTEGRATION_BACKEND=redis scripts/coverage-codecov.sh integration
 
 Current role:
 
-- unit mode runs the root module and every buildable nested module independently with `GOWORK=off`; it also executes the root module's lightweight integration-tagged `bus` fixture tests, while the tooling-only `docs` module is inventory-checked but has no package to cover
+- unit mode runs the root module and every buildable nested module independently with `GOWORK=off`; it also executes and verifies every root integration-tagged workflow reliability contract, while the tooling-only `docs` module is inventory-checked but has no package to cover
 - integration mode runs the tagged tests from the actual `integration` module and instruments repository root, integration, and driver packages
 - CI runs one integration coverage command in each existing backend matrix leg, then fans the unit profile and all ten backend profiles into one guarded Codecov upload
 - emitted atomic text profiles use module-qualified source paths and collapse duplicate source ranges produced by broad `-coverpkg` runs
-- the fan-in guard requires every expected unit/backend artifact, all buildable module records, the root integration-tagged bus fixture, and covered representative root, driver, and integration-module source before upload
+- the collector rejects a root tagged run unless every named workflow reliability contract executes; the fan-in guard requires every expected unit/backend artifact, all buildable module records, and covered representative root, driver, and integration-module source before upload
 - Codecov upload errors fail CI; project and patch status checks compare to the base at the repository's established 1% threshold
 - tracks broad regressions
 - not used as a substitute for guarantee validation
@@ -253,9 +253,9 @@ This is a trust-critical area. Users will assume high-level workflow helpers enc
 
 ### Covered today (good)
 
-- root `bus` tests cover chain/batch lifecycle and callback de-duplication
+- root workflow tests cover chain/batch lifecycle and callback de-duplication
 - SQL store contract tests cover callback marker/idempotency behavior
-- integration queue and bus tests cover chain/batch end-to-end scenarios
+- integration root-queue tests cover chain/batch end-to-end scenarios
 - SQL runtime callback duplicate suppression integration tests exist
 
 ### Gaps to add
@@ -335,7 +335,7 @@ This is a trust-critical area. Users will assume high-level workflow helpers enc
 ### Compatibility coverage
 
 - `queue.NewFake() *queue.FakeQueue` is the supported fake constructor and API.
-- Legacy bus builders retain shallow job snapshots and Dispatch-time payload JSON encoding before entering the canonical fake.
+- Root fake builders snapshot `queue.Job` values after `Payload` has encoded their bytes; the legacy migration guide documents the former dispatch-time encoding boundary.
 
 ## Test Types We Should Add or Expand (Prioritized)
 
@@ -577,7 +577,7 @@ Why:
 - [x] Add fuzz/property tests for decoding, naming, and option-validation boundaries
 - Location:
   - root package tests (`Fuzz...`)
-  - `bus` package where parsing/validation applies
+  - internal workflow package where parsing/validation applies
 - Acceptance:
   - at least one fuzz target for payload binding/decoding
   - at least one fuzz/property target for queue-name normalization/validation
