@@ -42,10 +42,10 @@ What is not yet sufficient for a GA claim:
   - Acceptance: green matrix in CI for `null`, `sync`, `workerpool`, `redis`, `mysql`, `postgres`, `sqlite`, `nats`, `sqs`, `rabbitmq`.
   - Evidence: local `main` run passed (`2026-02-23`): `INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1`
 
-- [x] Bus integration suite passes across enabled backends.
-  - Command: `INTEGRATION_BACKEND=all go test -tags=integration ./integration/bus -run TestIntegrationBus_AllBackends -count=1 -v`
+- [x] Canonical root workflow integration suite passes across enabled backends.
+  - Command: `INTEGRATION_BACKEND=all go test -tags=integration ./integration/root -run TestCanonicalWorkflowContract_AllExecutableBackends -count=1 -v`
   - Acceptance: all enabled backends green (including `rabbitmq`).
-  - Evidence: included in `INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1` on this repo layout (`integration/bus` is part of `./integration/...`).
+  - Evidence: included in `INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1` on this repo layout.
 
 ## 2. Shared Integration Contract and Recovery Semantics (must complete)
 

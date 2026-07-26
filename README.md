@@ -15,7 +15,7 @@
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
     <img src="https://img.shields.io/badge/unit_tests-895-brightgreen" alt="Unit tests (executed count)">
-    <img src="https://img.shields.io/badge/integration_tests-610-blue" alt="Integration tests (executed count)">
+    <img src="https://img.shields.io/badge/integration_tests-618-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
 
@@ -26,6 +26,8 @@ go get github.com/goforj/queue
 ```
 
 Existing deployments upgrading to application-type direct delivery must replace workers before switching producers. Follow the [direct delivery migration guide](docs/direct-delivery-migration.md), including its SQL schema step and backend-specific rollback constraints.
+
+Applications upgrading from the retired `bus` or `queuefake` packages should follow the [legacy API migration guide](docs/legacy-api-migration.md). The removed Temporal compatibility adapter has no root-package replacement.
 
 The root queue module and non-PostgreSQL driver modules require Go 1.24.4 or newer. The PostgreSQL driver requires Go 1.25 or newer so it can use pgx 5.9.2, the first release containing the [GO-2026-5004 security fix](https://pkg.go.dev/vuln/GO-2026-5004).
 
@@ -242,7 +244,8 @@ q, _ := queue.New(
 
 ```go
 q, _ := queue.New(
-	queue.Config{Driver: queue.DriverWorkerpool, Observer: queue.NewStatsCollector()},
+	queue.Config{Driver: queue.DriverWorkerpool},
+	queue.WithObserver(queue.NewStatsCollector()),
 )
 ```
 
@@ -398,10 +401,10 @@ observer := queue.MultiObserver(
     }),
 )
 
-q, _ := queue.New(queue.Config{
-    Driver:   queue.DriverWorkerpool,
-    Observer: observer,
-})
+q, _ := queue.New(
+    queue.Config{Driver: queue.DriverWorkerpool},
+    queue.WithObserver(observer),
+)
 _ = q
 ```
 
@@ -429,10 +432,10 @@ observer := queue.MultiObserver(
     }),
 )
 
-q, _ := queue.New(queue.Config{
-    Driver:   queue.DriverWorkerpool,
-    Observer: observer,
-})
+q, _ := queue.New(
+    queue.Config{Driver: queue.DriverWorkerpool},
+    queue.WithObserver(observer),
+)
 _ = q
 ```
 

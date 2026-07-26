@@ -53,6 +53,9 @@ func assertReadmeObserverSignatures(t *testing.T) {
 			t.Fatalf("README manual observer snippet is missing compiled signature %q", signature)
 		}
 	}
+	if strings.Contains(manual, "Observer:") {
+		t.Fatal("README manual snippets must configure root observers with queue.WithObserver")
+	}
 }
 
 // compileQuickStartQueueSnippet pins the queue quick start to the supported dispatch and handler signatures.

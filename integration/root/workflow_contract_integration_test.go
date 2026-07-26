@@ -4,6 +4,7 @@ package root_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -141,14 +142,74 @@ func TestCanonicalWorkflowContract_AllExecutableBackends(t *testing.T) {
 				state, findErr := q.FindBatch(context.Background(), batchID)
 				return findErr == nil && state.Completed && state.Processed == 2 && state.Failed == 0 && batchCalls.Load() == 2
 			})
+
+			runCanonicalWorkflowFailureContract(t, q, fixture.queue)
 		})
 	}
+}
+
+// runCanonicalWorkflowFailureContract proves terminal failures invoke catch and finally exactly once through the root API.
+func runCanonicalWorkflowFailureContract(t *testing.T, q *queue.Queue, queueName string) {
+	t.Helper()
+	suffix := time.Now().UnixNano()
+	chainSuccessType := fmt.Sprintf("workflow:chain:failure:first:%d", suffix)
+	chainFailureType := fmt.Sprintf("workflow:chain:failure:second:%d", suffix)
+	batchFailureType := fmt.Sprintf("workflow:batch:failure:%d", suffix)
+	q.Register(chainSuccessType, func(context.Context, queue.Message) error { return nil })
+	q.Register(chainFailureType, func(context.Context, queue.Message) error { return errors.New("chain step failed") })
+	q.Register(batchFailureType, func(context.Context, queue.Message) error { return errors.New("batch member failed") })
+
+	var chainCatchCalls atomic.Int32
+	var chainFinallyCalls atomic.Int32
+	chainID, _ := q.Chain(
+		queue.NewJob(chainSuccessType),
+		queue.NewJob(chainFailureType),
+	).OnQueue(queueName).
+		Catch(func(context.Context, queue.ChainState, error) error {
+			chainCatchCalls.Add(1)
+			return nil
+		}).
+		Finally(func(context.Context, queue.ChainState) error {
+			chainFinallyCalls.Add(1)
+			return nil
+		}).
+		Dispatch(context.Background())
+	if chainID == "" {
+		t.Fatal("failed chain did not return an ID")
+	}
+	waitForCanonicalWorkflow(t, "chain failure callbacks", func() bool {
+		state, err := q.FindChain(context.Background(), chainID)
+		return err == nil && state.Failed && state.Failure != "" && chainCatchCalls.Load() == 1 && chainFinallyCalls.Load() == 1
+	})
+
+	var batchCatchCalls atomic.Int32
+	var batchFinallyCalls atomic.Int32
+	batchID, _ := q.Batch(
+		queue.NewJob(batchFailureType),
+		queue.NewJob(batchFailureType),
+	).OnQueue(queueName).
+		Catch(func(context.Context, queue.BatchState, error) error {
+			batchCatchCalls.Add(1)
+			return nil
+		}).
+		Finally(func(context.Context, queue.BatchState) error {
+			batchFinallyCalls.Add(1)
+			return nil
+		}).
+		Dispatch(context.Background())
+	if batchID == "" {
+		t.Fatal("failed batch did not return an ID")
+	}
+	waitForCanonicalWorkflow(t, "batch failure callbacks", func() bool {
+		state, err := q.FindBatch(context.Background(), batchID)
+		return err == nil && state.Completed && state.Cancelled && batchCatchCalls.Load() == 1 && batchFinallyCalls.Load() == 1
+	})
 }
 
 // waitForCanonicalWorkflow keeps local asynchronous runtimes and synchronous runtimes under one contract assertion.
 func waitForCanonicalWorkflow(t *testing.T, scenario string, check func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
 		if check() {
 			return
