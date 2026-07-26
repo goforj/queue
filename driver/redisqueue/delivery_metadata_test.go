@@ -141,6 +141,7 @@ func TestRedisDriverMetadataReachesMessageHandler(t *testing.T) {
 	server := &serverStub{}
 	q, err := driverbridge.NewQueueFromDriver(
 		queue.Config{Driver: queue.DriverRedis, DefaultQueue: "default"},
+		nil,
 		producer,
 		func(int) (any, error) {
 			return newRedisWorker(server, backend.NewServeMux(), nil), nil

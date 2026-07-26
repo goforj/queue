@@ -2,7 +2,7 @@
 
 This document defines the baseline observability contract for `queue` before GA.
 
-For the normal root facade, it covers one event stream: `queue.Event` values delivered to the `queue.Observer` installed with `queue.WithObserver(...)`. `Event.Layer` identifies whether a fact came from queueing, worker execution, or workflow orchestration. The deprecated `bus` package translates the same internal producer into its frozen legacy event shape only for compatibility consumers; it no longer owns a second event stream.
+For the normal root facade, it covers one event stream: `queue.Event` values delivered to the `queue.Observer` installed with `queue.WithObserver(...)`. `Event.Layer` identifies whether a fact came from queueing, worker execution, or workflow orchestration.
 
 This is a baseline contract. Before GA, pin a version and treat field/label changes as compatibility-impacting.
 
@@ -22,8 +22,6 @@ Source:
 - `queue.Observer`
 - `queue.ObserverFunc`
 - `queue.WithObserver(...)`
-
-`queue.Config.Observer` is a deprecated compatibility path into the same stream.
 
 Queue, worker, and workflow events carry the same applicable dispatch/job/chain/batch correlation IDs. Internal envelope IDs are excluded from `Event.JobKey`, so telemetry grouping follows the logical application job rather than a one-off wrapper delivery. `Event.JobKey` remains an observability field rather than a persisted uniqueness key; both contracts resolve the same logical job type and payload, while uniqueness additionally includes version and effective queue framing.
 
@@ -86,9 +84,7 @@ Event kind type:
 
 - `queue.EventKind`
 
-The deprecated `WorkflowEvent`, `WorkflowEventKind`, `WorkflowObserver`, and `WorkflowObserverFunc` names are aliases of the canonical root model rather than a second stream.
-
-Public dispatch lifecycle facts are intentionally queue-layer events because they bracket queue acceptance. They are not logical workflow transitions, even when a workflow dispatch produced them. A sink migrated from the legacy workflow observer contract must accept `dispatch_started`, `dispatch_succeeded`, and `dispatch_failed` in addition to `EventLayerWorkflow` events to retain its former scope. A filter that accepts only `EventLayerWorkflow` is the narrower job, chain, batch, and callback stream.
+Public dispatch lifecycle facts are intentionally queue-layer events because they bracket queue acceptance. They are not logical workflow transitions, even when a workflow dispatch produced them. A filter that accepts only `EventLayerWorkflow` is the narrower job, chain, batch, and callback stream.
 
 Current workflow event kinds (via internal orchestration engine) include:
 
@@ -191,6 +187,6 @@ After GA (target):
 ## Cross-References
 
 - `observability.go` (canonical `queue.Event`, event layers, kinds, and observer helpers)
-- `runtime.go` (one `queue.WithObserver(...)` attachment path and deprecated workflow aliases)
+- `runtime.go` (one `queue.WithObserver(...)` attachment path)
 - `docs/ops-alerts.md` (dashboard/alert baseline)
 - `docs/runbooks/` (incident response)

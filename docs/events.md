@@ -1,6 +1,6 @@
 # Queue Events Contract
 
-This document defines the root application facade's unified observability contract emitted through `queue.Observer`. `Event.Layer` distinguishes queue, worker, and workflow facts without requiring separate observer models on the normal `*queue.Queue` path. The deprecated `bus` package retains its legacy event shape only as an adapter at the compatibility boundary; it no longer owns a second event producer or orchestration engine.
+This document defines the root application facade's unified observability contract emitted through `queue.Observer`. `Event.Layer` distinguishes queue, worker, and workflow facts without requiring separate observer models on the normal `*queue.Queue` path.
 
 ## Goals
 
@@ -150,16 +150,11 @@ Built-in `EventProcessArchived` support:
 - Additive changes are allowed (new event kinds, new optional fields).
 - Breaking changes require an explicit compatibility release and migration guide; after v1 they require a major version bump.
 
-## Unified observer migration
-
-The observer collapse is an explicit pre-v1 compatibility boundary:
+## Unified observer contract
 
 - `queue.WithObserver` accepts `queue.Observer` and receives queue, worker, and workflow layers.
-- `queue.WorkflowEvent`, `queue.WorkflowEventKind`, `queue.WorkflowObserver`, and `queue.WorkflowObserverFunc` are deprecated aliases of the root event model.
-- Code that used unkeyed `queue.Event` or `bus.Event` literals must switch to keyed literals because the envelopes now include correlation fields.
-- Adapt custom `bus.Observer` implementations with `queue.ObserverFunc` when constructing a root queue. `bus.WithObserver` remains supported only on the retained raw-`busruntime.Runtime` construction route; an already-built `*queue.Queue` must receive observation options when it is constructed.
 - Sinks that only need logical job, chain, batch, and callback transitions can return early unless `event.Layer == queue.EventLayerWorkflow`.
-- Legacy `queue.WorkflowObserver` and `bus.Observer` sinks also received `EventDispatchStarted`, `EventDispatchSucceeded`, and `EventDispatchFailed`. Those dispatch facts deliberately belong to `EventLayerQueue` in the unified model because they describe public queue acceptance, not a committed workflow transition. To retain the full legacy scope, accept the workflow layer plus those three event kinds:
+- Public dispatch lifecycle facts deliberately belong to `EventLayerQueue` because they describe public queue acceptance, not a committed workflow transition. A sink that needs both workflow transitions and dispatch lifecycle facts can accept them explicitly:
 
 ```go
 if event.Layer != queue.EventLayerWorkflow {

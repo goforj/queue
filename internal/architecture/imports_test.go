@@ -11,15 +11,11 @@ import (
 	"testing"
 )
 
-// TestWorkflowDependencyDirection prevents the public compatibility package from becoming an inward engine dependency again.
+// TestWorkflowDependencyDirection keeps the internal workflow engine independent from root public packages.
 func TestWorkflowDependencyDirection(t *testing.T) {
 	repository := repositoryRoot(t)
-	assertProductionImportsExclude(t, repository, map[string]struct{}{
-		"github.com/goforj/queue/bus": {},
-	})
 	assertProductionImportsExclude(t, filepath.Join(repository, "internal", "workflow"), map[string]struct{}{
 		"github.com/goforj/queue":           {},
-		"github.com/goforj/queue/bus":       {},
 		"github.com/goforj/queue/queuecore": {},
 	})
 }

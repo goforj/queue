@@ -131,6 +131,7 @@ func TestNewQueueFromDriverPreservesReadiness(t *testing.T) {
 	}
 	legacyQueue, err := NewQueueFromDriver(
 		queue.Config{Driver: queue.DriverDatabase},
+		nil,
 		legacy,
 		nil,
 	)
@@ -154,6 +155,7 @@ func TestNewQueueFromDriverPreservesReadiness(t *testing.T) {
 	}
 	canonicalQueue, err := NewQueueFromDriver(
 		queue.Config{Driver: queue.DriverDatabase},
+		nil,
 		canonical,
 		nil,
 	)
@@ -188,6 +190,7 @@ func TestNewQueueFromDriver_ExternalWorkerFactoryAndOptionalCapabilities(t *test
 
 	q, err := NewQueueFromDriver(
 		queue.Config{Driver: queue.DriverNATS, DefaultQueue: "default"},
+		nil,
 		backend,
 		func(int) (any, error) { return w, nil },
 	)
@@ -267,6 +270,7 @@ func TestNewQueueFromDriver_NativeBackendOptionalCapabilities(t *testing.T) {
 
 	q, err := NewQueueFromDriver(
 		queue.Config{Driver: queue.DriverDatabase, DefaultQueue: "default"},
+		nil,
 		backend,
 		nil,
 	)
@@ -303,7 +307,8 @@ func TestNewQueueFromDriverSharesObserverSink(t *testing.T) {
 	}))
 
 	q, err := NewQueueFromDriver(
-		queue.Config{Driver: queue.DriverNATS, DefaultQueue: "default", Observer: sink},
+		queue.Config{Driver: queue.DriverNATS, DefaultQueue: "default"},
+		sink,
 		&externalBackendStub{driver: queue.DriverNATS},
 		nil,
 		queue.WithObserver(queue.ObserverFunc(func(_ context.Context, event queue.Event) {

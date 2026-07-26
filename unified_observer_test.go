@@ -51,49 +51,17 @@ func TestWithObserverReceivesEveryEventLayer(t *testing.T) {
 	}
 }
 
-// TestConfigObserverReceivesWorkflowEvents preserves the compatibility configuration path during migration.
-func TestConfigObserverReceivesWorkflowEvents(t *testing.T) {
-	var events []Event
-	q, err := New(Config{
-		Driver: DriverSync,
-		Observer: ObserverFunc(func(_ context.Context, event Event) {
-			events = append(events, event)
-		}),
-	})
-	if err != nil {
-		t.Fatalf("new sync queue: %v", err)
-	}
-	q.Register("reports:build", func(context.Context, Message) error { return nil })
-	if err := q.StartWorkers(context.Background()); err != nil {
-		t.Fatalf("start workers: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := q.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown: %v", err)
-		}
-	})
-
-	if _, err := q.Dispatch(NewJob("reports:build").OnQueue("default")); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	if _, ok := findEvent(events, EventJobSucceeded); !ok {
-		t.Fatalf("config observer did not receive workflow events: %+v", events)
-	}
-}
-
-// TestConfigAndOptionObserversShareOneEventIdentity prevents nested wrappers from describing one fact twice.
-func TestConfigAndOptionObserversShareOneEventIdentity(t *testing.T) {
-	var configEvents []Event
-	var optionEvents []Event
+// TestMultipleOptionObserversShareOneEventIdentity prevents nested wrappers from describing one fact twice.
+func TestMultipleOptionObserversShareOneEventIdentity(t *testing.T) {
+	var firstEvents []Event
+	var secondEvents []Event
 	q, err := New(
-		Config{
-			Driver: DriverSync,
-			Observer: ObserverFunc(func(_ context.Context, event Event) {
-				configEvents = append(configEvents, event)
-			}),
-		},
+		Config{Driver: DriverSync},
 		WithObserver(ObserverFunc(func(_ context.Context, event Event) {
-			optionEvents = append(optionEvents, event)
+			firstEvents = append(firstEvents, event)
+		})),
+		WithObserver(ObserverFunc(func(_ context.Context, event Event) {
+			secondEvents = append(secondEvents, event)
 		})),
 	)
 	if err != nil {
@@ -113,13 +81,13 @@ func TestConfigAndOptionObserversShareOneEventIdentity(t *testing.T) {
 		t.Fatalf("dispatch: %v", err)
 	}
 	for _, kind := range []EventKind{EventEnqueueAccepted, EventProcessStarted, EventJobSucceeded} {
-		configMatches := eventsOfKind(configEvents, kind)
-		optionMatches := eventsOfKind(optionEvents, kind)
-		if len(configMatches) != 1 || len(optionMatches) != 1 {
-			t.Fatalf("event %q counts = config:%d option:%d, want 1/1", kind, len(configMatches), len(optionMatches))
+		firstMatches := eventsOfKind(firstEvents, kind)
+		secondMatches := eventsOfKind(secondEvents, kind)
+		if len(firstMatches) != 1 || len(secondMatches) != 1 {
+			t.Fatalf("event %q counts = first:%d second:%d, want 1/1", kind, len(firstMatches), len(secondMatches))
 		}
-		if configMatches[0].EventID != optionMatches[0].EventID || !configMatches[0].Time.Equal(optionMatches[0].Time) {
-			t.Fatalf("event %q identity differs: config=%+v option=%+v", kind, configMatches[0], optionMatches[0])
+		if firstMatches[0].EventID != secondMatches[0].EventID || !firstMatches[0].Time.Equal(secondMatches[0].Time) {
+			t.Fatalf("event %q identity differs: first=%+v second=%+v", kind, firstMatches[0], secondMatches[0])
 		}
 	}
 }

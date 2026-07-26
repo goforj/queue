@@ -53,6 +53,9 @@ func assertReadmeObserverSignatures(t *testing.T) {
 			t.Fatalf("README manual observer snippet is missing compiled signature %q", signature)
 		}
 	}
+	if strings.Contains(manual, "Observer:") {
+		t.Fatal("README manual snippets must configure root observers with queue.WithObserver")
+	}
 }
 
 // compileQuickStartQueueSnippet pins the queue quick start to the supported dispatch and handler signatures.
@@ -190,10 +193,7 @@ func compileObservabilitySnippet() {
 		}),
 	)
 
-	q, _ := queue.New(queue.Config{
-		Driver:   queue.DriverWorkerpool,
-		Observer: observer,
-	})
+	q, _ := queue.New(queue.Config{Driver: queue.DriverWorkerpool}, queue.WithObserver(observer))
 	_ = q
 }
 
@@ -212,10 +212,7 @@ func compileComposeObserversSnippet() {
 		}),
 	)
 
-	q, _ := queue.New(queue.Config{
-		Driver:   queue.DriverWorkerpool,
-		Observer: observer,
-	})
+	q, _ := queue.New(queue.Config{Driver: queue.DriverWorkerpool}, queue.WithObserver(observer))
 	_ = q
 }
 

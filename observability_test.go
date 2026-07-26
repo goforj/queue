@@ -20,10 +20,7 @@ func startTestQueue(t *testing.T, q queueRuntime) {
 
 func TestStatsCollector_CapturesQueueProcessing(t *testing.T) {
 	collector := NewStatsCollector()
-	q, err := newRuntime(Config{
-		Driver:   DriverSync,
-		Observer: collector,
-	})
+	q, err := newRuntimeWithObserver(Config{Driver: DriverSync}, collector)
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -49,10 +46,7 @@ func TestStatsCollector_CapturesQueueProcessing(t *testing.T) {
 
 func TestStatsCollector_CapturesProcessingFailure(t *testing.T) {
 	collector := NewStatsCollector()
-	q, err := newRuntime(Config{
-		Driver:   DriverSync,
-		Observer: collector,
-	})
+	q, err := newRuntimeWithObserver(Config{Driver: DriverSync}, collector)
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -532,12 +526,9 @@ func TestStatsSnapshot_Getters(t *testing.T) {
 }
 
 func TestObserverPanic_DoesNotBreakDispatch(t *testing.T) {
-	q, err := newRuntime(Config{
-		Driver: DriverSync,
-		Observer: ObserverFunc(func(context.Context, Event) {
-			panic("observer panic")
-		}),
-	})
+	q, err := newRuntimeWithObserver(Config{Driver: DriverSync}, ObserverFunc(func(context.Context, Event) {
+		panic("observer panic")
+	}))
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}
@@ -550,12 +541,9 @@ func TestObserverPanic_DoesNotBreakDispatch(t *testing.T) {
 
 func TestObserverPanic_DoesNotBreakHandlerExecution(t *testing.T) {
 	var called atomic.Int64
-	q, err := newRuntime(Config{
-		Driver: DriverSync,
-		Observer: ObserverFunc(func(context.Context, Event) {
-			panic("observer panic")
-		}),
-	})
+	q, err := newRuntimeWithObserver(Config{Driver: DriverSync}, ObserverFunc(func(context.Context, Event) {
+		panic("observer panic")
+	}))
 	if err != nil {
 		t.Fatalf("new queue failed: %v", err)
 	}

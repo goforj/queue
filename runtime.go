@@ -10,30 +10,6 @@ import (
 	"github.com/goforj/queue/internal/workflow"
 )
 
-// WorkflowEventKind identifies high-level workflow runtime lifecycle events.
-//
-// Deprecated: use EventKind. Delivery and workflow facts now share one event model.
-// @group Queue
-type WorkflowEventKind = EventKind
-
-// WorkflowEvent is emitted by the high-level workflow runtime observer hooks.
-//
-// Deprecated: use Event. Delivery and workflow facts now share one event model.
-// @group Queue
-type WorkflowEvent = Event
-
-// WorkflowObserver receives high-level workflow runtime events.
-//
-// Deprecated: use Observer. A single observer now receives every event layer.
-// @group Queue
-type WorkflowObserver = Observer
-
-// WorkflowObserverFunc adapts a function to a workflow observer.
-//
-// Deprecated: use ObserverFunc. A single observer now receives every event layer.
-// @group Queue
-type WorkflowObserverFunc = ObserverFunc
-
 // Permanent marks an error as terminal so workers do not spend the remaining application retry budget on it.
 // @group Queue
 func Permanent(err error) error {

@@ -58,11 +58,11 @@ func NewObserverSink(observers ...queue.Observer) queue.Observer {
 // the runtime seam is being moved behind internal APIs.
 func NewQueueFromDriver(
 	cfg queue.Config,
+	observer queue.Observer,
 	backend any,
 	workerFactory func(workers int) (any, error),
 	opts ...queue.Option,
 ) (*queue.Queue, error) {
-	cfg.Observer = NewObserverSink(cfg.Observer)
 	driverBackend, err := adaptQueueBackend(backend)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func NewQueueFromDriver(
 	for _, opt := range opts {
 		rawOpts = append(rawOpts, opt)
 	}
-	qv, err := runtimehook.BuildQueueFromDriver(cfg, driverBackend, adaptWorkerFactory(workerFactory), rawOpts)
+	qv, err := runtimehook.BuildQueueFromDriver(cfg, NewObserverSink(observer), driverBackend, adaptWorkerFactory(workerFactory), rawOpts)
 	if err != nil {
 		return nil, err
 	}

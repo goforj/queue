@@ -9,13 +9,13 @@ This module contains integration and benchmark suites that were moved out of the
   - `Queue`-surface integration matrix (`TestIntegrationQueue_AllBackends`)
 - `integration/root`
   - Root-package integration/contract/observability suites
+  - Canonical root workflow success and failure callbacks across backends
+  - SQL workflow-store concurrency coverage
   - Driver constructor/linking integration coverage
   - Integration benchmarks
-- `integration/bus`
-  - `bus` integration suites (including callback + SQL integration coverage)
 
 Optional drivers are linked once per integration package via `drivers_link_test.go`
-files (`integration/all`, `integration/bus`, `integration/root`) so individual test files
+files (`integration/all`, `integration/root`) so individual test files
 do not need repeated driver import blocks.
 
 ## Common Commands
@@ -32,10 +32,10 @@ Shared scenario matrix only:
 GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/all -run '^TestIntegrationScenarios_AllBackends$' -count=1 -v
 ```
 
-Bus integration matrix only:
+Canonical root workflow matrix only:
 
 ```bash
-GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/bus -run '^TestIntegrationBus_AllBackends$' -count=1 -v
+GOCACHE=/tmp/queue-gocache go test -tags=integration ./integration/root -run '^TestCanonicalWorkflowContract_AllExecutableBackends$' -count=1 -v
 ```
 
 Local-only compile/smoke checks (no Docker):

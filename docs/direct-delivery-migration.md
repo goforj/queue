@@ -24,7 +24,7 @@ Drivers carry the record using their native transport boundary:
 
 Missing metadata is valid for legacy and low-level deliveries. Version 1 is trusted. Malformed or unknown versions never block application delivery and never supply correlation IDs; workers fall back to the physical application identity or decode a supported version-one workflow envelope.
 
-Chains, batches, and ephemeral callbacks continue to use the version-one workflow envelope because their durable state transitions require orchestration fields. The raw `bus.New(busruntime.Runtime)` compatibility route also retains its exact version-one `bus:job` bytes. New workers keep all four legacy handlers registered, so old backlog remains readable.
+Chains, batches, and ephemeral callbacks continue to use the version-one workflow envelope because their durable state transitions require orchestration fields. New workers keep all four legacy handlers registered, so old backlog remains readable.
 
 Application job types equal to `bus:job`, `bus:chain:node`, `bus:batch:job`, or `bus:callback` continue through the legacy direct envelope. This prevents an application registration from replacing a reserved workflow handler.
 
@@ -72,10 +72,10 @@ The current release retains dual claims unconditionally. A future release may st
 
 ## Compatibility Classification
 
-- **Source/API:** Existing root and `bus` calls retain their signatures. Driver metadata helpers and `WithLegacyDirectEnvelope` are additive advanced APIs.
-- **Configuration:** Existing configuration remains valid. The migration option is temporary and opt-in.
+- **Source/API:** Existing root direct-delivery calls retain their signatures. Driver metadata helpers and `WithLegacyDirectEnvelope` are additive advanced APIs. The current release separately removes the retired `bus` package; follow the [legacy API migration guide](legacy-api-migration.md).
+- **Configuration:** Direct-delivery configuration remains valid and the migration option is temporary and opt-in. The current release separately replaces root `Config.Observer` with `queue.WithObserver` as described in the legacy API migration guide.
 - **Persisted data:** SQL adds two nullable columns, `metadata_json` and `processing_token`. Existing rows remain readable and retain `NULL` in both columns; old producers can continue inserting rows that omit them after migration. During the uniqueness transition, each accepted SQL `UniqueFor` dispatch stores both historical and canonical lock rows in the existing table. Existing locks are not rewritten, and expiry pruning removes both formats.
-- **Wire:** New root direct deliveries use the application type and payload plus optional transport metadata. Legacy workflow envelopes remain readable and raw-runtime `bus` emission remains byte-stable.
+- **Wire:** New root direct deliveries use the application type and payload plus optional transport metadata. Persisted version-one workflow envelopes remain readable; the removed public raw-runtime bus emitter has no root replacement.
 - **Runtime behavior:** Exact `Job.PayloadBytes()` are delivered without a JSON re-marshal. Arbitrary bytes now reach the handler; `Message.Bind` reports a JSON error only if the application chooses to bind non-JSON bytes. An absent payload remains absent instead of becoming literal JSON `null`.
 - **Operations:** Worker-first rollout and backlog-aware rollback are required as described above. SQL additionally requires complete old/new worker-fleet separation in both directions.
 - **Minimum Go version:** Unchanged.

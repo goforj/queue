@@ -14,10 +14,6 @@ import (
 	backend "github.com/hibiken/asynq"
 )
 
-// ServerLogger is the Redis worker server logger contract.
-// Deprecated: use queue.Logger via Config.DriverBaseConfig.Logger.
-type ServerLogger = queue.Logger
-
 // ServerLogLevel configures Redis worker server log verbosity.
 type ServerLogLevel int
 
@@ -38,7 +34,6 @@ type Config struct {
 	Password        string
 	DB              int
 	Queues          map[string]int
-	ServerLogger    ServerLogger
 	ServerLogLevel  ServerLogLevel
 	ShutdownTimeout time.Duration
 }
@@ -74,7 +69,7 @@ func New(addr string, opts ...queue.Option) (*queue.Queue, error) {
 //			Addr: "127.0.0.1:6379", // required
 //			Password: "",           // optional; default empty
 //			DB: 0,                  // optional; default 0
-//			ServerLogger: nil,      // optional; default backend logger
+//			Logger: nil,            // optional; default backend logger
 //			ServerLogLevel: redisqueue.ServerLogLevelDefault, // optional
 //		},
 //		queue.WithWorkers(4), // optional; default: runtime.NumCPU() (min 1)
@@ -91,11 +86,10 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	rootCfg := queue.Config{
 		Driver:       queue.DriverRedis,
 		DefaultQueue: cfg.DefaultQueue,
-		Observer:     observer,
 		Logger:       cfg.Logger,
 	}
 	driverBackend := newRedisQueue(newRedisClient(cfg), newRedisInspector(cfg), newRedisTimelineStore(cfg), true)
-	q, err := driverbridge.NewQueueFromDriver(rootCfg, driverBackend, func(workers int) (any, error) {
+	q, err := driverbridge.NewQueueFromDriver(rootCfg, observer, driverBackend, func(workers int) (any, error) {
 		return newRedisWorker(
 			backend.NewServer(backend.RedisClientOpt{
 				Addr:     cfg.Addr,
@@ -121,9 +115,7 @@ func serverConfig(cfg Config, workers int) backend.Config {
 	if queues := normalizeQueues(cfg.Queues, cfg.DefaultQueue); len(queues) > 0 {
 		serverCfg.Queues = queues
 	}
-	if cfg.ServerLogger != nil {
-		serverCfg.Logger = cfg.ServerLogger
-	} else if cfg.Logger != nil {
+	if cfg.Logger != nil {
 		serverCfg.Logger = cfg.Logger
 	}
 	if level, ok := serverLogLevel(cfg.ServerLogLevel); ok {

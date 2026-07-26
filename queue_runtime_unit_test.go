@@ -1712,7 +1712,8 @@ func TestQueueCommonWrapRegisteredHandlerPreservesContextOnNilDecoration(t *test
 			}
 			decoratorCalls := 0
 			common := &queueCommon{
-				cfg: Config{Driver: DriverSync, Observer: observer},
+				cfg:          Config{Driver: DriverSync},
+				observerSink: observer,
 				handlerContextDecorator: func(context.Context) context.Context {
 					decoratorCalls++
 					return nil
@@ -1781,9 +1782,10 @@ func TestRuntimeHandlerContextDecoratorNativeExternalParity(t *testing.T) {
 
 				driver := DriverSync
 				common := &queueCommon{
-					inner:  backend,
-					cfg:    Config{Driver: driver, DefaultQueue: "default", Observer: observer},
-					driver: driver,
+					inner:        backend,
+					cfg:          Config{Driver: driver, DefaultQueue: "default"},
+					driver:       driver,
+					observerSink: observer,
 				}
 				var runtime queueRuntime = &nativeQueueRuntime{
 					common:  common,
@@ -1855,12 +1857,10 @@ func TestQueueCommonWrapRegisteredHandlerDefersRedisDecoration(t *testing.T) {
 	decoratorCalls := 0
 	observerCalls := 0
 	common := &queueCommon{
-		cfg: Config{
-			Driver: DriverRedis,
-			Observer: ObserverFunc(func(context.Context, Event) {
-				observerCalls++
-			}),
-		},
+		cfg: Config{Driver: DriverRedis},
+		observerSink: ObserverFunc(func(context.Context, Event) {
+			observerCalls++
+		}),
 		handlerContextDecorator: func(ctx context.Context) context.Context {
 			decoratorCalls++
 			return context.WithValue(ctx, "decorated", true)

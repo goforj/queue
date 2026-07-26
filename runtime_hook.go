@@ -12,10 +12,14 @@ func init() {
 	runtimehook.ExtractRuntimeFromQueue = extractRuntimeFromQueueHook
 }
 
-func buildQueueFromDriverHook(cfgv any, backendv any, workerFactoryv runtimehook.WorkerFactory, optsv []any) (any, error) {
+func buildQueueFromDriverHook(cfgv any, observerv any, backendv any, workerFactoryv runtimehook.WorkerFactory, optsv []any) (any, error) {
 	cfg, ok := cfgv.(Config)
 	if !ok {
 		return nil, fmt.Errorf("invalid queue config type %T", cfgv)
+	}
+	observer, ok := observerv.(Observer)
+	if !ok && observerv != nil {
+		return nil, fmt.Errorf("invalid queue observer type %T", observerv)
 	}
 	backend, ok := backendv.(driverQueueBackend)
 	if !ok {
@@ -26,8 +30,11 @@ func buildQueueFromDriverHook(cfgv any, backendv any, workerFactoryv runtimehook
 	if workerFactoryv != nil {
 		workerFactory = func(workers int) (driverWorkerBackend, error) {
 			v, err := workerFactoryv(workers)
-			if err != nil || v == nil {
+			if err != nil {
 				return nil, err
+			}
+			if v == nil {
+				return nil, fmt.Errorf("driver worker factory returned nil")
 			}
 			w, ok := v.(driverWorkerBackend)
 			if !ok {
@@ -46,7 +53,7 @@ func buildQueueFromDriverHook(cfgv any, backendv any, workerFactoryv runtimehook
 		opts = append(opts, opt)
 	}
 
-	raw, err := newQueueFromDriver(cfg, backend, workerFactory)
+	raw, err := newQueueFromDriver(cfg, observer, backend, workerFactory)
 	if err != nil {
 		return nil, err
 	}

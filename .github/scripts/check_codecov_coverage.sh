@@ -123,7 +123,6 @@ require_path "$unit_profile" "^${ROOT_MODULE//./[.]}/integration/.*[.]go:" "inte
 require_path "$unit_profile" "^${ROOT_MODULE//./[.]}/docs/readme/testcounts/.*[.]go:" "tagged documentation tooling source"
 
 require_covered_path "^${ROOT_MODULE//./[.]}/queue[.]go:" "representative root source" "${expected_profiles[@]}"
-require_covered_path "^${ROOT_MODULE//./[.]}/bus/testhooks_integration[.]go:" "root integration-tagged bus fixture" "$unit_profile"
 require_covered_function "$unit_profile" "docs/readme/testcounts/main.go" "loadIntegrationCountManifest" "generated test-count evidence validation"
 for driver in "${driver_modules[@]}"; do
   require_covered_path "^${ROOT_MODULE//./[.]}/driver/$driver/.*[.]go:" "driver/$driver source" "${expected_profiles[@]}"

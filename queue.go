@@ -72,10 +72,7 @@ func (c WorkerpoolConfig) normalize() WorkerpoolConfig {
 // @group Config
 type Config struct {
 	Driver Driver
-	// Observer is a compatibility attachment path for queue lifecycle events.
-	// Deprecated: use WithObserver so all event layers share one constructor option.
-	Observer Observer
-	Logger   Logger
+	Logger Logger
 
 	DefaultQueue string
 }
@@ -129,8 +126,13 @@ func New(cfg Config, opts ...Option) (*Queue, error) {
 }
 
 func newRuntime(cfg Config) (queueRuntime, error) {
+	return newRuntimeWithObserver(cfg, nil)
+}
+
+// newRuntimeWithObserver builds a root runtime with an internal observer sink for focused runtime tests.
+func newRuntimeWithObserver(cfg Config, observer Observer) (queueRuntime, error) {
 	cfg = cfg.normalize()
-	cfg.Observer = ensureObserverSink(cfg.Observer)
+	observer = ensureObserverSink(observer)
 
 	var q queueBackend
 	var err error
@@ -162,9 +164,10 @@ func newRuntime(cfg Config) (queueRuntime, error) {
 		runtime = native
 	}
 	common := &queueCommon{
-		inner:  newObservedQueue(q, cfg.Driver, cfg.Observer),
-		cfg:    cfg,
-		driver: cfg.Driver,
+		inner:        newObservedQueue(q, cfg.Driver, observer),
+		cfg:          cfg,
+		driver:       cfg.Driver,
+		observerSink: observer,
 	}
 	if runtime != nil {
 		return &nativeQueueRuntime{
@@ -196,6 +199,7 @@ type queueCommon struct {
 	inner                   queueBackend
 	cfg                     Config
 	driver                  Driver
+	observerSink            Observer
 	ctx                     context.Context
 	handlerContextDecorator func(context.Context) context.Context
 }
@@ -360,20 +364,20 @@ func (q *queueCommon) addObserver(observer Observer) {
 	if q == nil || observer == nil {
 		return
 	}
-	q.cfg.Observer = addObserverToSink(q.cfg.Observer, observer)
+	q.observerSink = addObserverToSink(q.observerSink, observer)
 	if observed, ok := q.inner.(*observedQueue); ok {
-		observed.observer = q.cfg.Observer
+		observed.observer = q.observerSink
 		return
 	}
-	q.inner = newObservedQueue(q.inner, q.driver, q.cfg.Observer)
+	q.inner = newObservedQueue(q.inner, q.driver, q.observerSink)
 }
 
 // observer returns the composed application observer shared by execution and workflow adapters.
 func (q *queueCommon) observer() Observer {
-	if q == nil || !observerHasRecipients(q.cfg.Observer) {
+	if q == nil || !observerHasRecipients(q.observerSink) {
 		return nil
 	}
-	return q.cfg.Observer
+	return q.observerSink
 }
 
 func (q *queueCommon) WithContext(ctx context.Context) *queueCommon {
@@ -1197,10 +1201,10 @@ func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Han
 	if q.cfg.Driver == DriverRedis {
 		return handler
 	}
-	if !observerHasRecipients(q.cfg.Observer) {
+	if !observerHasRecipients(q.observerSink) {
 		return wrapHandlerContext(q.handlerContextDecorator, handler)
 	}
-	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, q.handlerContextDecorator, handler)
+	return wrapObservedHandler(q.observerSink, q.cfg.Driver, "", jobType, q.handlerContextDecorator, handler)
 }
 
 // wrapHandlerContext applies optional execution context decoration while

@@ -36,7 +36,7 @@ GOCACHE=/tmp/queue-gocache go test ./...
 What this currently gives us:
 
 - Core queue API behavior in the root module
-- `bus` workflow runtime/store semantics and callback idempotency tests
+- workflow runtime/store semantics and callback idempotency tests
 - Fake queue behavior used by application tests
 - Internal bridge regressions (`internal/driverbridge`)
 - API-level behavior and option handling
@@ -72,9 +72,9 @@ Current integration coverage is already strong and includes:
 
 - shared queue-runtime scenarios in `integration/all/integration_scenarios_test.go`
 - queue/workflow API integration in `integration/all/runtime_integration_test.go`
-- bus integration in `integration/bus/integration_test.go`
+- canonical root workflow integration in `integration/root/workflow_contract_integration_test.go`
 - observability integration in `integration/root/observability_integration_test.go`
-- SQL callback duplicate-suppression integration tests in `integration/bus/callback_sql_integration_test.go`
+- SQL callback and dispatch-failure reliability tests in `workflow_reliability_integration_test.go` (executed by unit coverage with the root `integration` tag)
 
 Related documentation and CI checks:
 
@@ -92,11 +92,11 @@ INTEGRATION_BACKEND=redis scripts/coverage-codecov.sh integration
 
 Current role:
 
-- unit mode runs the root module and every buildable nested module independently with `GOWORK=off`; it also executes the root module's lightweight integration-tagged `bus` fixture tests, while the tooling-only `docs` module is inventory-checked but has no package to cover
+- unit mode runs the root module and every buildable nested module independently with `GOWORK=off`; it also executes and verifies every root integration-tagged workflow reliability contract, while the tooling-only `docs` module is inventory-checked but has no package to cover
 - integration mode runs the tagged tests from the actual `integration` module and instruments repository root, integration, and driver packages
 - CI runs one integration coverage command in each existing backend matrix leg, then fans the unit profile and all ten backend profiles into one guarded Codecov upload
 - emitted atomic text profiles use module-qualified source paths and collapse duplicate source ranges produced by broad `-coverpkg` runs
-- the fan-in guard requires every expected unit/backend artifact, all buildable module records, the root integration-tagged bus fixture, and covered representative root, driver, and integration-module source before upload
+- the collector rejects a root tagged run unless every named workflow reliability contract executes; the fan-in guard requires every expected unit/backend artifact, all buildable module records, and covered representative root, driver, and integration-module source before upload
 - Codecov upload errors fail CI; project and patch status checks compare to the base at the repository's established 1% threshold
 - tracks broad regressions
 - not used as a substitute for guarantee validation
@@ -253,9 +253,9 @@ This is a trust-critical area. Users will assume high-level workflow helpers enc
 
 ### Covered today (good)
 
-- root `bus` tests cover chain/batch lifecycle and callback de-duplication
+- root workflow tests cover chain/batch lifecycle and callback de-duplication
 - SQL store contract tests cover callback marker/idempotency behavior
-- integration queue and bus tests cover chain/batch end-to-end scenarios
+- integration root-queue tests cover chain/batch end-to-end scenarios
 - SQL runtime callback duplicate suppression integration tests exist
 
 ### Gaps to add
@@ -324,7 +324,7 @@ This is a trust-critical area. Users will assume high-level workflow helpers enc
 
 ### Guarantees enforced today
 
-- `queue.NewFake` is the only fake state owner; deprecated `bus.Fake` and `queuefake.Fake` are compatibility views over it.
+- `queue.NewFake` is the only fake state owner for direct and workflow assertions.
 - Direct dispatch uses the same typed-value conversion and `Job` validation as production runtimes.
 - Chain and batch builders use the production workflow engine, record only from `Dispatch`, retain queue/name/failure policy, and expose isolated canonical records plus lookup state.
 - Closure callbacks remain fluent compatibility inputs but are not retained in fake runtime state or executed by the recording fake.
@@ -334,9 +334,8 @@ This is a trust-critical area. Users will assume high-level workflow helpers enc
 
 ### Compatibility coverage
 
-- `queue.NewFake() *queue.FakeQueue`, `queuefake.Fake.Queue() *queue.FakeQueue`, `queuefake.Fake.Workflow() *bus.Fake`, and `bus.NewFake() *bus.Fake` retain their established signatures.
-- `bus.Fake` and the one-field `bus.BatchSpec` retain their physical package identity and keyed/unkeyed source forms.
-- Legacy bus builders retain shallow job snapshots and Dispatch-time payload JSON encoding before entering the canonical fake.
+- `queue.NewFake() *queue.FakeQueue` is the supported fake constructor and API.
+- Root fake builders snapshot `queue.Job` values after `Payload` has encoded their bytes; the legacy migration guide documents the former dispatch-time encoding boundary.
 
 ## Test Types We Should Add or Expand (Prioritized)
 
@@ -424,8 +423,8 @@ Why:
 - [x] Expand workflow integration coverage for callback duplication/failure/recovery semantics
 - Location:
   - `integration/all/runtime_integration_test.go`
-  - `integration/bus/integration_test.go`
-  - `integration/bus/callback_sql_integration_test.go` (extend or mirror patterns)
+  - `integration/root/workflow_contract_integration_test.go`
+  - `workflow_reliability_integration_test.go`
   - workflow docs (`README.md` / workflow docs if applicable)
 - Acceptance:
   - callback duplicate delivery is tested under at least one fault/recovery path
@@ -434,7 +433,7 @@ Why:
   - no double-advance / double-terminal transition under concurrent processing in covered scenarios
 - Notes:
   - this is a trust-critical P0 item, not optional polish
-  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/bus/integration_test.go`; SQL runtime/store integration covers chain + batch duplicate callback suppression, callback replay after callback-dispatch fault (chain final callback), and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress). Shared public and real-dialect workflow-store contracts prove concurrent duplicate chain advancement, first-writer outcome categories, suppression of contradictory logical facts, and simultaneous batch aggregation without lost state across memory, SQLite, MySQL, and PostgreSQL. Focused private built-in contracts distinguish response-local `claimedNow` from immutable transition receipts and validate receipt identity on memory and SQLite. `TestTransitionReceiptUnknownVersionsFailClosed` and `TestUnknownTransitionReceiptVersionsBlockRecoveredApplicationExecution` prove unsupported `receipt_version` or observer `event_schema_version` values produce an uncommitted outcome without acknowledgement, application execution, state-commit signaling, or facts; the event schema is independent from the workflow-envelope protocol. `TestDeliveryApplicationStateCommittedSignal`, `TestDatabasePendingRecoveryTokenPreservesPendingRecovery`, and `TestChainPostTransitionFailureMarksCurrentGenerationForRecovery` prove that a receipt-owning generation supersedes inherited provenance when later infrastructure requests same-attempt redelivery. `TestChainSuccessorRejectionRecoversWithoutPredecessorReplay` proves active exact-receipt recovery re-dispatches the immediate successor after definite rejection. `TestChainRecoveryWithoutExactReceiptOwnershipPreservesOnlyLiveContinuation` covers receipt absence, a decorated no-capability store, and supported receipts with different or legacy generation provenance: only the live immediate successor is dispatched, predecessor handlers/facts/callbacks remain suppressed, progressed or terminal state is a no-op, and rejection remains uncommitted for retry. `TestChainSuccessRecoveryRejectsInvalidReceiptShapeBeforeLiveness` proves cancellation/completion corruption fails uncommitted before dispatch or effects. These paths retain the documented at-least-once duplicate ambiguity. The SQLite recovery group plus `mysql_workflow_receipt_recovery` and `postgres_workflow_receipt_recovery` prove supported receipts suppress handler replay and exact recovered-generation ownership gates reconstructed success facts. `TestChainCommittedFailureRecoveryPreservesOneApplicationOccurrence`, its invalid/legacy companions, the first-cause store contract, and the receipt rollback test prove failed-chain receipts return authoritative permanent state across generation variants without repeated handlers, callbacks, or facts. `sqlite_failed_chain_recovery_archives_without_reexecution` extends that proof through repeated real archive failure and best-effort lineage restoration to a final `dead` row with the persisted cause. SQLite also covers completed predecessors, aggregate non-inference, later-attempt ownership, two-member completion ownership, and failed-batch generic permanent archive. Driver tests cover the lineage repair's fence, delay, malformed token, stale owner, and inapplicable branches. `mysql_concurrent_batch_receipt_owner` and `postgres_concurrent_batch_receipt_owner` race twelve fail-fast members through separate workers and prove one aggregate-owner receipt and one failed/cancelled terminal fact pair. `TestWorkflowStoreIntegration_MySQLAutoMigratesMissingReceiptAtLegacyWidths` is the real upgrade gate: it drops only the receipt table beside 512-byte legacy state, proves ordinary startup derives 512-byte receipt identities without altering existing tables, and exercises chain, batch, callback, and receipt keys above fresh defaults. The managed-width fixture separately covers a complete pre-existing wider schema. Still open: managed-schema migration/rollback and real cross-dialect pruning/physical-commit-readback coverage, remaining custom/decorated/raw-store fallback contracts, cross-driver provenance, durable callback/continuation intents, exact successor-enqueue ownership, and a settlement outbox for the no-surviving-row window.
+  - Progress: cross-backend callback failure semantics (catch/finally + terminal state) are covered in `integration/root/workflow_contract_integration_test.go`; root Queue and SQL store integration covers chain + batch duplicate callback suppression, callback replay after callback-dispatch fault (chain final callback), and chain/batch dispatch failure state consistency (including batch partial-dispatch-failure-after-progress) in `workflow_reliability_integration_test.go`. Shared public and real-dialect workflow-store contracts prove concurrent duplicate chain advancement, first-writer outcome categories, suppression of contradictory logical facts, and simultaneous batch aggregation without lost state across memory, SQLite, MySQL, and PostgreSQL. Focused private built-in contracts distinguish response-local `claimedNow` from immutable transition receipts and validate receipt identity on memory and SQLite. `TestTransitionReceiptUnknownVersionsFailClosed` and `TestUnknownTransitionReceiptVersionsBlockRecoveredApplicationExecution` prove unsupported `receipt_version` or observer `event_schema_version` values produce an uncommitted outcome without acknowledgement, application execution, state-commit signaling, or facts; the event schema is independent from the workflow-envelope protocol. `TestDeliveryApplicationStateCommittedSignal`, `TestDatabasePendingRecoveryTokenPreservesPendingRecovery`, and `TestChainPostTransitionFailureMarksCurrentGenerationForRecovery` prove that a receipt-owning generation supersedes inherited provenance when later infrastructure requests same-attempt redelivery. `TestChainSuccessorRejectionRecoversWithoutPredecessorReplay` proves active exact-receipt recovery re-dispatches the immediate successor after definite rejection. `TestChainRecoveryWithoutExactReceiptOwnershipPreservesOnlyLiveContinuation` covers receipt absence, a decorated no-capability store, and supported receipts with different or legacy generation provenance: only the live immediate successor is dispatched, predecessor handlers/facts/callbacks remain suppressed, progressed or terminal state is a no-op, and rejection remains uncommitted for retry. `TestChainSuccessRecoveryRejectsInvalidReceiptShapeBeforeLiveness` proves cancellation/completion corruption fails uncommitted before dispatch or effects. These paths retain the documented at-least-once duplicate ambiguity. The SQLite recovery group plus `mysql_workflow_receipt_recovery` and `postgres_workflow_receipt_recovery` prove supported receipts suppress handler replay and exact recovered-generation ownership gates reconstructed success facts. `TestChainCommittedFailureRecoveryPreservesOneApplicationOccurrence`, its invalid/legacy companions, the first-cause store contract, and the receipt rollback test prove failed-chain receipts return authoritative permanent state across generation variants without repeated handlers, callbacks, or facts. `sqlite_failed_chain_recovery_archives_without_reexecution` extends that proof through repeated real archive failure and best-effort lineage restoration to a final `dead` row with the persisted cause. SQLite also covers completed predecessors, aggregate non-inference, later-attempt ownership, two-member completion ownership, and failed-batch generic permanent archive. Driver tests cover the lineage repair's fence, delay, malformed token, stale owner, and inapplicable branches. `mysql_concurrent_batch_receipt_owner` and `postgres_concurrent_batch_receipt_owner` race twelve fail-fast members through separate workers and prove one aggregate-owner receipt and one failed/cancelled terminal fact pair. `TestWorkflowStoreIntegration_MySQLAutoMigratesMissingReceiptAtLegacyWidths` is the real upgrade gate: it drops only the receipt table beside 512-byte legacy state, proves ordinary startup derives 512-byte receipt identities without altering existing tables, and exercises chain, batch, callback, and receipt keys above fresh defaults. The managed-width fixture separately covers a complete pre-existing wider schema. Still open: managed-schema migration/rollback and real cross-dialect pruning/physical-commit-readback coverage, remaining custom/decorated/raw-store fallback contracts, cross-driver provenance, durable callback/continuation intents, exact successor-enqueue ownership, and a settlement outbox for the no-surviving-row window.
   - Final receipt regression gate: `TestRecoveredTransitionReceiptLogicalValidationSeparatesPhysicalOwnership`, `TestChainSuccessRecoveryAllowsDifferentPhysicalDeliveryIdentity`, `TestChainFailureRecoveryAllowsDifferentPhysicalDeliveryIdentity`, and `TestBatchRecoverySettlesNonFactOwnersWithoutFacts` prove a complete persisted owner must retain a nonnegative attempt while a logical duplicate's current attempt may differ or be negative. Chain physical `JobID` may differ; batch `JobID` remains the logical member key. Logical nonowners do not execute handlers, callbacks, or facts; chain success preserves only the live immediate successor, chain failure returns the persisted permanent cause, batch success settles silently, and batch failure returns a generic permanent cause. Exact recovered generation, current attempt, and physical `JobID` remain mandatory for fact reconstruction. `TestSQLStoreBatchAggregateOwnershipMismatchFailsClosed`, `TestSQLStoreBatchAggregateIncarnationMismatchFailsClosed`, and `TestBatchRecoveryRejectsInvalidAggregateReceiptShape` cover missing completion/member, stale incarnation, success-owned cancellation, owner/outcome mismatch, and aggregate/live-state disagreement; every branch is uncommitted and produces no partial effects.
 
 Extend workflow integration scenarios to cover:
@@ -550,7 +549,7 @@ Track flake rates by backend/scenario.
 - Location:
   - root tests (`*_test.go`)
   - `integration/all` for backend/dispatch errors
-  - `integration/root` / `integration/bus` for workflow/state errors
+  - `integration/root` and root integration-tagged reliability tests for workflow/state errors
 - Acceptance:
   - invalid config errors are asserted (not just non-nil)
   - unsupported capability operations have stable/documented error behavior
@@ -578,7 +577,7 @@ Why:
 - [x] Add fuzz/property tests for decoding, naming, and option-validation boundaries
 - Location:
   - root package tests (`Fuzz...`)
-  - `bus` package where parsing/validation applies
+  - internal workflow package where parsing/validation applies
 - Acceptance:
   - at least one fuzz target for payload binding/decoding
   - at least one fuzz/property target for queue-name normalization/validation

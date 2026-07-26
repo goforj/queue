@@ -41,8 +41,7 @@ func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue
 	rootCfg := queue.Config{
 		Driver:       queue.DriverDatabase,
 		DefaultQueue: cfg.DefaultQueue,
-		Observer:     observer,
 		Logger:       cfg.Logger,
 	}
-	return driverbridge.NewQueueFromDriver(rootCfg, backend, nil, opts...)
+	return driverbridge.NewQueueFromDriver(rootCfg, observer, backend, nil, opts...)
 }
