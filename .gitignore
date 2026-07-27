@@ -3,3 +3,4 @@ coverage.txt
 coverage/
 coverage-artifacts/
 .artifacts
+.DS_Store
