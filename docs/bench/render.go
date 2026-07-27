@@ -294,13 +294,13 @@ func writeMetricSVG(root, fileName, title, unit string, higherBetter bool, rows 
 	var svg bytes.Buffer
 	svg.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	svg.WriteString(fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d">`+"\n", width, height, width, height))
-	svg.WriteString(`<rect width="100%" height="100%" fill="#111827"/>` + "\n")
+	svg.WriteString(`<rect width="100%" height="100%" rx="8" fill="#1A1620"/>` + "\n")
 	pref := "lower is better"
 	if higherBetter {
 		pref = "higher is better"
 	}
-	svg.WriteString(fmt.Sprintf(`<text x="%d" y="38" text-anchor="middle" fill="#f9fafb" font-size="26" font-family="Arial, sans-serif">%s (%s)</text>`+"\n", width/2, xmlEscape(title), xmlEscape(unit)))
-	svg.WriteString(fmt.Sprintf(`<text x="%d" y="66" text-anchor="middle" fill="#9ca3af" font-size="16" font-family="Arial, sans-serif">%s</text>`+"\n", width/2, xmlEscape(pref)))
+	svg.WriteString(fmt.Sprintf(`<text x="%d" y="38" text-anchor="middle" fill="#FFFFFF" font-size="26" font-weight="700" letter-spacing="-0.8" font-family="Space Grotesk, Inter, system-ui, sans-serif">%s (%s)</text>`+"\n", width/2, xmlEscape(title), xmlEscape(unit)))
+	svg.WriteString(fmt.Sprintf(`<text x="%d" y="66" text-anchor="middle" fill="#A9A1B3" font-size="16" font-family="Inter, system-ui, sans-serif">%s</text>`+"\n", width/2, xmlEscape(pref)))
 
 	axisX0 := leftPad
 	// grid
@@ -308,8 +308,8 @@ func writeMetricSVG(root, fileName, title, unit string, higherBetter bool, rows 
 		p := float64(i) / 5.0
 		x := axisX0 + int(p*float64(plotW))
 		v := p * maxV
-		svg.WriteString(fmt.Sprintf(`<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#374151" stroke-width="1"/>`+"\n", x, topPad-10, x, height-bottomPad))
-		svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" text-anchor="middle" fill="#d1d5db" font-size="13" font-family="Arial, sans-serif">%s</text>`+"\n", x, topPad-axisLabelGap, formatMetric(v)))
+		svg.WriteString(fmt.Sprintf(`<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#2A2333" stroke-width="1"/>`+"\n", x, topPad-10, x, height-bottomPad))
+		svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" text-anchor="middle" fill="#746C80" font-size="13" font-family="JetBrains Mono, ui-monospace, monospace">%s</text>`+"\n", x, topPad-axisLabelGap, formatMetric(v)))
 	}
 
 	for i, row := range rows {
@@ -320,25 +320,25 @@ func writeMetricSVG(root, fileName, title, unit string, higherBetter bool, rows 
 			label = displaySetLabel(row.Set) + "/" + row.Driver
 		}
 		// track
-		svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="%d" height="%d" rx="4" fill="#1f2937"/>`+"\n", axisX0, y, plotW, rowHeight))
+		svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="%d" height="%d" rx="6" fill="#2C2734" stroke="#3D3349"/>`+"\n", axisX0, y, plotW, rowHeight))
 		barW := int((values[i] / maxV) * float64(plotW))
 		if barW < 1 && values[i] > 0 {
 			barW = 1
 		}
-		color := "#60a5fa"
+		color := "#FF5E3A"
 		if row.Set == "Integration" {
-			color = "#34d399"
+			color = "#FFC24D"
 		}
-		svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="%d" height="%d" rx="4" fill="%s"/>`+"\n", axisX0, y, barW, rowHeight, color))
-		svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" text-anchor="end" fill="#e5e7eb" font-size="14" font-family="Arial, sans-serif">%s</text>`+"\n", leftPad-10, centerY+5, xmlEscape(label)))
-		svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" text-anchor="start" fill="#f3f4f6" font-size="13" font-family="Arial, sans-serif">%s</text>`+"\n", axisX0+barW+8, centerY+5, formatMetric(values[i])))
+		svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="%d" height="%d" rx="6" fill="%s"/>`+"\n", axisX0, y, barW, rowHeight, color))
+		svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" text-anchor="end" fill="#A9A1B3" font-size="14" font-family="Inter, system-ui, sans-serif">%s</text>`+"\n", leftPad-10, centerY+5, xmlEscape(label)))
+		svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" text-anchor="start" fill="#FFFFFF" font-size="13" font-family="JetBrains Mono, ui-monospace, monospace">%s</text>`+"\n", axisX0+barW+8, centerY+5, formatMetric(values[i])))
 	}
 
 	legendY := height - 14
-	svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="12" height="12" fill="#60a5fa"/>`+"\n", leftPad, legendY-10))
-	svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" fill="#d1d5db" font-size="12" font-family="Arial, sans-serif">Local</text>`+"\n", leftPad+18, legendY))
-	svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="12" height="12" fill="#34d399"/>`+"\n", leftPad+80, legendY-10))
-	svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" fill="#d1d5db" font-size="12" font-family="Arial, sans-serif">External</text>`+"\n", leftPad+98, legendY))
+	svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="12" height="12" rx="3" fill="#FF5E3A"/>`+"\n", leftPad, legendY-10))
+	svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" fill="#A9A1B3" font-size="12" font-family="Inter, system-ui, sans-serif">Local</text>`+"\n", leftPad+18, legendY))
+	svg.WriteString(fmt.Sprintf(`<rect x="%d" y="%d" width="12" height="12" rx="3" fill="#FFC24D"/>`+"\n", leftPad+80, legendY-10))
+	svg.WriteString(fmt.Sprintf(`<text x="%d" y="%d" fill="#A9A1B3" font-size="12" font-family="Inter, system-ui, sans-serif">External</text>`+"\n", leftPad+98, legendY))
 
 	svg.WriteString(`</svg>` + "\n")
 	return os.WriteFile(filepath.Join(root, "docs", "bench", fileName), svg.Bytes(), 0o644)
