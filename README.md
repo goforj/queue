@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./docs/images/logo.png?v=1" width="300" alt="queue logo">
+  <img src="https://raw.githubusercontent.com/goforj/queue/main/docs/images/logo.png" width="300" alt="queue logo">
 </p>
 
 <p align="center">
