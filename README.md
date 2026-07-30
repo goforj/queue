@@ -68,6 +68,8 @@ func main() {
 
 ## Drivers
 
+Each driver is thoroughly tested against the shared test suite using [testcontainers](https://testcontainers.com/) or emulators where appropriate.
+
 | Driver / Backend | Mode | Notes | Durable | Async | Delay | Unique | Backoff | Timeout | Native Stats | Queue Admin |
 | ---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | <img src="https://img.shields.io/badge/null-%23666?style=flat" alt="Null"> | Drop-only | Discards dispatched jobs; useful for disabled queue modes and smoke tests. | - | - | - | Instance | - | - | - | - |
