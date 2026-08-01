@@ -2466,28 +2466,8 @@ fmt.Println(q != nil)
 ```
 <!-- api:embed:end -->
 
-## Contributing
+## Development
 
-### Testing
+Use `make test` for root-module tests, `make vet` for static checks, and `make generate` to refresh generated documentation. `make test-integration` runs the separate integration module; pass a backend such as `make test-integration sqlite` to narrow the matrix. Integration tests may need local services.
 
-Unit tests (root module):
-
-```bash
-go test ./...
-```
-
-Integration tests (separate `integration` module):
-
-```bash
-go test -tags=integration ./integration/...
-```
-
-Select specific backends with `INTEGRATION_BACKEND` (comma-separated), for example:
-
-```bash
-INTEGRATION_BACKEND=sqlite go test -tags=integration ./integration/...
-INTEGRATION_BACKEND=redis,rabbitmq go test -tags=integration ./integration/... -count=1
-INTEGRATION_BACKEND=all go test -tags=integration ./integration/... -count=1
-```
-
-Matrix status and backend integration notes are tracked in `docs/integration-scenarios.md`.
+Driver, docs, examples, and integration directories are independent Go modules; test each changed module from its directory. Matrix status and backend notes are tracked in `docs/integration-scenarios.md`.
