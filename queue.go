@@ -33,6 +33,14 @@ type queueRuntime interface {
 	// @group Driver Integration
 	StartWorkers(ctx context.Context) error
 
+	// PauseWorkers stops new worker intake after active handlers finish.
+	// @group Driver Integration
+	PauseWorkers(ctx context.Context) error
+
+	// ResumeWorkers restarts worker intake after a pause.
+	// @group Driver Integration
+	ResumeWorkers(ctx context.Context) error
+
 	// Workers sets desired worker concurrency before StartWorkers.
 	// @group Driver Integration
 	Workers(count int) queueRuntime
@@ -88,6 +96,12 @@ type runtimeQueueBackend interface {
 	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
 	DrainWorkers(ctx context.Context) error
+}
+
+// workerLifecycleBackend supports pausing consumers without closing producer resources.
+type workerLifecycleBackend interface {
+	PauseWorkers(ctx context.Context) error
+	ResumeWorkers(ctx context.Context) error
 }
 
 func newSyncQueue() queueBackend {
@@ -217,9 +231,11 @@ type nativeQueueRuntimeState struct {
 	handlerSlots         map[string]*runtimeHandlerSlot
 	runtimeRegistrations map[string]struct{}
 	started              bool
+	paused               bool
 	draining             bool
 	closed               bool
 	start                *runtimeStartAttempt
+	pause                *runtimePauseAttempt
 	shutdown             *runtimeShutdownAttempt
 	operations           runtimeOperationState
 	continuation         *busruntime.ContinuationScope
@@ -240,9 +256,11 @@ type externalQueueRuntimeState struct {
 	worker              runtimeWorkerBackend
 	workerRegistrations map[string]struct{}
 	started             bool
+	paused              bool
 	draining            bool
 	closed              bool
 	start               *runtimeStartAttempt
+	pause               *runtimePauseAttempt
 	shutdown            *runtimeShutdownAttempt
 	operations          runtimeOperationState
 	continuation        *busruntime.ContinuationScope
@@ -280,6 +298,12 @@ type runtimeShutdownAttempt struct {
 }
 
 type runtimeStartAttempt struct {
+	done chan struct{}
+	err  error
+}
+
+// runtimePauseAttempt lets concurrent lifecycle callers observe one consumer pause.
+type runtimePauseAttempt struct {
 	done chan struct{}
 	err  error
 }
@@ -756,7 +780,7 @@ func (q *nativeQueueRuntime) StartWorkers(ctx context.Context) error {
 		q.mu.Unlock()
 		return ErrQueuerShuttingDown
 	}
-	if q.started {
+	if q.started || q.paused {
 		q.mu.Unlock()
 		return nil
 	}
@@ -796,7 +820,7 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 		q.mu.Unlock()
 		return ErrQueuerShuttingDown
 	}
-	if q.started {
+	if q.started || q.paused {
 		q.mu.Unlock()
 		return nil
 	}
@@ -853,6 +877,194 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 	return err
 }
 
+// PauseWorkers stops native worker intake while retaining dispatch resources.
+func (q *nativeQueueRuntime) PauseWorkers(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	q.mu.Lock()
+	if q.closed || q.draining {
+		q.mu.Unlock()
+		return ErrQueuerShuttingDown
+	}
+	if q.paused {
+		q.mu.Unlock()
+		return nil
+	}
+	if q.start != nil {
+		start := q.start
+		q.mu.Unlock()
+		if err := waitForRuntimeStartCompletion(ctx, start); err != nil {
+			return err
+		}
+		return q.PauseWorkers(ctx)
+	}
+	if q.pause != nil {
+		pause := q.pause
+		q.mu.Unlock()
+		return waitForRuntimePause(ctx, pause)
+	}
+	attempt := &runtimePauseAttempt{done: make(chan struct{})}
+	q.pause = attempt
+	started := q.started
+	q.mu.Unlock()
+
+	var err error
+	if started {
+		if lifecycle, ok := q.runtime.(workerLifecycleBackend); ok {
+			err = lifecycle.PauseWorkers(ctx)
+		}
+	}
+	q.mu.Lock()
+	if err == nil {
+		q.paused = true
+	}
+	attempt.err = err
+	q.pause = nil
+	close(attempt.done)
+	q.mu.Unlock()
+	return err
+}
+
+// ResumeWorkers restarts native worker intake after a pause.
+func (q *nativeQueueRuntime) ResumeWorkers(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	q.mu.Lock()
+	if q.closed || q.draining {
+		q.mu.Unlock()
+		return ErrQueuerShuttingDown
+	}
+	if q.pause != nil {
+		pause := q.pause
+		q.mu.Unlock()
+		if err := waitForRuntimePause(ctx, pause); err != nil {
+			return err
+		}
+		return q.ResumeWorkers(ctx)
+	}
+	if !q.paused {
+		started := q.started
+		q.mu.Unlock()
+		if started {
+			return nil
+		}
+		return q.StartWorkers(ctx)
+	}
+	started := q.started
+	q.mu.Unlock()
+
+	if started {
+		if lifecycle, ok := q.runtime.(workerLifecycleBackend); ok {
+			if err := lifecycle.ResumeWorkers(ctx); err != nil {
+				return err
+			}
+		}
+		q.mu.Lock()
+		q.paused = false
+		q.mu.Unlock()
+		return nil
+	}
+	q.mu.Lock()
+	q.paused = false
+	q.mu.Unlock()
+	if err := q.StartWorkers(ctx); err != nil {
+		q.mu.Lock()
+		q.paused = true
+		q.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// PauseWorkers stops the external consumer while retaining producer resources.
+func (q *externalQueueRuntime) PauseWorkers(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	q.mu.Lock()
+	if q.closed || q.draining {
+		q.mu.Unlock()
+		return ErrQueuerShuttingDown
+	}
+	if q.paused {
+		q.mu.Unlock()
+		return nil
+	}
+	if q.start != nil {
+		start := q.start
+		q.mu.Unlock()
+		if err := waitForRuntimeStartCompletion(ctx, start); err != nil {
+			return err
+		}
+		return q.PauseWorkers(ctx)
+	}
+	if q.pause != nil {
+		pause := q.pause
+		q.mu.Unlock()
+		return waitForRuntimePause(ctx, pause)
+	}
+	attempt := &runtimePauseAttempt{done: make(chan struct{})}
+	q.pause = attempt
+	w := q.worker
+	q.mu.Unlock()
+
+	var err error
+	if w != nil {
+		err = w.Shutdown(ctx)
+	}
+	q.mu.Lock()
+	if err == nil {
+		q.worker = nil
+		q.workerRegistrations = nil
+		q.started = false
+		q.paused = true
+	}
+	attempt.err = err
+	q.pause = nil
+	close(attempt.done)
+	q.mu.Unlock()
+	return err
+}
+
+// ResumeWorkers creates a fresh external consumer after a pause.
+func (q *externalQueueRuntime) ResumeWorkers(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	q.mu.Lock()
+	if q.closed || q.draining {
+		q.mu.Unlock()
+		return ErrQueuerShuttingDown
+	}
+	if q.pause != nil {
+		pause := q.pause
+		q.mu.Unlock()
+		if err := waitForRuntimePause(ctx, pause); err != nil {
+			return err
+		}
+		return q.ResumeWorkers(ctx)
+	}
+	if !q.paused {
+		started := q.started
+		q.mu.Unlock()
+		if started {
+			return nil
+		}
+		return q.StartWorkers(ctx)
+	}
+	q.paused = false
+	q.mu.Unlock()
+	if err := q.StartWorkers(ctx); err != nil {
+		q.mu.Lock()
+		q.paused = true
+		q.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
 func (q *nativeQueueRuntime) Workers(count int) queueRuntime {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -880,6 +1092,14 @@ func (q *nativeQueueRuntime) Shutdown(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	q.mu.Lock()
+	if q.pause != nil {
+		pause := q.pause
+		q.mu.Unlock()
+		if err := waitForRuntimePause(ctx, pause); err != nil {
+			return err
+		}
+		return q.Shutdown(ctx)
+	}
 	if q.start != nil {
 		q.draining = true
 		attempt := q.start
@@ -938,6 +1158,14 @@ func (q *externalQueueRuntime) Shutdown(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	q.mu.Lock()
+	if q.pause != nil {
+		pause := q.pause
+		q.mu.Unlock()
+		if err := waitForRuntimePause(ctx, pause); err != nil {
+			return err
+		}
+		return q.Shutdown(ctx)
+	}
 	if q.start != nil {
 		q.draining = true
 		attempt := q.start
@@ -1013,6 +1241,16 @@ func waitForRuntimeOperations(ctx context.Context, idle <-chan struct{}) error {
 
 // waitForRuntimeShutdown lets concurrent callers share one cleanup attempt while honoring their own deadline.
 func waitForRuntimeShutdown(ctx context.Context, attempt *runtimeShutdownAttempt) error {
+	select {
+	case <-attempt.done:
+		return attempt.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// waitForRuntimePause lets concurrent lifecycle callers share one pause attempt while honoring their own deadline.
+func waitForRuntimePause(ctx context.Context, attempt *runtimePauseAttempt) error {
 	select {
 	case <-attempt.done:
 		return attempt.err

@@ -547,6 +547,18 @@ func (r *Queue) StartWorkers(ctx context.Context) error {
 	return r.b.StartWorkers(ctx)
 }
 
+// PauseWorkers stops new worker intake after active handlers finish while keeping dispatch available.
+// @group Queue
+func (r *Queue) PauseWorkers(ctx context.Context) error {
+	return r.q.PauseWorkers(ctx)
+}
+
+// ResumeWorkers restarts worker intake after PauseWorkers.
+// @group Queue
+func (r *Queue) ResumeWorkers(ctx context.Context) error {
+	return r.q.ResumeWorkers(ctx)
+}
+
 // Run starts worker processing, blocks until ctx is canceled, then gracefully shuts down.
 // @group Queue
 //

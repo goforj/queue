@@ -1958,3 +1958,51 @@ func TestExternalQueueRuntimeStartWorkersErrorBranches(t *testing.T) {
 		}
 	})
 }
+
+func TestExternalQueueRuntimeWorkerLifecyclePreservesProducer(t *testing.T) {
+	inner := &queueBackendRecorder{}
+	workers := []*runtimeBackendStub{{}, {}}
+	nextWorker := 0
+	q := &externalQueueRuntime{
+		common: &queueCommon{inner: inner, cfg: Config{DefaultQueue: "default"}, driver: DriverNATS},
+		newWorker: func(int) (driverWorkerBackend, error) {
+			worker := workers[nextWorker]
+			nextWorker++
+			return worker, nil
+		},
+		externalQueueRuntimeState: &externalQueueRuntimeState{
+			registered: map[string]Handler{"job:external": func(context.Context, Job) error { return nil }},
+		},
+	}
+
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	if err := q.PauseWorkers(context.Background()); err != nil {
+		t.Fatalf("pause workers: %v", err)
+	}
+	if workers[0].stopCalls != 1 {
+		t.Fatalf("first worker shutdowns = %d, want 1", workers[0].stopCalls)
+	}
+	if inner.shutdowns != 0 {
+		t.Fatalf("producer shutdowns while paused = %d, want 0", inner.shutdowns)
+	}
+	if err := q.Dispatch(NewJob("job:external")); err != nil {
+		t.Fatalf("dispatch while paused: %v", err)
+	}
+	if err := q.ResumeWorkers(context.Background()); err != nil {
+		t.Fatalf("resume workers: %v", err)
+	}
+	if workers[1].startCalls != 1 {
+		t.Fatalf("replacement worker starts = %d, want 1", workers[1].startCalls)
+	}
+	if _, ok := workers[1].registered["job:external"]; !ok {
+		t.Fatal("replacement worker did not restore registrations")
+	}
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	if inner.shutdowns != 1 {
+		t.Fatalf("producer shutdowns = %d, want 1", inner.shutdowns)
+	}
+}

@@ -157,6 +157,14 @@ func (f *FakeQueue) Register(string, Handler) {}
 //	_ = err
 func (f *FakeQueue) StartWorkers(context.Context) error { return nil }
 
+// PauseWorkers stops fake worker intake.
+// @group Testing
+func (f *FakeQueue) PauseWorkers(context.Context) error { return nil }
+
+// ResumeWorkers restarts fake worker intake.
+// @group Testing
+func (f *FakeQueue) ResumeWorkers(context.Context) error { return nil }
+
 // Workers preserves fluent lifecycle compatibility without creating workers.
 // @group Testing
 //

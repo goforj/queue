@@ -17,6 +17,93 @@ func TestLocalQueue_Driver(t *testing.T) {
 	}
 }
 
+func TestLocalQueueWorkerLifecyclePausesIntakeAndDrainsActiveHandlers(t *testing.T) {
+	d := newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{Workers: 1, QueueCapacity: 4})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan int, 2)
+	var calls atomic.Int64
+	d.Register("job:lifecycle", func(context.Context, Job) error {
+		call := int(calls.Add(1))
+		if call == 1 {
+			close(started)
+			<-release
+		}
+		finished <- call
+		return nil
+	})
+	if err := d.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	if err := d.Dispatch(context.Background(), NewJob("job:lifecycle")); err != nil {
+		t.Fatalf("dispatch active job: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("active handler did not start")
+	}
+	pauseDone := make(chan error, 1)
+	go func() { pauseDone <- d.PauseWorkers(context.Background()) }()
+	select {
+	case err := <-pauseDone:
+		t.Fatalf("pause returned before active handler drained: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-pauseDone; err != nil {
+		t.Fatalf("pause workers: %v", err)
+	}
+	if err := d.Dispatch(context.Background(), NewJob("job:lifecycle")); err != nil {
+		t.Fatalf("dispatch while paused: %v", err)
+	}
+	if got := <-finished; got != 1 {
+		t.Fatalf("first finished job = %d, want 1", got)
+	}
+	select {
+	case got := <-finished:
+		t.Fatalf("paused worker executed job %d", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if err := d.ResumeWorkers(context.Background()); err != nil {
+		t.Fatalf("resume workers: %v", err)
+	}
+	select {
+	case got := <-finished:
+		if got != 2 {
+			t.Fatalf("resumed worker executed job %d, want 2", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued job did not execute after resume")
+	}
+	if err := d.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+}
+
+func TestLocalQueuePausedShutdownDoesNotStartPendingHandlers(t *testing.T) {
+	d := newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{Workers: 1, QueueCapacity: 2})
+	handled := make(chan struct{}, 1)
+	d.Register("job:pending", func(context.Context, Job) error {
+		handled <- struct{}{}
+		return nil
+	})
+	if err := d.PauseWorkers(context.Background()); err != nil {
+		t.Fatalf("pause workers: %v", err)
+	}
+	if err := d.Dispatch(context.Background(), NewJob("job:pending")); err != nil {
+		t.Fatalf("dispatch while paused: %v", err)
+	}
+	if err := d.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown paused workers: %v", err)
+	}
+	select {
+	case <-handled:
+		t.Fatal("paused shutdown started a pending handler")
+	default:
+	}
+}
+
 func TestLocalQueue_DispatchRunsRegisteredHandler(t *testing.T) {
 	d := newLocalQueue(DriverSync)
 	var calls atomic.Int64

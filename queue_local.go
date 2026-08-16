@@ -13,22 +13,28 @@ import (
 
 // localQueue is an in-memory queue implementation supporting sync and workerpool drivers.
 type localQueue struct {
-	driver       Driver
-	cfg          WorkerpoolConfig
-	mu           sync.RWMutex
-	metricsMu    sync.RWMutex
-	queueMu      sync.RWMutex
-	handlers     map[string]Handler
-	unique       uniqueness.MemoryStore
-	metrics      map[string]*localQueueMetrics
-	pausedQueues map[string]bool
-	workQueue    chan queuedJob
-	workPending  int
-	workIdle     chan struct{}
-	continuation *busruntime.ContinuationScope
-	resizeBuffer bool
-	shutdownOnce sync.Once
-	workerWG     sync.WaitGroup
+	driver         Driver
+	cfg            WorkerpoolConfig
+	mu             sync.RWMutex
+	metricsMu      sync.RWMutex
+	queueMu        sync.RWMutex
+	handlers       map[string]Handler
+	unique         uniqueness.MemoryStore
+	metrics        map[string]*localQueueMetrics
+	pausedQueues   map[string]bool
+	workQueue      chan queuedJob
+	workPending    int
+	workIdle       chan struct{}
+	continuation   *busruntime.ContinuationScope
+	resizeBuffer   bool
+	shutdownOnce   sync.Once
+	workerWG       sync.WaitGroup
+	workerStateMu  sync.Mutex
+	workerPaused   bool
+	workerStopping bool
+	workerActive   int
+	workerResume   chan struct{}
+	workerDrained  chan struct{}
 
 	syncWorkMu      sync.Mutex
 	syncWorkPending int
@@ -138,6 +144,47 @@ func (d *localQueue) StartWorkers(_ context.Context) error {
 	return nil
 }
 
+// PauseWorkers prevents the in-memory pool from starting queued jobs and waits for active handlers.
+func (d *localQueue) PauseWorkers(ctx context.Context) error {
+	if d.driver != DriverWorkerpool {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	d.workerStateMu.Lock()
+	if !d.workerPaused {
+		d.workerPaused = true
+		d.workerResume = make(chan struct{})
+	}
+	if d.workerActive == 0 {
+		d.workerStateMu.Unlock()
+		return nil
+	}
+	if d.workerDrained == nil {
+		d.workerDrained = make(chan struct{})
+	}
+	drained := d.workerDrained
+	d.workerStateMu.Unlock()
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ResumeWorkers allows the in-memory pool to start queued jobs again.
+func (d *localQueue) ResumeWorkers(_ context.Context) error {
+	if d.driver != DriverWorkerpool {
+		return nil
+	}
+	d.workerStateMu.Lock()
+	d.resumeWorkersLocked()
+	d.workerStateMu.Unlock()
+	return nil
+}
+
 // Shutdown drains running work and releases resources.
 // @group Queue
 //
@@ -162,6 +209,10 @@ func (d *localQueue) DrainWorkers(ctx context.Context) error {
 
 	d.shutdownOnce.Do(func() {
 		d.shuttingDown.Store(true)
+		d.workerStateMu.Lock()
+		d.workerStopping = d.workerPaused
+		d.resumeWorkersLocked()
+		d.workerStateMu.Unlock()
 	})
 
 	if d.driver == DriverSync {
@@ -526,8 +577,13 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	defer d.workerWG.Done()
 	jobTimeout := d.cfg.DefaultJobTimeout
 	for job := range workQueue {
+		if !d.beginWorkerExecution() {
+			d.finishQueuedWork()
+			continue
+		}
 		func() {
 			defer d.finishQueuedWork()
+			defer d.endWorkerExecution()
 			if job.ready != nil {
 				<-job.ready
 			}
@@ -567,6 +623,46 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 			}()
 		}()
 	}
+}
+
+// beginWorkerExecution waits outside the backend claim path and rejects pending work during a paused shutdown.
+func (d *localQueue) beginWorkerExecution() bool {
+	for {
+		d.workerStateMu.Lock()
+		if d.workerStopping {
+			d.workerStateMu.Unlock()
+			return false
+		}
+		if !d.workerPaused {
+			d.workerActive++
+			d.workerStateMu.Unlock()
+			return true
+		}
+		resume := d.workerResume
+		d.workerStateMu.Unlock()
+		<-resume
+	}
+}
+
+// endWorkerExecution releases pause waiters after an admitted handler completes.
+func (d *localQueue) endWorkerExecution() {
+	d.workerStateMu.Lock()
+	d.workerActive--
+	if d.workerActive == 0 && d.workerDrained != nil {
+		close(d.workerDrained)
+		d.workerDrained = nil
+	}
+	d.workerStateMu.Unlock()
+}
+
+// resumeWorkersLocked releases workers reserved behind the lifecycle gate.
+func (d *localQueue) resumeWorkersLocked() {
+	if !d.workerPaused {
+		return
+	}
+	d.workerPaused = false
+	close(d.workerResume)
+	d.workerResume = nil
 }
 
 // validateEnqueue rejects work before uniqueness is claimed or an acceptance fact is committed.
