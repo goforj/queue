@@ -917,10 +917,8 @@ func (q *nativeQueueRuntime) PauseWorkers(ctx context.Context) error {
 	q.mu.Unlock()
 
 	var err error
-	if started {
-		if lifecycle, ok := q.runtime.(workerLifecycleBackend); ok {
-			err = lifecycle.PauseWorkers(ctx)
-		}
+	if lifecycle, ok := q.runtime.(workerLifecycleBackend); ok {
+		err = lifecycle.PauseWorkers(ctx)
 	}
 	q.mu.Lock()
 	if err == nil {
