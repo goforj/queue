@@ -907,6 +907,13 @@ func (q *nativeQueueRuntime) PauseWorkers(ctx context.Context) error {
 	attempt := &runtimePauseAttempt{done: make(chan struct{})}
 	q.pause = attempt
 	started := q.started
+	if !started {
+		for jobType, handler := range q.registered {
+			var slot *runtimeHandlerSlot
+			q.handlerSlots, slot = updateRuntimeHandlerSlot(q.handlerSlots, jobType, handler)
+			q.runtimeRegistrations = installRuntimeHandler(q.runtime, q.common, q.runtimeRegistrations, jobType, handler, slot)
+		}
+	}
 	q.mu.Unlock()
 
 	var err error
