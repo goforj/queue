@@ -24,7 +24,7 @@ type ModuleConfig struct {
 // for a specific SQL driver name.
 func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue.Queue, error) {
 	observer := driverbridge.NewObserverSink(cfg.Observer)
-	backend, err := New(queue.DatabaseConfig{
+	databaseConfig := queue.DatabaseConfig{
 		DB:                       cfg.DB,
 		DriverName:               driverName,
 		DSN:                      cfg.DSN,
@@ -34,7 +34,8 @@ func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue
 		ProcessingLeaseNoTimeout: cfg.ProcessingLeaseNoTimeout,
 		Observer:                 observer,
 		Logger:                   cfg.Logger,
-	})
+	}
+	backend, err := New(databaseConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -43,5 +44,10 @@ func NewQueue(driverName string, cfg ModuleConfig, opts ...queue.Option) (*queue
 		DefaultQueue: cfg.DefaultQueue,
 		Logger:       cfg.Logger,
 	}
-	return driverbridge.NewQueueFromDriver(rootCfg, observer, backend, nil, opts...)
+	workerFactory := func(workers int) (any, error) {
+		workerConfig := databaseConfig
+		workerConfig.Workers = workers
+		return New(workerConfig)
+	}
+	return driverbridge.NewQueueFromDriver(rootCfg, observer, backend, workerFactory, opts...)
 }

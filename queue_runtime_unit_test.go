@@ -58,6 +58,32 @@ type phasedShutdownRuntimeBackendStub struct {
 	drainOnce    sync.Once
 }
 
+type latchingWorkerShutdownStub struct {
+	runtimeBackendStub
+	stopStarted chan struct{}
+	stopRelease chan struct{}
+	stopDone    chan struct{}
+	stopOnce    sync.Once
+}
+
+// Shutdown keeps a committed stop running after an individual caller's deadline.
+func (s *latchingWorkerShutdownStub) Shutdown(ctx context.Context) error {
+	s.stopCalls++
+	s.stopOnce.Do(func() {
+		close(s.stopStarted)
+		go func() {
+			<-s.stopRelease
+			close(s.stopDone)
+		}()
+	})
+	select {
+	case <-s.stopDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 type strictRegistrationRuntimeBackendStub struct {
 	runtimeBackendStub
 	registrations map[string]int
@@ -2004,5 +2030,41 @@ func TestExternalQueueRuntimeWorkerLifecyclePreservesProducer(t *testing.T) {
 	}
 	if inner.shutdowns != 1 {
 		t.Fatalf("producer shutdowns = %d, want 1", inner.shutdowns)
+	}
+}
+
+func TestExternalQueueRuntimeResumeReconcilesTimedOutPause(t *testing.T) {
+	first := &latchingWorkerShutdownStub{
+		stopStarted: make(chan struct{}),
+		stopRelease: make(chan struct{}),
+		stopDone:    make(chan struct{}),
+	}
+	second := &runtimeBackendStub{}
+	workers := []driverWorkerBackend{first, second}
+	nextWorker := 0
+	q := &externalQueueRuntime{
+		common: &queueCommon{inner: &queueBackendRecorder{}, cfg: Config{DefaultQueue: "default"}, driver: DriverNATS},
+		newWorker: func(int) (driverWorkerBackend, error) {
+			worker := workers[nextWorker]
+			nextWorker++
+			return worker, nil
+		},
+		externalQueueRuntimeState: &externalQueueRuntimeState{registered: map[string]Handler{}},
+	}
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := q.PauseWorkers(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("pause error = %v, want deadline exceeded", err)
+	}
+	<-first.stopStarted
+	close(first.stopRelease)
+	if err := q.ResumeWorkers(context.Background()); err != nil {
+		t.Fatalf("resume after pause deadline: %v", err)
+	}
+	if second.startCalls != 1 {
+		t.Fatalf("replacement worker starts = %d, want 1", second.startCalls)
 	}
 }

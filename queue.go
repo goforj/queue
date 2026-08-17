@@ -232,6 +232,7 @@ type nativeQueueRuntimeState struct {
 	runtimeRegistrations map[string]struct{}
 	started              bool
 	paused               bool
+	pauseIncomplete      bool
 	draining             bool
 	closed               bool
 	start                *runtimeStartAttempt
@@ -887,7 +888,7 @@ func (q *nativeQueueRuntime) PauseWorkers(ctx context.Context) error {
 		q.mu.Unlock()
 		return ErrQueuerShuttingDown
 	}
-	if q.paused {
+	if q.paused && !q.pauseIncomplete {
 		q.mu.Unlock()
 		return nil
 	}
@@ -906,6 +907,8 @@ func (q *nativeQueueRuntime) PauseWorkers(ctx context.Context) error {
 	}
 	attempt := &runtimePauseAttempt{done: make(chan struct{})}
 	q.pause = attempt
+	q.paused = true
+	q.pauseIncomplete = true
 	started := q.started
 	if !started {
 		for jobType, handler := range q.registered {
@@ -919,12 +922,16 @@ func (q *nativeQueueRuntime) PauseWorkers(ctx context.Context) error {
 	var err error
 	if lifecycle, ok := q.runtime.(workerLifecycleBackend); ok {
 		err = lifecycle.PauseWorkers(ctx)
+	} else {
+		err = ErrPauseUnsupported
 	}
 	q.mu.Lock()
-	if err == nil {
-		q.paused = true
+	if err != nil {
+		// The desired state stays paused after a caller deadline so ResumeWorkers can reconcile a backend gate that may already be active.
+		attempt.err = err
+	} else {
+		q.pauseIncomplete = false
 	}
-	attempt.err = err
 	q.pause = nil
 	close(attempt.done)
 	q.mu.Unlock()
@@ -944,7 +951,7 @@ func (q *nativeQueueRuntime) ResumeWorkers(ctx context.Context) error {
 	if q.pause != nil {
 		pause := q.pause
 		q.mu.Unlock()
-		if err := waitForRuntimePause(ctx, pause); err != nil {
+		if err := waitForRuntimePauseCompletion(ctx, pause); err != nil {
 			return err
 		}
 		return q.ResumeWorkers(ctx)
@@ -965,14 +972,18 @@ func (q *nativeQueueRuntime) ResumeWorkers(ctx context.Context) error {
 			if err := lifecycle.ResumeWorkers(ctx); err != nil {
 				return err
 			}
+		} else {
+			return ErrPauseUnsupported
 		}
 		q.mu.Lock()
 		q.paused = false
+		q.pauseIncomplete = false
 		q.mu.Unlock()
 		return nil
 	}
 	q.mu.Lock()
 	q.paused = false
+	q.pauseIncomplete = false
 	q.mu.Unlock()
 	if err := q.StartWorkers(ctx); err != nil {
 		q.mu.Lock()
@@ -993,7 +1004,7 @@ func (q *externalQueueRuntime) PauseWorkers(ctx context.Context) error {
 		q.mu.Unlock()
 		return ErrQueuerShuttingDown
 	}
-	if q.paused {
+	if q.paused && q.worker == nil {
 		q.mu.Unlock()
 		return nil
 	}
@@ -1012,6 +1023,7 @@ func (q *externalQueueRuntime) PauseWorkers(ctx context.Context) error {
 	}
 	attempt := &runtimePauseAttempt{done: make(chan struct{})}
 	q.pause = attempt
+	q.paused = true
 	w := q.worker
 	q.mu.Unlock()
 
@@ -1024,7 +1036,6 @@ func (q *externalQueueRuntime) PauseWorkers(ctx context.Context) error {
 		q.worker = nil
 		q.workerRegistrations = nil
 		q.started = false
-		q.paused = true
 	}
 	attempt.err = err
 	q.pause = nil
@@ -1046,7 +1057,7 @@ func (q *externalQueueRuntime) ResumeWorkers(ctx context.Context) error {
 	if q.pause != nil {
 		pause := q.pause
 		q.mu.Unlock()
-		if err := waitForRuntimePause(ctx, pause); err != nil {
+		if err := waitForRuntimePauseCompletion(ctx, pause); err != nil {
 			return err
 		}
 		return q.ResumeWorkers(ctx)
@@ -1059,6 +1070,21 @@ func (q *externalQueueRuntime) ResumeWorkers(ctx context.Context) error {
 		}
 		return q.StartWorkers(ctx)
 	}
+	w := q.worker
+	q.mu.Unlock()
+	if w != nil {
+		if err := w.Shutdown(ctx); err != nil {
+			return err
+		}
+		q.mu.Lock()
+		if q.worker == w {
+			q.worker = nil
+			q.workerRegistrations = nil
+			q.started = false
+		}
+		q.mu.Unlock()
+	}
+	q.mu.Lock()
 	q.paused = false
 	q.mu.Unlock()
 	if err := q.StartWorkers(ctx); err != nil {
@@ -1259,6 +1285,16 @@ func waitForRuntimePause(ctx context.Context, attempt *runtimePauseAttempt) erro
 	select {
 	case <-attempt.done:
 		return attempt.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// waitForRuntimePauseCompletion waits for transition ownership without inheriting another caller's diagnostic.
+func waitForRuntimePauseCompletion(ctx context.Context, attempt *runtimePauseAttempt) error {
+	select {
+	case <-attempt.done:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}

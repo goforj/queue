@@ -31,9 +31,11 @@ type natsWorker struct {
 	sub  natsWorkerSubscription
 	sem  chan struct{}
 
-	running  sync.WaitGroup
-	delayed  sync.WaitGroup
-	observer queue.Observer
+	running     sync.WaitGroup
+	delayed     sync.WaitGroup
+	delayedMu   sync.Mutex
+	delayedJobs map[*time.Timer]natsMessage
+	observer    queue.Observer
 }
 
 type natsWorkerSubscription interface {
@@ -84,6 +86,7 @@ func newNATSWorkerWithConfig(cfg natsWorkerConfig) *natsWorker {
 		defaultQueue: cfg.DefaultQueue,
 		workers:      cfg.Workers,
 		handlers:     make(map[string]queue.Handler),
+		delayedJobs:  make(map[*time.Timer]natsMessage),
 		observer:     cfg.Observer,
 	}
 }
@@ -177,7 +180,7 @@ func (w *natsWorker) Shutdown(ctx context.Context) error {
 				stopErr = sub.Drain()
 			}
 			w.running.Wait()
-			w.delayed.Wait()
+			w.flushDelayedJobs()
 			if conn != nil {
 				if drainErr := conn.Drain(); stopErr == nil {
 					stopErr = drainErr
@@ -216,13 +219,7 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 	if incoming.AvailableAtMS > 0 {
 		remaining := time.Until(time.UnixMilli(incoming.AvailableAtMS))
 		if remaining > 0 {
-			w.delayed.Add(1)
-			time.AfterFunc(remaining, func() {
-				defer w.delayed.Done()
-				if err := w.republish(incoming); err != nil {
-					w.observeRepublishFailure(context.Background(), incoming, err)
-				}
-			})
+			w.scheduleDelayedJob(incoming, remaining)
 			return
 		}
 	}
@@ -266,6 +263,45 @@ func (w *natsWorker) processMessage(message *nats.Msg) {
 	if err := w.republish(incoming); err != nil {
 		w.observeRepublishFailure(ctx, incoming, err)
 	}
+}
+
+// scheduleDelayedJob keeps Core NATS delayed work recoverable because the broker cannot retain a claimed callback until its due time.
+func (w *natsWorker) scheduleDelayedJob(message natsMessage, remaining time.Duration) {
+	w.delayedMu.Lock()
+	w.delayed.Add(1)
+	var timer *time.Timer
+	timer = time.AfterFunc(remaining, func() {
+		w.delayedMu.Lock()
+		delete(w.delayedJobs, timer)
+		w.delayedMu.Unlock()
+		defer w.delayed.Done()
+		if err := w.republish(message); err != nil {
+			w.observeRepublishFailure(context.Background(), message, err)
+		}
+	})
+	w.delayedJobs[timer] = message
+	w.delayedMu.Unlock()
+}
+
+// flushDelayedJobs returns timer-owned work to Core NATS before the consumer connection closes so maintenance does not wait for long delays.
+func (w *natsWorker) flushDelayedJobs() {
+	w.delayedMu.Lock()
+	messages := make([]natsMessage, 0, len(w.delayedJobs))
+	for timer, message := range w.delayedJobs {
+		if !timer.Stop() {
+			continue
+		}
+		delete(w.delayedJobs, timer)
+		messages = append(messages, message)
+		w.delayed.Done()
+	}
+	w.delayedMu.Unlock()
+	for _, message := range messages {
+		if err := w.republish(message); err != nil {
+			w.observeRepublishFailure(context.Background(), message, err)
+		}
+	}
+	w.delayed.Wait()
 }
 
 // connectNATSWorker creates the Core NATS subscription owned by one worker lifecycle.

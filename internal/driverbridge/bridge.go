@@ -139,6 +139,24 @@ func (a runtimeQueueBackendAdapter) StartWorkers(ctx context.Context) error {
 	return a.inner.StartWorkers(ctx)
 }
 
+// PauseWorkers preserves optional native lifecycle control without claiming unsupported backends have paused.
+func (a runtimeQueueBackendAdapter) PauseWorkers(ctx context.Context) error {
+	controller, ok := a.inner.(interface{ PauseWorkers(context.Context) error })
+	if !ok {
+		return queue.ErrPauseUnsupported
+	}
+	return controller.PauseWorkers(ctx)
+}
+
+// ResumeWorkers preserves optional native lifecycle control without claiming unsupported backends have resumed.
+func (a runtimeQueueBackendAdapter) ResumeWorkers(ctx context.Context) error {
+	controller, ok := a.inner.(interface{ ResumeWorkers(context.Context) error })
+	if !ok {
+		return queue.ErrPauseUnsupported
+	}
+	return controller.ResumeWorkers(ctx)
+}
+
 // DrainWorkers forwards the native backend's worker-drain lifecycle phase.
 func (a runtimeQueueBackendAdapter) DrainWorkers(ctx context.Context) error {
 	return a.inner.DrainWorkers(ctx)

@@ -81,7 +81,56 @@ func TestLocalQueueWorkerLifecyclePausesIntakeAndDrainsActiveHandlers(t *testing
 	}
 }
 
-func TestLocalQueuePausedShutdownDoesNotStartPendingHandlers(t *testing.T) {
+func TestQueueWorkerLifecycleResumesAfterPauseDeadline(t *testing.T) {
+	q, err := NewWorkerpool(WithWorkers(1))
+	if err != nil {
+		t.Fatalf("new workerpool: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handled := make(chan struct{}, 2)
+	q.Register("job:deadline", func(context.Context, Message) error {
+		select {
+		case <-started:
+		default:
+			close(started)
+			<-release
+		}
+		handled <- struct{}{}
+		return nil
+	})
+	if err := q.StartWorkers(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	if _, err := q.Dispatch(NewJob("job:deadline")); err != nil {
+		t.Fatalf("dispatch active job: %v", err)
+	}
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := q.PauseWorkers(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("pause error = %v, want deadline exceeded", err)
+	}
+	if _, err := q.Dispatch(NewJob("job:deadline")); err != nil {
+		t.Fatalf("dispatch behind timed-out pause: %v", err)
+	}
+	close(release)
+	if err := q.ResumeWorkers(context.Background()); err != nil {
+		t.Fatalf("resume after pause deadline: %v", err)
+	}
+	for range 2 {
+		select {
+		case <-handled:
+		case <-time.After(time.Second):
+			t.Fatal("resumed worker did not drain accepted jobs")
+		}
+	}
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+}
+
+func TestLocalQueuePausedShutdownDrainsAcceptedHandlers(t *testing.T) {
 	d := newLocalQueueWithConfig(DriverWorkerpool, WorkerpoolConfig{Workers: 1, QueueCapacity: 2})
 	handled := make(chan struct{}, 1)
 	d.Register("job:pending", func(context.Context, Job) error {
@@ -99,8 +148,16 @@ func TestLocalQueuePausedShutdownDoesNotStartPendingHandlers(t *testing.T) {
 	}
 	select {
 	case <-handled:
-		t.Fatal("paused shutdown started a pending handler")
 	default:
+		t.Fatal("paused shutdown did not drain an accepted handler")
+	}
+	stats, err := d.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("read shutdown stats: %v", err)
+	}
+	counters := stats.ByQueue["default"]
+	if counters.Pending != 0 || counters.Active != 0 || counters.Processed != 1 {
+		t.Fatalf("shutdown queue counters = %+v, want one drained job", counters)
 	}
 }
 

@@ -37,7 +37,7 @@ func newQueueFromDriver(cfg Config, observer Observer, backend driverQueueBacken
 
 	var q queueBackend
 	var runtime runtimeQueueBackend
-	if native, ok := backend.(driverRuntimeQueueBackend); ok {
+	if native, ok := backend.(driverRuntimeQueueBackend); ok && workerFactory == nil {
 		runtime = driverRuntimeQueueBackendAdapter{native}
 		q = runtime
 	} else {

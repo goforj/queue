@@ -109,12 +109,14 @@ type databaseQueue struct {
 	cfg localDatabaseConfig
 	db  *sql.DB
 
-	ownsDB bool
+	ownsDB             bool
+	prepareSchemaOnUse bool
 
 	mu       sync.RWMutex
 	handlers map[string]queue.Handler
 
 	startMu      sync.Mutex
+	schemaMu     sync.Mutex
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
 	closeOnce    sync.Once
@@ -124,6 +126,7 @@ type databaseQueue struct {
 	shutdownCh   chan struct{}
 
 	started      atomic.Bool
+	schemaReady  atomic.Bool
 	shuttingDown atomic.Bool
 	uniqueClaims atomic.Uint64
 	continuation *busruntime.ContinuationScope
@@ -204,13 +207,14 @@ func New(cfg queue.DatabaseConfig) (*databaseQueue, error) {
 	}
 
 	d := &databaseQueue{
-		cfg:          local,
-		db:           cfg.DB,
-		handlers:     make(map[string]queue.Handler),
-		shutdownCh:   make(chan struct{}),
-		ownsDB:       ownsDB,
-		continuation: busruntime.NewContinuationScope(),
-		observer:     cfg.Observer,
+		cfg:                local,
+		db:                 cfg.DB,
+		handlers:           make(map[string]queue.Handler),
+		shutdownCh:         make(chan struct{}),
+		ownsDB:             ownsDB,
+		prepareSchemaOnUse: true,
+		continuation:       busruntime.NewContinuationScope(),
+		observer:           cfg.Observer,
 	}
 	if cfg.DriverName == "sqlite" {
 		d.db.SetMaxOpenConns(1)
@@ -267,11 +271,7 @@ func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 	if d.started.Load() {
 		return nil
 	}
-	if d.cfg.AutoMigrate && !d.cfg.DisableAutoMigrate {
-		if err := d.ensureSchema(ctx); err != nil {
-			return err
-		}
-	} else if err := d.requireManagedQueueSchema(ctx); err != nil {
+	if err := d.prepareSchema(ctx); err != nil {
 		return err
 	}
 	for i := 0; i < d.cfg.Workers; i++ {
@@ -279,6 +279,29 @@ func (d *databaseQueue) StartWorkers(ctx context.Context) error {
 		go d.workerLoop()
 	}
 	d.started.Store(true)
+	return nil
+}
+
+// prepareSchema keeps producer-only and worker database handles on the same lazy, retryable schema boundary.
+func (d *databaseQueue) prepareSchema(ctx context.Context) error {
+	if d.schemaReady.Load() {
+		return nil
+	}
+	d.schemaMu.Lock()
+	defer d.schemaMu.Unlock()
+	if d.schemaReady.Load() {
+		return nil
+	}
+	var err error
+	if d.cfg.AutoMigrate && !d.cfg.DisableAutoMigrate {
+		err = d.ensureSchema(ctx)
+	} else {
+		err = d.requireManagedQueueSchema(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	d.schemaReady.Store(true)
 	return nil
 }
 
@@ -371,6 +394,11 @@ func (d *databaseQueue) Dispatch(ctx context.Context, job queue.Job) error {
 	}
 	if !d.started.Load() && d.hasHandlers() {
 		if err := d.StartWorkers(context.Background()); err != nil {
+			return err
+		}
+	}
+	if d.prepareSchemaOnUse {
+		if err := d.prepareSchema(ctx); err != nil {
 			return err
 		}
 	}

@@ -473,8 +473,8 @@ func TestNATSWorkerShutdownWaitsForInFlightRepublish(t *testing.T) {
 	}
 }
 
-// TestNATSWorkerShutdownTracksDelayedRepublish verifies timer-backed accepted work finishes before connection drain.
-func TestNATSWorkerShutdownTracksDelayedRepublish(t *testing.T) {
+// TestNATSWorkerShutdownFlushesDelayedRepublish verifies maintenance can return long-delay work to Core NATS without waiting for its due time.
+func TestNATSWorkerShutdownFlushesDelayedRepublish(t *testing.T) {
 	w := newNATSWorker("nats://example:4222")
 	connection, subscription := newNATSWorkerLifecycleStubs()
 	w.conn = connection
@@ -483,13 +483,15 @@ func TestNATSWorkerShutdownTracksDelayedRepublish(t *testing.T) {
 	payload, err := json.Marshal(natsMessage{
 		Type:          "job:delayed-shutdown",
 		Queue:         "default",
-		AvailableAtMS: time.Now().Add(25 * time.Millisecond).UnixMilli(),
+		AvailableAtMS: time.Now().Add(time.Hour).UnixMilli(),
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	w.processMessage(&nats.Msg{Data: payload})
-	if err := w.Shutdown(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := w.Shutdown(ctx); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
 	select {

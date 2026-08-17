@@ -13,28 +13,27 @@ import (
 
 // localQueue is an in-memory queue implementation supporting sync and workerpool drivers.
 type localQueue struct {
-	driver         Driver
-	cfg            WorkerpoolConfig
-	mu             sync.RWMutex
-	metricsMu      sync.RWMutex
-	queueMu        sync.RWMutex
-	handlers       map[string]Handler
-	unique         uniqueness.MemoryStore
-	metrics        map[string]*localQueueMetrics
-	pausedQueues   map[string]bool
-	workQueue      chan queuedJob
-	workPending    int
-	workIdle       chan struct{}
-	continuation   *busruntime.ContinuationScope
-	resizeBuffer   bool
-	shutdownOnce   sync.Once
-	workerWG       sync.WaitGroup
-	workerStateMu  sync.Mutex
-	workerPaused   bool
-	workerStopping bool
-	workerActive   int
-	workerResume   chan struct{}
-	workerDrained  chan struct{}
+	driver        Driver
+	cfg           WorkerpoolConfig
+	mu            sync.RWMutex
+	metricsMu     sync.RWMutex
+	queueMu       sync.RWMutex
+	handlers      map[string]Handler
+	unique        uniqueness.MemoryStore
+	metrics       map[string]*localQueueMetrics
+	pausedQueues  map[string]bool
+	workQueue     chan queuedJob
+	workPending   int
+	workIdle      chan struct{}
+	continuation  *busruntime.ContinuationScope
+	resizeBuffer  bool
+	shutdownOnce  sync.Once
+	workerWG      sync.WaitGroup
+	workerStateMu sync.Mutex
+	workerPaused  bool
+	workerActive  int
+	workerResume  chan struct{}
+	workerDrained chan struct{}
 
 	syncWorkMu      sync.Mutex
 	syncWorkPending int
@@ -210,7 +209,6 @@ func (d *localQueue) DrainWorkers(ctx context.Context) error {
 	d.shutdownOnce.Do(func() {
 		d.shuttingDown.Store(true)
 		d.workerStateMu.Lock()
-		d.workerStopping = d.workerPaused
 		d.resumeWorkersLocked()
 		d.workerStateMu.Unlock()
 	})
@@ -577,10 +575,7 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	defer d.workerWG.Done()
 	jobTimeout := d.cfg.DefaultJobTimeout
 	for job := range workQueue {
-		if !d.beginWorkerExecution() {
-			d.finishQueuedWork()
-			continue
-		}
+		d.beginWorkerExecution()
 		func() {
 			defer d.finishQueuedWork()
 			defer d.endWorkerExecution()
@@ -625,18 +620,14 @@ func (d *localQueue) worker(workQueue <-chan queuedJob) {
 	}
 }
 
-// beginWorkerExecution waits outside the backend claim path and rejects pending work during a paused shutdown.
-func (d *localQueue) beginWorkerExecution() bool {
+// beginWorkerExecution keeps accepted in-memory work behind the lifecycle gate until intake resumes or graceful shutdown drains it.
+func (d *localQueue) beginWorkerExecution() {
 	for {
 		d.workerStateMu.Lock()
-		if d.workerStopping {
-			d.workerStateMu.Unlock()
-			return false
-		}
 		if !d.workerPaused {
 			d.workerActive++
 			d.workerStateMu.Unlock()
-			return true
+			return
 		}
 		resume := d.workerResume
 		d.workerStateMu.Unlock()
