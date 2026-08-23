@@ -1,6 +1,6 @@
 module github.com/goforj/queue/driver/sqlitequeue
 
-go 1.24.4
+go 1.27.0
 
 require (
 	github.com/goforj/queue v0.0.0

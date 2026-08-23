@@ -1,6 +1,6 @@
 module github.com/goforj/queue/driver/mysqlqueue
 
-go 1.24.4
+go 1.27.0
 
 require (
 	github.com/go-sql-driver/mysql v1.9.3

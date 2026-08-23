@@ -43,6 +43,24 @@ func (m Message) Bind(dst any) error {
 	return json.Unmarshal(m.payload, dst)
 }
 
+// PayloadAs unmarshals the delivered payload and returns it as T.
+// @group Queue
+//
+// Example: typed message payload
+//
+//	type EmailPayload struct {
+//		To string `json:"to"`
+//	}
+//	message := queue.NewMessage("emails:send", []byte(`{"to":"user@example.com"}`))
+//	payload, err := message.PayloadAs[EmailPayload]()
+//	fmt.Println(err == nil, payload.To)
+//	// true user@example.com
+func (m Message) PayloadAs[T any]() (T, error) {
+	var out T
+	err := m.Bind(&out)
+	return out, err
+}
+
 // DispatchResult identifies an accepted logical dispatch.
 // @group Queue
 type DispatchResult struct {

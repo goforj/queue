@@ -1,6 +1,6 @@
 module github.com/goforj/queue/driver/sqsqueue
 
-go 1.24.4
+go 1.27.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
