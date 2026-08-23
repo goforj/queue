@@ -1,13 +1,13 @@
 # Exact module Go versions. The workspace uses the highest version in this file.
-. 1.24.4
-docs 1.24.4
-driver/mysqlqueue 1.24.4
-driver/natsqueue 1.24.4
-driver/postgresqueue 1.25.0
-driver/rabbitmqqueue 1.24.4
-driver/redisqueue 1.24.4
-driver/sqlitequeue 1.24.4
-driver/sqlqueuecore 1.24.4
-driver/sqsqueue 1.24.4
-examples 1.25.0
-integration 1.25.0
+. 1.27.0
+docs 1.27.0
+driver/mysqlqueue 1.27.0
+driver/natsqueue 1.27.0
+driver/postgresqueue 1.27.0
+driver/rabbitmqqueue 1.27.0
+driver/redisqueue 1.27.0
+driver/sqlitequeue 1.27.0
+driver/sqlqueuecore 1.27.0
+driver/sqsqueue 1.27.0
+examples 1.27.0
+integration 1.27.0

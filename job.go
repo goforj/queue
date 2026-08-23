@@ -271,6 +271,24 @@ func (t Job) Bind(dst any) error {
 	return nil
 }
 
+// PayloadAs unmarshals the job payload JSON and returns it as T.
+// @group Job
+//
+// Example: typed job payload
+//
+//	type EmailPayload struct {
+//		To string `json:"to"`
+//	}
+//	job := queue.NewJob("emails:send").Payload(EmailPayload{To: "user@example.com"})
+//	payload, err := job.PayloadAs[EmailPayload]()
+//	fmt.Println(err == nil, payload.To)
+//	// true user@example.com
+func (t Job) PayloadAs[T any]() (T, error) {
+	var out T
+	err := t.Bind(&out)
+	return out, err
+}
+
 func encodePayload(payload any) ([]byte, error) {
 	if payload == nil {
 		return nil, nil
