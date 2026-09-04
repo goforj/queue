@@ -55,7 +55,7 @@ require (
 	modernc.org/sqlite v1.46.0 // indirect
 )
 
-replace github.com/goforj/queue => ..
+replace github.com/goforj/queue => ./..
 
 replace github.com/goforj/queue/driver/redisqueue => ../driver/redisqueue
 

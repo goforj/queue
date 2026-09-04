@@ -2,7 +2,7 @@ module github.com/goforj/queue/integration
 
 go 1.27.0
 
-replace github.com/goforj/queue => ..
+replace github.com/goforj/queue => ./..
 
 replace github.com/goforj/queue/driver/natsqueue => ../driver/natsqueue
 
