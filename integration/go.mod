@@ -94,8 +94,8 @@ require (
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/moby/term v0.5.0 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect
-	github.com/nats-io/nats.go v1.48.0 // indirect
-	github.com/nats-io/nkeys v0.4.11 // indirect
+	github.com/nats-io/nats.go v1.53.1 // indirect
+	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
