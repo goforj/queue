@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /docs
+      - /driver/mysqlqueue
+      - /driver/natsqueue
+      - /driver/postgresqueue
+      - /driver/rabbitmqqueue
+      - /driver/redisqueue
+      - /driver/sqlitequeue
+      - /driver/sqlqueuecore
+      - /driver/sqsqueue
+      - /examples
+      - /integration
+    schedule:
+      interval: weekly
+    groups:
+      shared-dependencies:
+        group-by: dependency-name
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
