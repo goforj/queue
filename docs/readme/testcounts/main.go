@@ -264,16 +264,17 @@ func countRunEvents(root string, integrationPrefixes map[string]struct{}) (int, 
 	cmd := exec.Command("go", args...)
 	cmd.Dir = root
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, out.String())
+		return 0, fmt.Errorf("go %s: %w\n%s%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
 	}
 
 	var total int
-	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	dec := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 
 	for dec.More() {
 		var event struct {
@@ -325,19 +326,20 @@ func countIntegrationRunEvents(integrationRoot string, integrationPrefixes map[s
 		"RUN_SOAK=0",
 	)
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return 0, fmt.Errorf("go %s (in %s): %w", strings.Join(args, " "), integrationRoot, ctx.Err())
 		}
-		return 0, fmt.Errorf("go %s (in %s): %w\n%s", strings.Join(args, " "), integrationRoot, err, out.String())
+		return 0, fmt.Errorf("go %s (in %s): %w\n%s%s", strings.Join(args, " "), integrationRoot, err, stdout.String(), stderr.String())
 	}
 
 	var total int
-	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	dec := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	for dec.More() {
 		var event struct {
 			Action string `json:"Action"`
