@@ -33,7 +33,7 @@ require (
 	github.com/goforj/queue/driver/sqsqueue v0.0.0
 	github.com/hibiken/asynq v0.26.0
 	github.com/jackc/pgx/v5 v5.9.2
-	github.com/rabbitmq/amqp091-go v1.13.0
+	github.com/rabbitmq/amqp091-go v1.14.0
 	github.com/testcontainers/testcontainers-go v0.39.0
 	modernc.org/sqlite v1.46.0
 )
