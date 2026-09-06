@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/goforj/queue v0.0.0
-	github.com/rabbitmq/amqp091-go v1.13.0
+	github.com/rabbitmq/amqp091-go v1.14.0
 )
 
 replace github.com/goforj/queue => ../..
