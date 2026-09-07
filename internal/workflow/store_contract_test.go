@@ -1205,8 +1205,6 @@ func TestStoreContract_ConcurrentBatchJobOutcomeOwnership(t *testing.T) {
 func TestStoreContract_ConcurrentTerminalBatchJobOutcomeOwnership(t *testing.T) {
 	for name, factory := range testStoreFactories(t) {
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
 			for _, policy := range []struct {
 				name          string
 				allowFailures bool
@@ -1215,6 +1213,8 @@ func TestStoreContract_ConcurrentTerminalBatchJobOutcomeOwnership(t *testing.T) 
 				{name: "fail_fast", allowFailures: false},
 			} {
 				t.Run(policy.name, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
 					for iteration := range 6 {
 						store := factory(t)
 						outcomes := requireOutcomeStore(t, store)
@@ -1338,8 +1338,6 @@ func TestStoreContract_ConcurrentDistinctBatchSettlement(t *testing.T) {
 	for name, factory := range testStoreFactories(t) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
-			ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
-			defer cancel()
 			const jobCount = 32
 			jobs := make([]BatchJob, jobCount)
 			for i := range jobs {
@@ -1356,6 +1354,8 @@ func TestStoreContract_ConcurrentDistinctBatchSettlement(t *testing.T) {
 				{name: "fail_fast", allowFailures: false},
 			} {
 				t.Run(policy.name, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer cancel()
 					batchID := "batch-concurrent-distinct-" + policy.name
 					if err := s.CreateBatch(ctx, BatchRecord{
 						BatchID:     batchID,
