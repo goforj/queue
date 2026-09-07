@@ -73,9 +73,20 @@ type sqlStore struct {
 	driverName    string
 	autoMigrate   bool
 	mysqlKeyLimit mysqlWorkflowKeyLimits
+	sqliteWriteMu sync.Mutex
 
 	ensureMu    sync.Mutex
 	schemaReady bool
+}
+
+// lockWriteTransaction serializes transactions within one SQLite store because
+// SQLite permits only one writer and can reject competing deferred transactions.
+func (s *sqlStore) lockWriteTransaction() func() {
+	if s.driverName != "sqlite" {
+		return func() {}
+	}
+	s.sqliteWriteMu.Lock()
+	return s.sqliteWriteMu.Unlock
 }
 
 // transitionReceiptQueryer lets receipt reads share one implementation across
@@ -559,6 +570,7 @@ func (s *sqlStore) advanceChainOutcome(ctx context.Context, chainID string, comp
 	if state.DispatchID != "" && claim.dispatchID != "" && state.DispatchID != claim.dispatchID {
 		return chainAdvanceResult{}, fmt.Errorf("chain %q dispatch mismatch", chainID)
 	}
+	defer s.lockWriteTransaction()()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return chainAdvanceResult{}, err
@@ -694,6 +706,7 @@ func (s *sqlStore) failChainOutcome(ctx context.Context, chainID, nodeID string,
 	if cause != nil {
 		message = cause.Error()
 	}
+	defer s.lockWriteTransaction()()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return chainFailureResult{}, err
@@ -831,6 +844,7 @@ func (s *sqlStore) CreateBatch(ctx context.Context, rec BatchRecord) error {
 			return err
 		}
 	}
+	defer s.lockWriteTransaction()()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1006,6 +1020,7 @@ func (s *sqlStore) Prune(ctx context.Context, before time.Time) error {
 		return err
 	}
 	cutoff := before.UnixMilli()
+	defer s.lockWriteTransaction()()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1058,6 +1073,7 @@ func (s *sqlStore) markBatchTerminal(ctx context.Context, batchID, jobID string,
 	if err := s.ensureSchema(ctx); err != nil {
 		return BatchState{}, false, false, false, transitionReceipt{}, false, err
 	}
+	defer s.lockWriteTransaction()()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return BatchState{}, false, false, false, transitionReceipt{}, false, err
