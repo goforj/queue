@@ -91,11 +91,7 @@ func NewWithConfig(cfg Config, opts ...queue.Option) (*queue.Queue, error) {
 	driverBackend := newRedisQueue(newRedisClient(cfg), newRedisInspector(cfg), newRedisTimelineStore(cfg), true)
 	q, err := driverbridge.NewQueueFromDriver(rootCfg, observer, driverBackend, func(workers int) (any, error) {
 		return newRedisWorker(
-			backend.NewServer(backend.RedisClientOpt{
-				Addr:     cfg.Addr,
-				Password: cfg.Password,
-				DB:       cfg.DB,
-			}, serverConfig(cfg, workers)),
+			backend.NewServer(redisBackendOptions(cfg), serverConfig(cfg, workers)),
 			backend.NewServeMux(),
 			observer,
 		), nil

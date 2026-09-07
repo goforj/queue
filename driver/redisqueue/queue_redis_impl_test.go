@@ -10,6 +10,7 @@ import (
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/internal/driverbridge"
 	backend "github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 type redisInspectorStub struct {
@@ -257,6 +258,20 @@ func TestRedisQueueConstruction(t *testing.T) {
 	opts := configuredState.client.Options()
 	if opts.Addr != cfg.Addr || opts.Password != cfg.Password || opts.DB != cfg.DB {
 		t.Fatalf("state client options = addr:%q password:%q db:%d", opts.Addr, opts.Password, opts.DB)
+	}
+	if opts.ReadTimeout != redisDefaultReadTimeout || opts.WriteTimeout != redisDefaultReadTimeout || opts.MinRetryBackoff != redisDefaultMinRetryBackoff || opts.MaxRetryBackoff != redisDefaultMaxRetryBackoff {
+		t.Fatalf("state client transport defaults changed: %+v", opts)
+	}
+	backendClient, ok := redisBackendOptions(cfg).MakeRedisClient().(*redis.Client)
+	if !ok {
+		t.Fatal("Asynq transport options returned an unexpected client")
+	}
+	backendClientOpts := backendClient.Options()
+	if backendClientOpts.ReadTimeout != redisDefaultReadTimeout || backendClientOpts.WriteTimeout != redisDefaultReadTimeout || backendClientOpts.MinRetryBackoff != redisDefaultMinRetryBackoff || backendClientOpts.MaxRetryBackoff != redisDefaultMaxRetryBackoff || backendClientOpts.Dialer == nil {
+		t.Fatalf("Asynq transport defaults changed: %+v", backendClientOpts)
+	}
+	if err := backendClient.Close(); err != nil {
+		t.Fatalf("close Asynq transport client: %v", err)
 	}
 	if err := configuredState.Close(); err != nil {
 		t.Fatalf("close configured state client: %v", err)

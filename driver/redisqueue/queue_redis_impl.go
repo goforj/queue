@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,6 +121,20 @@ const redisDefaultJobTimeout = 30 * time.Second
 const redisUniqueCompensationTimeout = 5 * time.Second
 const redisMinimumUniqueTTL = time.Second
 const redisMaximumApplicationRetry = int(^uint32(0)>>1) - 1
+const redisDefaultReadTimeout = 3 * time.Second
+const redisDefaultMinRetryBackoff = 8 * time.Millisecond
+const redisDefaultMaxRetryBackoff = 512 * time.Millisecond
+const redisDefaultDialTimeout = 5 * time.Second
+const redisDefaultKeepAlive = 5 * time.Minute
+
+type redisConnectionOptions struct {
+	cfg Config
+}
+
+// MakeRedisClient gives Asynq a client whose transport behavior remains stable across go-redis upgrades.
+func (o redisConnectionOptions) MakeRedisClient() interface{} {
+	return redis.NewClient(redisOptions(o.cfg))
+}
 
 // newRedisQueue requires one state implementation so timeline and uniqueness behavior cannot silently diverge.
 func newRedisQueue(client redisEnqueueClient, inspector redisInspector, state redisStateStore, ownsClient bool) *redisQueue {
@@ -127,29 +142,42 @@ func newRedisQueue(client redisEnqueueClient, inspector redisInspector, state re
 }
 
 func newRedisClient(cfg Config) redisEnqueueClient {
-	return backend.NewClient(backend.RedisClientOpt{
-		Addr:     cfg.Addr,
-		Password: cfg.Password,
-		DB:       cfg.DB,
-	})
+	return backend.NewClient(redisBackendOptions(cfg))
 }
 
 func newRedisInspector(cfg Config) redisInspector {
-	return backend.NewInspector(backend.RedisClientOpt{
-		Addr:     cfg.Addr,
-		Password: cfg.Password,
-		DB:       cfg.DB,
-	})
+	return backend.NewInspector(redisBackendOptions(cfg))
+}
+
+// redisBackendOptions adapts the stable Redis transport settings to Asynq's connection interface.
+func redisBackendOptions(cfg Config) backend.RedisConnOpt {
+	return redisConnectionOptions{cfg: cfg}
+}
+
+// redisOptions preserves the go-redis transport defaults used by the previous dependency version.
+func redisOptions(cfg Config) *redis.Options {
+	return &redis.Options{
+		Addr:            cfg.Addr,
+		Password:        cfg.Password,
+		DB:              cfg.DB,
+		DialTimeout:     redisDefaultDialTimeout,
+		ReadTimeout:     redisDefaultReadTimeout,
+		WriteTimeout:    redisDefaultReadTimeout,
+		MinRetryBackoff: redisDefaultMinRetryBackoff,
+		MaxRetryBackoff: redisDefaultMaxRetryBackoff,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&net.Dialer{
+				Timeout:   redisDefaultDialTimeout,
+				KeepAlive: redisDefaultKeepAlive,
+			}).DialContext(ctx, network, addr)
+		},
+	}
 }
 
 // newRedisTimelineStore creates the shared Redis state client used by history and logical claims.
 func newRedisTimelineStore(cfg Config) redisStateStore {
 	return &redisTimelineClient{
-		client: redis.NewClient(&redis.Options{
-			Addr:     cfg.Addr,
-			Password: cfg.Password,
-			DB:       cfg.DB,
-		}),
+		client: redis.NewClient(redisOptions(cfg)),
 	}
 }
 
