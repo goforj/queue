@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/go-connections/nat"
 	_ "github.com/go-sql-driver/mysql"
 	. "github.com/goforj/queue"
 	"github.com/goforj/queue/integration/testenv"
@@ -2764,7 +2763,7 @@ func refreshRedisAddr(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	port, err := integrationRedis.container.MappedPort(ctx, nat.Port("6379/tcp"))
+	port, err := integrationRedis.container.MappedPort(ctx, "6379/tcp")
 	if err != nil {
 		return err
 	}
