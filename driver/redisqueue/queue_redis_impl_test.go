@@ -262,6 +262,9 @@ func TestRedisQueueConstruction(t *testing.T) {
 	if opts.ReadTimeout != redisDefaultReadTimeout || opts.WriteTimeout != redisDefaultReadTimeout || opts.MinRetryBackoff != redisDefaultMinRetryBackoff || opts.MaxRetryBackoff != redisDefaultMaxRetryBackoff {
 		t.Fatalf("state client transport defaults changed: %+v", opts)
 	}
+	if opts.PipelinePoolSize != -1 {
+		t.Fatalf("state client pipeline pool = %d, want shared pool", opts.PipelinePoolSize)
+	}
 	backendClient, ok := redisBackendOptions(cfg).MakeRedisClient().(*redis.Client)
 	if !ok {
 		t.Fatal("Asynq transport options returned an unexpected client")
@@ -269,6 +272,9 @@ func TestRedisQueueConstruction(t *testing.T) {
 	backendClientOpts := backendClient.Options()
 	if backendClientOpts.ReadTimeout != redisDefaultReadTimeout || backendClientOpts.WriteTimeout != redisDefaultReadTimeout || backendClientOpts.MinRetryBackoff != redisDefaultMinRetryBackoff || backendClientOpts.MaxRetryBackoff != redisDefaultMaxRetryBackoff || backendClientOpts.Dialer == nil {
 		t.Fatalf("Asynq transport defaults changed: %+v", backendClientOpts)
+	}
+	if backendClientOpts.PipelinePoolSize != -1 {
+		t.Fatalf("Asynq pipeline pool = %d, want shared pool", backendClientOpts.PipelinePoolSize)
 	}
 	if err := backendClient.Close(); err != nil {
 		t.Fatalf("close Asynq transport client: %v", err)
