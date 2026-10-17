@@ -165,6 +165,8 @@ func redisOptions(cfg Config) *redis.Options {
 		WriteTimeout:    redisDefaultReadTimeout,
 		MinRetryBackoff: redisDefaultMinRetryBackoff,
 		MaxRetryBackoff: redisDefaultMaxRetryBackoff,
+		// Preserve the shared connection pool instead of adding burst pipeline connections.
+		PipelinePoolSize: -1,
 		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return (&net.Dialer{
 				Timeout:   redisDefaultDialTimeout,
