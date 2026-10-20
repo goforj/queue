@@ -2499,3 +2499,7 @@ fmt.Println(q != nil)
 Use `make test` for root-module tests, `make vet` for static checks, and `make generate` to refresh generated documentation. `make test-integration` runs the separate integration module; pass a backend such as `make test-integration sqlite` to narrow the matrix. Integration tests may need local services.
 
 Driver, docs, examples, and integration directories are independent Go modules; test each changed module from its directory. Matrix status and backend notes are tracked in `docs/integration-scenarios.md`.
+
+## Documentation
+
+Read the [queue library documentation](https://goforj.dev/queue) for standalone installation, usage, and API reference.
