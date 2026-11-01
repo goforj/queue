@@ -3,14 +3,14 @@ go 1.27.0
 use (
 	.
 	./docs
+	./driver/mysqlqueue
 	./driver/natsqueue
+	./driver/postgresqueue
 	./driver/rabbitmqqueue
 	./driver/redisqueue
-	./driver/sqsqueue
-	./driver/sqlqueuecore
 	./driver/sqlitequeue
-	./driver/postgresqueue
-	./driver/mysqlqueue
+	./driver/sqlqueuecore
+	./driver/sqsqueue
 	./examples
 	./integration
 )
