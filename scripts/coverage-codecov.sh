@@ -235,7 +235,7 @@ collect_integration() {
   (
     cd "$ROOT_DIR/integration"
     INTEGRATION_BACKEND="$backend" GOWORK=off GOCACHE="$GOCACHE_DIR" GOMODCACHE="$GOMODCACHE_DIR" \
-      go test -p=1 -count=1 -tags=integration -covermode=atomic \
+      go test -p=1 -count=1 -timeout=15m -tags=integration -covermode=atomic \
         -coverpkg="$ROOT_MODULE/..." -coverprofile="$raw_profile" ./...
   )
 

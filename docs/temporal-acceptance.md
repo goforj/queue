@@ -7,7 +7,7 @@ The optional driver uses Temporal SDK 1.45.0, API 1.62.12, gRPC 1.83.2 and the r
 ```sh
 go test -race ./...
 GOWORK=off go -C driver/temporalqueue test -race ./...
-INTEGRATION_BACKEND=temporal GOWORK=off go -C integration test -race -tags=integration ./temporal -count=1 -timeout=5m
+INTEGRATION_BACKEND=temporal GOWORK=off go -C integration test -race -tags=integration ./temporal -count=1 -timeout=15m
 TEMPORAL_PROOF=1 GOWORK=off go -C integration test -race -tags=integration ./temporalproof -count=1 -timeout=5m
 INTEGRATION_BACKEND=sqlite,mysql,postgres GOWORK=off go -C integration test -race -tags=integration ./root -run '^TestNamedContinuations' -count=1 -timeout=3m
 FULL=1 VET=1 ./scripts/test-all-modules.sh
@@ -33,7 +33,7 @@ The module inventory includes root, optional drivers, examples, integration and 
 | Start uncertainty | Successful service acceptance followed by lost response, original immutable input reconciliation, collision and inaccessible/expired history controls |
 | Reset and isolation | Real administrative reset rejection, actual run checks at generic activity entry, and resource-bound authorized reads |
 | Protection | Bounded authenticated fixture conversion through dispatch/hooks/reads/replay, sentinel checks in persisted history and SDK logs |
-| Scale | 256-member fan-out with bounded history pages, 32 hook definitions and immediate over-limit/multiplication rejection |
+| Scale | 256-member fan-out, 32 hook definitions, combined 256 members plus 1,024 progress invocations at the maximum reservation, and immediate over-limit/multiplication rejection |
 | SQL recovery | SQLite/MySQL/PostgreSQL atomic state and intents, recovery without surviving business delivery, competing transitions, one-connection restart, managed schema and pruning retention |
 
 The AEAD test fixture uses a deliberately public synthetic key, bounded bytes and no tenant AAD. It demonstrates the adapter boundary and must never be used to protect application data.
@@ -52,6 +52,7 @@ Several independent protocol, security, runtime and recovery passes found and ve
 - Transient SQL settlement failure repeating or stranding an effect, application timeout preventing durable settlement, and idempotent settlement accepting a stale or forged owner.
 - Oversized broker claims reaching decoding, catalogs omitting JSON/base64 expansion and routes, and post-default route resolution bypassing the amplified ledger reservation. Both encoded catalog and worst-case footprint checks run after defaults resolve.
 - Graceful worker shutdown closing serialization adapters before admitted native result encoding, with retryable availability preserved for calls arriving after SDK grace expires.
+- Duplicate activity entry admission and internal authority reads rejecting callbacks already admitted before graceful shutdown.
 
 Review approval applies to the inspected code and checks. It does not replace required feature acceptance or establish an actual published module release.
 
@@ -64,3 +65,6 @@ Publish root and each optional module using the repository release scripts and s
 The local qualification used the full generated default and `customer-portal` Apps at GoForj `5ab78874`, with the exact candidate queue modules selected through temporary replacements. All generated packages built. App/Wire, jobs, schedules, queues and the application-owned dual-resource/native-workflow fixture passed under the race detector. Queue regeneration preserved that fixture and generated manager bytes.
 
 That framework revision still emits the retired `queue.Config.Observer` field. The isolated qualification applied the existing [legacy API migration](legacy-api-migration.md), moving that argument to `queue.WithObserver` for native queue constructors. This adaptation belongs in the downstream framework rollout. The unmodified framework's full render test command separately fails its HTTP maintenance response assertions with the old queue dependency as well; those baseline failures do not establish a queue regression or a passing full framework test suite.
+
+
+The combined maximum ran on the pinned server under `-race`: 256 members and four progress definitions, 1,024 unique successful hook outcomes and exactly 1,024 hook executions. It reserved 4,194,304 bytes and retained 3,763,079 protobuf/server history bytes across 9,479 events. Acceptance took 18.96 ms, execution took 6m30.79s, and final state/outcome reads plus history capture took 1.49s on the qualification host. The declared retry field used its highest accepted value; successful handlers remained on the first attempt. Separate failure tests establish actual retry budgets. These measurements describe this fixture and host, rather than a general latency guarantee.

@@ -11,10 +11,13 @@ import (
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/driver/temporalqueue"
+	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/history/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
+	"google.golang.org/protobuf/proto"
 )
 
 // sharedCapacityWorkflow schedules native work beside portable members on the same remote role.
@@ -143,4 +146,63 @@ func TestTemporalDriverScaleAndPaging(t *testing.T) {
 	if _, err := multiplied.Dispatch(t.Context()); err == nil {
 		t.Fatal("multiplication over history reservation accepted")
 	}
+
+	// The maximum reservation combines all supported members with four progress definitions.
+	businessBefore, hooksBefore := business.Load(), hooks.Load()
+	maximumJobs := make([]queue.Job, 256)
+	for i := range maximumJobs {
+		maximumJobs[i] = queue.NewJob("member").Retry(2147483646)
+	}
+	maximum := queue.Continue(q.Batch(maximumJobs...))
+	for range 4 {
+		maximum.OnProgress(queue.NewJob("hook").Retry(2147483646))
+	}
+	started := time.Now()
+	maximumID, err := maximum.Dispatch(t.Context())
+	acceptanceDuration := time.Since(started)
+	if err != nil {
+		t.Fatalf("maximum combined acceptance failed after %s: %v", acceptanceDuration, err)
+	}
+	t.Logf("maximum combined accepted workflow=%s members=256 definitions=4 invocations=1024 reserved_bytes=%d acceptance=%s", maximumID, 4<<20, acceptanceDuration)
+	if err := c.GetWorkflow(t.Context(), maximumID, "").Get(t.Context(), nil); err != nil {
+		t.Fatalf("maximum combined completion after %s: %v", time.Since(started), err)
+	}
+	completionDuration := time.Since(started)
+	outcomeStarted := time.Now()
+	maximumOutcomes, err := q.FindContinuations(t.Context(), maximumID)
+	if err != nil {
+		t.Fatalf("maximum combined continuation read: %v", err)
+	}
+	if len(maximumOutcomes) != 1024 {
+		t.Fatalf("maximum combined outcomes=%d, want 1024", len(maximumOutcomes))
+	}
+	ids := make(map[string]bool, 1024)
+	for _, outcome := range maximumOutcomes {
+		if outcome.Status != "succeeded" {
+			t.Fatalf("maximum combined outcome status=%s", outcome.Status)
+		}
+		if ids[outcome.Invocation.ID] {
+			t.Fatal("duplicate maximum combined invocation identity")
+		}
+		ids[outcome.Invocation.ID] = true
+	}
+	maximumState, err := q.FindBatch(t.Context(), maximumID)
+	if err != nil || !maximumState.Completed || maximumState.Processed != 256 || maximumState.Pending != 0 || maximumState.Failed != 0 {
+		t.Fatalf("maximum combined business state %+v, error %v", maximumState, err)
+	}
+	if business.Load()-businessBefore != 256 || hooks.Load()-hooksBefore != 1024 {
+		t.Fatalf("maximum combined actual handlers business=%d hooks=%d", business.Load()-businessBefore, hooks.Load()-hooksBefore)
+	}
+	iterator := c.GetWorkflowHistory(t.Context(), maximumID, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+	recorded := &history.History{}
+	counts := make(map[string]int)
+	for iterator.HasNext() {
+		event, err := iterator.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorded.Events = append(recorded.Events, event)
+		counts[event.EventType.String()]++
+	}
+	t.Logf("maximum combined PASS business=%d hooks=%d outcomes=%d reservation_bytes=%d history_bytes=%d events=%d completion=%s outcome_read_and_state=%s events_by_type=%v", business.Load()-businessBefore, hooks.Load()-hooksBefore, len(maximumOutcomes), 4<<20, proto.Size(recorded), len(recorded.Events), completionDuration, time.Since(outcomeStarted), counts)
 }
