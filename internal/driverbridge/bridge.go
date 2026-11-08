@@ -63,24 +63,36 @@ func NewQueueFromDriver(
 	workerFactory func(workers int) (any, error),
 	opts ...queue.Option,
 ) (*queue.Queue, error) {
-	driverBackend, err := adaptQueueBackend(backend)
+	return NewQueue(cfg, observer, runtimehook.Descriptor{
+		Backend:       backend,
+		WorkerFactory: workerFactory,
+		WorkflowMode:  runtimehook.WorkflowBuiltIn,
+	}, opts...)
+}
+
+// NewQueue preserves declared driver capabilities across ordinary backend adaptation.
+// Unlike the compatibility constructor, it never infers a workflow mode.
+func NewQueue(cfg queue.Config, observer queue.Observer, descriptor runtimehook.Descriptor, opts ...queue.Option) (*queue.Queue, error) {
+	driverBackend, err := adaptQueueBackend(descriptor.Backend)
 	if err != nil {
 		return nil, err
 	}
-	if runtimehook.BuildQueueFromDriver == nil {
-		return nil, fmt.Errorf("queue internal runtime hook is not registered")
+	if runtimehook.BuildQueueFromDescriptor == nil {
+		return nil, fmt.Errorf("queue internal descriptor hook is not registered")
 	}
+	descriptor.Backend = driverBackend
+	descriptor.WorkerFactory = adaptWorkerFactory(descriptor.WorkerFactory)
 	rawOpts := make([]any, 0, len(opts))
 	for _, opt := range opts {
 		rawOpts = append(rawOpts, opt)
 	}
-	qv, err := runtimehook.BuildQueueFromDriver(cfg, NewObserverSink(observer), driverBackend, adaptWorkerFactory(workerFactory), rawOpts)
+	qv, err := runtimehook.BuildQueueFromDescriptor(cfg, NewObserverSink(observer), descriptor, rawOpts)
 	if err != nil {
 		return nil, err
 	}
 	q, ok := qv.(*queue.Queue)
 	if !ok {
-		return nil, fmt.Errorf("queue internal runtime hook returned %T", qv)
+		return nil, fmt.Errorf("queue internal descriptor hook returned %T", qv)
 	}
 	return q, nil
 }

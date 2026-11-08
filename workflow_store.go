@@ -25,6 +25,10 @@ type SQLStoreConfig struct {
 // @group Queue
 var ErrWorkflowNotFound = workflow.ErrNotFound
 
+// ErrWorkflowUnsupported indicates that the selected driver cannot perform a portable workflow operation.
+// @group Queue
+var ErrWorkflowUnsupported = errors.New("portable workflows are unsupported")
+
 // NewMemoryStore creates an in-memory workflow state store. It copies chain
 // nodes and payload bytes on creation and return so callers retain independent ownership.
 // @group Constructors

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue/busruntime"
+	"github.com/goforj/queue/internal/runtimehook"
 	"github.com/goforj/queue/internal/workflow"
 )
 
@@ -210,6 +211,7 @@ type Queue struct {
 	q                    queueRuntime
 	jobs                 *workflow.Jobs
 	b                    workflow.Engine
+	workflowMode         runtimehook.WorkflowMode
 	ctx                  context.Context
 	legacyDirectEnvelope bool
 }
@@ -227,6 +229,11 @@ func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
+	return newQueueWithDescriptor(q, ro, runtimehook.Descriptor{WorkflowMode: runtimehook.WorkflowBuiltIn})
+}
+
+// newQueueWithDescriptor selects one coordinator after shared execution is configured.
+func newQueueWithDescriptor(q queueRuntime, ro runtimeOptions, descriptor runtimehook.Descriptor) (*Queue, error) {
 	observer := attachRuntimeObserver(q, ro.observer)
 	if ro.workers > 0 && q != nil {
 		q = q.Workers(ro.workers)
@@ -263,8 +270,26 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := workflow.NewCoordinator(jobs, workflow.WithStore(workflowStoreFromRoot(ro.store)))
-	return &Queue{q: q, jobs: jobs, b: b, legacyDirectEnvelope: ro.legacyDirectEnvelope}, nil
+	var coordinator workflow.Engine
+	switch descriptor.WorkflowMode {
+	case runtimehook.WorkflowBuiltIn:
+		coordinator = workflow.NewCoordinator(jobs, workflow.WithStore(workflowStoreFromRoot(ro.store)))
+	case runtimehook.WorkflowNative:
+		binding := runtimehook.NewWorkflowBinding(q, jobs, string(q.Driver()))
+		native, err := descriptor.NewCoordinator(binding)
+		if err != nil {
+			return nil, err
+		}
+		if native == nil || native.Binding() != binding {
+			return nil, fmt.Errorf("native workflow coordinator does not belong to the selected runtime and executor")
+		}
+		coordinator = native
+	case runtimehook.WorkflowUnsupported:
+		// No built-in routes or state may be installed for an unsupported driver.
+	default:
+		return nil, fmt.Errorf("invalid workflow mode %q", descriptor.WorkflowMode)
+	}
+	return &Queue{q: q, jobs: jobs, b: coordinator, workflowMode: descriptor.WorkflowMode, legacyDirectEnvelope: ro.legacyDirectEnvelope}, nil
 }
 
 // attachRuntimeObserver composes constructor and option observers before the workflow runtime is built so every layer shares one sink.
@@ -523,6 +548,9 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 	if r == nil {
 		return &chainBuilderAdapter{}
 	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return &chainBuilderAdapter{err: r.unsupportedWorkflow("chain")}
+	}
 	workflowJobs, err := toWorkflowJobs(jobs)
 	if err != nil {
 		return &chainBuilderAdapter{err: err}
@@ -551,6 +579,9 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 func (r *Queue) Batch(jobs ...Job) BatchBuilder {
 	if r == nil {
 		return &batchBuilderAdapter{}
+	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return &batchBuilderAdapter{err: r.unsupportedWorkflow("batch")}
 	}
 	workflowJobs, err := toWorkflowJobs(jobs)
 	if err != nil {
@@ -645,6 +676,9 @@ func (r *Queue) FindChain(ctx context.Context, chainID string) (ChainState, erro
 	if r == nil {
 		return ChainState{}, fmt.Errorf("runtime is nil")
 	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return ChainState{}, r.unsupportedWorkflow("find chain")
+	}
 	state, err := r.b.FindChain(ctx, chainID)
 	return chainStateFromWorkflow(state), err
 }
@@ -668,6 +702,9 @@ func (r *Queue) FindBatch(ctx context.Context, batchID string) (BatchState, erro
 	if r == nil {
 		return BatchState{}, fmt.Errorf("runtime is nil")
 	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return BatchState{}, r.unsupportedWorkflow("find batch")
+	}
 	state, err := r.b.FindBatch(ctx, batchID)
 	return batchStateFromWorkflow(state), err
 }
@@ -685,6 +722,9 @@ func (r *Queue) FindBatch(ctx context.Context, batchID string) (BatchState, erro
 func (r *Queue) Prune(ctx context.Context, before time.Time) error {
 	if r == nil {
 		return fmt.Errorf("runtime is nil")
+	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return r.unsupportedWorkflow("prune")
 	}
 	return r.b.Prune(ctx, before)
 }
@@ -1009,4 +1049,21 @@ func toWorkflowJob(job Job) (workflow.Job, error) {
 		j = j.UniqueFor(job.options.uniqueTTL)
 	}
 	return j, nil
+}
+
+// driverSettings freezes typed option provenance for a driver's construction checks.
+func (o runtimeOptions) driverSettings() runtimehook.Settings {
+	return runtimehook.Settings{
+		Store: workflowStoreFromRoot(o.store), StoreSupplied: o.storeSupplied,
+		Clock: o.clock, ClockSupplied: o.clockSupplied,
+		Middlewares: middlewaresToWorkflow(o.middlewares), MiddlewareSupplied: o.middlewareSupplied,
+		ObserverSupplied: o.observerSupplied, Workers: o.workers, WorkersSupplied: o.workersSupplied,
+		HandlerContextDecorator: o.handlerContextDecorator, DecoratorSupplied: o.decoratorSupplied,
+		LegacyDirectEnvelope: o.legacyDirectEnvelope, LegacyEnvelopeSupplied: o.legacyEnvelopeSupplied,
+	}
+}
+
+// unsupportedWorkflow adds resource and operation context while preserving errors.Is.
+func (r *Queue) unsupportedWorkflow(operation string) error {
+	return fmt.Errorf("%s for driver %q: %w", operation, r.Driver(), ErrWorkflowUnsupported)
 }
