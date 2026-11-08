@@ -158,6 +158,9 @@ func (r *runtime) FindContinuations(ctx context.Context, id string) ([]busruntim
 
 // handleContinuation validates fenced authority before invoking the shared logical handler.
 func (r *runtime) handleContinuation(ctx context.Context, job busruntime.InboundJob) error {
+	if len(job.PayloadBytes()) > 256<<10 {
+		return busruntime.Permanent(errors.New("workflow continuation delivery exceeds byte budget"))
+	}
 	var claim continuationClaim
 	if err := job.Bind(&claim); err != nil {
 		return busruntime.Permanent(errors.New("invalid workflow continuation delivery"))

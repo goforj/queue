@@ -726,6 +726,12 @@ func (b *chainBuilder) BindContinuations(definitions []ContinuationDefinition) (
 			resolved[i].Job.Options.Queue = b.r.continuationQueue
 		}
 	}
+	if err := validateDefinitions("chain", resolved); err != nil {
+		return nil, err
+	}
+	if err := validateContinuationFootprint("chain", len(copy.jobs), resolved); err != nil {
+		return nil, err
+	}
 	copy.continuation = &continuationPlan{Resource: b.r.continuationResource, Definitions: resolved}
 	return &copy, nil
 }

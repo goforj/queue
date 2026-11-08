@@ -1,10 +1,13 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/goforj/queue/busruntime"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -311,5 +314,41 @@ func TestContinuationAuthorityRetryPreservesEffect(t *testing.T) {
 	cancel()
 	if err := retryContinuationStore(ctx, func(context.Context) error { return errors.New("transient") }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation ignored %v", err)
+	}
+}
+
+// oversizedContinuationInput exposes whether oversized broker input reaches JSON decoding.
+type oversizedContinuationInput struct{ decoded bool }
+
+// PayloadBytes reports a body beyond the maximum valid named claim envelope.
+func (*oversizedContinuationInput) PayloadBytes() []byte { return make([]byte, (256<<10)+1) }
+
+// Bind records decoder entry so preflight must reject before parsing application-selected bytes.
+func (i *oversizedContinuationInput) Bind(any) error { i.decoded = true; return nil }
+
+// TestContinuationDeliveryPreflightRejectsBeforeDecode bounds untrusted internal delivery envelopes before binding.
+func TestContinuationDeliveryPreflightRejectsBeforeDecode(t *testing.T) {
+	input := &oversizedContinuationInput{}
+	r := &runtime{}
+	if err := r.handleContinuation(t.Context(), input); !busruntime.IsPermanent(err) || input.decoded {
+		t.Fatalf("oversized continuation reached decoder: decoded=%t error=%v", input.decoded, err)
+	}
+}
+
+// TestAcceptedContinuationCatalogFitsDeliveryBudget proves JSON escaping and base64 expansion fit the decoder ceiling.
+func TestAcceptedContinuationCatalogFitsDeliveryBudget(t *testing.T) {
+	definitions := cloneDefinitions([]ContinuationDefinition{{Phase: "success", Job: StoredJob{Type: strings.Repeat("\x01", 100), Payload: bytes.Repeat([]byte("x"), 90<<10), Options: JobOptions{Queue: strings.Repeat("\x02", 100)}}}})
+	if err := validateDefinitions("chain", definitions); err != nil {
+		t.Fatal(err)
+	}
+	ledger := newLedger("chain", "chn_0123456789abcdef", "dsp_0123456789abcdef", &continuationPlan{Resource: strings.Repeat("\x03", 255), Definitions: definitions})
+	ledger.trigger(busruntime.ContinuationSummary{Kind: "chain", MemberID: "job_0123456789abcdef", Total: 256, Processed: 256, Completed: true}, false, true, time.Now())
+	claim, ok := ledger.claim("publisher_0123456789abcdef", time.Now(), time.Minute)
+	if !ok {
+		t.Fatal("no valid claim")
+	}
+	encoded, err := json.Marshal(claim)
+	if err != nil || len(encoded) > 256<<10 {
+		t.Fatalf("accepted catalog exceeds delivery ceiling: %d %v", len(encoded), err)
 	}
 }

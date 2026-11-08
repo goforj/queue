@@ -6,6 +6,9 @@ import (
 	"errors"
 	"io"
 
+	"github.com/goforj/queue/internal/workflow"
+	"go.temporal.io/api/serviceerror"
+
 	"go.temporal.io/api/common/v1"
 	"go.temporal.io/api/history/v1"
 	"go.temporal.io/api/workflowservice/v1"
@@ -80,4 +83,23 @@ func (h *historyPages) Next() (*history.HistoryEvent, error) {
 	event := h.page[h.cursor]
 	h.cursor++
 	return event, nil
+}
+
+// historyReadError preserves actionable service categories without copying server diagnostics or treating outages as absence.
+func historyReadError(ctx context.Context, err error) error {
+	var missing *serviceerror.NotFound
+	var denied *serviceerror.PermissionDenied
+	var invalid *serviceerror.InvalidArgument
+	switch {
+	case errors.As(err, &missing):
+		return workflow.ErrNotFound
+	case errors.As(err, &denied):
+		return serviceerror.NewPermissionDenied("Temporal history access denied", "")
+	case errors.As(err, &invalid):
+		return serviceerror.NewInvalidArgument("Temporal history request invalid")
+	case ctx.Err() != nil:
+		return ctx.Err()
+	default:
+		return serviceerror.NewUnavailable("Temporal history unavailable")
+	}
 }

@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -184,5 +185,43 @@ func TestNamedContinuationShutdownPreservesAcceptedContext(t *testing.T) {
 	close(finish)
 	if err := q.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestNamedContinuationsRejectEncodedCatalogOverflow includes escaping and resolved routes before acceptance.
+func TestNamedContinuationsRejectEncodedCatalogOverflow(t *testing.T) {
+	for _, scenario := range []string{"explicit queue", "default queue", "escaped type", "default multiplication"} {
+		t.Run(scenario, func(t *testing.T) {
+			cfg := Config{Driver: DriverWorkerpool}
+			if scenario == "default queue" {
+				cfg.DefaultQueue = strings.Repeat("q", 300<<10)
+			}
+			if scenario == "default multiplication" {
+				cfg.DefaultQueue = strings.Repeat("q", 100<<10)
+			}
+			q, err := New(cfg, WithResourceID("scope"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer q.Shutdown(context.Background())
+			hook := NewJob("hook")
+			switch scenario {
+			case "explicit queue":
+				hook = hook.OnQueue(strings.Repeat("q", 300<<10))
+			case "escaped type":
+				hook = NewJob(strings.Repeat("\x01", 30<<10))
+			}
+			bound := Continue(q.Chain(NewJob("business"))).OnCompletion(hook)
+			if scenario == "default multiplication" {
+				jobs := make([]Job, 256)
+				for i := range jobs {
+					jobs[i] = NewJob("business")
+				}
+				bound = Continue(q.Batch(jobs...)).OnProgress(hook)
+			}
+			if id, err := bound.Dispatch(t.Context()); err == nil || id != "" {
+				t.Fatalf("oversized encoded catalog accepted: %s %v", id, err)
+			}
+		})
 	}
 }

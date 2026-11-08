@@ -44,11 +44,13 @@ Several independent protocol, security, runtime and recovery passes found and ve
 
 - Batch fail-fast cancellation of already admitted siblings, cancellation reported as successful closure, and failed business aggregates incorrectly closing successfully.
 - Reset lineage and cross-resource payload reads, immutable member association and stable activity IDs.
+- Malformed retained journal records, missing accepted definitions, and RPC diagnostics collapsing authorization, outage and absence into one category. Production-history mutation controls exercise the actual state reader.
 - SDK Memo default-converter fallback after authoritative codec rejection, copied hook payloads in journal deltas, maximum journal-size reservation and partial transition sequencing.
 - Dynamic credential/transport callback panic escape, ambiguous acceptance after a post-commit interceptor failure and lost uncertainty across retry responses.
 - Publisher cancellation reaching accepted local hooks, synchronous hook panic escape, leaked cancellation-detach markers and silently ignored hook uniqueness.
 - Publication/execution lease interference, retry-budget fencing, duplicate terminal hooks, single-connection SQL lock inversion and recovery-index validation.
 - Transient SQL settlement failure repeating or stranding an effect, application timeout preventing durable settlement, and idempotent settlement accepting a stale or forged owner.
+- Oversized broker claims reaching decoding, catalogs omitting JSON/base64 expansion and routes, and post-default route resolution bypassing the amplified ledger reservation. Both encoded catalog and worst-case footprint checks run after defaults resolve.
 - Graceful worker shutdown closing serialization adapters before admitted native result encoding, with retryable availability preserved for calls arriving after SDK grace expires.
 
 Review approval applies to the inspected code and checks. It does not replace required feature acceptance or establish an actual published module release.

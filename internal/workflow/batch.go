@@ -796,6 +796,12 @@ func (b *batchBuilder) BindContinuations(definitions []ContinuationDefinition) (
 			resolved[i].Job.Options.Queue = b.r.continuationQueue
 		}
 	}
+	if err := validateDefinitions("batch", resolved); err != nil {
+		return nil, err
+	}
+	if err := validateContinuationFootprint("batch", len(copy.jobs), resolved); err != nil {
+		return nil, err
+	}
 	copy.continuation = &continuationPlan{Resource: b.r.continuationResource, Definitions: resolved}
 	return &copy, nil
 }

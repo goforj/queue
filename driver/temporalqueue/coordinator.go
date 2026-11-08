@@ -13,8 +13,6 @@ import (
 	"github.com/goforj/queue/internal/runtimehook"
 	engine "github.com/goforj/queue/internal/workflow"
 
-	"go.temporal.io/api/serviceerror"
-
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -446,11 +444,7 @@ func (c *coordinator) readStateRun(ctx context.Context, id, kind, runID string) 
 	defer cancel()
 	description, describeErr := c.backend.clientBinding.client.DescribeWorkflowExecution(ctx, id, runID)
 	if describeErr != nil {
-		var missing *serviceerror.NotFound
-		if errors.As(describeErr, &missing) {
-			return workflowDefinition{}, nil, time.Time{}, engine.ErrNotFound
-		}
-		return workflowDefinition{}, nil, time.Time{}, errors.New("Temporal workflow description unavailable")
+		return workflowDefinition{}, nil, time.Time{}, historyReadError(ctx, describeErr)
 	}
 	actualRun := description.GetWorkflowExecutionInfo().GetExecution().GetRunId()
 	watermark := description.GetWorkflowExecutionInfo().GetHistoryLength()
@@ -469,14 +463,7 @@ func (c *coordinator) readStateRun(ctx context.Context, id, kind, runID string) 
 	for iter.HasNext() {
 		event, err := iter.Next()
 		if err != nil {
-			var missing *serviceerror.NotFound
-			if errors.As(err, &missing) {
-				return def, nil, created, engine.ErrNotFound
-			}
-			if ctx.Err() != nil {
-				return def, nil, created, ctx.Err()
-			}
-			return def, nil, created, errors.New("Temporal workflow history unavailable")
+			return def, nil, created, historyReadError(ctx, err)
 		}
 		if event == nil || event.EventId != lastEventID+1 {
 			return def, nil, created, errors.New("Temporal workflow history is incomplete")
@@ -548,7 +535,7 @@ func (c *coordinator) readStateRun(ctx context.Context, id, kind, runID string) 
 		return def, nil, created, errors.New("Temporal workflow history prefix is incomplete")
 	}
 	if def.ID == "" {
-		return def, nil, created, engine.ErrNotFound
+		return def, nil, created, errors.New("Temporal workflow accepted definition is absent")
 	}
 	if err := validateJournal(def, deltas, originalRun, activities); err != nil {
 		return def, nil, created, err

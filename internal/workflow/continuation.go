@@ -115,7 +115,6 @@ func validateDefinitions(kind string, definitions []ContinuationDefinition) erro
 	if len(definitions) > 32 {
 		return errors.New("too many durable workflow continuations")
 	}
-	total := 0
 	for _, definition := range definitions {
 		if definition.Phase != "success" && definition.Phase != "failure" && definition.Phase != "completion" && (kind != "batch" || definition.Phase != "progress") {
 			return errors.New("unsupported workflow continuation phase")
@@ -123,9 +122,9 @@ func validateDefinitions(kind string, definitions []ContinuationDefinition) erro
 		if definition.Job.Type == "" || definition.Job.Options.Retry < 0 || definition.Job.Options.Timeout < 0 || definition.Job.Options.UniqueFor != 0 || definition.Job.Options.Timeout > time.Hour || definition.Job.Options.Retry > 100 || definition.Job.Options.Delay < 0 || definition.Job.Options.Delay > 7*24*time.Hour || definition.Job.Options.Backoff < 0 || definition.Job.Options.Backoff > time.Hour {
 			return errors.New("invalid workflow continuation job")
 		}
-		total += len(definition.Job.Payload) + len(definition.Job.Type)
 	}
-	if total > 128<<10 {
+	encoded, err := json.Marshal(definitions)
+	if err != nil || len(encoded) > 128<<10 {
 		return errors.New("workflow continuation definitions exceed byte budget")
 	}
 	return nil
