@@ -68,6 +68,8 @@ type NativeCoordinator interface {
 
 // Descriptor carries declared capabilities separately from adapted interfaces.
 // New drivers must supply an explicit mode; only the legacy bridge defaults it.
+// Construction callbacks roll back their own allocations on error. The supplying
+// module retains cleanup ownership of the backend if queue construction fails.
 type Descriptor struct {
 	Backend          any
 	WorkerFactory    WorkerFactory

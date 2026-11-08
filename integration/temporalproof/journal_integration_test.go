@@ -38,8 +38,15 @@ func TestMain(m *testing.M) {
 		os.Exit(m.Run())
 	}
 	worker.SetStickyWorkflowCacheSize(0)
+	os.Exit(runProofSuite(m.Run, testcontainers.GenericContainer))
+}
+
+// runProofSuite retains cleanup ownership even when container creation or
+// startup returns a partial resource, independently of the optional reaper.
+func runProofSuite(run func() int, create func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error)) (code int) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	defer cancel()
+	container, err := create(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        proofImage,
 			Cmd:          []string{"server", "start-dev", "--ip", "0.0.0.0", "--headless", "--log-level", "error"},
@@ -47,10 +54,20 @@ func TestMain(m *testing.M) {
 			WaitingFor:   wait.ForListeningPort("7233/tcp").WithStartupTimeout(45 * time.Second),
 		}, Started: true,
 	})
+	if container != nil {
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+			defer stop()
+			if err := container.Terminate(cleanup); err != nil {
+				fmt.Fprintf(os.Stderr, "Temporal proof server cleanup: %v\n", err)
+				code = 1
+			}
+		}()
+	}
 	if err != nil {
 		cancel()
 		fmt.Fprintf(os.Stderr, "Temporal proof server startup: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	host, err := container.Host(ctx)
 	if err == nil {
@@ -59,19 +76,13 @@ func TestMain(m *testing.M) {
 		proofAddress = fmt.Sprintf("%s:%s", host, port.Port())
 	}
 	cancel()
-	code := 1
+	code = 1
 	if err == nil {
-		code = m.Run()
+		code = run()
 	} else {
 		fmt.Fprintf(os.Stderr, "Temporal proof server address: %v\n", err)
 	}
-	cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
-	if err := container.Terminate(cleanup); err != nil {
-		fmt.Fprintf(os.Stderr, "Temporal proof server cleanup: %v\n", err)
-		code = 1
-	}
-	stop()
-	os.Exit(code)
+	return code
 }
 
 // requireProofServer keeps prototype experiments explicit instead of claiming

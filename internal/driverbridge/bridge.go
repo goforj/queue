@@ -72,6 +72,8 @@ func NewQueueFromDriver(
 
 // NewQueue preserves declared driver capabilities across ordinary backend adaptation.
 // Unlike the compatibility constructor, it never infers a workflow mode.
+// The caller owns the supplied backend until construction succeeds and must
+// clean up its owned resources on error; the bridge never closes borrowed resources.
 func NewQueue(cfg queue.Config, observer queue.Observer, descriptor runtimehook.Descriptor, opts ...queue.Option) (*queue.Queue, error) {
 	driverBackend, err := adaptQueueBackend(descriptor.Backend)
 	if err != nil {
