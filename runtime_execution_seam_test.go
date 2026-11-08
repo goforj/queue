@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/goforj/queue/internal/runtimehook"
 )
 
 // TestOrdinaryExecutionWithoutCoordinator proves coordinator replacement cannot
@@ -140,5 +143,23 @@ func TestRuntimeOptionProvenance(t *testing.T) {
 	explicitZero.apply([]Option{WithStore(nil), WithClock(nil), WithMiddleware(), WithWorkers(0), WithObserver(nil), WithHandlerContextDecorator(nil)})
 	if !explicitZero.storeSupplied || !explicitZero.clockSupplied || !explicitZero.middlewareSupplied || !explicitZero.workersSupplied || !explicitZero.observerSupplied || !explicitZero.decoratorSupplied {
 		t.Fatal("explicit zero-value options became indistinguishable from omission")
+	}
+}
+
+// TestQueueConstructionRejectsInvalidCoordinatorMode protects the internal
+// composition boundary even when a caller bypasses the optional-driver hook.
+func TestQueueConstructionRejectsInvalidCoordinatorMode(t *testing.T) {
+	raw, err := newRuntime(Config{Driver: DriverSync})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := raw.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	_, err = newQueueWithDescriptor(raw, runtimeOptions{}, runtimehook.Descriptor{WorkflowMode: "unknown"})
+	if err == nil || !strings.Contains(err.Error(), "invalid workflow mode") {
+		t.Fatalf("invalid coordinator mode=%v", err)
 	}
 }
