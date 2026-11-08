@@ -103,8 +103,9 @@ func TestConstructorAndFluentCapacityRejectConflict(t *testing.T) {
 // TestWorkerTopologyRejectsUnsafePolicies covers role, deployment, capacity and numeric validation before clients exist.
 func TestWorkerTopologyRejectsUnsafePolicies(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
-		"partial split": func(c *Config) { c.WorkflowTaskQueue = "workflow" },
-		"invalid route": func(c *Config) { c.WorkflowTaskQueue = " trailing "; c.ActivityTaskQueue = "activity" },
+		"invalid UTF-8 route": func(c *Config) { c.DefaultQueue = "queue\xff" },
+		"partial split":       func(c *Config) { c.WorkflowTaskQueue = "workflow" },
+		"invalid route":       func(c *Config) { c.WorkflowTaskQueue = " trailing "; c.ActivityTaskQueue = "activity" },
 		"split combined options": func(c *Config) {
 			c.WorkflowTaskQueue = "workflow"
 			c.ActivityTaskQueue = "activity"

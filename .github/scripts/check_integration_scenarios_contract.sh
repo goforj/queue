@@ -105,7 +105,7 @@ fi
 # Temporal has explicit capability rejections and a public-driver server suite.
 # Keep its required evidence separate from legacy uniqueness/admin expectations.
 temporal_suite="${integration_root}/temporal"
-for scenario in PortableDispatch WorkflowStateWithoutWorker NamedContinuations OriginalHistoryReplay FailureDrainsAdmittedBatch CanceledDelayAndResourceIsolation CrashAfterExternalEffect CrashBeforeJournalCommit ReconcilesLostStartResponse ActualSDKFatalReachesRun RejectsAdministrativeReset SharedRemoteCapacity ScaleAndPaging ProtectedHistoryAndDiagnostics; do
+for scenario in PortableDispatch WorkflowStateWithoutWorker NamedContinuations OriginalHistoryReplay FailureDrainsAdmittedBatch CanceledDelayAndResourceIsolation CrashAfterExternalEffect CrashBeforeJournalCommit ReconcilesLostStartResponse ActualSDKFatalReachesRun RejectsAdministrativeReset SharedRemoteCapacity ScaleAndPaging ProtectedHistoryAndDiagnostics ContextBoundProtection ShutdownDrainsInheritedActivityInterceptor AllowedFailuresRetainBusinessSuccess; do
   if ! has_pattern "func TestTemporalDriver${scenario}\\(" "${temporal_suite}"; then
     echo "missing production Temporal scenario: ${scenario}"
     exit 1

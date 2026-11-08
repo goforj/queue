@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/goforj/queue/busruntime"
 )
@@ -116,6 +117,9 @@ func validateDefinitions(kind string, definitions []ContinuationDefinition) erro
 		return errors.New("too many durable workflow continuations")
 	}
 	for _, definition := range definitions {
+		if err := validateContinuationText(definition.Job.Type, definition.Job.Options.Queue); err != nil {
+			return err
+		}
 		if definition.Phase != "success" && definition.Phase != "failure" && definition.Phase != "completion" && (kind != "batch" || definition.Phase != "progress") {
 			return errors.New("unsupported workflow continuation phase")
 		}
@@ -371,4 +375,14 @@ func (r BatchRecord) Continuations() []ContinuationDefinition {
 		return nil
 	}
 	return cloneDefinitions(r.continuation.Definitions)
+}
+
+// validateContinuationText rejects identifiers that JSON would normalize and invalidate during durable delivery association.
+func validateContinuationText(values ...string) error {
+	for _, value := range values {
+		if !utf8.ValidString(value) {
+			return errors.New("named workflow identifiers must be valid UTF-8")
+		}
+	}
+	return nil
 }

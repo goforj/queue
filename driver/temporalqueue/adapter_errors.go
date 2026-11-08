@@ -13,7 +13,7 @@ var ErrAdapterUnavailable = errors.New("Temporal adapter temporarily unavailable
 
 // invalidAdapterError returns a sanitized terminal category even for attacker-selected workflow retry policies.
 func invalidAdapterError() error {
-	return temporal.NewNonRetryableApplicationError("Temporal adapter rejected input", "goforj.invalid.v1", nil)
+	return &adapterRejection{cause: temporal.NewNonRetryableApplicationError("Temporal adapter rejected input", "goforj.invalid.v1", nil)}
 }
 
 // unavailableAdapterError preserves a safe retryable category after bounded local recovery.
@@ -45,4 +45,23 @@ func convertAdapter[T any](call func() (T, error)) (result T, err error) {
 		}
 	}
 	return result, unavailableAdapterError()
+}
+
+// adapterRejection identifies module-owned input rejection across SDK decode wrappers without changing native errors.
+type adapterRejection struct{ cause error }
+
+// Error keeps diagnostics fixed while retaining SDK error inspection through Unwrap.
+func (e *adapterRejection) Error() string { return e.cause.Error() }
+
+// Unwrap preserves errors.As for callers inspecting the safe SDK application category.
+func (e *adapterRejection) Unwrap() error { return e.cause }
+
+// terminalAdapterCause prevents SDK fmt wrappers from making deterministic module rejection retryable at persistence.
+func terminalAdapterCause(err error) error {
+	for cause, depth := err, 0; cause != nil && depth < 16; cause, depth = errors.Unwrap(cause), depth+1 {
+		if rejection, ok := cause.(*adapterRejection); ok {
+			return rejection.cause
+		}
+	}
+	return err
 }

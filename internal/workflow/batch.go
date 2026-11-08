@@ -766,6 +766,9 @@ func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) erro
 
 // BindContinuations snapshots configured aggregate policy and named hooks.
 func (b *batchBuilder) BindContinuations(definitions []ContinuationDefinition) (any, error) {
+	if err := validateContinuationText(b.r.continuationResource, b.queue, b.name); err != nil {
+		return nil, err
+	}
 	if b.r.continuationResource == "" || len(b.r.continuationResource) > 255 {
 		return nil, errors.New("named continuations require a stable WithResourceID scope")
 	}
@@ -784,6 +787,9 @@ func (b *batchBuilder) BindContinuations(definitions []ContinuationDefinition) (
 	copy := *b
 	copy.jobs = append([]Job(nil), b.jobs...)
 	for i, job := range copy.jobs {
+		if err := validateContinuationText(job.Type, job.Options.Queue); err != nil {
+			return nil, err
+		}
 		stored, err := toStoredJob(job)
 		if err != nil {
 			return nil, err

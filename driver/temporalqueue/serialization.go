@@ -108,6 +108,9 @@ func conversionFailure(err *error) {
 func (c *guardedConverter) ToPayload(value any) (payload *common.Payload, err error) {
 	if journal, ok := value.(journalValue); ok {
 		value = journal.Delta
+		if journal.state != nil {
+			defer func() { journal.state.err = err }()
+		}
 	}
 	defer conversionFailure(&err)
 	release, err := c.gate.enter()

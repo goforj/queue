@@ -1,6 +1,7 @@
 package temporalqueue
 
 import (
+	"github.com/goforj/queue/busruntime"
 	"math"
 	"testing"
 	"time"
@@ -36,6 +37,39 @@ func TestResolvePolicyPreservesExplicitBoundedDefaults(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := resolvePolicy(tc.timeout, tc.delay, tc.backoff, tc.retry, tc.defaultTimeout); err == nil {
 				t.Fatal("invalid policy accepted")
+			}
+		})
+	}
+}
+
+// TestDeliveryRejectsLossyWireIdentifiers prevents serialization from changing a validated logical identity.
+func TestDeliveryRejectsLossyWireIdentifiers(t *testing.T) {
+	for _, scenario := range []string{"type", "workflow queue", "activity queue", "dispatch", "job", "chain", "batch", "queue"} {
+		t.Run(scenario, func(t *testing.T) {
+			d := delivery{Version: 1, Type: "job", WorkflowQueue: "route", ActivityQueue: "route", Metadata: busruntime.DeliveryMetadata{SchemaVersion: 1, DispatchID: "dispatch", JobID: "job", Queue: "route"}}
+			if err := d.resolve(time.Second); err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "type":
+				d.Type = "job\xff"
+			case "workflow queue":
+				d.WorkflowQueue = "route\xff"
+			case "activity queue":
+				d.ActivityQueue = "route\xff"
+			case "dispatch":
+				d.Metadata.DispatchID = "dispatch\xff"
+			case "job":
+				d.Metadata.JobID = "job\xff"
+			case "chain":
+				d.Metadata.ChainID = "chain\xff"
+			case "batch":
+				d.Metadata.BatchID = "batch\xff"
+			case "queue":
+				d.Metadata.Queue = "queue\xff"
+			}
+			if err := d.validate(); err == nil {
+				t.Fatal("lossy identifier accepted")
 			}
 		})
 	}

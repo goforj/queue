@@ -2,13 +2,17 @@ package temporalqueue
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/failure/v1"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -103,5 +107,130 @@ func TestLateFailureAdaptersRemainRetryable(t *testing.T) {
 	contextual := protected.WithSerializationContext(converter.WorkflowSerializationContext{Namespace: "default", WorkflowID: "workflow"})
 	if info := contextual.ErrorToFailure(errors.New("late")).GetApplicationFailureInfo(); info == nil || info.NonRetryable {
 		t.Fatal("contextual late adapter became terminal")
+	}
+}
+
+// TestWrappedAdapterRejectionRemainsTerminal preserves module rejection across actual SDK decode wrapping forms.
+func TestWrappedAdapterRejectionRemainsTerminal(t *testing.T) {
+	dc, err := newGuardedConverter(nil, DefaultSerializationLimits(), newAdmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	rejection := dc.FromPayload(&common.Payload{Data: make([]byte, DefaultSerializationLimits().MaxPayloadBytes+1)}, &value)
+	binding, err := newGuardedFailureConverter(nil, dc, newAdmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &guardedFailureConverter{inner: binding, dc: dc, gate: newAdmission(), protected: true}
+	for _, guard := range []*guardedFailureConverter{binding, worker} {
+		f := guard.ErrorToFailure(fmt.Errorf("unable to decode workflow input: %w", rejection))
+		app := f.GetApplicationFailureInfo()
+		if app == nil || !app.NonRetryable || app.Type != "goforj.invalid.v1" {
+			t.Fatalf("SDK wrapping made module input retryable: %+v", f)
+		}
+		native := temporal.NewNonRetryableApplicationError("private native detail", "native-child", nil)
+		f = guard.ErrorToFailure(fmt.Errorf("native application wrapper: %w", native))
+		if app := f.GetApplicationFailureInfo(); app == nil || app.NonRetryable || app.Type == "goforj.invalid.v1" {
+			t.Fatal("genuine native wrapper taxonomy changed")
+		}
+		if child := f.GetCause().GetApplicationFailureInfo(); child == nil || !child.NonRetryable || child.Type != "native-child" {
+			t.Fatal("genuine native cause taxonomy changed")
+		}
+	}
+}
+
+// nativeMultiCycle models a native aggregate whose graph is outside SDK single-cause failure semantics.
+type nativeMultiCycle struct{ visits int }
+
+// Error supplies fixed native diagnostics without traversing the error graph.
+func (*nativeMultiCycle) Error() string { return "synthetic native multi-error" }
+
+// Unwrap exposes a cyclic multi-cause graph that module marker detection must not traverse.
+func (e *nativeMultiCycle) Unwrap() []error { e.visits++; return []error{e} }
+
+// TestAdapterMarkerSearchDoesNotTraverseNativeErrorGraphs preserves the SDK's bounded single-cause path.
+func TestAdapterMarkerSearchDoesNotTraverseNativeErrorGraphs(t *testing.T) {
+	native := &nativeMultiCycle{}
+	if terminalAdapterCause(native) != native || native.visits != 0 {
+		t.Fatal("marker search traversed a native multi-cause graph")
+	}
+	dc, err := newGuardedConverter(nil, DefaultSerializationLimits(), newAdmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	guarded, err := newGuardedFailureConverter(nil, dc, newAdmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := guarded.ErrorToFailure(native)
+	if failure.GetApplicationFailureInfo() == nil || native.visits != 0 {
+		t.Fatal("native aggregate was recursively inspected")
+	}
+}
+
+// journalFailureConverter exposes authoritative serialization rejection before the SDK's default fallback.
+type journalFailureConverter struct {
+	converter.DataConverter
+	failure error
+	calls   int
+}
+
+// DecodingLimits keeps the test adapter within the real binding's declared bounds.
+func (*journalFailureConverter) DecodingLimits() SerializationLimits {
+	return DefaultSerializationLimits()
+}
+
+// MaxEncodedOverhead reserves ordinary JSON payload metadata only.
+func (*journalFailureConverter) MaxEncodedOverhead() int { return 256 }
+
+// ToPayload rejects only journal publication so workflow argument decoding retains its normal SDK behavior.
+func (c *journalFailureConverter) ToPayload(value any) (*common.Payload, error) {
+	if _, ok := value.(journalDelta); ok {
+		c.calls++
+		return nil, c.failure
+	}
+	return c.DataConverter.ToPayload(value)
+}
+
+// TestJournalPublicationPreservesAuthoritativeFailureClass uses actual SDK memo encoding to retain availability and terminal input categories.
+func TestJournalPublicationPreservesAuthoritativeFailureClass(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unavailable=%t", unavailable), func(t *testing.T) {
+			rejection := errors.New("synthetic private codec failure")
+			expectedCalls := 1
+			expectedType := "goforj.invalid.v1"
+			if unavailable {
+				rejection = ErrAdapterUnavailable
+				expectedCalls = 3
+				expectedType = "goforj.adapter-unavailable.v1"
+			}
+			inner := &journalFailureConverter{DataConverter: converter.GetDefaultDataConverter(), failure: rejection}
+			dc, err := newGuardedConverter(inner, DefaultSerializationLimits(), newAdmission())
+			if err != nil {
+				t.Fatal(err)
+			}
+			fc, err := newGuardedFailureConverter(nil, dc, newAdmission())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var suite testsuite.WorkflowTestSuite
+			env := suite.NewTestWorkflowEnvironment()
+			env.SetDataConverter(dc)
+			env.SetFailureConverter(fc)
+			var observed error
+			env.ExecuteWorkflow(func(ctx workflow.Context) error {
+				observed = publishJournal(ctx, journalDelta{Version: 1, Sequence: 1})
+				return observed
+			})
+			failure := fc.ErrorToFailure(observed)
+			app := failure.GetApplicationFailureInfo()
+			if observed == nil || inner.calls != expectedCalls || app == nil || app.Type != expectedType || app.NonRetryable == unavailable {
+				t.Fatalf("SDK erased authoritative rejection: calls=%d observed=%v failure=%+v", inner.calls, observed, failure)
+			}
+			if unavailable && !adapterUnavailable(observed) {
+				t.Fatal("key availability class was erased")
+			}
+		})
 	}
 }

@@ -122,7 +122,7 @@ func (c *guardedFailureConverter) ErrorToFailure(err error) (result *failure.Fai
 			seen[e] = true
 		}
 	}
-	encoded := c.inner.ErrorToFailure(err)
+	encoded := c.inner.ErrorToFailure(terminalAdapterCause(err))
 	if !validateFailure(encoded) {
 		return result
 	}

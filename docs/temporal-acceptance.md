@@ -32,7 +32,7 @@ The module inventory includes root, optional drivers, examples, integration and 
 | Lifecycle | Owned/borrowed resources, actual fatal-poller propagation, concurrent shutdown joins, cancellation-resistant callbacks and typed result encoding during grace |
 | Start uncertainty | Successful service acceptance followed by lost response, original immutable input reconciliation, collision and inaccessible/expired history controls |
 | Reset and isolation | Real administrative reset rejection, actual run checks at generic activity entry, and resource-bound authorized reads |
-| Protection | Bounded authenticated fixture conversion through dispatch/hooks/reads/replay, sentinel checks in persisted history and SDK logs |
+| Protection | Bounded authenticated context-aware conversion, mixed-key retained histories, key-service read outages/recovery, native typed results/replay and single-attempt malformed-input rejection; sentinel checks in history and SDK logs |
 | Scale | 256-member fan-out, 32 hook definitions, combined 256 members plus 1,024 progress invocations at the maximum reservation, and immediate over-limit/multiplication rejection |
 | SQL recovery | SQLite/MySQL/PostgreSQL atomic state and intents, recovery without surviving business delivery, competing transitions, one-connection restart, managed schema and pruning retention |
 
@@ -53,6 +53,10 @@ Several independent protocol, security, runtime and recovery passes found and ve
 - Oversized broker claims reaching decoding, catalogs omitting JSON/base64 expansion and routes, and post-default route resolution bypassing the amplified ledger reservation. Both encoded catalog and worst-case footprint checks run after defaults resolve.
 - Graceful worker shutdown closing serialization adapters before admitted native result encoding, with retryable availability preserved for calls arriving after SDK grace expires.
 - Duplicate activity entry admission and internal authority reads rejecting callbacks already admitted before graceful shutdown.
+- Independently canceled business activities reporting successful SDK completion with pending members. Chains stop, admitted batch siblings and hooks drain, and a terminal interruption preserves pending counters, including with `AllowFailures`.
+- Invalid UTF-8 identifiers being normalized during JSON persistence and stranding accepted hook claims. Durable names and native resource routes now reject before acceptance.
+- SDK Memo error stringification losing the authoritative converter availability category. Journal publication retains the sanitized result while fallback stays closed.
+- SDK decoding wrappers downgrading module-owned terminal rejection to a retryable root failure. A private rejection marker promotes only that module-owned error before binding, worker and protected failure conversion; native error wrapping retains its SDK taxonomy.
 
 Review approval applies to the inspected code and checks. It does not replace required feature acceptance or establish an actual published module release.
 

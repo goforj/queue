@@ -22,7 +22,7 @@ import (
 )
 
 // NewWorkflowReplayer creates an SDK replayer with this resource's authoritative serialization policy.
-// Its registration callback is evaluated again and must only register deterministic definitions.
+// Its immutable registration plan is shared with worker startup and must contain deterministic definitions.
 // Finish replays before closing this resource, or use a separate read/replay resource with a retained binding.
 // Raw-history replay is routed through the stable namespace-aware SDK path so
 // protected converters receive the same namespace as the original execution.

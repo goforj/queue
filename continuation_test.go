@@ -225,3 +225,46 @@ func TestNamedContinuationsRejectEncodedCatalogOverflow(t *testing.T) {
 		})
 	}
 }
+
+// TestNamedContinuationsRejectLossyIdentifiers prevents accepted state from differing from its serialized claims.
+func TestNamedContinuationsRejectLossyIdentifiers(t *testing.T) {
+	for _, scenario := range []string{"hook type", "hook queue", "resource", "default queue", "member type", "member queue", "workflow queue", "batch name"} {
+		t.Run(scenario, func(t *testing.T) {
+			cfg := Config{Driver: DriverWorkerpool}
+			resource := "scope"
+			if scenario == "default queue" {
+				cfg.DefaultQueue = "queue\xff"
+			}
+			if scenario == "resource" {
+				resource = "resource\xff"
+			}
+			q, err := New(cfg, WithResourceID(resource))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer q.Shutdown(context.Background())
+			member, hook := NewJob("business"), NewJob("hook")
+			switch scenario {
+			case "hook type":
+				hook = NewJob("hook\xff")
+			case "hook queue":
+				hook = hook.OnQueue("queue\xff")
+			case "member type":
+				member = NewJob("business\xff")
+			case "member queue":
+				member = member.OnQueue("queue\xff")
+			}
+			chain := q.Chain(member)
+			if scenario == "workflow queue" {
+				chain = chain.OnQueue("queue\xff")
+			}
+			bound := Continue(chain).OnCompletion(hook)
+			if scenario == "batch name" {
+				bound = Continue(q.Batch(member).Name("batch\xff")).OnCompletion(hook)
+			}
+			if id, err := bound.Dispatch(t.Context()); err == nil || id != "" {
+				t.Fatalf("lossy named identity accepted: %q %v", id, err)
+			}
+		})
+	}
+}

@@ -233,7 +233,12 @@ func (d workflowDefinition) validate() error {
 
 // publishJournal commits a reducer event in the same workflow task as its commands.
 func publishJournal(ctx workflow.Context, delta journalDelta) error {
-	return workflow.UpsertMemo(ctx, map[string]interface{}{journalKey: journalValue{Delta: delta}})
+	state := &journalEncodingState{}
+	err := workflow.UpsertMemo(ctx, map[string]interface{}{journalKey: journalValue{Delta: delta, state: state}})
+	if state.err != nil {
+		return state.err
+	}
+	return err
 }
 
 // coordinatorWorkflow uses only replay-safe SDK commands and immutable input.
@@ -314,7 +319,7 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 		}
 	})
 	processed, failed, collected := 0, 0, 0
-	terminal, cancelled := false, false
+	terminal, cancelled, interrupted := false, false, false
 	businessCtx := ctx
 	settle := func(index int, err error) error {
 		collected++
@@ -322,6 +327,7 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 			return nil
 		}
 		skipped := temporal.IsCanceledError(err)
+		interrupted = interrupted || skipped
 		if !skipped {
 			processed++
 			if err != nil {
@@ -424,6 +430,9 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 	}
 	if cancelled || (def.Kind == "chain" && failed > 0) {
 		return temporal.NewNonRetryableApplicationError("queue workflow business failed", "goforj.business-failed.v1", nil)
+	}
+	if interrupted {
+		return temporal.NewNonRetryableApplicationError("queue workflow interrupted", "goforj.workflow-interrupted.v1", nil)
 	}
 	return nil
 }

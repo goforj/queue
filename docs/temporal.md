@@ -23,7 +23,7 @@ q.Register("reports:notify", notifyReport)
 return q.Run(ctx)
 ```
 
-Construction creates a lazy client and no pollers. Register all native workflows and activities before starting workers. Registration runs once, before any role starts polling. Every worker polling the same role must carry the same catalog, code and serialization policy. `RegistrationFingerprint` becomes available after startup; it identifies catalog names, not code compatibility.
+Construction creates a lazy client and no pollers. Register all native workflows and activities before starting workers. Registration runs once, before any role starts polling. Framework names are reserved, dynamic registrations are unsupported, and duplicate registrations reject even when SDK duplicate checks are disabled. Every worker polling the same physical role must agree on the logical resource identity, routing, catalog, code and serialization policy. `RegistrationFingerprint` becomes available after startup; it identifies catalog names, not code compatibility.
 
 `Run` starts workers, returns worker fatal errors, and joins shutdown with a fresh bounded context. `StartWorkers` supports separately managed hosts. Such hosts must propagate worker errors and join shutdown before releasing injected dependencies. A timed-out shutdown means callbacks or SDK work can still be active. Retain dependencies and call `Shutdown` again to join actual completion.
 
@@ -116,3 +116,18 @@ See [named continuation storage](continuations.md) for built-in store recovery a
 
 
 For exact production scenarios, replay controls, composition evidence and release checks, see [Temporal acceptance](temporal-acceptance.md).
+
+
+For local development, start the same pinned service used by acceptance tests:
+
+```sh
+docker run --rm --name queue-temporal-dev -p 127.0.0.1:7233:7233 \
+  temporalio/temporal@sha256:2c344b4a39b4489fc6944db095f628f0c30659836faf11780a4dc435599e80e3 \
+  server start-dev --ip 0.0.0.0 --headless
+```
+
+This development instance has ephemeral history and no namespace authentication. Production clients and workers need their configured Temporal endpoint, TLS trust and namespace permissions. Approved KMS/codec adapters additionally need authenticated outbound key-service access, bounded deadlines and retained decoding keys.
+
+Static TLS and client policy are copied at binding construction. Use bounded certificate-selection and dynamic credential callbacks for live rotation, or roll to a new binding, move compatible producers/workers and drain the old owner before closing it. Updating the original static configuration does not rotate an existing binding.
+
+The deployment owner manages namespace authentication/authorization, retention, archival, backups, legal holds and deletion. Preserve keys for retained histories and backups under that policy. Authoritative audit records for starts, signals, updates, cancellation, termination and namespace administration come from the secured service boundary, with owner-defined retention, integrity and export controls. Queue observers and application logs provide operational telemetry. A Web payload-codec service requires its own authenticated and authorized decryption boundary; the driver does not publish one.

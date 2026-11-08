@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/internal/runtimehook"
@@ -90,7 +91,7 @@ func resolveTopology(cfg Config) (string, string, error) {
 		activityQueue = logical
 	}
 	for _, name := range []string{workflowQueue, activityQueue} {
-		if strings.TrimSpace(name) != name || len(name) > 255 {
+		if !utf8.ValidString(name) || strings.TrimSpace(name) != name || len(name) > 255 {
 			return "", "", errors.New("Temporal task queue name is invalid")
 		}
 	}

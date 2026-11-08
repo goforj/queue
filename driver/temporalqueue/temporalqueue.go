@@ -17,7 +17,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// Config configures one combined workflow and activity worker resource.
+// Config configures one Temporal resource with combined or split worker roles.
 type Config struct {
 	queueconfig.DriverBaseConfig
 	ClientOptions          client.Options

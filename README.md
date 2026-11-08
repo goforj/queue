@@ -14,8 +14,8 @@
     <img src="https://img.shields.io/github/v/tag/goforj/queue?label=version&sort=semver" alt="Latest tag">
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
-    <img src="https://img.shields.io/badge/unit_tests-958-brightgreen" alt="Unit tests (executed count)">
-    <img src="https://img.shields.io/badge/integration_tests-681-blue" alt="Integration tests (executed count)">
+    <img src="https://img.shields.io/badge/unit_tests-967-brightgreen" alt="Unit tests (executed count)">
+    <img src="https://img.shields.io/badge/integration_tests-683-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
 
@@ -2358,7 +2358,7 @@ Error type names remain visible because Temporal uses them for retry matching.
 #### <a id="temporalqueue-newworkflowreplayer"></a>NewWorkflowReplayer
 
 NewWorkflowReplayer creates an SDK replayer with this resource's authoritative serialization policy.
-Its registration callback is evaluated again and must only register deterministic definitions.
+Its immutable registration plan is shared with worker startup and must contain deterministic definitions.
 Finish replays before closing this resource, or use a separate read/replay resource with a retained binding.
 Raw-history replay is routed through the stable namespace-aware SDK path so
 protected converters receive the same namespace as the original execution.

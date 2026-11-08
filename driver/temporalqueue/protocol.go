@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/busruntime"
@@ -43,6 +44,11 @@ type delivery struct {
 
 // validate checks untrusted persisted workflow input before scheduling application code.
 func (d delivery) validate() error {
+	for _, value := range []string{d.Type, d.WorkflowQueue, d.ActivityQueue, d.Metadata.DispatchID, d.Metadata.JobID, d.Metadata.ChainID, d.Metadata.BatchID, d.Metadata.Queue} {
+		if !utf8.ValidString(value) {
+			return errors.New("Temporal delivery identifiers must be valid UTF-8")
+		}
+	}
 	expected, err := resolvePolicy(d.Timeout, d.Delay, d.Backoff, d.Retry, d.DefaultTimeout)
 	if err != nil || expected != d.Resolved {
 		return errors.New("unresolved or invalid Temporal delivery policy")

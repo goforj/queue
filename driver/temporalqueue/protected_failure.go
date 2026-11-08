@@ -118,7 +118,7 @@ func (c *protectedSDKFailures) ErrorToFailure(err error) (result *failure.Failur
 			return protocolFailure()
 		}
 	}
-	f := c.inner.ErrorToFailure(err)
+	f := c.inner.ErrorToFailure(terminalAdapterCause(err))
 	if f == nil {
 		return nil
 	}

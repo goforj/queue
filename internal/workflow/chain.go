@@ -696,6 +696,9 @@ func (r *runtime) invokeChainFinallyObserved(ctx context.Context, st ChainState,
 
 // BindContinuations snapshots configured members and named hooks without changing ChainBuilder.
 func (b *chainBuilder) BindContinuations(definitions []ContinuationDefinition) (any, error) {
+	if err := validateContinuationText(b.r.continuationResource, b.queue); err != nil {
+		return nil, err
+	}
 	if b.r.continuationResource == "" || len(b.r.continuationResource) > 255 {
 		return nil, errors.New("named continuations require a stable WithResourceID scope")
 	}
@@ -714,6 +717,9 @@ func (b *chainBuilder) BindContinuations(definitions []ContinuationDefinition) (
 	copy := *b
 	copy.jobs = append([]Job(nil), b.jobs...)
 	for i, job := range copy.jobs {
+		if err := validateContinuationText(job.Type, job.Options.Queue); err != nil {
+			return nil, err
+		}
 		stored, err := toStoredJob(job)
 		if err != nil {
 			return nil, err

@@ -11,7 +11,13 @@ import (
 
 // journalValue prevents the SDK's default-converter fallback from serializing application data.
 // Only guardedConverter unwraps this value for the authoritative bounded converter.
-type journalValue struct{ Delta journalDelta }
+type journalValue struct {
+	Delta journalDelta
+	state *journalEncodingState
+}
+
+// journalEncodingState retains a sanitized converter result across the SDK memo error stringify step.
+type journalEncodingState struct{ err error }
 
 // MarshalJSON makes fallback conversion fail closed after any authoritative encoding failure.
 func (journalValue) MarshalJSON() ([]byte, error) {
