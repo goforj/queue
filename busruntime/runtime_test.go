@@ -257,3 +257,18 @@ func TestAttemptErrorMarkers(t *testing.T) {
 		t.Fatal("Uncommitted must be idempotent")
 	}
 }
+
+// TestIndependentExecutionMarkerIsConsumed preserves cancellation for application-created descendant jobs.
+func TestIndependentExecutionMarkerIsConsumed(t *testing.T) {
+	publication, cancelPublication := context.WithCancel(t.Context())
+	execution := DeliveryExecutionContext(WithIndependentExecution(publication))
+	cancelPublication()
+	if err := execution.Err(); err != nil {
+		t.Fatalf("accepted execution canceled: %v", err)
+	}
+	child, cancelChild := context.WithCancel(execution)
+	cancelChild()
+	if err := DeliveryExecutionContext(child).Err(); err == nil {
+		t.Fatal("publication marker leaked into ordinary descendant")
+	}
+}

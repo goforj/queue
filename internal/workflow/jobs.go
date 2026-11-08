@@ -13,20 +13,24 @@ import (
 
 // JobConfig supplies execution policy independently of a workflow coordinator.
 type JobConfig struct {
-	Clock       func() time.Time
-	Observer    Observer
-	Middlewares []Middleware
+	TranslateError func(error) error
+	PanicError     func(any) error
+	Clock          func() time.Time
+	Observer       Observer
+	Middlewares    []Middleware
 }
 
 // Jobs owns ordinary delivery and the executor shared by portable coordinators.
 // Constructing it does not allocate workflow state or install chain/batch routes.
 type Jobs struct {
-	q           busruntime.Runtime
-	now         func() time.Time
-	observer    Observer
-	handlerMu   sync.RWMutex
-	handlers    map[string]Handler
-	middlewares []Middleware
+	translateError func(error) error
+	panicError     func(any) error
+	q              busruntime.Runtime
+	now            func() time.Time
+	observer       Observer
+	handlerMu      sync.RWMutex
+	handlers       map[string]Handler
+	middlewares    []Middleware
 }
 
 // NewJobs installs only the retained ordinary envelope route; canonical routes
@@ -36,7 +40,7 @@ func NewJobs(q any, cfg JobConfig) (*Jobs, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Jobs{
+	r := &Jobs{translateError: cfg.TranslateError, panicError: cfg.PanicError,
 		q:           qr,
 		now:         time.Now,
 		observer:    cfg.Observer,
@@ -245,7 +249,7 @@ func (r *Jobs) executeStoredJobAttempt(ctx context.Context, env envelope) stored
 	})
 	handler, ok := r.lookupHandler(env.Job.Type)
 	if !ok {
-		err := fmt.Errorf("bus handler not registered for %q", env.Job.Type)
+		err := r.translate(missingHandlerError{jobType: env.Job.Type})
 		return storedJobOutcome{env: env, attempt: attempt, started: started, finished: r.now(), err: err}
 	}
 	jc := NewContext(
@@ -258,9 +262,10 @@ func (r *Jobs) executeStoredJobAttempt(ctx context.Context, env envelope) stored
 		env.Job.Type,
 		env.Job.Payload,
 	)
-	err := chainMiddleware(r.middlewareSnapshot(), func(ctx context.Context, c Context) error {
-		return handler(ctx, c)
-	})(ctx, jc)
+	if metadata, ok := busruntime.DeliveryMetadataFromContext(ctx); ok && metadata.Continuation != nil {
+		jc = jc.WithContinuation(*metadata.Continuation)
+	}
+	err := r.invokeHandler(ctx, jc, handler)
 	return storedJobOutcome{env: env, attempt: attempt, started: started, finished: r.now(), err: err}
 }
 
@@ -316,4 +321,45 @@ func (r *Jobs) emit(ctx context.Context, event Event) {
 		return
 	}
 	safeObserve(ctx, r.observer, event)
+}
+
+// ErrHandlerNotRegistered identifies an absent logical handler without changing its established error text.
+var ErrHandlerNotRegistered = errors.New("workflow handler is not registered")
+
+// missingHandlerError preserves compatibility text while supporting driver-specific terminal classification.
+type missingHandlerError struct{ jobType string }
+
+// Error retains the established diagnostic for existing queue consumers.
+func (e missingHandlerError) Error() string {
+	return fmt.Sprintf("bus handler not registered for %q", e.jobType)
+}
+
+// Is exposes missing logical registration independently of its user-selected name.
+func (e missingHandlerError) Is(target error) bool { return target == ErrHandlerNotRegistered }
+
+// translate applies only the selected driver's explicit error policy before observer classification.
+func (r *Jobs) translate(err error) error {
+	if r.translateError != nil {
+		return r.translateError(err)
+	}
+	return err
+}
+
+// invokeHandler optionally translates generic queue panics without changing native workflow panic policy.
+func (r *Jobs) invokeHandler(ctx context.Context, message Context, handler Handler) (err error) {
+	if r.panicError != nil {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = r.translate(r.panicError(recovered))
+			}
+		}()
+	}
+	return r.translate(chainMiddleware(r.middlewareSnapshot(), func(ctx context.Context, message Context) error { return handler(ctx, message) })(ctx, message))
+}
+
+// ExecuteDirect shares missing-handler execution and facts with driver-owned generic activity wrappers.
+func (r *Jobs) ExecuteDirect(ctx context.Context, job StoredJob, metadata busruntime.DeliveryMetadata, attempt busruntime.DeliveryAttempt) error {
+	ctx = busruntime.WithDeliveryMetadata(ctx, metadata)
+	ctx = busruntime.WithDeliveryAttempt(ctx, attempt)
+	return r.executeStoredJob(ctx, envelope{SchemaVersion: schemaVersion, DispatchID: metadata.DispatchID, JobID: metadata.JobID, ChainID: metadata.ChainID, BatchID: metadata.BatchID, Attempt: attempt.Number, Kind: "job", Job: job})
 }

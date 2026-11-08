@@ -20,6 +20,8 @@ replace github.com/goforj/queue/driver/redisqueue => ../driver/redisqueue
 
 replace github.com/goforj/queue/driver/sqsqueue => ../driver/sqsqueue
 
+replace github.com/goforj/queue/driver/temporalqueue => ../driver/temporalqueue
+
 require (
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/goforj/queue v0.0.0
@@ -30,6 +32,7 @@ require (
 	github.com/goforj/queue/driver/redisqueue v0.0.0
 	github.com/goforj/queue/driver/sqlitequeue v0.0.0
 	github.com/goforj/queue/driver/sqsqueue v0.0.0
+	github.com/goforj/queue/driver/temporalqueue v0.0.0
 	github.com/hibiken/asynq v0.26.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/rabbitmq/amqp091-go v1.16.0

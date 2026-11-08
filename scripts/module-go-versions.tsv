@@ -9,5 +9,6 @@ driver/redisqueue 1.27.0
 driver/sqlitequeue 1.27.0
 driver/sqlqueuecore 1.27.0
 driver/sqsqueue 1.27.0
+driver/temporalqueue 1.27.0
 examples 1.27.0
 integration 1.27.0

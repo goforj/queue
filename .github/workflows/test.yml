@@ -33,7 +33,7 @@ jobs:
           matrix_values="${matrix_line#*[}"
           matrix_values="${matrix_values%%]*}"
           IFS=',' read -r -a configured_backends <<< "$matrix_values"
-          required_backends=(null sync workerpool redis mysql postgres sqlite nats sqs rabbitmq)
+          required_backends=(null sync workerpool redis mysql postgres sqlite nats sqs rabbitmq temporal)
           if [[ "${#configured_backends[@]}" -ne "${#required_backends[@]}" ]]; then
             echo "integration matrix has ${#configured_backends[@]} backends, want ${#required_backends[@]}"
             exit 1
@@ -181,7 +181,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        race_module: [".", "driver/mysqlqueue", "driver/natsqueue", "driver/postgresqueue", "driver/rabbitmqqueue", "driver/redisqueue", "driver/sqlitequeue", "driver/sqlqueuecore", "driver/sqsqueue"]
+        race_module: [".", "driver/mysqlqueue", "driver/natsqueue", "driver/postgresqueue", "driver/rabbitmqqueue", "driver/redisqueue", "driver/sqlitequeue", "driver/sqlqueuecore", "driver/sqsqueue", "driver/temporalqueue"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -222,7 +222,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ["null", "sync", "workerpool", "redis", "mysql", "postgres", "sqlite", "nats", "sqs", "rabbitmq"]
+        backend: ["null", "sync", "workerpool", "redis", "mysql", "postgres", "sqlite", "nats", "sqs", "rabbitmq", "temporal"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

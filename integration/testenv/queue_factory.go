@@ -11,6 +11,7 @@ import (
 	"github.com/goforj/queue/driver/redisqueue"
 	"github.com/goforj/queue/driver/sqlitequeue"
 	"github.com/goforj/queue/driver/sqsqueue"
+	"github.com/goforj/queue/driver/temporalqueue"
 	"github.com/goforj/queue/internal/testbridge"
 )
 
@@ -20,6 +21,8 @@ func NewQueueRuntime(cfg any) (Runtime, error) {
 		err  error
 	)
 	switch c := cfg.(type) {
+	case temporalqueue.Config:
+		high, err = temporalqueue.NewWithConfig(c)
 	case queue.Config:
 		high, err = queue.New(c)
 	case redisqueue.Config:
@@ -55,6 +58,8 @@ func NewQueueRuntime(cfg any) (Runtime, error) {
 
 func NewQueue(cfg any, opts ...queue.Option) (*queue.Queue, error) {
 	switch c := cfg.(type) {
+	case temporalqueue.Config:
+		return temporalqueue.NewWithConfig(c, opts...)
 	case queue.Config:
 		return queue.New(c, opts...)
 	case redisqueue.Config:

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goforj/queue/integration/testenv"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.temporal.io/api/common/v1"
@@ -26,7 +27,7 @@ import (
 )
 
 const (
-	proofImage = "temporalio/temporal@sha256:2c344b4a39b4489fc6944db095f628f0c30659836faf11780a4dc435599e80e3"
+	proofImage = testenv.TemporalServerImage
 )
 
 var proofAddress string

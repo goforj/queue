@@ -223,7 +223,7 @@ collect_unit() {
 collect_integration() {
   local backend="${INTEGRATION_BACKEND:-all}"
   case "$backend" in
-    all|null|sync|workerpool|redis|mysql|postgres|sqlite|nats|sqs|rabbitmq) ;;
+    all|null|sync|workerpool|redis|mysql|postgres|sqlite|nats|sqs|rabbitmq|temporal) ;;
     *) fail "unsupported INTEGRATION_BACKEND for coverage: $backend" ;;
   esac
 

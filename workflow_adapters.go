@@ -18,7 +18,12 @@ func cloneWorkflowPayload(payload []byte) []byte {
 
 // messageFromWorkflow converts an engine context into the root-owned public message model.
 func messageFromWorkflow(message workflow.Context) Message {
+	var continuation *Continuation
+	if value, ok := message.Continuation(); ok {
+		continuation = &value
+	}
 	return Message{
+		continuation:  continuation,
 		SchemaVersion: message.SchemaVersion,
 		DispatchID:    message.DispatchID,
 		JobID:         message.JobID,
@@ -32,7 +37,7 @@ func messageFromWorkflow(message workflow.Context) Message {
 
 // messageToWorkflow converts a public message into the engine's private context model.
 func messageToWorkflow(message Message) workflow.Context {
-	return workflow.NewContext(
+	result := workflow.NewContext(
 		message.SchemaVersion,
 		message.DispatchID,
 		message.JobID,
@@ -42,6 +47,10 @@ func messageToWorkflow(message Message) workflow.Context {
 		message.JobType,
 		message.payload,
 	)
+	if value, ok := message.Continuation(); ok {
+		result = result.WithContinuation(value)
+	}
+	return result
 }
 
 // dispatchResultFromWorkflow converts the engine's dispatch receipt into the root-owned result.

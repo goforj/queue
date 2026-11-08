@@ -151,6 +151,8 @@ func newRuntimeWithObserver(cfg Config, observer Observer) (queueRuntime, error)
 		return nil, optionalDriverMovedError(cfg.Driver)
 	case DriverSQS:
 		return nil, optionalDriverMovedError(cfg.Driver)
+	case DriverTemporal:
+		return nil, optionalDriverMovedError(cfg.Driver)
 	case DriverRabbitMQ:
 		return nil, optionalDriverMovedError(cfg.Driver)
 	default:
@@ -1483,6 +1485,8 @@ func runtimeReadyCheck(ctx context.Context, raw any) error {
 
 func optionalDriverMovedError(driver Driver) error {
 	switch driver {
+	case DriverTemporal:
+		return fmt.Errorf("temporal driver is optional; use github.com/goforj/queue/driver/temporalqueue")
 	case DriverRedis:
 		return fmt.Errorf("redis driver moved; use github.com/goforj/queue/driver/redisqueue")
 	case DriverNATS:

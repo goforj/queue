@@ -102,3 +102,13 @@ if ! has_pattern "func TestObservabilityIntegration_PauseResumeSupport_AllBacken
 fi
 
 echo "Scenarios contract checks passed."
+
+# Temporal has explicit capability rejections and a public-driver server suite.
+# Keep its required evidence separate from legacy uniqueness/admin expectations.
+temporal_suite="${integration_root}/temporal"
+for scenario in PortableDispatch WorkflowStateWithoutWorker NamedContinuations OriginalHistoryReplay FailureDrainsAdmittedBatch CanceledDelayAndResourceIsolation CrashAfterExternalEffect CrashBeforeJournalCommit ReconcilesLostStartResponse ActualSDKFatalReachesRun RejectsAdministrativeReset SharedRemoteCapacity ScaleAndPaging ProtectedHistoryAndDiagnostics; do
+  if ! rg -q "func TestTemporalDriver${scenario}\\(" "${temporal_suite}"; then
+    echo "missing production Temporal scenario: ${scenario}"
+    exit 1
+  fi
+done

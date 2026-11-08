@@ -146,6 +146,7 @@ func newCoordinator(jobs *Jobs, store Store, opts ...Option) *runtime {
 			opt(r)
 		}
 	}
+	jobs.q.BusRegister(ContinuationDeliveryType, r.handleContinuation)
 	jobs.q.BusRegister(internalJobChainNode, r.handleInternalChainNode)
 	jobs.q.BusRegister(internalJobBatchJob, r.handleInternalBatchJob)
 	jobs.q.BusRegister(internalJobCallback, r.handleInternalCallback)
@@ -164,6 +165,10 @@ func asRuntime(v any) (busruntime.Runtime, error) {
 }
 
 type runtime struct {
+	continuationResource string
+	continuationQueue    string
+	runner               *continuationRunner
+	coordinatorStopped   bool
 	*Jobs
 	store Store
 
@@ -511,4 +516,14 @@ func newID(prefix string) string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return prefix + "_" + hex.EncodeToString(b[:])
+}
+
+// WithContinuationResource scopes competing recovery runners to one physical queue resource.
+func WithContinuationResource(resource string) Option {
+	return func(r *runtime) { r.continuationResource = resource }
+}
+
+// WithContinuationQueue resolves default hook routing into immutable initial definitions.
+func WithContinuationQueue(queue string) Option {
+	return func(r *runtime) { r.continuationQueue = queue }
 }

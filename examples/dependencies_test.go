@@ -12,4 +12,5 @@ import (
 	_ "github.com/goforj/queue/driver/sqlitequeue"
 	_ "github.com/goforj/queue/driver/sqlqueuecore"
 	_ "github.com/goforj/queue/driver/sqsqueue"
+	_ "github.com/goforj/queue/driver/temporalqueue"
 )

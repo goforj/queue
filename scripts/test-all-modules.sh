@@ -65,6 +65,7 @@ run_module "driver/sqlqueuecore"
 run_module "driver/mysqlqueue"
 run_module "driver/postgresqueue"
 run_module "driver/sqlitequeue"
+run_module "driver/temporalqueue"
 run_module "examples"
 run_module "integration"
 # The generated-doc check compiles the build-ignored tools; module verification covers their dependency graph.

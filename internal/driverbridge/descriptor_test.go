@@ -294,7 +294,7 @@ func TestLegacyBridgeExplicitlySelectsBuiltIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer q.Shutdown(context.Background())
-	if len(backend.routes) != 4 {
+	if len(backend.routes) != 5 {
 		t.Fatalf("built-in routes = %v", backend.routes)
 	}
 	_, err = q.FindChain(t.Context(), "missing")
@@ -320,5 +320,86 @@ func TestDescriptorHookFailures(t *testing.T) {
 	}
 	if _, err := NewQueue(queue.Config{}, nil, runtimehook.Descriptor{}); err == nil {
 		t.Fatal("nil backend accepted")
+	}
+}
+
+// descriptorLifecycle supplies explicit owner identity and a test-controlled terminal channel.
+type descriptorLifecycle struct {
+	binding   *runtimehook.WorkflowBinding
+	done      chan struct{}
+	budget    time.Duration
+	err       error
+	configErr error
+	workers   int
+}
+
+// Binding pins lifecycle ownership to the root-selected runtime and executor.
+func (l *descriptorLifecycle) Binding() *runtimehook.WorkflowBinding { return l.binding }
+
+// Done exposes only terminal physical-worker failure.
+func (l *descriptorLifecycle) Done() <-chan struct{} { return l.done }
+
+// Err preserves the terminal driver category through Queue.Run.
+func (l *descriptorLifecycle) Err() error { return l.err }
+
+// ShutdownTimeout defines one aggregate cleanup budget.
+func (l *descriptorLifecycle) ShutdownTimeout() time.Duration { return l.budget }
+
+// SetWorkers records the root's explicit capacity forwarding.
+func (l *descriptorLifecycle) SetWorkers(count int) { l.workers = count }
+
+// ConfigurationError exposes deferred fluent validation without losing cleanup ownership.
+func (l *descriptorLifecycle) ConfigurationError() error { return l.configErr }
+
+// TestDescriptorRejectsInvalidLifecycle prevents silently unowned fatal channels and shutdown budgets.
+func TestDescriptorRejectsInvalidLifecycle(t *testing.T) {
+	failure := errors.New("factory failed")
+	for _, scenario := range []string{"nil", "binding", "channel", "budget", "factory"} {
+		t.Run(scenario, func(t *testing.T) {
+			backend := newDescriptorBackend()
+			_, err := NewQueue(queue.Config{Driver: backend.Driver()}, nil, runtimehook.Descriptor{Backend: backend, WorkflowMode: runtimehook.WorkflowUnsupported, NewLifecycle: func(binding *runtimehook.WorkflowBinding) (runtimehook.DriverLifecycle, error) {
+				l := &descriptorLifecycle{binding: binding, done: make(chan struct{}), budget: time.Second}
+				switch scenario {
+				case "nil":
+					return nil, nil
+				case "binding":
+					l.binding = runtimehook.NewWorkflowBinding(nil, nil, "other")
+				case "channel":
+					l.done = nil
+				case "budget":
+					l.budget = 0
+				case "factory":
+					return nil, failure
+				}
+				return l, nil
+			}})
+			if err == nil {
+				t.Fatal("invalid lifecycle accepted")
+			}
+		})
+	}
+}
+
+// TestDescriptorRunPropagatesFatalAndKeepsCleanup exercises the root public lifecycle independently of any SDK.
+func TestDescriptorRunPropagatesFatalAndKeepsCleanup(t *testing.T) {
+	backend := newDescriptorBackend()
+	fatal := errors.New("driver stopped")
+	var lifecycle *descriptorLifecycle
+	q, err := NewQueue(queue.Config{Driver: backend.Driver()}, nil, runtimehook.Descriptor{Backend: backend, WorkflowMode: runtimehook.WorkflowUnsupported, NewLifecycle: func(binding *runtimehook.WorkflowBinding) (runtimehook.DriverLifecycle, error) {
+		lifecycle = &descriptorLifecycle{binding: binding, done: make(chan struct{}), budget: time.Second, err: fatal}
+		return lifecycle, nil
+	}}, queue.WithWorkers(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle.workers != 3 {
+		t.Fatal("capacity was not forwarded")
+	}
+	close(lifecycle.done)
+	if err := q.Run(t.Context()); !errors.Is(err, fatal) {
+		t.Fatalf("fatal lost: %v", err)
+	}
+	if !backend.stopped {
+		t.Fatal("fatal return skipped physical shutdown")
 	}
 }

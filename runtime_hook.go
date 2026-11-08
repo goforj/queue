@@ -8,6 +8,12 @@ import (
 
 // Register internal bridge/test hooks in package init to avoid import cycles.
 func init() {
+	runtimehook.DriverResource = func(value any) any {
+		if q, ok := value.(*Queue); ok {
+			return q.lifecycle
+		}
+		return nil
+	}
 	runtimehook.BuildQueueFromDriver = buildQueueFromDriverHook
 	runtimehook.BuildQueueFromDescriptor = buildQueueFromDescriptorHook
 	runtimehook.ExtractRuntimeFromQueue = extractRuntimeFromQueueHook

@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"github.com/goforj/queue/busruntime"
 	"sync"
 	"time"
 )
@@ -10,6 +11,7 @@ import (
 // NewMemoryStore creates an in-memory orchestration store implementation.
 func NewMemoryStore() Store {
 	return &memoryStore{
+		continuations:      make(map[string]*continuationLedger),
 		chains:             make(map[string]*memoryChain),
 		batch:              make(map[string]*memoryBatch),
 		callbacks:          make(map[string]time.Time),
@@ -18,6 +20,7 @@ func NewMemoryStore() Store {
 }
 
 type memoryStore struct {
+	continuations      map[string]*continuationLedger
 	mu                 sync.Mutex
 	chains             map[string]*memoryChain
 	batch              map[string]*memoryBatch
@@ -55,6 +58,9 @@ func (m *memoryStore) CreateChain(_ context.Context, rec ChainRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
+	if ledger := newLedger("chain", rec.ChainID, rec.DispatchID, rec.continuation); ledger != nil {
+		m.continuations[rec.ChainID] = ledger
+	}
 	m.deleteTransitionReceipts(chainTransitionKind, rec.ChainID)
 	m.chains[rec.ChainID] = &memoryChain{
 		state: ChainState{
@@ -115,6 +121,7 @@ func (m *memoryStore) advanceChainOutcome(_ context.Context, chainID string, com
 	ch.state.UpdatedAt = time.Now()
 	if ch.state.NextIndex >= len(ch.state.Nodes) {
 		ch.state.Completed = true
+		m.triggerChainContinuations(ch.state, completedNode, false)
 		state := ch.state
 		state.Nodes = cloneChainNodes(state.Nodes)
 		receipt, receiptKnown := m.recordTransitionReceipt(chainTransitionKind, chainID, state.DispatchID, state.CreatedAt, completedNode, BatchJobSucceeded, claim, true, false)
@@ -164,6 +171,7 @@ func (m *memoryStore) failChainOutcome(_ context.Context, chainID, nodeID string
 		ch.state.Failure = cause.Error()
 	}
 	ch.state.UpdatedAt = time.Now()
+	m.triggerChainContinuations(ch.state, nodeID, true)
 	state := ch.state
 	state.Nodes = cloneChainNodes(state.Nodes)
 	receipt, receiptKnown := m.recordTransitionReceipt(chainTransitionKind, chainID, state.DispatchID, state.CreatedAt, nodeID, BatchJobFailed, claim, false, false)
@@ -184,6 +192,7 @@ func (m *memoryStore) FailChain(_ context.Context, chainID string, cause error) 
 			ch.state.Failure = cause.Error()
 		}
 		ch.state.UpdatedAt = time.Now()
+		m.triggerChainContinuations(ch.state, "", true)
 	}
 	return nil
 }
@@ -233,6 +242,9 @@ func (m *memoryStore) CreateBatch(_ context.Context, rec BatchRecord) error {
 	jm := make(map[string]batchJobStatus, len(rec.Jobs))
 	for _, job := range rec.Jobs {
 		jm[job.JobID] = batchJobStatus{}
+	}
+	if ledger := newLedger("batch", rec.BatchID, rec.DispatchID, rec.continuation); ledger != nil {
+		m.continuations[rec.BatchID] = ledger
 	}
 	m.batch[rec.BatchID] = &memoryBatch{
 		state: st,
@@ -323,6 +335,9 @@ func (m *memoryStore) settleBatchOutcome(_ context.Context, batchID, jobID strin
 	}
 	b.state.UpdatedAt = time.Now()
 	aggregateCompleted := !wasCompleted && b.state.Completed
+	if ledger := m.continuations[batchID]; ledger != nil {
+		ledger.trigger(busruntime.ContinuationSummary{Kind: "batch", MemberID: jobID, Total: b.state.Total, Processed: b.state.Processed, Pending: b.state.Pending, Failed: b.state.Failed, Completed: b.state.Completed, Cancelled: b.state.Cancelled}, requestedFailure && b.state.Failed == 1, aggregateCompleted, b.state.UpdatedAt)
+	}
 	receipt, receiptKnown := m.recordTransitionReceipt(batchTransitionKind, batchID, b.state.DispatchID, b.state.CreatedAt, jobID, outcome, claim, aggregateCompleted, aggregateCompleted && b.state.Cancelled)
 	return batchSettlementResult{state: b.state, owned: true, claimedNow: true, receipt: receipt, receiptKnown: receiptKnown}, nil
 }
@@ -420,9 +435,13 @@ func (m *memoryStore) CancelBatch(_ context.Context, batchID string) error {
 	if !ok {
 		return ErrNotFound
 	}
+	wasTerminal := b.state.Completed
 	b.state.Cancelled = true
 	b.state.Completed = true
 	b.state.UpdatedAt = time.Now()
+	if ledger := m.continuations[batchID]; ledger != nil && !wasTerminal {
+		ledger.trigger(busruntime.ContinuationSummary{Kind: "batch", Total: b.state.Total, Pending: b.state.Pending, Processed: b.state.Processed, Failed: b.state.Failed, Completed: true, Cancelled: true}, false, true, b.state.UpdatedAt)
+	}
 	return nil
 }
 
@@ -463,12 +482,18 @@ func (m *memoryStore) Prune(_ context.Context, before time.Time) error {
 	defer m.mu.Unlock()
 
 	for chainID, ch := range m.chains {
+		if m.continuations[chainID] != nil {
+			continue
+		}
 		if (ch.state.Completed || ch.state.Failed) && ch.state.UpdatedAt.Before(before) {
 			delete(m.chains, chainID)
 			m.deleteTransitionReceipts(chainTransitionKind, chainID)
 		}
 	}
 	for batchID, b := range m.batch {
+		if m.continuations[batchID] != nil {
+			continue
+		}
 		if b.state.Completed && b.state.UpdatedAt.Before(before) {
 			delete(m.batch, batchID)
 			m.deleteTransitionReceipts(batchTransitionKind, batchID)

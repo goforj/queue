@@ -260,12 +260,13 @@ const DeliveryMetadataVersion = 1
 // changing its application type or payload. Its JSON representation is the
 // canonical persisted and transported driver metadata record.
 type DeliveryMetadata struct {
-	SchemaVersion int    `json:"schema_version"`
-	DispatchID    string `json:"dispatch_id,omitempty"`
-	JobID         string `json:"job_id,omitempty"`
-	ChainID       string `json:"chain_id,omitempty"`
-	BatchID       string `json:"batch_id,omitempty"`
-	Queue         string `json:"queue,omitempty"`
+	Continuation  *Continuation `json:"continuation,omitempty"`
+	SchemaVersion int           `json:"schema_version"`
+	DispatchID    string        `json:"dispatch_id,omitempty"`
+	JobID         string        `json:"job_id,omitempty"`
+	ChainID       string        `json:"chain_id,omitempty"`
+	BatchID       string        `json:"batch_id,omitempty"`
+	Queue         string        `json:"queue,omitempty"`
 }
 
 // Runtime is the queue runtime surface required by the orchestration engine.
@@ -293,7 +294,7 @@ func WithDeliveryMetadata(ctx context.Context, metadata DeliveryMetadata) contex
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, deliveryMetadataContextKey{}, metadata)
+	return context.WithValue(ctx, deliveryMetadataContextKey{}, CloneDeliveryMetadata(metadata))
 }
 
 // DeliveryMetadataFromContext returns supported direct-job correlation supplied
@@ -306,5 +307,5 @@ func DeliveryMetadataFromContext(ctx context.Context) (DeliveryMetadata, bool) {
 	if !ok || metadata.SchemaVersion != DeliveryMetadataVersion {
 		return DeliveryMetadata{}, false
 	}
-	return metadata, true
+	return CloneDeliveryMetadata(metadata), true
 }
