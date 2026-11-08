@@ -88,6 +88,8 @@ func newProofClient(t *testing.T, options client.Options) client.Client {
 	t.Helper()
 	options.HostPort = proofAddress
 	options.Identity = "queue-protocol-proof"
+	// Keep the SDK handshake inside the same explicit setup budget under the full backend suite's load.
+	options.ConnectionOptions.GetSystemInfoTimeout = 20 * time.Second
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	c, err := client.DialContext(ctx, options)

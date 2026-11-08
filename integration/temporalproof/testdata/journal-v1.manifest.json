@@ -8,5 +8,6 @@
   "capture_test": "TestTemporalProofSameKeyJournal",
   "worker_identity": "queue-protocol-proof",
   "sticky_cache_enabled": false,
-  "data": "Fabricated input only; captured directly without rewriting history."
+  "data": "Fabricated input only; captured directly without rewriting history.",
+  "grpc": "1.79.3 (original synthetic capture; replay is checked with the current patched transport)"
 }
