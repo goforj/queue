@@ -33,31 +33,34 @@ const (
 	internalJobCallback = CallbackDeliveryType
 )
 
-// Engine defines the orchestration surface shared by the public facade and compatibility adapters.
+// Engine owns portable coordination and state, independently of ordinary delivery.
 type Engine interface {
-	// Register binds a logical job type to its handler.
-	Register(jobType string, handler Handler)
-
-	// Dispatch submits one logical job through the underlying delivery runtime.
-	Dispatch(ctx context.Context, job Job) (DispatchResult, error)
-	// DispatchDirect submits one frozen ordinary job without the legacy workflow envelope.
-	DispatchDirect(ctx context.Context, job StoredJob) (DispatchResult, error)
 	// Chain creates a sequential workflow builder.
 	Chain(jobs ...Job) ChainBuilder
 	// Batch creates an aggregate workflow builder.
 	Batch(jobs ...Job) BatchBuilder
-
-	// StartWorkers starts the underlying delivery runtime.
-	StartWorkers(ctx context.Context) error
-	// Shutdown stops the underlying delivery runtime.
-	Shutdown(ctx context.Context) error
-
 	// FindBatch returns persisted aggregate workflow state.
 	FindBatch(ctx context.Context, batchID string) (BatchState, error)
 	// FindChain returns persisted sequential workflow state.
 	FindChain(ctx context.Context, chainID string) (ChainState, error)
 	// Prune removes terminal workflow state older than before.
 	Prune(ctx context.Context, before time.Time) error
+}
+
+// Runtime composes the built-in coordinator and job runtime for internal compatibility callers.
+// The public Queue constructs and holds these responsibilities separately.
+type Runtime interface {
+	Engine
+	// Register binds a logical job type to its handler.
+	Register(jobType string, handler Handler)
+	// Dispatch submits a legacy envelope delivery.
+	Dispatch(ctx context.Context, job Job) (DispatchResult, error)
+	// DispatchDirect submits a canonical ordinary delivery.
+	DispatchDirect(ctx context.Context, job StoredJob) (DispatchResult, error)
+	// StartWorkers starts the selected physical runtime.
+	StartWorkers(ctx context.Context) error
+	// Shutdown drains the selected physical runtime.
+	Shutdown(ctx context.Context) error
 }
 
 // Option configures one workflow runtime before its internal handlers are registered.
@@ -108,27 +111,33 @@ func WithMiddleware(middlewares ...Middleware) Option {
 }
 
 // New creates a workflow engine using an in-memory orchestration store.
-func New(q any, opts ...Option) (Engine, error) {
+func New(q any, opts ...Option) (Runtime, error) {
 	return NewWithStore(q, NewMemoryStore(), opts...)
 }
 
 // NewWithStore creates a workflow engine with a custom orchestration store.
-func NewWithStore(q any, store Store, opts ...Option) (Engine, error) {
-	if q == nil {
-		return nil, errors.New("queue is required")
-	}
-	qr, err := asRuntime(q)
+func NewWithStore(q any, store Store, opts ...Option) (Runtime, error) {
+	jobs, err := NewJobs(q, JobConfig{})
 	if err != nil {
 		return nil, err
 	}
+	return newCoordinator(jobs, store, opts...), nil
+}
+
+// NewCoordinator attaches built-in workflow deliveries to an existing shared executor.
+// It never registers ordinary handlers or starts or shuts down physical workers.
+func NewCoordinator(jobs *Jobs, opts ...Option) Engine {
+	return newCoordinator(jobs, NewMemoryStore(), opts...)
+}
+
+// newCoordinator preserves store defaults and callback ownership for compatibility constructors.
+func newCoordinator(jobs *Jobs, store Store, opts ...Option) *runtime {
 	if store == nil {
 		store = NewMemoryStore()
 	}
 	r := &runtime{
-		q:              qr,
+		Jobs:           jobs,
 		store:          store,
-		now:            time.Now,
-		handlers:       make(map[string]Handler),
 		chainCallbacks: make(map[string]chainCallbacks),
 		batchCallbacks: make(map[string]batchCallbacks),
 	}
@@ -137,12 +146,10 @@ func NewWithStore(q any, store Store, opts ...Option) (Engine, error) {
 			opt(r)
 		}
 	}
-
-	qr.BusRegister(internalJob, r.handleInternalJob)
-	qr.BusRegister(internalJobChainNode, r.handleInternalChainNode)
-	qr.BusRegister(internalJobBatchJob, r.handleInternalBatchJob)
-	qr.BusRegister(internalJobCallback, r.handleInternalCallback)
-	return r, nil
+	jobs.q.BusRegister(internalJobChainNode, r.handleInternalChainNode)
+	jobs.q.BusRegister(internalJobBatchJob, r.handleInternalBatchJob)
+	jobs.q.BusRegister(internalJobCallback, r.handleInternalCallback)
+	return r
 }
 
 // asRuntime narrows compatibility inputs to the transport contract required by workflow orchestration.
@@ -157,100 +164,16 @@ func asRuntime(v any) (busruntime.Runtime, error) {
 }
 
 type runtime struct {
-	q     busruntime.Runtime
+	*Jobs
 	store Store
-	now   func() time.Time
-
-	observer Observer
 
 	mu                         sync.RWMutex
-	handlers                   map[string]Handler
 	chainCallbacks             map[string]chainCallbacks
 	batchCallbacks             map[string]batchCallbacks
-	middlewares                []Middleware
 	ephemeralCallbacksDisabled bool
 }
 
 var _ Engine = (*runtime)(nil)
-
-// Register binds a job type to a handler.
-func (r *runtime) Register(jobType string, handler Handler) {
-	if handler == nil {
-		return
-	}
-	r.mu.Lock()
-	r.handlers[jobType] = handler
-	r.mu.Unlock()
-
-	_, ok := r.q.(busruntime.DirectRuntime)
-	if !ok || IsDeliveryType(jobType) {
-		return
-	}
-	r.q.BusRegister(jobType, func(ctx context.Context, job busruntime.InboundJob) error {
-		return r.handleDirectJob(ctx, jobType, job)
-	})
-}
-
-// Dispatch enqueues one job for execution.
-func (r *runtime) Dispatch(ctx context.Context, job Job) (DispatchResult, error) {
-	stored, err := toStoredJob(job)
-	if err != nil {
-		return DispatchResult{}, err
-	}
-	return r.dispatch(ctx, stored, false)
-}
-
-// DispatchDirect enqueues one ordinary job using its application type and payload.
-func (r *runtime) DispatchDirect(ctx context.Context, job StoredJob) (DispatchResult, error) {
-	if job.Type == "" {
-		return DispatchResult{}, errors.New("bus job type is required")
-	}
-	job.Payload = append([]byte(nil), job.Payload...)
-	return r.dispatch(ctx, job, true)
-}
-
-// dispatch applies one receipt and event contract to both canonical direct
-// delivery and the retained legacy envelope route.
-func (r *runtime) dispatch(ctx context.Context, job StoredJob, direct bool) (DispatchResult, error) {
-	dispatchID := newID("dsp")
-	env := envelope{
-		SchemaVersion: schemaVersion,
-		DispatchID:    dispatchID,
-		Kind:          "job",
-		JobID:         newID("job"),
-		Job:           job,
-	}
-	r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventDispatchStarted, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
-	dispatch := func() error { return r.dispatchEnvelope(ctx, internalJob, env) }
-	if direct {
-		dispatch = func() error { return r.dispatchDirectEnvelope(ctx, env) }
-	}
-	if err := dispatch(); err != nil {
-		if executionErr, ok := acceptedDispatchExecutionError(err); ok {
-			r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
-			return DispatchResult{DispatchID: dispatchID}, executionErr
-		}
-		r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventDispatchFailed, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now(), Err: err})
-		return DispatchResult{DispatchID: dispatchID}, err
-	}
-	r.emit(ctx, Event{SchemaVersion: eventSchemaVersion, EventID: newID("evt"), Kind: EventDispatchSucceeded, DispatchID: dispatchID, JobID: env.JobID, JobType: job.Type, JobKey: storedJobEventKey(job), Queue: job.Options.Queue, Time: r.now()})
-	return DispatchResult{DispatchID: dispatchID}, nil
-}
-
-type acceptedDispatchError interface {
-	error
-	DispatchAccepted() bool
-	Unwrap() error
-}
-
-// acceptedDispatchExecutionError separates synchronous execution failure from enqueue rejection without coupling workflow to root types.
-func acceptedDispatchExecutionError(err error) (error, bool) {
-	var accepted acceptedDispatchError
-	if !errors.As(err, &accepted) || !accepted.DispatchAccepted() {
-		return nil, false
-	}
-	return accepted.Unwrap(), true
-}
 
 // Chain creates a sequential workflow where each job runs only after the prior job succeeds.
 func (r *runtime) Chain(jobs ...Job) ChainBuilder {
@@ -261,12 +184,6 @@ func (r *runtime) Chain(jobs ...Job) ChainBuilder {
 func (r *runtime) Batch(jobs ...Job) BatchBuilder {
 	return &batchBuilder{r: r, jobs: append([]Job(nil), jobs...)}
 }
-
-// StartWorkers starts the underlying queue worker runtime.
-func (r *runtime) StartWorkers(ctx context.Context) error { return r.q.StartWorkers(ctx) }
-
-// Shutdown stops the underlying queue worker runtime.
-func (r *runtime) Shutdown(ctx context.Context) error { return r.q.Shutdown(ctx) }
 
 // FindBatch returns persisted batch state by id.
 func (r *runtime) FindBatch(ctx context.Context, batchID string) (BatchState, error) {
@@ -281,47 +198,6 @@ func (r *runtime) FindChain(ctx context.Context, chainID string) (ChainState, er
 // Prune removes terminal orchestration records older than before.
 func (r *runtime) Prune(ctx context.Context, before time.Time) error {
 	return r.store.Prune(ctx, before)
-}
-
-// dispatchEnvelope serializes one workflow delivery onto the underlying queue runtime.
-func (r *runtime) dispatchEnvelope(ctx context.Context, jobType string, env envelope) error {
-	payload, err := json.Marshal(env)
-	if err != nil {
-		return err
-	}
-	return r.q.BusDispatch(ctx, jobType, payload, busruntime.JobOptions{
-		Queue:     env.Job.Options.Queue,
-		Delay:     env.Job.Options.Delay,
-		Timeout:   env.Job.Options.Timeout,
-		Retry:     env.Job.Options.Retry,
-		Backoff:   env.Job.Options.Backoff,
-		UniqueFor: env.Job.Options.UniqueFor,
-	})
-}
-
-// dispatchDirectEnvelope carries correlation through the driver metadata plane.
-// Runtimes without that capability and reserved legacy names keep the frozen
-// version-one envelope route.
-func (r *runtime) dispatchDirectEnvelope(ctx context.Context, env envelope) error {
-	direct, ok := r.q.(busruntime.DirectRuntime)
-	if !ok || IsDeliveryType(env.Job.Type) {
-		return r.dispatchEnvelope(ctx, internalJob, env)
-	}
-	return direct.BusDispatchDirect(ctx, env.Job.Type, env.Job.Payload, busruntime.DeliveryMetadata{
-		SchemaVersion: busruntime.DeliveryMetadataVersion,
-		DispatchID:    env.DispatchID,
-		JobID:         env.JobID,
-		ChainID:       env.ChainID,
-		BatchID:       env.BatchID,
-		Queue:         env.Job.Options.Queue,
-	}, busruntime.JobOptions{
-		Queue:     env.Job.Options.Queue,
-		Delay:     env.Job.Options.Delay,
-		Timeout:   env.Job.Options.Timeout,
-		Retry:     env.Job.Options.Retry,
-		Backoff:   env.Job.Options.Backoff,
-		UniqueFor: env.Job.Options.UniqueFor,
-	})
 }
 
 // dispatchCallback schedules only configured ephemeral closures through the same queue delivery path.
@@ -387,121 +263,6 @@ func (r *runtime) callbackConfigured(base envelope, kind string) bool {
 	default:
 		return false
 	}
-}
-
-// handleInternalJob decodes and executes one direct workflow delivery.
-func (r *runtime) handleInternalJob(ctx context.Context, job busruntime.InboundJob) error {
-	var env envelope
-	if err := job.Bind(&env); err != nil {
-		return err
-	}
-	return r.executeStoredJob(ctx, env)
-}
-
-// handleDirectJob reconstructs engine context from driver metadata while
-// leaving the application's type and payload untouched.
-func (r *runtime) handleDirectJob(ctx context.Context, jobType string, job busruntime.InboundJob) error {
-	metadata, _ := busruntime.DeliveryMetadataFromContext(ctx)
-	attempt, _ := busruntime.DeliveryAttemptFromContext(ctx)
-	return r.executeStoredJob(ctx, envelope{
-		SchemaVersion: schemaVersion,
-		DispatchID:    metadata.DispatchID,
-		Kind:          "job",
-		JobID:         metadata.JobID,
-		ChainID:       metadata.ChainID,
-		BatchID:       metadata.BatchID,
-		Attempt:       attempt.Number,
-		Job: StoredJob{
-			Type:    jobType,
-			Payload: job.PayloadBytes(),
-			Options: JobOptions{
-				Queue: metadata.Queue,
-				Retry: attempt.MaxRetry,
-			},
-		},
-	})
-}
-
-// storedJobOutcome carries an attempt result until its owning workflow mutation commits.
-type storedJobOutcome struct {
-	env      envelope
-	attempt  busruntime.DeliveryAttempt
-	started  time.Time
-	finished time.Time
-	err      error
-}
-
-// executeStoredJob preserves direct-job behavior while allowing workflows to defer terminal facts until their state commits.
-func (r *runtime) executeStoredJob(ctx context.Context, env envelope) error {
-	outcome := r.executeStoredJobAttempt(ctx, env)
-	r.emitStoredJobOutcome(ctx, outcome)
-	return outcome.err
-}
-
-// executeStoredJobAttempt runs one logical handler attempt without claiming its terminal workflow state committed.
-func (r *runtime) executeStoredJobAttempt(ctx context.Context, env envelope) storedJobOutcome {
-	attempt := applyDeliveryAttempt(ctx, &env)
-	started := r.now()
-	r.emit(ctx, Event{
-		SchemaVersion: eventSchemaVersion,
-		EventID:       newID("evt"),
-		Kind:          EventJobStarted,
-		DispatchID:    env.DispatchID,
-		JobID:         env.JobID,
-		ChainID:       env.ChainID,
-		BatchID:       env.BatchID,
-		Attempt:       env.Attempt,
-		JobType:       env.Job.Type,
-		JobKey:        storedJobEventKey(env.Job),
-		Queue:         env.Job.Options.Queue,
-		Time:          started,
-	})
-	handler, ok := r.lookupHandler(env.Job.Type)
-	if !ok {
-		err := fmt.Errorf("bus handler not registered for %q", env.Job.Type)
-		return storedJobOutcome{env: env, attempt: attempt, started: started, finished: r.now(), err: err}
-	}
-	jc := NewContext(
-		schemaVersion,
-		env.DispatchID,
-		env.JobID,
-		env.ChainID,
-		env.BatchID,
-		env.Attempt,
-		env.Job.Type,
-		env.Job.Payload,
-	)
-	err := chainMiddleware(r.middlewareSnapshot(), func(ctx context.Context, c Context) error {
-		return handler(ctx, c)
-	})(ctx, jc)
-	return storedJobOutcome{env: env, attempt: attempt, started: started, finished: r.now(), err: err}
-}
-
-// emitStoredJobOutcome publishes only terminal logical facts selected by the shared attempt classifier.
-func (r *runtime) emitStoredJobOutcome(ctx context.Context, outcome storedJobOutcome) {
-	kind := EventJobSucceeded
-	if outcome.err != nil {
-		if busruntime.ClassifyAttempt(outcome.attempt, outcome.err) != busruntime.AttemptFailed {
-			return
-		}
-		kind = EventJobFailed
-	}
-	r.emit(ctx, Event{
-		SchemaVersion: eventSchemaVersion,
-		EventID:       storedJobOutcomeFactID(kind, outcome),
-		Kind:          kind,
-		DispatchID:    outcome.env.DispatchID,
-		JobID:         outcome.env.JobID,
-		ChainID:       outcome.env.ChainID,
-		BatchID:       outcome.env.BatchID,
-		Attempt:       outcome.env.Attempt,
-		JobType:       outcome.env.Job.Type,
-		JobKey:        storedJobEventKey(outcome.env.Job),
-		Queue:         outcome.env.Job.Options.Queue,
-		Duration:      outcome.finished.Sub(outcome.started),
-		Time:          outcome.finished,
-		Err:           outcome.err,
-	})
 }
 
 // recoveredStoredJobSuccess reconstructs only the success identity persisted
@@ -677,33 +438,6 @@ func applyDeliveryAttempt(ctx context.Context, env *envelope) busruntime.Deliver
 		Number:   env.Attempt,
 		MaxRetry: env.Job.Options.Retry,
 	}
-}
-
-// middlewareSnapshot isolates an execution attempt from concurrent middleware registration.
-func (r *runtime) middlewareSnapshot() []Middleware {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]Middleware, len(r.middlewares))
-	copy(out, r.middlewares)
-	return out
-}
-
-// lookupHandler resolves a handler without retaining the registration lock during application execution.
-func (r *runtime) lookupHandler(jobType string) (Handler, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	handler, ok := r.handlers[jobType]
-	return handler, ok
-}
-
-// emit delays positive workflow facts when the physical driver owns a later settlement boundary.
-func (r *runtime) emit(ctx context.Context, event Event) {
-	if eventWaitsForDeliverySettlement(event.Kind) && busruntime.DeferUntilDeliveryCommitted(ctx, func() {
-		safeObserve(ctx, r.observer, event)
-	}) {
-		return
-	}
-	safeObserve(ctx, r.observer, event)
 }
 
 // eventWaitsForDeliverySettlement identifies positive workflow facts that would be false if broker acknowledgement remains unresolved.

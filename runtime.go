@@ -26,8 +26,19 @@ func IsPermanent(err error) bool {
 // @group Queue
 type Option func(*runtimeOptions)
 
+// runtimeOptions retains explicit supply separately from effective values so
+// driver capability checks need not interpret opaque option functions.
 type runtimeOptions struct {
-	workflowOpts            []workflow.Option
+	store                   WorkflowStore
+	storeSupplied           bool
+	clock                   func() time.Time
+	clockSupplied           bool
+	middlewares             []Middleware
+	middlewareSupplied      bool
+	workersSupplied         bool
+	observerSupplied        bool
+	decoratorSupplied       bool
+	legacyEnvelopeSupplied  bool
 	workers                 int
 	observer                Observer
 	handlerContextDecorator func(context.Context) context.Context
@@ -58,6 +69,7 @@ func (o *runtimeOptions) apply(opts []Option) {
 //	_ = q
 func WithObserver(observer Observer) Option {
 	return func(o *runtimeOptions) {
+		o.observerSupplied = true
 		if observer == nil {
 			return
 		}
@@ -82,7 +94,10 @@ func WithObserver(observer Observer) Option {
 //	_ = q
 func WithStore(store WorkflowStore) Option {
 	return func(o *runtimeOptions) {
-		o.workflowOpts = append(o.workflowOpts, workflow.WithStore(workflowStoreFromRoot(store)))
+		o.storeSupplied = true
+		if store != nil {
+			o.store = store
+		}
 	}
 }
 
@@ -101,7 +116,10 @@ func WithStore(store WorkflowStore) Option {
 //	_ = q
 func WithClock(clock func() time.Time) Option {
 	return func(o *runtimeOptions) {
-		o.workflowOpts = append(o.workflowOpts, workflow.WithClock(clock))
+		o.clockSupplied = true
+		if clock != nil {
+			o.clock = clock
+		}
 	}
 }
 
@@ -120,7 +138,8 @@ func WithClock(clock func() time.Time) Option {
 //	_ = q
 func WithMiddleware(middlewares ...Middleware) Option {
 	return func(o *runtimeOptions) {
-		o.workflowOpts = append(o.workflowOpts, workflow.WithMiddleware(middlewaresToWorkflow(middlewares)...))
+		o.middlewareSupplied = true
+		o.middlewares = append(o.middlewares, middlewares...)
 	}
 }
 
@@ -139,6 +158,7 @@ func WithMiddleware(middlewares ...Middleware) Option {
 //	_ = q
 func WithWorkers(count int) Option {
 	return func(o *runtimeOptions) {
+		o.workersSupplied = true
 		if count <= 0 {
 			return
 		}
@@ -164,6 +184,7 @@ func WithWorkers(count int) Option {
 //	_ = q
 func WithHandlerContextDecorator(fn func(context.Context) context.Context) Option {
 	return func(o *runtimeOptions) {
+		o.decoratorSupplied = true
 		o.handlerContextDecorator = fn
 	}
 }
@@ -177,21 +198,23 @@ func WithHandlerContextDecorator(fn func(context.Context) context.Context) Optio
 // @group Queue
 func WithLegacyDirectEnvelope() Option {
 	return func(o *runtimeOptions) {
+		o.legacyEnvelopeSupplied = true
 		o.legacyDirectEnvelope = true
 	}
 }
 
 // Queue is the high-level user-facing queue API.
-// It composes the queue runtime with the internal orchestration engine.
+// It composes shared job execution with the internal workflow coordinator.
 // @group Queue
 type Queue struct {
 	q                    queueRuntime
+	jobs                 *workflow.Jobs
 	b                    workflow.Engine
 	ctx                  context.Context
 	legacyDirectEnvelope bool
 }
 
-// newHighLevelQueue constructs the selected physical runtime before attaching the canonical workflow engine.
+// newHighLevelQueue constructs the selected physical runtime before attaching shared execution and coordination.
 func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 	q, err := newRuntime(cfg)
 	if err != nil {
@@ -200,7 +223,7 @@ func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 	return newQueueFromRuntime(q, opts...)
 }
 
-// newQueueFromRuntime applies root configuration once before registering the single internal workflow engine.
+// newQueueFromRuntime parses options once so execution and coordination share typed configuration.
 func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
@@ -211,6 +234,7 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	if ro.handlerContextDecorator != nil && q != nil {
 		q.setHandlerContextDecorator(ro.handlerContextDecorator)
 	}
+	var jobObserver workflow.Observer
 	if observer != nil {
 		driver := Driver("")
 		resolveQueueName := func(queueName string) string {
@@ -225,17 +249,22 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 				return q.physicalQueueNameOrDefault(queueName)
 			}
 		}
-		ro.workflowOpts = append(ro.workflowOpts, workflow.WithObserver(workflowObserverAdapter{
+		jobObserver = workflowObserverAdapter{
 			driver:           driver,
 			resolveQueueName: resolveQueueName,
 			observer:         observer,
-		}))
+		}
 	}
-	b, err := workflow.New(q, ro.workflowOpts...)
+	jobs, err := workflow.NewJobs(q, workflow.JobConfig{
+		Clock:       ro.clock,
+		Observer:    jobObserver,
+		Middlewares: middlewaresToWorkflow(ro.middlewares),
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &Queue{q: q, b: b, legacyDirectEnvelope: ro.legacyDirectEnvelope}, nil
+	b := workflow.NewCoordinator(jobs, workflow.WithStore(workflowStoreFromRoot(ro.store)))
+	return &Queue{q: q, jobs: jobs, b: b, legacyDirectEnvelope: ro.legacyDirectEnvelope}, nil
 }
 
 // attachRuntimeObserver composes constructor and option observers before the workflow runtime is built so every layer shares one sink.
@@ -350,7 +379,7 @@ func (r *Queue) Register(jobType string, handler func(context.Context, Message) 
 	if r == nil || handler == nil {
 		return
 	}
-	r.b.Register(jobType, func(ctx context.Context, message workflow.Context) error {
+	r.jobs.Register(jobType, func(ctx context.Context, message workflow.Context) error {
 		return handler(ctx, messageFromWorkflow(message))
 	})
 }
@@ -432,14 +461,14 @@ func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
 		if legacyErr != nil {
 			return DispatchResult{}, legacyErr
 		}
-		result, dispatchErr := r.b.Dispatch(ctx, legacy)
+		result, dispatchErr := r.jobs.Dispatch(ctx, legacy)
 		return dispatchResultFromWorkflow(result), dispatchErr
 	}
 	bj, err := toDirectWorkflowJob(job)
 	if err != nil {
 		return DispatchResult{}, err
 	}
-	result, err := r.b.DispatchDirect(ctx, bj)
+	result, err := r.jobs.DispatchDirect(ctx, bj)
 	return dispatchResultFromWorkflow(result), err
 }
 
@@ -544,7 +573,7 @@ func (r *Queue) StartWorkers(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
-	return r.b.StartWorkers(ctx)
+	return r.q.StartWorkers(ctx)
 }
 
 // Run starts worker processing, blocks until ctx is canceled, then gracefully shuts down.
@@ -594,7 +623,7 @@ func (r *Queue) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
-	return r.b.Shutdown(ctx)
+	return r.q.Shutdown(ctx)
 }
 
 // FindChain returns current chain state by ID.
