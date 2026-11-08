@@ -1,0 +1,12 @@
+{
+  "purpose": "Synthetic SDK/server journal feasibility fixture; not a released driver protocol.",
+  "sdk": "go.temporal.io/sdk v1.45.0",
+  "server": "1.31.2",
+  "cli": "1.8.0",
+  "server_image": "temporalio/temporal@sha256:2c344b4a39b4489fc6944db095f628f0c30659836faf11780a4dc435599e80e3",
+  "sha256": "3b84d06cf85195be3c6b70a84c5d77691efe7b818ba46c4fb524073324efb798",
+  "capture_test": "TestTemporalProofSameKeyJournal",
+  "worker_identity": "queue-protocol-proof",
+  "sticky_cache_enabled": false,
+  "data": "Fabricated input only; captured directly without rewriting history."
+}
