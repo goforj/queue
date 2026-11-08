@@ -124,6 +124,71 @@ func decodeLedgerDelta(event *history.HistoryEvent) (proofLedgerDelta, bool, err
 	return delta, true, err
 }
 
+// validateContinuationSchedules rejects overlapping heads, duplicate commands,
+// and incomplete drain even when execution and outcome slices retain their expected order.
+func validateContinuationSchedules(recorded *history.History, expected []proofIntent) error {
+	scheduled := make(map[string]int64)
+	activities := make(map[string]bool)
+	active := ""
+	next := 0
+	for _, event := range recorded.Events {
+		delta, ok, err := decodeLedgerDelta(event)
+		if err != nil {
+			return fmt.Errorf("decode continuation ledger: %w", err)
+		}
+		if ok {
+			id := delta.Intent.ID
+			switch delta.Kind {
+			case "scheduled":
+				if _, duplicate := scheduled[id]; duplicate {
+					return fmt.Errorf("duplicate continuation schedule for %q", id)
+				}
+				if active != "" {
+					return fmt.Errorf("continuation %q scheduled before %q settled", id, active)
+				}
+				if next >= len(expected) || delta.Intent != expected[next] {
+					return fmt.Errorf("unexpected continuation head %q", id)
+				}
+				commit := event.GetWorkflowPropertiesModifiedEventAttributes().WorkflowTaskCompletedEventId
+				if commit == 0 {
+					return fmt.Errorf("continuation %q has no workflow-task commit", id)
+				}
+				scheduled[id] = commit
+				active = id
+			case "succeeded", "exhausted":
+				if active == "" || id != active || delta.Intent != expected[next] {
+					return fmt.Errorf("continuation %q settled without its active head", id)
+				}
+				if !activities[id] {
+					return fmt.Errorf("continuation %q settled before its activity schedule", id)
+				}
+				active = ""
+				next++
+			}
+		}
+		if attributes := event.GetActivityTaskScheduledEventAttributes(); attributes != nil && strings.HasPrefix(attributes.ActivityId, "continuation/") {
+			id := strings.TrimPrefix(attributes.ActivityId, "continuation/")
+			if active == "" || id != active {
+				return fmt.Errorf("continuation activity %q scheduled without its active head", id)
+			}
+			if activities[id] {
+				return fmt.Errorf("duplicate continuation activity for %q", id)
+			}
+			if scheduled[id] != attributes.WorkflowTaskCompletedEventId {
+				return fmt.Errorf("continuation %q activity uses a different workflow-task commit", id)
+			}
+			activities[id] = true
+		}
+	}
+	if active != "" {
+		return fmt.Errorf("continuation %q remains unsettled", active)
+	}
+	if next != len(expected) || len(scheduled) != len(expected) || len(activities) != len(expected) {
+		return fmt.Errorf("missing continuation schedules or settlements: got %d, want %d", next, len(expected))
+	}
+	return nil
+}
+
 // awaitBusinessTerminal observes an actual committed journal record, using the
 // SDK's long-poll history iterator rather than sleeps or worker-side markers.
 func awaitBusinessTerminal(ctx context.Context, c client.Client, id, runID string) error {
@@ -230,7 +295,6 @@ func TestTemporalProofContinuationLedger(t *testing.T) {
 	}
 	var outcomes []string
 	var pending []proofIntent
-	scheduled := make(map[string]int64)
 	sequence := 0
 	lastBusinessCommit := int64(0)
 	for _, event := range retained.Events {
@@ -252,19 +316,15 @@ func TestTemporalProofContinuationLedger(t *testing.T) {
 					t.Fatal("trigger and pending intent did not commit atomically")
 				}
 				pending = append(pending, delta.Intent)
-			case "scheduled":
-				scheduled["continuation/"+delta.Intent.ID] = commit
 			case "succeeded", "exhausted":
 				outcomes = append(outcomes, delta.Intent.ID+":"+delta.Kind)
 			}
 		}
-		if attributes := event.GetActivityTaskScheduledEventAttributes(); attributes != nil && strings.HasPrefix(attributes.ActivityId, "continuation/") {
-			if commit, ok := scheduled[attributes.ActivityId]; !ok || commit != attributes.WorkflowTaskCompletedEventId {
-				t.Fatal("scheduled ledger delta and activity command did not commit atomically")
-			}
-		}
 	}
 	wantIntents := []proofIntent{{"progress-0", proofSnapshot{1, false}}, {"progress-1", proofSnapshot{2, true}}, {"completion", proofSnapshot{2, true}}}
+	if err := validateContinuationSchedules(retained, wantIntents); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(pending, wantIntents) {
 		t.Fatalf("immutable trigger snapshots=%+v", pending)
 	}
