@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/interceptor"
+	"sync"
 	"testing"
 	"time"
 
@@ -419,5 +421,78 @@ func TestTemporalDriverShutdownPreservesTypedCompletion(t *testing.T) {
 	var result string
 	if err := reader.GetWorkflow(t.Context(), run.GetID(), run.GetRunID()).Get(t.Context(), &result); err != nil || result != "successful-result" {
 		t.Fatalf("graceful result %q, error %v", result, err)
+	}
+}
+
+// stopAwareClientInterceptor holds an inherited activity callback after the resource admits it.
+type stopAwareClientInterceptor struct {
+	interceptor.InterceptorBase
+	entered chan struct{}
+	once    sync.Once
+}
+
+// stopAwareInbound waits for graceful stop before forwarding to the remaining SDK activity pipeline.
+type stopAwareInbound struct {
+	interceptor.ActivityInboundInterceptorBase
+	owner *stopAwareClientInterceptor
+}
+
+// InterceptActivity places the barrier between client-level admission and worker-level interceptors.
+func (i *stopAwareClientInterceptor) InterceptActivity(_ context.Context, next interceptor.ActivityInboundInterceptor) interceptor.ActivityInboundInterceptor {
+	return &stopAwareInbound{ActivityInboundInterceptorBase: interceptor.ActivityInboundInterceptorBase{Next: next}, owner: i}
+}
+
+// ExecuteActivity retains admitted ownership across the shutdown entry fence.
+func (i *stopAwareInbound) ExecuteActivity(ctx context.Context, in *interceptor.ExecuteActivityInput) (any, error) {
+	i.owner.once.Do(func() { close(i.owner.entered) })
+	<-activity.GetWorkerStopChannel(ctx)
+	return i.Next.ExecuteActivity(ctx, in)
+}
+
+// TestTemporalDriverShutdownDrainsInheritedActivityInterceptor prevents nested admission from rejecting an already accepted callback.
+func TestTemporalDriverShutdownDrainsInheritedActivityInterceptor(t *testing.T) {
+	requireTemporalServer(t)
+	name := fmt.Sprintf("driver-inherited-drain-%d", time.Now().UnixNano())
+	barrier := &stopAwareClientInterceptor{entered: make(chan struct{})}
+	q, err := temporalqueue.NewWithConfig(temporalqueue.Config{DriverBaseConfig: queueconfig.DriverBaseConfig{DefaultQueue: name}, ClientOptions: client.Options{HostPort: temporalAddress, Interceptors: []interceptor.ClientInterceptor{barrier}}, DefaultActivityTimeout: time.Second, ShutdownTimeout: 5 * time.Second, Register: func(r worker.Registry) error {
+		r.RegisterWorkflow(nativeGracefulResultWorkflow)
+		r.RegisterActivityWithOptions(func(context.Context) (string, error) { return "successful-result", nil }, activity.RegisterOptions{Name: "graceful-result"})
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Shutdown(context.Background())
+	if err := q.StartWorkers(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sdk, _ := temporalqueue.Client(q)
+	run, err := sdk.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: name, TaskQueue: name}, nativeGracefulResultWorkflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-barrier.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("inherited interceptor never entered")
+	}
+	if err := q.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	replacement := newDriverResource(t, name, func(r worker.Registry) error {
+		r.RegisterWorkflow(nativeGracefulResultWorkflow)
+		r.RegisterActivityWithOptions(func(context.Context) (string, error) {
+			t.Error("admitted callback was retried")
+			return "unexpected", nil
+		}, activity.RegisterOptions{Name: "graceful-result"})
+		return nil
+	})
+	if err := replacement.StartWorkers(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reader, _ := temporalqueue.Client(replacement)
+	var result string
+	if err := reader.GetWorkflow(t.Context(), run.GetID(), run.GetRunID()).Get(t.Context(), &result); err != nil || result != "successful-result" {
+		t.Fatalf("admitted inherited callback lost completion: %q %v", result, err)
 	}
 }

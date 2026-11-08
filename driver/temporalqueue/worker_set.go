@@ -39,7 +39,6 @@ func (b *backend) startWorkerSet(c client.Client) (err error) {
 		for i, item := range options.Interceptors {
 			options.Interceptors[i] = &trackedWorkerInterceptor{inner: item, gate: b.gate}
 		}
-		options.Interceptors = append([]interceptor.WorkerInterceptor{&admissionInterceptor{gate: b.entry}}, options.Interceptors...)
 		if spec.role == "workflow" {
 			options.LocalActivityWorkerOnly = true
 		} else {

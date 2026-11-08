@@ -211,3 +211,29 @@ func TestHistoryReadFailuresKeepServiceCategories(t *testing.T) {
 		})
 	}
 }
+
+// TestAdmittedHistoryReadSurvivesEntryClosure preserves internal authority checks during graceful callback drain.
+func TestAdmittedHistoryReadSurvivesEntryClosure(t *testing.T) {
+	h, def := recordedJournalFixture(t)
+	run := h.Events[0].GetWorkflowExecutionStartedEventAttributes().OriginalExecutionRunId
+	service := &acceptanceHistory{response: &workflowservice.GetWorkflowExecutionHistoryResponse{History: h}}
+	sdkClient := &journalHistoryClient{acceptanceClient: &acceptanceClient{service: service}, description: &workflowservice.DescribeWorkflowExecutionResponse{WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{Execution: &common.WorkflowExecution{WorkflowId: def.ID, RunId: run}, HistoryLength: h.Events[len(h.Events)-1].EventId}}}
+	dc, err := newGuardedConverter(nil, DefaultSerializationLimits(), newAdmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &backend{entry: newAdmission(), taskQueue: def.Queue, workflowQueue: def.WorkflowQueue, clientBinding: &ClientBinding{client: sdkClient, options: client.Options{Namespace: "default", DataConverter: dc}}}
+	release, err := b.entry.enter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	b.entry.close()
+	c := &coordinator{backend: b}
+	if _, _, _, err := c.readStateRunAdmitted(t.Context(), def.ID, def.Kind, run); err != nil {
+		t.Fatalf("admitted authority read rejected during drain: %v", err)
+	}
+	if _, _, _, err := c.readStateRun(t.Context(), def.ID, def.Kind, run); !errors.Is(err, errAdmissionClosed) {
+		t.Fatalf("new public read bypassed closure: %v", err)
+	}
+}

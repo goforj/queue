@@ -7,17 +7,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// admissionInterceptor fences native activity bodies and their user interceptor chain.
-type admissionInterceptor struct {
-	interceptor.WorkerInterceptorBase
-	gate *admission
-}
-
-// InterceptActivity wraps user interceptors before they can access application dependencies.
-func (i *admissionInterceptor) InterceptActivity(ctx context.Context, next interceptor.ActivityInboundInterceptor) interceptor.ActivityInboundInterceptor {
-	return &admittedActivity{ActivityInboundInterceptorBase: interceptor.ActivityInboundInterceptorBase{Next: next}, gate: i.gate}
-}
-
 // admittedActivity tracks actual callback return independently of the SDK Stop timeout.
 type admittedActivity struct {
 	interceptor.ActivityInboundInterceptorBase

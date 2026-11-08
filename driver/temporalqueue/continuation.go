@@ -239,7 +239,7 @@ func (b *backend) verifyContinuation(ctx context.Context, d delivery) error {
 		return fmt.Errorf("%w: continuation execution association rejected", errAssociationRejected)
 	}
 	coordinator := &coordinator{backend: b}
-	def, deltas, _, err := coordinator.readStateRun(ctx, invocation.WorkflowID, "", info.WorkflowExecution.RunID)
+	def, deltas, _, err := coordinator.readStateRunAdmitted(ctx, invocation.WorkflowID, "", info.WorkflowExecution.RunID)
 	if err != nil {
 		return err
 	}

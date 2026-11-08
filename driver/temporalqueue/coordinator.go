@@ -440,6 +440,11 @@ func (c *coordinator) readStateRun(ctx context.Context, id, kind, runID string) 
 		return workflowDefinition{}, nil, time.Time{}, err
 	}
 	defer release()
+	return c.readStateRunAdmitted(ctx, id, kind, runID)
+}
+
+// readStateRunAdmitted uses an existing activity or public-read lifetime without reopening entry admission.
+func (c *coordinator) readStateRunAdmitted(ctx context.Context, id, kind, runID string) (workflowDefinition, []journalDelta, time.Time, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	description, describeErr := c.backend.clientBinding.client.DescribeWorkflowExecution(ctx, id, runID)
