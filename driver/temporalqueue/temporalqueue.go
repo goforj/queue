@@ -18,6 +18,9 @@ import (
 )
 
 // Config configures one Temporal resource with combined or split worker roles.
+// Native workflow/update interceptors can remain in the SDK's process-wide cache
+// after shutdown. Dependencies captured across SDK workflow yields must remain
+// valid for that cache lifetime; resource-owned application I/O belongs in activities.
 type Config struct {
 	queueconfig.DriverBaseConfig
 	ClientOptions          client.Options
@@ -358,7 +361,9 @@ func (b *backend) DrainWorkers(ctx context.Context) error {
 	return b.gate.wait(ctx)
 }
 
-// Shutdown closes owned client handles only after the resource is genuinely drained.
+// Shutdown joins owned workers and admitted resource callbacks before closing owned clients.
+// SDK-cached workflow/update coroutines and their deferred tracing cleanup remain
+// application-owned and do not delay resource shutdown.
 func (b *backend) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()

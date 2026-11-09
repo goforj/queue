@@ -104,8 +104,9 @@ func (p *registrationPlan) apply(b *backend, w worker.Worker, role string) (err 
 		}
 	}()
 	if role != "activity" {
-		w.RegisterWorkflowWithOptions(jobWorkflow, workflow.RegisterOptions{Name: jobWorkflowType})
-		w.RegisterWorkflowWithOptions(coordinatorWorkflow, workflow.RegisterOptions{Name: coordinatorWorkflowType})
+		portable := b.portableWorkflows()
+		w.RegisterWorkflowWithOptions(portable.jobWorkflow, workflow.RegisterOptions{Name: jobWorkflowType})
+		w.RegisterWorkflowWithOptions(portable.coordinatorWorkflow, workflow.RegisterOptions{Name: coordinatorWorkflowType})
 		for _, registration := range p.workflows {
 			w.RegisterWorkflowWithOptions(registration.fn, registration.options)
 		}

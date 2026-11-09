@@ -61,8 +61,9 @@ func NewWorkflowReplayer(q *queue.Queue) (result worker.WorkflowReplayer, err er
 	if err != nil {
 		return nil, errors.New("Temporal replay options rejected")
 	}
-	result.RegisterWorkflowWithOptions(jobWorkflow, workflow.RegisterOptions{Name: jobWorkflowType})
-	result.RegisterWorkflowWithOptions(coordinatorWorkflow, workflow.RegisterOptions{Name: coordinatorWorkflowType})
+	portable := b.portableWorkflows()
+	result.RegisterWorkflowWithOptions(portable.jobWorkflow, workflow.RegisterOptions{Name: jobWorkflowType})
+	result.RegisterWorkflowWithOptions(portable.coordinatorWorkflow, workflow.RegisterOptions{Name: coordinatorWorkflowType})
 	plan, err := b.applicationPlan()
 	if err != nil {
 		return nil, err
