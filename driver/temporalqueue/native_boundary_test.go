@@ -51,7 +51,7 @@ func TestNativeCallbacksRejectPropagatedContext(t *testing.T) {
 			env.ExecuteWorkflow(func(ctx workflow.Context) error {
 				ctx = workflow.WithValue(ctx, headerRejectionKey{}, category)
 				fixture := &nativeBoundaryFixture{calls: make(map[string]int)}
-				guard := &guardedInboundWorkflow{WorkflowInboundInterceptorBase: interceptor.WorkflowInboundInterceptorBase{Next: fixture}}
+				guard := &guardedInboundWorkflow{WorkflowInboundInterceptorBase: interceptor.WorkflowInboundInterceptorBase{Next: fixture}, gate: newAdmission()}
 				result, workflowErr := guard.ExecuteWorkflow(ctx, &interceptor.ExecuteWorkflowInput{})
 				queryResult, queryErr := guard.HandleQuery(ctx, &interceptor.HandleQueryInput{})
 				updateResult, updateErr := guard.ExecuteUpdate(ctx, &interceptor.UpdateInput{})

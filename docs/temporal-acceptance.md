@@ -76,6 +76,9 @@ Several independent protocol, security, runtime and recovery passes found and ve
 - Service-based replay bypassing capture limits, and deterministic original-history decoding failures being relabeled as retryable outages. Replay now uses the bounded decoded-history reader; authority rejection retains the module's terminal category.
 - Protected failure converters satisfying the public contract being rejected for lacking an optional SDK contextual interface, and unsupported pruning losing the established capability sentinel. SDK conversion tests preserve context-independent native failure semantics; pruning now supports `errors.Is` capability checks.
 
+- Synchronous native message callbacks outliving successful shutdown. Queries, signal dispatch and update validation now retain admission until actual callback return; a real-server query test verifies repeated shutdown timeouts followed by a successful join.
+- Multiple individually bounded propagators producing a combined header set rejected by their own receiver. An outer guard now validates merged output atomically, retaining SDK overwrite order, per-provider retry budgets and extraction rejection markers.
+
 Review approval applies to the inspected code and checks. It does not replace required feature acceptance or establish an actual published module release.
 
 ## Generated composition and publication

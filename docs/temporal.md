@@ -29,7 +29,7 @@ The registration callback may register independent types concurrently, but must 
 
 Interceptors observing framework-owned workflows must preserve the SDK command semantics: activity scheduling returns immediately, and private journal publication must not yield, suppress, replace, reorder or add commands. Those operations commit together in one workflow task. Native application workflows retain their own interceptor behavior. As with SDK workflow code, adding waits or commands requires deliberate replay compatibility.
 
-`Run` starts workers, returns worker fatal errors, and joins shutdown with a fresh bounded context. `StartWorkers` supports separately managed hosts. Such hosts must propagate worker errors and join shutdown before releasing injected dependencies. A timed-out shutdown means callbacks or SDK work can still be active. Retain dependencies and call `Shutdown` again to join actual completion.
+`Run` starts workers, returns worker fatal errors, and joins shutdown with a fresh bounded context. `StartWorkers` supports separately managed hosts. Such hosts must propagate worker errors and join shutdown before releasing injected dependencies. Synchronous native query, signal-dispatch and update-validation callbacks participate in shutdown drain. A timed-out shutdown means callbacks or SDK work can still be active. Retain dependencies and call `Shutdown` again to join actual completion.
 
 ## Portable work
 
@@ -116,7 +116,7 @@ Use namespace RBAC granting workflow start, history reads and the required worke
 
 Default diagnostics redact SDK message text, payload stringification, failure messages, stacks and arbitrary details. Error type names remain visible for native retry matching. Provide a protected converter and `NewProtectedFailureConverter` when native details and heartbeat checkpoints must be retained confidentially. Custom converters must implement `BoundedDataConverter`, bound internal expansion/work, declare encoded overhead and preserve their contract in contextual copies. `ProtectedDataConverter` additionally validates authenticated envelopes. Missing keys must return the explicit adapter availability category; authentication failures must fail closed. Keep old decoding keys for retained history and replay.
 
-Context propagators must declare bounded headers. Outer guards limit counts, encoded bytes, recursive failures, history pages and transport sizes before invoking adapters. TLS, credentials, interceptors, metrics and converters participate in actual callback drain. TLS key logging, unverified TLS, plaintext credentials, opaque transport overrides and unbounded external payload storage are rejected.
+Context propagators must declare bounded headers. Multiple propagators retain SDK order and last-writer behavior; their merged outgoing headers must fit the shared count and byte limits before any request or command receives them. Outer guards limit counts, encoded bytes, recursive failures, history pages and transport sizes before invoking adapters. TLS, credentials, interceptors, metrics and converters participate in actual callback drain. TLS key logging, unverified TLS, plaintext credentials, opaque transport overrides and unbounded external payload storage are rejected.
 
 Worker system-information providers also participate in callback drain. Provider errors and panics become sanitized unavailable samples, including during SDK startup rollback and shutdown.
 

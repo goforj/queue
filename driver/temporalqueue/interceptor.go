@@ -38,13 +38,14 @@ func (i *resourceInterceptor) InterceptActivity(ctx context.Context, next interc
 
 // InterceptWorkflow rejects malformed propagated input before the application workflow runs.
 func (i *resourceInterceptor) InterceptWorkflow(ctx workflow.Context, next interceptor.WorkflowInboundInterceptor) interceptor.WorkflowInboundInterceptor {
-	return &guardedInboundWorkflow{limits: i.limits, overhead: i.overhead, WorkflowInboundInterceptorBase: interceptor.WorkflowInboundInterceptorBase{Next: next}}
+	return &guardedInboundWorkflow{limits: i.limits, overhead: i.overhead, gate: i.gate, WorkflowInboundInterceptorBase: interceptor.WorkflowInboundInterceptorBase{Next: next}}
 }
 
 // guardedInboundWorkflow leaves genuine native workflow panic policy to the SDK.
 type guardedInboundWorkflow struct {
 	limits   SerializationLimits
 	overhead int
+	gate     *admission
 	interceptor.WorkflowInboundInterceptorBase
 }
 
@@ -84,6 +85,11 @@ func (i *guardedInboundWorkflow) HandleSignal(ctx workflow.Context, input *inter
 		workflow.GetLogger(ctx).Warn("Temporal signal context rejected")
 		return nil
 	}
+	release, err := i.gate.enter()
+	if err != nil {
+		return unavailableAdapterError()
+	}
+	defer release()
 	return i.Next.HandleSignal(ctx, input)
 }
 
@@ -92,6 +98,11 @@ func (i *guardedInboundWorkflow) HandleQuery(ctx workflow.Context, input *interc
 	if err := propagatedInputError(ctx); err != nil {
 		return nil, err
 	}
+	release, err := i.gate.enter()
+	if err != nil {
+		return nil, unavailableAdapterError()
+	}
+	defer release()
 	return i.Next.HandleQuery(ctx, input)
 }
 
@@ -100,6 +111,11 @@ func (i *guardedInboundWorkflow) ValidateUpdate(ctx workflow.Context, input *int
 	if err := propagatedInputError(ctx); err != nil {
 		return err
 	}
+	release, err := i.gate.enter()
+	if err != nil {
+		return unavailableAdapterError()
+	}
+	defer release()
 	return i.Next.ValidateUpdate(ctx, input)
 }
 

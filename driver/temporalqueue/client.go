@@ -108,12 +108,22 @@ func NewClientBinding(options client.Options, limits SerializationLimits) (bindi
 		return nil, err
 	}
 	options.ContextPropagators = append([]workflow.ContextPropagator(nil), options.ContextPropagators...)
+	decodedBound := 0
 	for i, propagator := range options.ContextPropagators {
 		bounded, ok := propagator.(BoundedContextPropagator)
-		if !ok || bounded.MaxDecodedBytes() < 1 || bounded.MaxDecodedBytes() > 65536 {
+		if !ok {
 			return nil, errors.New("Temporal context propagator must declare bounded decoding")
 		}
+		limit := bounded.MaxDecodedBytes()
+		if limit < 1 || limit > 65536 {
+			return nil, errors.New("Temporal context propagator must declare bounded decoding")
+		}
+		decodedBound += limit
 		options.ContextPropagators[i] = &guardedPropagator{inner: bounded, gate: gate}
+	}
+	if len(options.ContextPropagators) > 1 {
+		combined := &combinedPropagators{items: options.ContextPropagators, decodedBound: decodedBound}
+		options.ContextPropagators = []workflow.ContextPropagator{&guardedPropagator{inner: combined, gate: gate}}
 	}
 	c, err := client.NewLazyClient(options)
 	if err != nil {
