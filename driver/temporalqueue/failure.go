@@ -27,6 +27,8 @@ type guardedFailureConverter struct {
 	gate         *admission
 	protected    bool
 	workflowTask bool
+	// workflowContext retains workflow execution ownership across SDK activity-context copies.
+	workflowContext bool
 }
 
 // newGuardedFailureConverter requires an explicit protection contract for custom failure adapters.
@@ -160,17 +162,17 @@ func (c *guardedFailureConverter) FailureToError(f *failure.Failure) (result err
 
 // WithSerializationContext binds protected detail decoding to authoritative workflow identity.
 func (c *guardedFailureConverter) WithSerializationContext(ctx converter.SerializationContext) (result converter.FailureConverter) {
+	_, workflowScope := ctx.(converter.WorkflowSerializationContext)
+	workflowContext := c.workflowContext || workflowScope
 	defer func() {
 		if recover() != nil {
 			result = rejectedFailureConverter{}
 		}
-		if rejected, ok := result.(rejectedFailureConverter); ok && c.workflowTask {
-			if _, workflowScope := ctx.(converter.WorkflowSerializationContext); workflowScope {
-				if rejected.unavailable {
-					panic(unavailableAdapterError())
-				}
-				panic(invalidAdapterError())
+		if rejected, ok := result.(rejectedFailureConverter); ok && c.workflowTask && workflowContext {
+			if rejected.unavailable {
+				panic(unavailableAdapterError())
 			}
+			panic(invalidAdapterError())
 		}
 	}()
 	dc := converter.WithDataConverterSerializationContext(c.dc, ctx)
@@ -196,7 +198,7 @@ func (c *guardedFailureConverter) WithSerializationContext(ctx converter.Seriali
 			return rejected
 		}
 	}
-	return &guardedFailureConverter{inner: inner, dc: dc, gate: c.gate, protected: c.protected, workflowTask: c.workflowTask}
+	return &guardedFailureConverter{inner: inner, dc: dc, gate: c.gate, protected: c.protected, workflowTask: c.workflowTask, workflowContext: workflowContext}
 }
 
 // rejectedFailureConverter fences late calls without invoking application adapters.

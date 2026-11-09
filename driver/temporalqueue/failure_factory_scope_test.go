@@ -30,7 +30,7 @@ func (f *failureFactoryScopeFixture) WithSerializationContext(ctx converter.Seri
 	case "unavailable":
 		return rejectedFailureConverter{unavailable: true}
 	}
-	return f.ProtectedFailureConverter.(converter.FailureConverterWithSerializationContext).WithSerializationContext(ctx)
+	return f
 }
 
 // captureFailureFactoryBinding distinguishes task abortion from a safe client/activity rejection object.
@@ -42,7 +42,7 @@ func captureFailureFactoryBinding(guard *guardedFailureConverter, ctx converter.
 
 // TestFailureFactoryScopePreservesTaskAndClientBoundaries checks contextual failures before they can rewrite recorded activity outcomes.
 func TestFailureFactoryScopePreservesTaskAndClientBoundaries(t *testing.T) {
-	for _, scope := range []string{"client workflow", "worker activity", "worker workflow"} {
+	for _, scope := range []string{"client workflow", "worker activity", "worker workflow", "workflow activity"} {
 		for _, mode := range []string{"success", "panic", "nil", "rejected", "unavailable", "closed", "data rejected", "data unavailable"} {
 			t.Run(scope+"/"+mode, func(t *testing.T) {
 				data := newFailureProtectionFixture(t)
@@ -50,7 +50,7 @@ func TestFailureFactoryScopePreservesTaskAndClientBoundaries(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				fixture := &failureFactoryScopeFixture{ProtectedFailureConverter: protected, mode: mode}
+				fixture := &failureFactoryScopeFixture{ProtectedFailureConverter: protected, mode: "success"}
 				dataGate := newAdmission()
 				dc, err := newGuardedConverter(data, DefaultSerializationLimits(), dataGate)
 				if err != nil {
@@ -69,8 +69,13 @@ func TestFailureFactoryScopePreservesTaskAndClientBoundaries(t *testing.T) {
 				if scope != "client workflow" {
 					guard = &guardedFailureConverter{inner: binding, dc: dc, gate: gate, protected: true, workflowTask: true}
 				}
-				var ctx converter.SerializationContext = converter.WorkflowSerializationContext{Namespace: "default", WorkflowID: "native"}
-				if scope == "worker activity" {
+				rootContext := converter.WorkflowSerializationContext{Namespace: "default", WorkflowID: "native"}
+				if scope == "workflow activity" {
+					guard = guard.WithSerializationContext(rootContext).(*guardedFailureConverter)
+				}
+				fixture.mode = mode
+				var ctx converter.SerializationContext = rootContext
+				if scope == "worker activity" || scope == "workflow activity" {
 					ctx = converter.ActivitySerializationContext{Namespace: "default", WorkflowID: "native", ActivityType: "fixture"}
 				}
 				if mode == "closed" {
@@ -83,7 +88,7 @@ func TestFailureFactoryScopePreservesTaskAndClientBoundaries(t *testing.T) {
 					dataGate.close()
 				}
 				bound, aborted := captureFailureFactoryBinding(guard, ctx)
-				wantAbort := scope == "worker workflow" && mode != "success"
+				wantAbort := (scope == "worker workflow" || scope == "workflow activity") && mode != "success"
 				if (aborted != nil) != wantAbort {
 					t.Fatal("factory crossed task/client boundary", aborted)
 				}
@@ -105,6 +110,9 @@ func TestFailureFactoryScopePreservesTaskAndClientBoundaries(t *testing.T) {
 					}
 					if scope != "client workflow" && !bound.(*guardedFailureConverter).workflowTask {
 						t.Fatal("context copy lost workflow-task policy")
+					}
+					if scope == "workflow activity" && !bound.(*guardedFailureConverter).workflowContext {
+						t.Fatal("activity context lost workflow execution ownership")
 					}
 				} else if unavailable {
 					requirePropagationCategory(t, result, true)
