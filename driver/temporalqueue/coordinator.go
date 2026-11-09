@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/goforj/queue"
 	"github.com/goforj/queue/busruntime"
@@ -182,7 +183,7 @@ func (d workflowDefinition) validate() error {
 	if d.JournalBudget < 1024 || d.JournalBudget > 2<<20 || d.EncodingOverhead < 0 || d.EncodingOverhead > 4096 {
 		return errors.New("invalid Temporal journal budget")
 	}
-	if d.CreatedAt.IsZero() || d.Version != 1 || (d.Kind != "chain" && d.Kind != "batch") || d.ID == "" || d.DispatchID == "" || d.Queue == "" || len(d.Jobs) == 0 || len(d.Jobs) > maxMembers || len(d.Name) > 256 {
+	if d.CreatedAt.IsZero() || d.Version != 1 || (d.Kind != "chain" && d.Kind != "batch") || d.ID == "" || d.DispatchID == "" || d.Queue == "" || len(d.Jobs) == 0 || len(d.Jobs) > maxMembers || len(d.Name) > 256 || !utf8.ValidString(d.Name) {
 		return errors.New("invalid Temporal workflow definition")
 	}
 	seen := make(map[string]bool, len(d.Jobs))
@@ -593,7 +594,7 @@ func (c *coordinator) readStateRunAdmitted(ctx context.Context, id, kind, runID 
 				if err := dc.FromPayload(payload, &delta); err != nil {
 					return def, nil, created, err
 				}
-				if delta.Version != 1 || delta.Sequence != len(deltas)+1 || (delta.Index < 0 && delta.InvocationID == "") || delta.Index >= len(def.Jobs) {
+				if delta.Status == "workflow-interrupted" || delta.Version != 1 || delta.Sequence != len(deltas)+1 || (delta.Index < 0 && delta.InvocationID == "") || delta.Index >= len(def.Jobs) {
 					return def, nil, created, errors.New("invalid Temporal journal sequence")
 				}
 				delta.taskCommit = update.WorkflowTaskCompletedEventId

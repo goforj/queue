@@ -43,7 +43,7 @@ func (f *nativeBoundaryFixture) ExecuteUpdate(workflow.Context, *interceptor.Upd
 	return "native", nil
 }
 
-// TestNativeCallbacksRejectPropagatedContext checks every entry point and permits SDK retry only for signal availability failures.
+// TestNativeCallbacksRejectPropagatedContext checks every entry point and aborts accepted-update replay instead of returning an alternate outcome.
 func TestNativeCallbacksRejectPropagatedContext(t *testing.T) {
 	for _, category := range []string{"", "invalid", "unavailable"} {
 		t.Run("category="+category, func(t *testing.T) {
@@ -54,7 +54,10 @@ func TestNativeCallbacksRejectPropagatedContext(t *testing.T) {
 				guard := &guardedInboundWorkflow{WorkflowInboundInterceptorBase: interceptor.WorkflowInboundInterceptorBase{Next: fixture}, gate: newAdmission()}
 				result, workflowErr := guard.ExecuteWorkflow(ctx, &interceptor.ExecuteWorkflowInput{})
 				queryResult, queryErr := guard.HandleQuery(ctx, &interceptor.HandleQueryInput{})
-				updateResult, updateErr := guard.ExecuteUpdate(ctx, &interceptor.UpdateInput{})
+				updateResult, updateErr, updatePanicked := invokeNativeUpdateBoundary(guard, ctx)
+				if updatePanicked != (category != "") {
+					t.Fatal("accepted update did not abort rejected replay", category)
+				}
 				validateErr := guard.ValidateUpdate(ctx, &interceptor.UpdateInput{})
 				signalErr := guard.HandleSignal(ctx, &interceptor.HandleSignalInput{})
 				for name, err := range map[string]error{"workflow": workflowErr, "query": queryErr, "update": updateErr, "validate": validateErr, "signal": signalErr} {
@@ -83,4 +86,16 @@ func TestNativeCallbacksRejectPropagatedContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+// invokeNativeUpdateBoundary distinguishes replay abortion from a returned update outcome at the SDK boundary.
+func invokeNativeUpdateBoundary(guard *guardedInboundWorkflow, ctx workflow.Context) (result any, err error, panicked bool) {
+	defer func() {
+		if value := recover(); value != nil {
+			panicked = true
+			err = value.(error)
+		}
+	}()
+	result, err = guard.ExecuteUpdate(ctx, &interceptor.UpdateInput{})
+	return result, err, false
 }

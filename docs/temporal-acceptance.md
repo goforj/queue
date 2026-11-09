@@ -81,6 +81,13 @@ Several independent protocol, security, runtime and recovery passes found and ve
 
 - Typed native activities returning preencoded SDK payloads bypassing result conversion and its encoded limits. The outer activity boundary now applies the shared payload count, individual byte and aggregate byte checks before SDK acceptance, including interceptor replacement results.
 
+- Preencoded activity-result validation replacing native failure and asynchronous-completion dispositions, even though the SDK discards those results. Native errors now retain precedence; SDK environment regressions cover retryable failure and pending completion.
+- Persisted journal data impersonating a service-synthesized workflow interruption. History admission now rejects that status in Memo transitions while retaining real terminal service events.
+
+- Invalid UTF-8 batch names being normalized in persisted JSON and producing a false immutable-input collision during ambiguous-start recovery. Names now reject before service acceptance, with valid Unicode round-trip controls.
+
+- Replayed accepted native updates silently losing their committed state when header extraction failed. The accepted-update boundary now aborts execution under the existing SDK panic policy, while new-update validation retains ordinary rejection. A real-server restart/outage/finish-signal regression verifies recovery retains the original update state and offline replay rejects during outage.
+
 Direct reserved workflow starts remain a narrower guarantee than public dispatch: a namespace writer can construct a private envelope with a foreign activity route and cause a command to wait on an unpolled queue. Public dispatch rejects foreign resource routes, and activity entry rejects a wrong resource before invoking handlers. This does not bypass handler authority, but the design's stronger requirement to reject every invalid target before scheduling is not fully implemented. Namespace authorization remains the deployment boundary; task queue names do not provide authorization.
 
 SDK sticky-cache lifetime is another explicit limit: a real-server proof retained a suspended native workflow interceptor after successful shutdown, then observed its deferred cleanup during a later legal SDK cache purge. Workflow/update tracing dependencies must therefore remain alive through SDK cache eviction. Resource drain covers synchronous callbacks and adapter factories/initialization, not suspended workflow/update bodies and their defers. No global cache purge is introduced, since it would affect unrelated workers. This narrows the design's blanket interceptor-drain claim.

@@ -24,6 +24,9 @@ func (i *admittedActivity) ExecuteActivity(ctx context.Context, input *intercept
 	}
 	defer release()
 	result, err := i.Next.ExecuteActivity(ctx, input)
+	if err != nil {
+		return result, err
+	}
 	if payloads, ok := result.(*common.Payloads); ok && payloads != nil {
 		if rejected := checkEncodedPayloads(i.limits, payloads.Payloads); rejected != nil {
 			return nil, rejected
@@ -128,10 +131,11 @@ func (i *guardedInboundWorkflow) ValidateUpdate(ctx workflow.Context, input *int
 	return i.Next.ValidateUpdate(ctx, input)
 }
 
-// ExecuteUpdate also checks replay and handlers whose update validation is omitted by the SDK.
+// ExecuteUpdate aborts replay before an accepted update can lose its committed state change.
 func (i *guardedInboundWorkflow) ExecuteUpdate(ctx workflow.Context, input *interceptor.UpdateInput) (any, error) {
 	if err := propagatedInputError(ctx); err != nil {
-		return nil, err
+		// The SDK skips validation on replay and does not compare update outcomes; returning an error could silently skip committed state.
+		panic(err)
 	}
 	return i.Next.ExecuteUpdate(ctx, input)
 }
