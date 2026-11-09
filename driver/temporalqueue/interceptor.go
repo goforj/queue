@@ -61,9 +61,12 @@ type guardedInboundWorkflow struct {
 	interceptor.WorkflowInboundInterceptorBase
 }
 
-// ExecuteWorkflow turns only adapter preflight rejection into a terminal input failure.
+// ExecuteWorkflow preserves fresh-input rejection without replacing an accepted workflow during replay.
 func (i *guardedInboundWorkflow) ExecuteWorkflow(ctx workflow.Context, input *interceptor.ExecuteWorkflowInput) (any, error) {
 	if err := propagatedInputError(ctx); err != nil {
+		if workflow.IsReplaying(ctx) {
+			panic(err)
+		}
 		return nil, err
 	}
 	for _, argument := range input.Args {
