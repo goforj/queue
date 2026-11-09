@@ -79,9 +79,11 @@ Several independent protocol, security, runtime and recovery passes found and ve
 - Synchronous native message callbacks outliving successful shutdown. Queries, signal dispatch and update validation now retain admission until actual callback return; a real-server query test verifies repeated shutdown timeouts followed by a successful join.
 - Multiple individually bounded propagators producing a combined header set rejected by their own receiver. An outer guard now validates merged output atomically, retaining SDK overwrite order, per-provider retry budgets and extraction rejection markers.
 
+- Typed native activities returning preencoded SDK payloads bypassing result conversion and its encoded limits. The outer activity boundary now applies the shared payload count, individual byte and aggregate byte checks before SDK acceptance, including interceptor replacement results.
+
 Direct reserved workflow starts remain a narrower guarantee than public dispatch: a namespace writer can construct a private envelope with a foreign activity route and cause a command to wait on an unpolled queue. Public dispatch rejects foreign resource routes, and activity entry rejects a wrong resource before invoking handlers. This does not bypass handler authority, but the design's stronger requirement to reject every invalid target before scheduling is not fully implemented. Namespace authorization remains the deployment boundary; task queue names do not provide authorization.
 
-- Typed native activities returning preencoded SDK payloads bypassing result conversion and its encoded limits. The outer activity boundary now applies the shared payload count, individual byte and aggregate byte checks before SDK acceptance, including interceptor replacement results.
+SDK sticky-cache lifetime is another explicit limit: a real-server proof retained a suspended native workflow interceptor after successful shutdown, then observed its deferred cleanup during a later legal SDK cache purge. Workflow/update tracing dependencies must therefore remain alive through SDK cache eviction. Resource drain covers synchronous callbacks and adapter factories/initialization, not suspended workflow/update bodies and their defers. No global cache purge is introduced, since it would affect unrelated workers. This narrows the design's blanket interceptor-drain claim.
 
 Review approval applies to the inspected code and checks. It does not replace required feature acceptance or establish an actual published module release.
 
