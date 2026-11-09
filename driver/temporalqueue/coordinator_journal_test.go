@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goforj/queue/busruntime"
 	engine "github.com/goforj/queue/internal/workflow"
 	"github.com/stretchr/testify/mock"
 	"go.temporal.io/api/common/v1"
@@ -213,4 +214,53 @@ func (i *memoFailureOutbound) UpsertMemo(ctx workflow.Context, memo map[string]i
 		return invalidAdapterError()
 	}
 	return i.Next.UpsertMemo(ctx, memo)
+}
+
+// TestTemporalChainFailureHookCountersIncludeCommittedFailure keeps portable summaries aligned with built-in stores while preserving the successful-node cursor.
+func TestTemporalChainFailureHookCountersIncludeCommittedFailure(t *testing.T) {
+	for _, mode := range []string{"first", "later"} {
+		t.Run(mode, func(t *testing.T) {
+			c, sdk := coordinatorAcceptanceFixture(t)
+			jobs := []engine.Job{{Type: "first"}, {Type: "later"}}
+			hooks := []engine.ContinuationDefinition{{Phase: "failure", Job: engine.StoredJob{Type: "failure-hook"}}, {Phase: "completion", Job: engine.StoredJob{Type: "completion-hook"}}}
+			if _, err := c.start(t.Context(), "chain", "", "", false, jobs, hooks); err != nil {
+				t.Fatal(err)
+			}
+			def := sdk.inputs[0].(workflowDefinition)
+			def.Resource = "default-test-namespace:reports"
+			env := guardedWorkflowEnvironment(t)
+			env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: def.ID, TaskQueue: "reports"})
+			env.RegisterWorkflowWithOptions(coordinatorWorkflowFixture, workflow.RegisterOptions{Name: coordinatorWorkflowType})
+			var summaries []busruntime.ContinuationSummary
+			env.OnUpsertMemo(mock.Anything).Run(func(args mock.Arguments) {
+				delta := args.Get(0).(map[string]interface{})[journalKey].(journalValue).Delta
+				for _, intent := range delta.Intents {
+					summaries = append(summaries, intent.Outcome.Invocation.Trigger)
+				}
+			}).Return(nil)
+			env.RegisterActivityWithOptions(func(_ context.Context, d delivery) error {
+				if d.Type == mode {
+					return temporal.NewNonRetryableApplicationError("business failed", "fixture", nil)
+				}
+				return nil
+			}, activity.RegisterOptions{Name: deliveryActivityType})
+			env.ExecuteWorkflow(coordinatorWorkflowType, def)
+			var failure *temporal.ApplicationError
+			if !errors.As(env.GetWorkflowError(), &failure) || failure.Type() != "goforj.business-failed.v1" {
+				t.Fatal("chain did not fail", env.GetWorkflowError())
+			}
+			if len(summaries) != 2 {
+				t.Fatal("failure/completion definitions not triggered", summaries)
+			}
+			processed, next := 1, 0
+			if mode == "later" {
+				processed, next = 2, 1
+			}
+			for _, summary := range summaries {
+				if summary.Processed != processed || summary.Pending != 2-processed || summary.NextIndex != next || summary.Failed != 1 || !summary.Cancelled || summary.Completed {
+					t.Fatalf("incorrect portable failed-chain counters: %+v", summary)
+				}
+			}
+		})
+	}
 }

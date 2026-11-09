@@ -215,6 +215,7 @@ func (m *memoryStore) GetChain(_ context.Context, chainID string) (ChainState, e
 func (m *memoryStore) DiscardChain(chainID string) {
 	m.mu.Lock()
 	delete(m.chains, chainID)
+	delete(m.continuations, chainID)
 	m.deleteTransitionReceipts(chainTransitionKind, chainID)
 	m.mu.Unlock()
 }
@@ -461,6 +462,7 @@ func (m *memoryStore) GetBatch(_ context.Context, batchID string) (BatchState, e
 func (m *memoryStore) DiscardBatch(batchID string) {
 	m.mu.Lock()
 	delete(m.batch, batchID)
+	delete(m.continuations, batchID)
 	m.deleteTransitionReceipts(batchTransitionKind, batchID)
 	m.mu.Unlock()
 }

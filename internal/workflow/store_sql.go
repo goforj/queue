@@ -692,7 +692,7 @@ func (s *sqlStore) advanceChainOutcome(ctx context.Context, chainID string, comp
 		return chainAdvanceResult{}, err
 	}
 	if state.Completed {
-		if err := s.triggerSQLContinuations(ctx, tx, chainID, busruntime.ContinuationSummary{Kind: "chain", MemberID: completedNode, Total: len(state.Nodes), Processed: state.NextIndex, NextIndex: state.NextIndex, Completed: true}, false, true, state.UpdatedAt); err != nil {
+		if err := s.triggerSQLContinuations(ctx, tx, chainID, chainContinuationSummary(state, completedNode, false), false, true, state.UpdatedAt); err != nil {
 			return chainAdvanceResult{}, err
 		}
 	}
@@ -780,7 +780,7 @@ func (s *sqlStore) failChainOutcome(ctx context.Context, chainID, nodeID string,
 		if receiptErr != nil {
 			return chainFailureResult{}, receiptErr
 		}
-		if err := s.triggerSQLContinuations(ctx, tx, chainID, busruntime.ContinuationSummary{Kind: "chain", MemberID: nodeID, Total: len(state.Nodes), Processed: state.NextIndex, Pending: len(state.Nodes) - state.NextIndex, NextIndex: state.NextIndex, Failed: 1, Cancelled: true}, true, true, state.UpdatedAt); err != nil {
+		if err := s.triggerSQLContinuations(ctx, tx, chainID, chainContinuationSummary(state, nodeID, true), true, true, state.UpdatedAt); err != nil {
 			return chainFailureResult{}, err
 		}
 		if err := tx.Commit(); err != nil {
@@ -852,7 +852,7 @@ func (s *sqlStore) FailChain(ctx context.Context, chainID string, cause error) e
 		if err != nil {
 			return err
 		}
-		if err := s.triggerSQLContinuations(ctx, tx, chainID, busruntime.ContinuationSummary{Kind: "chain", Total: len(state.Nodes), Processed: state.NextIndex, Pending: len(state.Nodes) - state.NextIndex, NextIndex: state.NextIndex, Failed: 1, Cancelled: true}, true, true, at); err != nil {
+		if err := s.triggerSQLContinuations(ctx, tx, chainID, chainContinuationSummary(state, "", true), true, true, at); err != nil {
 			return err
 		}
 	}

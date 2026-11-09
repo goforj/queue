@@ -343,3 +343,53 @@ func TestTLSAuxiliaryCallbacksFenceLateWork(t *testing.T) {
 		})
 	}
 }
+
+// TestTLSPolicySnapshotPreservesSliceSemantics prevents caller mutation from changing negotiated policy or enabling intentionally disabled defaults.
+func TestTLSPolicySnapshotPreservesSliceSemantics(t *testing.T) {
+	for _, mode := range []string{"nil", "empty", "populated"} {
+		t.Run(mode, func(t *testing.T) {
+			source := &tls.Config{}
+			if mode == "empty" {
+				source.NextProtos = []string{}
+				source.CipherSuites = []uint16{}
+				source.CurvePreferences = []tls.CurveID{}
+				source.EncryptedClientHelloConfigList = []byte{}
+			}
+			if mode == "populated" {
+				source.NextProtos = []string{"h2"}
+				source.CipherSuites = []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}
+				source.CurvePreferences = []tls.CurveID{tls.X25519}
+				source.EncryptedClientHelloConfigList = []byte{1, 2, 3}
+			}
+			snapshot, err := guardedTLS(source, newAdmission())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (source.NextProtos == nil) != (snapshot.NextProtos == nil) || (source.CipherSuites == nil) != (snapshot.CipherSuites == nil) || (source.CurvePreferences == nil) != (snapshot.CurvePreferences == nil) || (source.EncryptedClientHelloConfigList == nil) != (snapshot.EncryptedClientHelloConfigList == nil) {
+				t.Fatal("TLS nil/empty policy distinction changed")
+			}
+			if mode == "populated" {
+				source.NextProtos[0] = "changed"
+				source.CipherSuites[0] = tls.TLS_RSA_WITH_AES_128_CBC_SHA
+				source.CurvePreferences[0] = tls.CurveP256
+				source.EncryptedClientHelloConfigList[0] = 9
+				if snapshot.NextProtos[0] != "h2" || snapshot.CipherSuites[0] != tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 || snapshot.CurvePreferences[0] != tls.X25519 || snapshot.EncryptedClientHelloConfigList[0] != 1 {
+					t.Fatal("caller mutation changed TLS policy snapshot")
+				}
+			}
+		})
+	}
+	certificate, _ := tlsFixtureCertificate(t)
+	certificate.SupportedSignatureAlgorithms = []tls.SignatureScheme{}
+	snapshot, err := guardedTLS(&tls.Config{Certificates: []tls.Certificate{certificate}}, newAdmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Certificates[0].SupportedSignatureAlgorithms == nil {
+		t.Fatal("empty certificate signature policy became unrestricted")
+	}
+	selected, err := snapshot.GetClientCertificate(&tls.CertificateRequestInfo{Version: tls.VersionTLS13, SignatureSchemes: []tls.SignatureScheme{tls.Ed25519}})
+	if err != nil || selected == nil || len(selected.Certificate) != 0 {
+		t.Fatal("disabled certificate signature policy was ignored", err)
+	}
+}

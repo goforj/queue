@@ -104,6 +104,7 @@ func (r *fakeWorkflowRecorder) rejectChain(chainID string) {
 	defer r.state.mu.Unlock()
 	r.store.DiscardChain(chainID)
 	delete(r.chains, chainID)
+	delete(r.continuations, chainID)
 }
 
 // rejectBatch removes state created before a failed member delivery so
@@ -113,6 +114,7 @@ func (r *fakeWorkflowRecorder) rejectBatch(batchID string) {
 	defer r.state.mu.Unlock()
 	r.store.DiscardBatch(batchID)
 	delete(r.batches, batchID)
+	delete(r.continuations, batchID)
 }
 
 // CreateChain records the exact committed engine model before the first node is

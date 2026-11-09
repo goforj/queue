@@ -290,21 +290,7 @@ func (b *backend) startWorker(ctx context.Context) (err error) {
 		return err
 	}
 	defer release()
-	options := b.clientBinding.options
-	options.Interceptors = append([]interceptor.ClientInterceptor{&resourceInterceptor{limits: b.clientBinding.limits, overhead: b.clientBinding.options.DataConverter.(*guardedConverter).overhead, gate: b.entry}}, options.Interceptors...)
-	options.DataConverter, err = newGuardedConverter(options.DataConverter, b.clientBinding.limits, b.gate)
-	options.FailureConverter = &guardedFailureConverter{inner: options.FailureConverter, dc: options.DataConverter, gate: b.gate, protected: true}
-	options.Logger = &redactedLogger{inner: options.Logger, gate: b.gate}
-	if options.MetricsHandler != nil {
-		options.MetricsHandler = &guardedMetrics{inner: options.MetricsHandler, gate: b.gate}
-	}
-	if options.HeadersProvider != nil {
-		options.HeadersProvider = &guardedHeaders{inner: options.HeadersProvider, gate: b.gate}
-	}
-	options.ContextPropagators = append([]workflow.ContextPropagator(nil), options.ContextPropagators...)
-	for i, propagator := range options.ContextPropagators {
-		options.ContextPropagators[i] = &guardedPropagator{inner: propagator.(BoundedContextPropagator), gate: b.gate}
-	}
+	options, err := b.workerClientOptions()
 	if err != nil {
 		return err
 	}
@@ -435,4 +421,29 @@ func RegistrationFingerprint(q *queue.Queue) (string, error) {
 		return "", errors.New("Temporal registration catalog is not finalized")
 	}
 	return b.RegistrationFingerprint(), nil
+}
+
+// workerClientOptions shares existing connection authentication without reapplying SDK credentials or replacing its trust policy.
+func (b *backend) workerClientOptions() (client.Options, error) {
+	options := b.clientBinding.options
+	options.Credentials = nil
+	options.Interceptors = append([]interceptor.ClientInterceptor{&resourceInterceptor{limits: b.clientBinding.limits, overhead: b.clientBinding.options.DataConverter.(*guardedConverter).overhead, gate: b.entry}}, options.Interceptors...)
+	var err error
+	options.DataConverter, err = newGuardedConverter(options.DataConverter, b.clientBinding.limits, b.gate)
+	if err != nil {
+		return client.Options{}, err
+	}
+	options.FailureConverter = &guardedFailureConverter{inner: options.FailureConverter, dc: options.DataConverter, gate: b.gate, protected: true}
+	options.Logger = &redactedLogger{inner: options.Logger, gate: b.gate}
+	if options.MetricsHandler != nil {
+		options.MetricsHandler = &guardedMetrics{inner: options.MetricsHandler, gate: b.gate}
+	}
+	if options.HeadersProvider != nil {
+		options.HeadersProvider = &guardedHeaders{inner: options.HeadersProvider, gate: b.gate}
+	}
+	options.ContextPropagators = append([]workflow.ContextPropagator(nil), options.ContextPropagators...)
+	for i, propagator := range options.ContextPropagators {
+		options.ContextPropagators[i] = &guardedPropagator{inner: propagator.(BoundedContextPropagator), gate: b.gate}
+	}
+	return options, nil
 }

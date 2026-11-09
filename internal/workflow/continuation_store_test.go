@@ -352,3 +352,65 @@ func TestAcceptedContinuationCatalogFitsDeliveryBudget(t *testing.T) {
 		t.Fatalf("accepted catalog exceeds delivery ceiling: %d %v", len(encoded), err)
 	}
 }
+
+// TestChainFailureContinuationCountersIncludeOnlyCommittedMembers keeps failed-member accounting portable without changing ChainState.NextIndex.
+func TestChainFailureContinuationCountersIncludeOnlyCommittedMembers(t *testing.T) {
+	for name, store := range continuationStores(t) {
+		t.Run(name, func(t *testing.T) {
+			capable := store.(ContinuationStore)
+			ctx := t.Context()
+			if err := capable.PrepareContinuations(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, mode := range []string{"first failure", "later failure", "aggregate failure"} {
+				t.Run(mode, func(t *testing.T) {
+					record := namedChainRecord(mode)
+					record.Nodes = append(record.Nodes, ChainNode{NodeID: "later", Job: StoredJob{Type: "business"}})
+					record.continuation.Definitions = []ContinuationDefinition{{Phase: "failure", Job: StoredJob{Type: "failure"}}, {Phase: "completion", Job: StoredJob{Type: "completion"}}}
+					if err := store.CreateChain(ctx, record); err != nil {
+						t.Fatal(err)
+					}
+					next := 0
+					member := "member"
+					if mode == "later failure" {
+						if _, _, err := store.AdvanceChain(ctx, mode, "member"); err != nil {
+							t.Fatal(err)
+						}
+						next = 1
+						member = "later"
+					}
+					if mode == "aggregate failure" {
+						member = ""
+						if err := store.FailChain(ctx, mode, errors.New("enqueue rejected")); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						if _, _, err := store.(interface {
+							FailChainNode(context.Context, string, string, error) (ChainState, bool, error)
+						}).FailChainNode(ctx, mode, member, errors.New("terminal member failure")); err != nil {
+							t.Fatal(err)
+						}
+					}
+					outcomes, err := capable.ContinuationOutcomes(ctx, mode)
+					if err != nil || len(outcomes) != 2 {
+						t.Fatal("missing failure obligations", outcomes, err)
+					}
+					processed := next
+					if member != "" {
+						processed++
+					}
+					for _, outcome := range outcomes {
+						summary := outcome.Invocation.Trigger
+						if summary.Processed != processed || summary.Pending != 2-processed || summary.NextIndex != next || summary.MemberID != member || summary.Failed != 1 || !summary.Cancelled || summary.Completed {
+							t.Fatalf("invalid committed-member counters: %+v", summary)
+						}
+					}
+					state, err := store.GetChain(ctx, mode)
+					if err != nil || state.NextIndex != next || !state.Failed || state.Completed {
+						t.Fatal("continuation accounting changed chain state", state, err)
+					}
+				})
+			}
+		})
+	}
+}

@@ -100,6 +100,8 @@ A borrowed `ClientBinding` supplies the authoritative namespace, converter and t
 
 ## Security and operations
 
+For mTLS, configure explicit verified TLS and supply either `TLS.Certificates` or SDK `client.NewMTLSCredentials`. Certificate material and client policy slices are snapshotted; dynamic certificate and ECH verification callbacks participate in resource drain. A nonnil empty certificate may decline optional client authentication, following Go TLS semantics.
+
 Use namespace RBAC granting workflow start, history reads and the required worker task permissions. History reads are necessary for acceptance reconciliation and activity association as well as public state reads. Withholding history permission leaves ambiguous starts unresolved and prevents safe portable execution.
 
 Default diagnostics redact SDK message text, payload stringification, failure messages, stacks and arbitrary details. Error type names remain visible for native retry matching. Provide a protected converter and `NewProtectedFailureConverter` when native details and heartbeat checkpoints must be retained confidentially. Custom converters must implement `BoundedDataConverter`, bound internal expansion/work, declare encoded overhead and preserve their contract in contextual copies. `ProtectedDataConverter` additionally validates authenticated envelopes. Missing keys must return the explicit adapter availability category; authentication failures must fail closed. Keep old decoding keys for retained history and replay.

@@ -7,12 +7,35 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
+	"slices"
+	"sync"
 	"time"
 )
 
 // guardedTLS snapshots public trust material and fences callbacks that gRPC may run after RPC cancellation.
 func guardedTLS(configuration *tls.Config, gate *admission) (*tls.Config, error) {
+	policy, err := newTLSPolicy(configuration, gate)
+	if err != nil {
+		return nil, err
+	}
+	return policy.configuration, nil
+}
+
+// tlsPolicy serializes certificate normalization with factory-initiated handshakes during SDK construction.
+type tlsPolicy struct {
+	mu            sync.Mutex
+	configuration *tls.Config
+	gate          *admission
+}
+
+// newTLSPolicy captures trust and callbacks before SDK construction while retaining a certificate finalization boundary.
+func newTLSPolicy(configuration *tls.Config, gate *admission) (*tlsPolicy, error) {
 	snapshot := configuration.Clone()
+	snapshot.NextProtos = slices.Clone(configuration.NextProtos)
+	snapshot.CipherSuites = slices.Clone(configuration.CipherSuites)
+	snapshot.CurvePreferences = slices.Clone(configuration.CurvePreferences)
+	snapshot.EncryptedClientHelloConfigList = slices.Clone(configuration.EncryptedClientHelloConfigList)
+	policy := &tlsPolicy{configuration: snapshot, gate: gate}
 	if snapshot.InsecureSkipVerify || snapshot.KeyLogWriter != nil {
 		return nil, errors.New("Temporal TLS requires verified transport without key logging")
 	}
@@ -22,13 +45,8 @@ func guardedTLS(configuration *tls.Config, gate *admission) (*tls.Config, error)
 	if snapshot.ClientCAs != nil {
 		snapshot.ClientCAs = snapshot.ClientCAs.Clone()
 	}
-	snapshot.Certificates = append([]tls.Certificate(nil), configuration.Certificates...)
-	for i, certificate := range configuration.Certificates {
-		copy, err := guardTLSCertificate(certificate, gate)
-		if err != nil {
-			return nil, err
-		}
-		snapshot.Certificates[i] = *copy
+	if err := policy.snapshotCertificates(); err != nil {
+		return nil, err
 	}
 	if callback := configuration.GetClientCertificate; callback != nil {
 		snapshot.GetClientCertificate = func(info *tls.CertificateRequestInfo) (result *tls.Certificate, err error) {
@@ -45,7 +63,20 @@ func guardedTLS(configuration *tls.Config, gate *admission) (*tls.Config, error)
 			if certificate == nil {
 				return nil, errors.New("Temporal TLS certificate provider returned no certificate")
 			}
+			if len(certificate.Certificate) == 0 {
+				return new(tls.Certificate), nil
+			}
 			return guardTLSCertificate(*certificate, gate)
+		}
+	} else {
+		snapshot.GetClientCertificate = func(info *tls.CertificateRequestInfo) (result *tls.Certificate, err error) {
+			defer tlsFailure(&err)
+			release, err := gate.enter()
+			if err != nil {
+				return nil, err
+			}
+			defer release()
+			return policy.selectCertificate(info)
 		}
 	}
 	if callback := configuration.VerifyPeerCertificate; callback != nil {
@@ -86,6 +117,20 @@ func guardedTLS(configuration *tls.Config, gate *admission) (*tls.Config, error)
 			return nil
 		}
 	}
+	if callback := configuration.EncryptedClientHelloRejectionVerify; callback != nil {
+		snapshot.EncryptedClientHelloRejectionVerify = func(state tls.ConnectionState) (err error) {
+			defer tlsFailure(&err)
+			release, err := gate.enter()
+			if err != nil {
+				return err
+			}
+			defer release()
+			if err := callback(state); err != nil {
+				return errors.New("Temporal TLS ECH rejection verification failed")
+			}
+			return nil
+		}
+	}
 	if callback := configuration.Time; callback != nil {
 		snapshot.Time = func() time.Time { return adapterCall(gate, time.Now(), callback) }
 	}
@@ -95,7 +140,7 @@ func guardedTLS(configuration *tls.Config, gate *admission) (*tls.Config, error)
 	if configuration.ClientSessionCache != nil {
 		snapshot.ClientSessionCache = &guardedSessionCache{inner: configuration.ClientSessionCache, gate: gate}
 	}
-	return snapshot, nil
+	return policy, nil
 }
 
 // tlsFailure removes callback-controlled panic text from TLS transport diagnostics.
@@ -142,7 +187,7 @@ func guardTLSCertificate(certificate tls.Certificate, gate *admission) (*tls.Cer
 	for i, value := range certificate.SignedCertificateTimestamps {
 		copy.SignedCertificateTimestamps[i] = append([]byte(nil), value...)
 	}
-	copy.SupportedSignatureAlgorithms = append([]tls.SignatureScheme(nil), certificate.SupportedSignatureAlgorithms...)
+	copy.SupportedSignatureAlgorithms = slices.Clone(certificate.SupportedSignatureAlgorithms)
 	return &copy, nil
 }
 
@@ -207,4 +252,46 @@ func (c *guardedSessionCache) Get(key string) (*tls.ClientSessionState, bool) {
 // Put suppresses late cache updates while joining admitted callbacks.
 func (c *guardedSessionCache) Put(key string, value *tls.ClientSessionState) {
 	adapterCall(c.gate, false, func() bool { c.inner.Put(key, value); return true })
+}
+
+// snapshotTLSCertificates captures SDK-added credentials under the certificate selection lock.
+func snapshotTLSCertificates(configuration *tls.Config, gate *admission) error {
+	certificates := make([]tls.Certificate, len(configuration.Certificates))
+	for i, certificate := range configuration.Certificates {
+		if signer, ok := certificate.PrivateKey.(*guardedSigner); ok && signer.gate == gate {
+			certificates[i] = certificate
+			continue
+		}
+		snapshot, err := guardTLSCertificate(certificate, gate)
+		if err != nil {
+			return err
+		}
+		certificates[i] = *snapshot
+	}
+	configuration.Certificates = certificates
+	return nil
+}
+
+// snapshotCertificates prevents normalization from racing a handshake started by a supported client interceptor factory.
+func (p *tlsPolicy) snapshotCertificates() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return snapshotTLSCertificates(p.configuration, p.gate)
+}
+
+// selectCertificate guards SDK-appended material even when a factory starts TLS before lazy construction returns.
+func (p *tlsPolicy) selectCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.configuration.Certificates {
+		certificate := &p.configuration.Certificates[i]
+		if info.SupportsCertificate(certificate) != nil {
+			continue
+		}
+		if signer, ok := certificate.PrivateKey.(*guardedSigner); ok && signer.gate == p.gate {
+			return certificate, nil
+		}
+		return guardTLSCertificate(*certificate, p.gate)
+	}
+	return new(tls.Certificate), nil
 }

@@ -105,7 +105,7 @@ func (r *resourceReplayer) ReplayWorkflowHistory(logger log.Logger, history *his
 
 // ReplayWorkflowHistoryWithOptions bounds raw history and preserves caller-supplied original execution identity.
 func (r *resourceReplayer) ReplayWorkflowHistoryWithOptions(logger log.Logger, recorded *history.History, options worker.ReplayWorkflowHistoryOptions) error {
-	if recorded == nil || len(recorded.Events) == 0 || len(recorded.Events) > 100000 || proto.Size(recorded) > 64<<20 {
+	if recorded == nil || len(recorded.Events) == 0 || len(recorded.Events) > maxReplayHistoryEvents || proto.Size(recorded) > 64<<20 {
 		return errors.New("Temporal replay history exceeds limits")
 	}
 	for i, event := range recorded.Events {
@@ -158,6 +158,9 @@ func (r *resourceReplayer) ReplayPartialWorkflowHistoryFromJSONFile(logger log.L
 	data, err := io.ReadAll(io.LimitReader(file, (64<<20)+1))
 	if err != nil || len(data) > 64<<20 {
 		return errors.New("Temporal replay capture exceeds limits")
+	}
+	if err := preflightReplayJSON(data, maxReplayHistoryEvents); err != nil {
+		return err
 	}
 	recorded, err := client.HistoryFromJSON(bytes.NewReader(data), client.HistoryJSONOptions{})
 	if err != nil {

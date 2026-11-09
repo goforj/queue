@@ -78,11 +78,13 @@ func NewClientBinding(options client.Options, limits SerializationLimits) (bindi
 		options.ConnectionOptions.MaxPayloadSize = 8 << 20
 	}
 	gate := newAdmission()
+	var transportTLS *tlsPolicy
 	if options.ConnectionOptions.TLS != nil {
-		options.ConnectionOptions.TLS, err = guardedTLS(options.ConnectionOptions.TLS, gate)
+		transportTLS, err = newTLSPolicy(options.ConnectionOptions.TLS, gate)
 		if err != nil {
 			return nil, err
 		}
+		options.ConnectionOptions.TLS = transportTLS.configuration
 	}
 	dc, err := newGuardedConverter(options.DataConverter, limits, gate)
 	if err != nil {
@@ -117,6 +119,20 @@ func NewClientBinding(options client.Options, limits SerializationLimits) (bindi
 	if err != nil {
 		return nil, errors.New("Temporal client configuration rejected")
 	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			gate.close()
+			c.Close()
+			_ = gate.wait(context.Background())
+		}
+	}()
+	if transportTLS != nil {
+		if err := transportTLS.snapshotCertificates(); err != nil {
+			return nil, err
+		}
+	}
+	transferred = true
 	return &ClientBinding{client: c, options: options, limits: limits, gate: gate}, nil
 }
 

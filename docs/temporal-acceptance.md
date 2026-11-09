@@ -57,6 +57,12 @@ Several independent protocol, security, runtime and recovery passes found and ve
 - Invalid UTF-8 identifiers being normalized during JSON persistence and stranding accepted hook claims. Durable names and native resource routes now reject before acceptance.
 - SDK Memo error stringification losing the authoritative converter availability category. Journal publication retains the sanitized result while fallback stays closed.
 - SDK decoding wrappers downgrading module-owned terminal rejection to a retryable root failure. A private rejection marker promotes only that module-owned error before binding, worker and protected failure conversion; native error wrapping retains its SDK taxonomy.
+- Failed-chain hook counters excluding the committed failed member in built-in stores, while Temporal included it. Shared memory/SQL summaries now preserve the successful-node cursor and align settled-member counts with Temporal.
+- Rejected named fake workflows retaining phantom obligations and hidden definitions. Rejection removes only that workflow's authority and preserves accepted siblings.
+- Late logical registration executing successfully but returning a missing-handler activity failure. A controlled registration barrier verifies shared results and observer facts stay consistent.
+- Offline JSON replay allocating the full event graph before checking event count. Token preflight now enforces the existing event cap before SDK parsing, including partial replay.
+- SDK mTLS credentials appending unguarded certificates and being reapplied to shared worker clients. Actual TLS gRPC tests verify shared-client initialization, certificate snapshots, token rotation and headers, signer drain, and constructor rollback after a live connection exists.
+- TLS certificate selection racing SDK construction, ECH verification escaping callback drain, optional empty certificates being rejected, and client policy slices aliasing caller input. Selection/finalization is synchronized, callbacks are fenced, and nil-versus-empty TLS policy is preserved.
 
 Review approval applies to the inspected code and checks. It does not replace required feature acceptance or establish an actual published module release.
 

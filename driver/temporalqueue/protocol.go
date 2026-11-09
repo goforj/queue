@@ -175,12 +175,15 @@ func (b *backend) executeDelivery(ctx context.Context, d delivery) (err error) {
 	b.mu.Unlock()
 	if handler == nil {
 		err = b.binding.Jobs().ExecuteDirect(ctx, engine.StoredJob{Type: d.Type, Payload: d.Payload, Options: engine.JobOptions{Queue: d.Metadata.Queue, Timeout: d.Timeout, Retry: d.Retry, Backoff: d.Backoff}}, d.Metadata, busruntime.DeliveryAttempt{Number: int(activity.GetInfo(ctx).Attempt) - 1, MaxRetry: d.Retry})
-		return temporal.NewNonRetryableApplicationError("queue handler is not registered", "goforj.missing-handler.v1", nil)
+		if errors.Is(err, engine.ErrHandlerNotRegistered) {
+			return temporal.NewNonRetryableApplicationError("queue handler is not registered", "goforj.missing-handler.v1", nil)
+		}
+	} else {
+		job := queue.NewJob(d.Type).Payload(d.Payload).Timeout(d.Timeout).Retry(d.Retry)
+		job = queue.DriverWithMetadata(job, d.Metadata)
+		job = queue.DriverWithAttempt(job, int(activity.GetInfo(ctx).Attempt)-1)
+		err = handler(ctx, job)
 	}
-	job := queue.NewJob(d.Type).Payload(d.Payload).Timeout(d.Timeout).Retry(d.Retry)
-	job = queue.DriverWithMetadata(job, d.Metadata)
-	job = queue.DriverWithAttempt(job, int(activity.GetInfo(ctx).Attempt)-1)
-	err = handler(ctx, job)
 	if errors.Is(err, errUnsupportedOutcome) {
 		return temporal.NewNonRetryableApplicationError("unsupported queue handler outcome", "goforj.unsupported-outcome.v1", nil)
 	}

@@ -386,3 +386,20 @@ func validateContinuationText(values ...string) error {
 	}
 	return nil
 }
+
+// chainContinuationSummary counts a settled failed member without advancing the successful-node cursor.
+func chainContinuationSummary(state ChainState, member string, failed bool) busruntime.ContinuationSummary {
+	processed := state.NextIndex
+	if failed && member != "" {
+		processed++
+	}
+	return busruntime.ContinuationSummary{Kind: "chain", MemberID: member, Total: len(state.Nodes), Processed: processed, Pending: len(state.Nodes) - processed, NextIndex: state.NextIndex, Failed: continuationFailureCount(failed), Completed: state.Completed, Cancelled: failed}
+}
+
+// continuationFailureCount converts a single terminal failure into the safe summary count.
+func continuationFailureCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}

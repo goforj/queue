@@ -18,15 +18,7 @@ func (m *memoryStore) triggerChainContinuations(state ChainState, member string,
 	if ledger == nil {
 		return
 	}
-	ledger.trigger(busruntime.ContinuationSummary{Kind: "chain", MemberID: member, Total: len(state.Nodes), Processed: state.NextIndex, Pending: len(state.Nodes) - state.NextIndex, NextIndex: state.NextIndex, Failed: continuationFailureCount(failed), Completed: state.Completed, Cancelled: failed}, failed, state.Completed || failed, state.UpdatedAt)
-}
-
-// continuationFailureCount converts a single terminal failure into the safe summary count.
-func continuationFailureCount(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
+	ledger.trigger(chainContinuationSummary(state, member, failed), failed, state.Completed || failed, state.UpdatedAt)
 }
 
 // ContinuationOutcomes copies committed invocation views without exposing mutable intent payloads.

@@ -27,6 +27,8 @@ Use a stable, unique resource ID for every independently owned built-in queue re
 
 Hooks run in durable trigger order, then phase order (progress, failure, success, completion), then declaration order. Only one eligible invocation executes at a time per workflow. Business work can continue while hooks run. Exhaustion settles that obligation and releases later hooks without changing business state. No hook runs from a state reader.
 
+Chain trigger summaries count committed successful and failed members in `Processed`, with remaining members in `Pending`. `NextIndex` remains the count of successful nodes. An aggregate dispatch failure without a settled member does not invent a processed member.
+
 `Message.Continuation()` returns the stable invocation identity and immutable safe trigger counters. `FindContinuations` returns triggered obligations, not pending definitions. Store the invocation ID with external effects to make application operations idempotent. Delivery is at least once: a process can die after an effect and before recording settlement.
 
 ## Built-in recovery ownership

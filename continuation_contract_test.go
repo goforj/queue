@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -78,5 +79,53 @@ func TestContinuationZeroAndNilBindingsRejectWithoutAcceptance(t *testing.T) {
 	}
 	if _, err := (&Queue{}).FindContinuations(t.Context(), "id"); !errors.Is(err, ErrWorkflowUnsupported) {
 		t.Fatal("unsupported resource exposed continuation reader", err)
+	}
+}
+
+// TestRejectedFakeNamedWorkflowsRemoveOnlyRejectedAuthority prevents phantom obligations without erasing accepted sibling definitions.
+func TestRejectedFakeNamedWorkflowsRemoveOnlyRejectedAuthority(t *testing.T) {
+	for _, kind := range []string{"chain", "batch"} {
+		t.Run(kind, func(t *testing.T) {
+			fake := NewFake()
+			ctx := t.Context()
+			build := func() *ContinuationBuilder {
+				if kind == "chain" {
+					return Continue(fake.Chain(NewJob("business")))
+				}
+				return Continue(fake.Batch(NewJob("business")))
+			}
+			accepted, err := build().OnCompletion(NewJob("complete").Payload([]byte("sibling"))).Dispatch(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canceled, cancel := context.WithCancel(ctx)
+			cancel()
+			rejected, err := build().OnFailure(NewJob("fail")).OnCompletion(NewJob("complete")).Dispatch(canceled)
+			if err == nil || rejected == "" {
+				t.Fatal("canceled dispatch did not reject with identity", rejected, err)
+			}
+			if kind == "chain" {
+				if _, err := fake.FindChain(ctx, rejected); !errors.Is(err, ErrWorkflowNotFound) {
+					t.Fatal("rejected chain remained", err)
+				}
+			} else {
+				if _, err := fake.FindBatch(ctx, rejected); !errors.Is(err, ErrWorkflowNotFound) {
+					t.Fatal("rejected batch remained", err)
+				}
+			}
+			if outcomes, err := fake.FindContinuations(ctx, rejected); !errors.Is(err, ErrWorkflowNotFound) {
+				t.Fatal("phantom rejected obligations", outcomes, err)
+			}
+			if outcomes, err := fake.FindContinuations(ctx, accepted); err != nil || len(outcomes) != 0 {
+				t.Fatal("accepted sibling authority changed", outcomes, err)
+			}
+			records := fake.ContinuationRecords()
+			if len(records) != 1 || records[0].WorkflowID != accepted || string(records[0].Definitions[0].Job.Payload) != "sibling" {
+				t.Fatal("accepted sibling definitions changed", records)
+			}
+			if len(fake.state.workflow.continuations) != 1 {
+				t.Fatal("rejected definitions retained internally")
+			}
+		})
 	}
 }
