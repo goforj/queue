@@ -116,10 +116,14 @@ func (i *trackedWorkflowInitialization) Init(out interceptor.WorkflowOutboundInt
 	return i.Next.Init(out)
 }
 
-// ExecuteWorkflow leaves genuine workflow panics untouched after successful adapter initialization.
+// ExecuteWorkflow rejects fresh initialization failures but aborts replay before replacing accepted workflow state.
 func (i *trackedWorkflowInitialization) ExecuteWorkflow(ctx workflow.Context, input *interceptor.ExecuteWorkflowInput) (any, error) {
 	if i.rejected {
-		return nil, temporal.NewNonRetryableApplicationError("workflow interceptor initialization rejected", "goforj.invalid.v1", nil)
+		err := temporal.NewNonRetryableApplicationError("workflow interceptor initialization rejected", "goforj.invalid.v1", nil)
+		if workflow.IsReplaying(ctx) {
+			panic(err)
+		}
+		return nil, err
 	}
 	return i.Next.ExecuteWorkflow(ctx, input)
 }

@@ -233,6 +233,9 @@ func (c *guardedConverter) WithSerializationContext(ctx converter.SerializationC
 		if inner == nil {
 			return rejectedConverter{err: invalidAdapterError()}
 		}
+		if rejected, ok := inner.(rejectedConverter); ok {
+			return rejected
+		}
 	}
 	return &guardedConverter{inner: inner, limits: c.limits, overhead: c.overhead, gate: c.gate}
 }
@@ -257,6 +260,22 @@ func (c rejectedConverter) ToString(*common.Payload) string { return "<redacted>
 
 // ToStrings never includes rejected input in diagnostics.
 func (c rejectedConverter) ToStrings(*common.Payloads) []string { return []string{"<redacted>"} }
+
+// WithContext retains the original rejection when SDK activity/client context binding is attempted.
+func (c rejectedConverter) WithContext(context.Context) converter.DataConverter { return c }
+
+// WithWorkflowContext prevents an earlier context-factory failure from replacing an accepted workflow during replay.
+func (c rejectedConverter) WithWorkflowContext(ctx workflow.Context) converter.DataConverter {
+	return rejectWorkflowConverter(ctx, c.err)
+}
+
+// rejectWorkflowConverter preserves fresh-input rejection while refusing to invent a terminal outcome during replay.
+func rejectWorkflowConverter(ctx workflow.Context, err error) converter.DataConverter {
+	if workflow.IsReplaying(ctx) {
+		panic(err)
+	}
+	return rejectedConverter{err: err}
+}
 
 // DecodingLimits retains the bound when a resource wraps an authoritative binding converter.
 func (c *guardedConverter) DecodingLimits() SerializationLimits { return c.limits }
@@ -291,7 +310,7 @@ func (c *guardedConverter) WithWorkflowContext(ctx workflow.Context) (result con
 	result = c
 	defer func() {
 		if recover() != nil {
-			result = rejectedConverter{err: invalidAdapterError()}
+			result = rejectWorkflowConverter(ctx, invalidAdapterError())
 		}
 	}()
 	if inner, ok := c.inner.(interface {
@@ -299,12 +318,12 @@ func (c *guardedConverter) WithWorkflowContext(ctx workflow.Context) (result con
 	}); ok {
 		release, err := c.gate.enter()
 		if err != nil {
-			return rejectedConverter{err: err}
+			return rejectWorkflowConverter(ctx, err)
 		}
 		defer release()
 		bound := inner.WithWorkflowContext(ctx)
 		if bound == nil {
-			return rejectedConverter{err: invalidAdapterError()}
+			return rejectWorkflowConverter(ctx, invalidAdapterError())
 		}
 		return &guardedConverter{inner: bound, limits: c.limits, overhead: c.overhead, gate: c.gate}
 	}

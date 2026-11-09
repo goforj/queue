@@ -433,7 +433,7 @@ func (b *backend) workerClientOptions() (client.Options, error) {
 	if err != nil {
 		return client.Options{}, err
 	}
-	options.FailureConverter = &guardedFailureConverter{inner: options.FailureConverter, dc: options.DataConverter, gate: b.gate, protected: true}
+	options.FailureConverter = &guardedFailureConverter{inner: options.FailureConverter, dc: options.DataConverter, gate: b.gate, protected: true, workflowTask: true}
 	options.Logger = &redactedLogger{inner: options.Logger, gate: b.gate}
 	if options.MetricsHandler != nil {
 		options.MetricsHandler = &guardedMetrics{inner: options.MetricsHandler, gate: b.gate}

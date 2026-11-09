@@ -179,6 +179,12 @@ func TestActivityInterceptorInitializationFailureIsTerminal(t *testing.T) {
 
 // TestWorkflowInitializationRejectsDeterministicallyWithoutChangingNativePanicPolicy separates adapter rejection from genuine workflow execution.
 func TestWorkflowInitializationRejectsDeterministicallyWithoutChangingNativePanicPolicy(t *testing.T) {
+	var flowCtx workflow.Context
+	env := guardedWorkflowEnvironment(t)
+	env.ExecuteWorkflow(func(ctx workflow.Context) error { flowCtx = ctx; return nil })
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
 	for _, mode := range []string{"success", "factory panic", "init panic", "init error", "closed", "closed before init", "body error", "body panic"} {
 		t.Run(mode, func(t *testing.T) {
 			gate := newAdmission()
@@ -197,7 +203,7 @@ func TestWorkflowInitializationRejectsDeterministicallyWithoutChangingNativePani
 				next.err = errors.New("native business error")
 			}
 			tracked := &trackedWorkerInterceptor{inner: factory, gate: gate}
-			inbound := tracked.InterceptWorkflow(nil, next)
+			inbound := tracked.InterceptWorkflow(flowCtx, next)
 			if mode == "closed before init" {
 				gate.close()
 			}
@@ -216,14 +222,14 @@ func TestWorkflowInitializationRejectsDeterministicallyWithoutChangingNativePani
 				var recovered any
 				func() {
 					defer func() { recovered = recover() }()
-					_, _ = inbound.ExecuteWorkflow(nil, &interceptor.ExecuteWorkflowInput{})
+					_, _ = inbound.ExecuteWorkflow(flowCtx, &interceptor.ExecuteWorkflowInput{})
 				}()
 				if recovered != "genuine workflow panic" {
 					t.Fatal("native workflow panic policy changed", recovered)
 				}
 				return
 			}
-			result, err := inbound.ExecuteWorkflow(nil, &interceptor.ExecuteWorkflowInput{})
+			result, err := inbound.ExecuteWorkflow(flowCtx, &interceptor.ExecuteWorkflowInput{})
 			if mode == "success" || mode == "body error" {
 				if result != "native workflow result" || err != next.err || next.bodies != 1 {
 					t.Fatal("native workflow result/error identity changed", result, err)

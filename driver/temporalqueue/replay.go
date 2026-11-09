@@ -55,7 +55,9 @@ func NewWorkflowReplayer(q *queue.Queue) (result worker.WorkflowReplayer, err er
 	for _, item := range options.Interceptors {
 		interceptors = append(interceptors, &trackedWorkerInterceptor{inner: item, gate: b.clientBinding.gate})
 	}
-	result, err = worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{DataConverter: b.clientBinding.options.DataConverter, FailureConverter: b.clientBinding.options.FailureConverter, ContextPropagators: b.clientBinding.options.ContextPropagators, Interceptors: interceptors, DisableRegistrationAliasing: options.DisableRegistrationAliasing, EnableLoggingInReplay: options.EnableLoggingInReplay})
+	failurePolicy := *b.clientBinding.options.FailureConverter.(*guardedFailureConverter)
+	failurePolicy.workflowTask = true
+	result, err = worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{DataConverter: b.clientBinding.options.DataConverter, FailureConverter: &failurePolicy, ContextPropagators: b.clientBinding.options.ContextPropagators, Interceptors: interceptors, DisableRegistrationAliasing: options.DisableRegistrationAliasing, EnableLoggingInReplay: options.EnableLoggingInReplay})
 	if err != nil {
 		return nil, errors.New("Temporal replay options rejected")
 	}

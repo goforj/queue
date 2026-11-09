@@ -22,10 +22,11 @@ type ProtectedFailureConverter interface {
 
 // guardedFailureConverter preserves SDK error taxonomy while fencing adapter callbacks.
 type guardedFailureConverter struct {
-	inner     converter.FailureConverter
-	dc        converter.DataConverter
-	gate      *admission
-	protected bool
+	inner        converter.FailureConverter
+	dc           converter.DataConverter
+	gate         *admission
+	protected    bool
+	workflowTask bool
 }
 
 // newGuardedFailureConverter requires an explicit protection contract for custom failure adapters.
@@ -163,8 +164,19 @@ func (c *guardedFailureConverter) WithSerializationContext(ctx converter.Seriali
 		if recover() != nil {
 			result = rejectedFailureConverter{}
 		}
+		if rejected, ok := result.(rejectedFailureConverter); ok && c.workflowTask {
+			if _, workflowScope := ctx.(converter.WorkflowSerializationContext); workflowScope {
+				if rejected.unavailable {
+					panic(unavailableAdapterError())
+				}
+				panic(invalidAdapterError())
+			}
+		}
 	}()
 	dc := converter.WithDataConverterSerializationContext(c.dc, ctx)
+	if rejected, ok := dc.(rejectedConverter); ok {
+		return rejectedFailureConverter{unavailable: adapterUnavailable(rejected.err)}
+	}
 	inner := c.inner
 	if !c.protected {
 		inner = temporal.NewDefaultFailureConverter(temporal.DefaultFailureConverterOptions{DataConverter: dc})
@@ -177,8 +189,14 @@ func (c *guardedFailureConverter) WithSerializationContext(ctx converter.Seriali
 		if contextual, ok := inner.(converter.FailureConverterWithSerializationContext); ok {
 			inner = contextual.WithSerializationContext(ctx)
 		}
+		if inner == nil {
+			return rejectedFailureConverter{}
+		}
+		if rejected, ok := inner.(rejectedFailureConverter); ok {
+			return rejected
+		}
 	}
-	return &guardedFailureConverter{inner: inner, dc: dc, gate: c.gate, protected: c.protected}
+	return &guardedFailureConverter{inner: inner, dc: dc, gate: c.gate, protected: c.protected, workflowTask: c.workflowTask}
 }
 
 // rejectedFailureConverter fences late calls without invoking application adapters.
