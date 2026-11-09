@@ -80,7 +80,12 @@ func newGuardedConverter(inner converter.DataConverter, limits SerializationLimi
 
 // check rejects excessive encoded input before application decoding is entered.
 func (c *guardedConverter) check(payloads []*common.Payload) error {
-	if len(payloads) > c.limits.MaxPayloads {
+	return checkEncodedPayloads(c.limits, payloads)
+}
+
+// checkEncodedPayloads applies identical encoded bounds to converted and SDK-preencoded payloads.
+func checkEncodedPayloads(limits SerializationLimits, payloads []*common.Payload) error {
+	if len(payloads) > limits.MaxPayloads {
 		return invalidAdapterError()
 	}
 	total := 0
@@ -89,7 +94,7 @@ func (c *guardedConverter) check(payloads []*common.Payload) error {
 			return invalidAdapterError()
 		}
 		size := proto.Size(payload)
-		if size > c.limits.MaxPayloadBytes || size > c.limits.MaxTotalBytes-total {
+		if size > limits.MaxPayloadBytes || size > limits.MaxTotalBytes-total {
 			return invalidAdapterError()
 		}
 		total += size

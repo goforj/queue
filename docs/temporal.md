@@ -100,7 +100,7 @@ err = run.Get(ctx, &result)
 
 Native workflows can use signals, queries, validated updates, update-with-start, timers, children, version markers, continue-as-new and worker deployment routing. Persist explicit activity routing in native workflow input when deploying split roles.
 
-Payload-level SDK activity objects receive the same callback-drain and encoded input/output bounds as typed activities. Their handlers own decoding and protection of raw payloads, as in native SDK usage. Registration distinguishes the SDK's complete payload-level interface from a struct with an ordinary `Execute` method; struct method prefixes and duplicate checks remain SDK-compatible.
+Payload-level SDK activity objects receive the same callback-drain and encoded input/output bounds as typed activities. Typed activities and activity interceptors returning preencoded SDK payloads also retain the encoded result bounds, even when the SDK bypasses conversion. Their handlers own decoding and protection of raw payloads, as in native SDK usage. Registration distinguishes the SDK's complete payload-level interface from a struct with an ordinary `Execute` method; struct method prefixes and duplicate checks remain SDK-compatible.
 
 Propagated context is checked before query handlers, update validation and update execution. Malformed signal context is discarded before application delivery, like corrupt SDK signal arguments. A signal RPC acknowledges service acceptance, not application delivery. Temporary signal-adapter unavailability instead fails the workflow task so the original signal can replay after recovery; do not resubmit it merely because the adapter is unavailable.
 

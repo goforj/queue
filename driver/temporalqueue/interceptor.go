@@ -2,6 +2,8 @@ package temporalqueue
 
 import (
 	"context"
+
+	"go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -10,7 +12,8 @@ import (
 // admittedActivity tracks actual callback return independently of the SDK Stop timeout.
 type admittedActivity struct {
 	interceptor.ActivityInboundInterceptorBase
-	gate *admission
+	gate   *admission
+	limits SerializationLimits
 }
 
 // ExecuteActivity retains the SDK context and native result/error semantics.
@@ -20,7 +23,13 @@ func (i *admittedActivity) ExecuteActivity(ctx context.Context, input *intercept
 		return nil, err
 	}
 	defer release()
-	return i.Next.ExecuteActivity(ctx, input)
+	result, err := i.Next.ExecuteActivity(ctx, input)
+	if payloads, ok := result.(*common.Payloads); ok && payloads != nil {
+		if rejected := checkEncodedPayloads(i.limits, payloads.Payloads); rejected != nil {
+			return nil, rejected
+		}
+	}
+	return result, err
 }
 
 // resourceInterceptor places admission outside worker interceptors inherited from client options.
@@ -33,7 +42,7 @@ type resourceInterceptor struct {
 
 // InterceptActivity fences the complete inherited worker interception chain.
 func (i *resourceInterceptor) InterceptActivity(ctx context.Context, next interceptor.ActivityInboundInterceptor) interceptor.ActivityInboundInterceptor {
-	return &admittedActivity{ActivityInboundInterceptorBase: interceptor.ActivityInboundInterceptorBase{Next: next}, gate: i.gate}
+	return &admittedActivity{ActivityInboundInterceptorBase: interceptor.ActivityInboundInterceptorBase{Next: next}, gate: i.gate, limits: i.limits}
 }
 
 // InterceptWorkflow rejects malformed propagated input before the application workflow runs.
