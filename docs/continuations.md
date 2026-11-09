@@ -29,7 +29,7 @@ Hooks run in durable trigger order, then phase order (progress, failure, success
 
 Hook delay is a minimum wait, not an exact execution time. Built-in coordinators measure it from trigger creation; Temporal starts the full delay when an invocation reaches the serialized ledger head. A slow predecessor can therefore add another full delay on Temporal. Do not rely on equal hook start times across drivers.
 
-Chain trigger summaries count committed successful and failed members in `Processed`, with remaining members in `Pending`. `NextIndex` remains the count of successful nodes. An aggregate dispatch failure without a settled member does not invent a processed member.
+Chain trigger summaries count committed successful and failed members in `Processed`, with remaining members in `Pending`. `NextIndex` remains the count of successful nodes. An aggregate dispatch failure without a settled member does not invent a processed member. Initial built-in chain enqueue rejection commits the first node as failed, so that member counts as processed even when no handler ran.
 
 `Message.Continuation()` returns the stable invocation identity and immutable safe trigger counters. `FindContinuations` returns triggered obligations, not pending definitions. Store the invocation ID with external effects to make application operations idempotent. Delivery is at least once: a process can die after an effect and before recording settlement.
 

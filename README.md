@@ -15,7 +15,7 @@
     <a href="https://codecov.io/gh/goforj/queue"><img src="https://codecov.io/gh/goforj/queue/graph/badge.svg?token=40Z5UQATME"/></a>
 <!-- test-count:embed:start -->
     <img src="https://img.shields.io/badge/unit_tests-1071-brightgreen" alt="Unit tests (executed count)">
-    <img src="https://img.shields.io/badge/integration_tests-698-blue" alt="Integration tests (executed count)">
+    <img src="https://img.shields.io/badge/integration_tests-708-blue" alt="Integration tests (executed count)">
 <!-- test-count:embed:end -->
 </p>
 
