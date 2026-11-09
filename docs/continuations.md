@@ -27,6 +27,8 @@ Use a stable, unique resource ID for every independently owned built-in queue re
 
 Hooks run in durable trigger order, then phase order (progress, failure, success, completion), then declaration order. Only one eligible invocation executes at a time per workflow. Business work can continue while hooks run. Exhaustion settles that obligation and releases later hooks without changing business state. No hook runs from a state reader.
 
+Hook delay is a minimum wait, not an exact execution time. Built-in coordinators measure it from trigger creation; Temporal starts the full delay when an invocation reaches the serialized ledger head. A slow predecessor can therefore add another full delay on Temporal. Do not rely on equal hook start times across drivers.
+
 Chain trigger summaries count committed successful and failed members in `Processed`, with remaining members in `Pending`. `NextIndex` remains the count of successful nodes. An aggregate dispatch failure without a settled member does not invent a processed member.
 
 `Message.Continuation()` returns the stable invocation identity and immutable safe trigger counters. `FindContinuations` returns triggered obligations, not pending definitions. Store the invocation ID with external effects to make application operations idempotent. Delivery is at least once: a process can die after an effect and before recording settlement.
@@ -39,7 +41,7 @@ Shutdown first stops new claims, then joins physical work. A caller timeout does
 
 Memory storage provides process-local guarantees. SQL storage survives worker replacement and can recover obligations without any surviving original queue delivery. Custom stores lacking transactional continuation capability reject named binding before acceptance. Fake queues record definitions separately with `ContinuationRecords`; they do not pretend definitions have executed.
 
-Built-in hooks preserve `busruntime.Uncommitted` semantics: infrastructure redelivery reuses the logical attempt and does not spend an application retry. Settlement receipts prevent duplicate refunds, while each execution still receives a new fenced owner generation. Retry eligibility uses the same wall clock as publication and execution leases; `WithClock` continues to supply terminal and event timestamps.
+After a `busruntime.Uncommitted` redelivery disposition commits, built-in hooks reuse the logical attempt without spending an application retry. Settlement receipts prevent duplicate refunds, while each execution receives a new fenced owner generation. If execution or settlement is lost before its outcome commits, recovery must treat that result as unknown; the reserved attempt can then be consumed, as after worker loss. Retry eligibility uses the same wall clock as publication and execution leases; `WithClock` continues to supply terminal and event timestamps.
 
 New named workflows allow at most 256 members and 32 definitions, with bounded definition bytes and a worst-case reservation of 4096 invocations and 4 MiB ledger footprint. Hooks default to a 30-second timeout. Retry is bounded to 100, timeout/backoff to one hour, delay to seven days. `UniqueFor` on a hook is rejected before acceptance. Existing ordinary and closure-based workflow limits remain unchanged.
 

@@ -22,7 +22,7 @@ func (b *backend) verifyDeliveryParent(ctx context.Context, d delivery) error {
 		return b.verifyContinuation(ctx, d)
 	}
 	info := activity.GetInfo(ctx)
-	pages := &historyPages{ctx: ctx, client: b.clientBinding.client, namespace: b.clientBinding.Namespace(), id: info.WorkflowExecution.ID, runID: info.WorkflowExecution.RunID}
+	pages := &historyPages{ctx: ctx, service: b.clientBinding.client.WorkflowService(), namespace: b.clientBinding.Namespace(), id: info.WorkflowExecution.ID, runID: info.WorkflowExecution.RunID}
 	event, err := pages.Next()
 	if err != nil {
 		return err

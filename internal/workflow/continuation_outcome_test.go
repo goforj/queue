@@ -192,3 +192,47 @@ func TestContinuationRedeliverySettlementIsFencedAndIdempotent(t *testing.T) {
 		})
 	}
 }
+
+// TestUnknownContinuationSettlementConsumesReservedAttempt preserves bounded crash accounting when no redelivery disposition committed.
+func TestUnknownContinuationSettlementConsumesReservedAttempt(t *testing.T) {
+	for name, store := range continuationStores(t) {
+		t.Run(name, func(t *testing.T) {
+			capable := store.(ContinuationStore)
+			if err := capable.PrepareContinuations(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			record := namedChainRecord("unknown-outcome")
+			record.continuation.Definitions = record.continuation.Definitions[:1]
+			if err := store.CreateChain(t.Context(), record); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := store.AdvanceChain(t.Context(), record.ChainID, "member"); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			publication, ok, err := capable.ClaimContinuation(t.Context(), "resource", "publisher", now, time.Minute)
+			if err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+			execution, ok, err := capable.BeginContinuation(t.Context(), publication, "executor", now)
+			if err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+			later := now.Add(2 * time.Minute)
+			recovery, ok, err := capable.ClaimContinuation(t.Context(), "resource", "replacement", later, time.Minute)
+			if err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+			if _, ok, err := capable.BeginContinuation(t.Context(), recovery, "new-executor", later); err != nil || ok {
+				t.Fatal("unknown result invented an application retry refund", ok, err)
+			}
+			outcomes, err := capable.ContinuationOutcomes(t.Context(), record.ChainID)
+			if err != nil || len(outcomes) != 1 || outcomes[0].Status != "exhausted" || outcomes[0].FailureCategory != "execution_interrupted" {
+				t.Fatal("unknown result lost bounded interruption outcome", outcomes, err)
+			}
+			if err := capable.SettleContinuation(t.Context(), execution, "redeliver", later); err == nil {
+				t.Fatal("expired owner refunded unknown execution")
+			}
+		})
+	}
+}

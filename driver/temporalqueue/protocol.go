@@ -159,6 +159,10 @@ func (b *backend) executeDelivery(ctx context.Context, d delivery) (err error) {
 	}
 	defer release()
 	if err := b.verifyDeliveryParent(ctx, d); err != nil {
+		var rejection *adapterRejection
+		if errors.As(err, &rejection) {
+			return rejection
+		}
 		if errors.Is(err, errAssociationRejected) {
 			return temporal.NewNonRetryableApplicationError("continuation association rejected", "goforj.invalid.v1", nil)
 		}

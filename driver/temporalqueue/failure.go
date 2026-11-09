@@ -174,11 +174,9 @@ func (c *guardedFailureConverter) WithSerializationContext(ctx converter.Seriali
 			return rejectedFailureConverter{unavailable: true}
 		}
 		defer release()
-		contextual, ok := inner.(converter.FailureConverterWithSerializationContext)
-		if !ok {
-			return rejectedFailureConverter{}
+		if contextual, ok := inner.(converter.FailureConverterWithSerializationContext); ok {
+			inner = contextual.WithSerializationContext(ctx)
 		}
-		inner = contextual.WithSerializationContext(ctx)
 	}
 	return &guardedFailureConverter{inner: inner, dc: dc, gate: c.gate, protected: c.protected}
 }

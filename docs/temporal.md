@@ -100,6 +100,8 @@ err = run.Get(ctx, &result)
 
 Native workflows can use signals, queries, validated updates, update-with-start, timers, children, version markers, continue-as-new and worker deployment routing. Persist explicit activity routing in native workflow input when deploying split roles.
 
+Payload-level SDK activity objects receive the same callback-drain and encoded input/output bounds as typed activities. Their handlers own decoding and protection of raw payloads, as in native SDK usage. Registration distinguishes the SDK's complete payload-level interface from a struct with an ordinary `Execute` method; struct method prefixes and duplicate checks remain SDK-compatible.
+
 Propagated context is checked before query handlers, update validation and update execution. Malformed signal context is discarded before application delivery, like corrupt SDK signal arguments. A signal RPC acknowledges service acceptance, not application delivery. Temporary signal-adapter unavailability instead fails the workflow task so the original signal can replay after recovery; do not resubmit it merely because the adapter is unavailable.
 
 The default topology combines workflow and activity polling on one task queue. Set `WorkflowTaskQueue` and `ActivityTaskQueue` together to use separate role workers. Use their corresponding worker options instead of combined `WorkerOptions`. `WorkerRouting(q)` exposes resolved roles. One remote activity task queue is supported per resource. `WithWorkers` caps shared native and portable remote activity execution on that role; local activities and Nexus have separate SDK capacities. Custom tuners, sessions, plugins, dynamic registrations and poller-behavior overrides are rejected until their capacity and lifecycle contracts are supported.
@@ -122,9 +124,11 @@ Queue journal deltas contain safe counters and immutable specification reference
 
 Use `NewWorkflowReplayer(q)` with the same namespace/converter/catalog to replay retained captures. Protocol evolution also requires semantic comparison of regenerated journal deltas: SDK command matching alone does not compare Memo contents. The checked-in production fixture includes a same-command-count negative control.
 
+Service replay enforces the same 64 MiB and 100,000-event bounds as retained captures, plus 1,000 pages and progressing pagination tokens. As with authoritative state reads, it requires decoded history pages and rejects opaque service `RawHistory` blobs before SDK interpretation.
+
 Deploy compatible workers before producers using the new protocol. Keep old handlers, registrations, codecs and version routing until all open executions and retained replay obligations have drained. Portable workflow names and journal schema are versioned. A worker rollback must retain support for already accepted versions; changing the queue driver does not migrate open Temporal executions. Use a new resource/queue when changing transport and leave the old owner draining. Release scripts publish optional modules separately; a root tag alone does not publish this driver.
 
-Continuation scheduling preserves Memo-first command order for existing histories. New histories use SDK change ID `goforj.queue.continuation.schedule-command`, version 1, to schedule and journal atomically after SDK preflight succeeds. Rollback workers must retain that version branch; earlier development builds with only Memo-first scheduling cannot replay those new histories.
+Continuation scheduling preserves Memo-first command order for existing histories. New histories use SDK change ID `goforj.queue.continuation.schedule-command`, version 1, to schedule and journal atomically after SDK preflight succeeds. Business scheduling uses `goforj.queue.business.schedule-preflight`, version 1, to distinguish unscheduled infrastructure failures from actual activity outcomes. Rollback workers must retain both branches while executions or replay obligations for those versions remain.
 
 See [named continuation storage](continuations.md) for built-in store recovery and schema rollout.
 

@@ -181,6 +181,7 @@ func TestJournalFailureStopsAtBusinessScheduleAndSettlementBoundaries(t *testing
 			}, activity.RegisterOptions{Name: deliveryActivityType})
 			// Retained histories use Memo-first ordering; server tests cover the new atomic command-first path.
 			env.OnGetVersion("goforj.queue.continuation.schedule-command", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+			env.OnGetVersion("goforj.queue.business.schedule-preflight", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
 			env.ExecuteWorkflow(coordinatorWorkflowType, def)
 			if sequence == 0 {
 				if err := env.GetWorkflowError(); err != nil {

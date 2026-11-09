@@ -95,7 +95,20 @@ func (r *resourceReplayer) ReplayWorkflowExecution(ctx context.Context, service 
 		return err
 	}
 	defer release()
-	return r.WorkflowReplayer.ReplayWorkflowExecution(ctx, service, r.replayLogger(logger), namespace, execution)
+	pages := &historyPages{ctx: ctx, service: service, namespace: namespace, id: execution.ID, runID: execution.RunID}
+	recorded := &history.History{}
+	for pages.HasNext() {
+		event, err := pages.Next()
+		if err != nil {
+			return err
+		}
+		if event == nil || len(recorded.Events) >= maxReplayHistoryEvents {
+			return errors.New("Temporal replay history exceeds event limits")
+		}
+		recorded.Events = append(recorded.Events, event)
+	}
+	bounded := &recordedHistoryService{WorkflowServiceClient: service, recorded: recorded}
+	return r.WorkflowReplayer.ReplayWorkflowExecution(ctx, bounded, r.replayLogger(logger), namespace, execution)
 }
 
 // ReplayWorkflowHistory preserves original namespace context through the stable SDK execution-replay path.

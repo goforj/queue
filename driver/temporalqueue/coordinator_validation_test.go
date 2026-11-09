@@ -175,7 +175,7 @@ func TestTemporalBuildersRejectEphemeralHooksAndUnknownRoutes(t *testing.T) {
 			}
 		})
 	}
-	if err := q.Prune(t.Context(), time.Now()); err == nil {
-		t.Fatal("portable history pruning was accepted")
+	if err := q.Prune(t.Context(), time.Now()); !errors.Is(err, queue.ErrWorkflowUnsupported) {
+		t.Fatal("portable history pruning lost unsupported capability category", err)
 	}
 }

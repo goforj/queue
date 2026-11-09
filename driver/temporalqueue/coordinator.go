@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/goforj/queue"
 	"github.com/goforj/queue/busruntime"
 	"github.com/goforj/queue/internal/runtimehook"
 	engine "github.com/goforj/queue/internal/workflow"
@@ -39,7 +41,7 @@ func (c *coordinator) Batch(jobs ...engine.Job) engine.BatchBuilder {
 
 // Prune leaves history retention under namespace operator control.
 func (c *coordinator) Prune(context.Context, time.Time) error {
-	return errors.New("Temporal history retention is managed by the namespace")
+	return fmt.Errorf("%w: Temporal history retention is managed by the namespace", queue.ErrWorkflowUnsupported)
 }
 
 // workflowDefinition persists complete routing and identity before any worker runs.
@@ -252,19 +254,29 @@ func scheduleContinuationActivity(ctx workflow.Context, intent continuationInvoc
 		return workflow.ExecuteActivity(ctx, deliveryActivityType, intent.Job), nil
 	}
 	future := workflow.ExecuteActivity(ctx, deliveryActivityType, intent.Job)
-	// Header or outbound-interceptor rejection creates a failed future without an activity command.
-	if future.IsReady() {
-		if err := future.Get(ctx, nil); err != nil {
-			var activityErr *temporal.ActivityError
-			if !errors.As(err, &activityErr) {
-				return nil, err
-			}
-		}
+	if err := activitySchedulingError(ctx, future); err != nil {
+		return nil, err
 	}
 	if err := emit(ctx, scheduled); err != nil {
 		return nil, err
 	}
 	return future, nil
+}
+
+// activitySchedulingError separates SDK preflight rejection from an actual scheduled activity outcome.
+func activitySchedulingError(ctx workflow.Context, future workflow.Future) error {
+	if future.IsReady() {
+		if err := future.Get(ctx, nil); err != nil {
+			var activityErr *temporal.ActivityError
+			if !errors.As(err, &activityErr) {
+				if adapterUnavailable(err) {
+					return unavailableAdapterError()
+				}
+				return terminalAdapterCause(err)
+			}
+		}
+	}
+	return nil
 }
 
 // coordinatorWorkflow uses only replay-safe SDK commands and immutable input.
@@ -278,6 +290,7 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 	if err := def.validate(); err != nil {
 		return temporal.NewNonRetryableApplicationError("invalid workflow definition", "goforj.invalid.v1", nil)
 	}
+	checkBusinessScheduling := workflow.GetVersion(ctx, "goforj.queue.business.schedule-preflight", workflow.DefaultVersion, 1) == 1
 	journalSequence, invocationSequence := 0, 0
 	var intents []continuationInvocation
 	businessDone, ledgerDone := false, false
@@ -392,7 +405,15 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 				err = awaitDeliveryDelay(businessCtx, d.Resolved.Delay, func() bool { return journalBroken })
 			}
 			if err == nil {
-				err = workflow.ExecuteActivity(activityContext(businessCtx, d), deliveryActivityType, d).Get(businessCtx, nil)
+				activityCtx := activityContext(businessCtx, d)
+				future := workflow.ExecuteActivity(activityCtx, deliveryActivityType, d)
+				if checkBusinessScheduling {
+					if err := activitySchedulingError(activityCtx, future); err != nil {
+						failJournal(err)
+						break
+					}
+				}
+				err = future.Get(businessCtx, nil)
 			}
 			if journalErr := settle(i, err); journalErr != nil {
 				return journalErr
@@ -406,8 +427,19 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 		futures := make([]workflow.Future, len(def.Jobs))
 		done := make([]bool, len(def.Jobs))
 		for i, d := range def.Jobs {
+			if journalBroken {
+				future, settable := workflow.NewFuture(ctx)
+				settable.Set(nil, runnerErr)
+				futures[i] = future
+				continue
+			}
 			if d.Resolved.Delay == 0 {
 				futures[i] = workflow.ExecuteActivity(activityContext(businessCtx, d), deliveryActivityType, d)
+				if checkBusinessScheduling {
+					if err := activitySchedulingError(businessCtx, futures[i]); err != nil {
+						failJournal(err)
+					}
+				}
 				continue
 			}
 			future, settable := workflow.NewFuture(ctx)
@@ -416,7 +448,14 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 			workflow.Go(ctx, func(memberCtx workflow.Context) {
 				err := awaitDeliveryDelay(memberCtx, d.Resolved.Delay, func() bool { return journalBroken })
 				if err == nil && !journalBroken {
-					err = workflow.ExecuteActivity(activityContext(memberCtx, d), deliveryActivityType, d).Get(memberCtx, nil)
+					activityCtx := activityContext(memberCtx, d)
+					future := workflow.ExecuteActivity(activityCtx, deliveryActivityType, d)
+					if checkBusinessScheduling {
+						if err := activitySchedulingError(activityCtx, future); err != nil {
+							failJournal(err)
+						}
+					}
+					err = future.Get(memberCtx, nil)
 				}
 				settable.Set(nil, err)
 			})
@@ -492,7 +531,7 @@ func (c *coordinator) readStateRunAdmitted(ctx context.Context, id, kind, runID 
 	if actualRun == "" || watermark <= 0 {
 		return workflowDefinition{}, nil, time.Time{}, errors.New("Temporal workflow history watermark unavailable")
 	}
-	iter := &historyPages{ctx: ctx, client: c.backend.clientBinding.client, namespace: c.backend.clientBinding.Namespace(), id: id, runID: actualRun}
+	iter := &historyPages{ctx: ctx, service: c.backend.clientBinding.client.WorkflowService(), namespace: c.backend.clientBinding.Namespace(), id: id, runID: actualRun}
 	var def workflowDefinition
 	var deltas []journalDelta
 	var created time.Time

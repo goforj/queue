@@ -1,10 +1,8 @@
 package temporalqueue
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"go.temporal.io/api/common/v1"
 	"reflect"
 	"runtime"
 	"sort"
@@ -82,9 +80,7 @@ func (r *registrationRegistry) RegisterActivityWithOptions(fn interface{}, opts 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	value := reflect.ValueOf(fn)
-	if _, ok := fn.(interface {
-		Execute(context.Context, *common.Payloads) (*common.Payloads, error)
-	}); ok {
+	if _, ok := fn.(payloadActivity); ok {
 		r.claim("activity", opts.Name)
 		r.inner.RegisterActivityWithOptions(fn, opts)
 		return

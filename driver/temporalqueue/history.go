@@ -12,20 +12,20 @@ import (
 	"go.temporal.io/api/common/v1"
 	"go.temporal.io/api/history/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/sdk/client"
 	"google.golang.org/protobuf/proto"
 )
 
 // historyPages bounds each server page and total original-history material before reduction.
 type historyPages struct {
 	ctx                  context.Context
-	client               client.Client
+	service              workflowservice.WorkflowServiceClient
 	namespace, id, runID string
 	page                 []*history.HistoryEvent
 	cursor               int
 	token                []byte
 	started, finished    bool
 	pages, bytes         int
+	seenTokens           map[string]bool
 	err                  error
 }
 
@@ -43,9 +43,13 @@ func (h *historyPages) HasNext() bool {
 			h.err = errors.New("Temporal history page budget exceeded")
 			return true
 		}
-		response, err := h.client.WorkflowService().GetWorkflowExecutionHistory(h.ctx, &workflowservice.GetWorkflowExecutionHistoryRequest{Namespace: h.namespace, Execution: &common.WorkflowExecution{WorkflowId: h.id, RunId: h.runID}, MaximumPageSize: 128, NextPageToken: h.token})
+		response, err := h.service.GetWorkflowExecutionHistory(h.ctx, &workflowservice.GetWorkflowExecutionHistoryRequest{Namespace: h.namespace, Execution: &common.WorkflowExecution{WorkflowId: h.id, RunId: h.runID}, MaximumPageSize: 128, NextPageToken: h.token})
 		if err != nil {
 			h.err = err
+			return true
+		}
+		if response == nil {
+			h.err = errors.New("Temporal history response is absent")
 			return true
 		}
 		h.pages++
@@ -54,9 +58,15 @@ func (h *historyPages) HasNext() bool {
 			h.err = errors.New("Temporal original history exceeds decoding budget")
 			return true
 		}
-		if len(response.NextPageToken) > 0 && bytes.Equal(h.token, response.NextPageToken) {
+		if len(response.NextPageToken) > 0 && (bytes.Equal(h.token, response.NextPageToken) || h.seenTokens[string(response.NextPageToken)]) {
 			h.err = errors.New("Temporal history pagination made no progress")
 			return true
+		}
+		if len(response.NextPageToken) > 0 {
+			if h.seenTokens == nil {
+				h.seenTokens = make(map[string]bool)
+			}
+			h.seenTokens[string(response.NextPageToken)] = true
 		}
 		h.page = response.GetHistory().GetEvents()
 		h.cursor = 0

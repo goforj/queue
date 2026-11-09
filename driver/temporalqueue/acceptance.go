@@ -60,7 +60,7 @@ func (b *backend) reconcileWorkflow(ctx context.Context, id, run, kind string, i
 	if run == "" {
 		return ErrAcceptanceUnknown
 	}
-	pages := &historyPages{ctx: ctx, client: b.clientBinding.client, namespace: b.clientBinding.Namespace(), id: id, runID: run}
+	pages := &historyPages{ctx: ctx, service: b.clientBinding.client.WorkflowService(), namespace: b.clientBinding.Namespace(), id: id, runID: run}
 	event, err := pages.Next()
 	if err != nil {
 		return ErrAcceptanceUnknown

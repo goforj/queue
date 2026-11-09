@@ -114,7 +114,11 @@ func (p *registrationPlan) apply(b *backend, w worker.Worker, role string) (err 
 		w.RegisterActivityWithOptions(b.executeDelivery, activity.RegisterOptions{Name: deliveryActivityType})
 	}
 	for _, registration := range p.activities {
-		w.RegisterActivityWithOptions(registration.fn, registration.options)
+		fn := registration.fn
+		if raw, ok := fn.(payloadActivity); ok {
+			fn = &admittedPayloadActivity{inner: raw, kind: raw.ActivityType(), function: raw.GetFunction(), gate: b.entry, policy: b.clientBinding.options.DataConverter.(*guardedConverter)}
+		}
+		w.RegisterActivityWithOptions(fn, registration.options)
 	}
 	if role != "workflow" {
 		for _, service := range p.services {

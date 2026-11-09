@@ -46,6 +46,12 @@ func (*rawActivityFixture) Execute(_ context.Context, input *common.Payloads) (*
 	return input, nil
 }
 
+// ActivityType supplies the second method required by SDK payload-level dispatch.
+func (*rawActivityFixture) ActivityType() activity.Type { return activity.Type{Name: "raw"} }
+
+// GetFunction supplies the SDK metadata method, distinguishing this fixture from an Execute-only struct.
+func (f *rawActivityFixture) GetFunction() interface{} { return f.Execute }
+
 // TestRegistrationPlanPreservesOptionsAndFiltersInvalidMethods verifies logical catalog inspection does not alter SDK registration intent.
 func TestRegistrationPlanPreservesOptionsAndFiltersInvalidMethods(t *testing.T) {
 	var captured worker.Registry
