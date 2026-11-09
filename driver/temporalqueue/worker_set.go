@@ -35,6 +35,9 @@ func (b *backend) startWorkerSet(c client.Client) (err error) {
 	var barriers []chan struct{}
 	for _, spec := range b.workerSpecs() {
 		options := spec.options
+		if options.SysInfoProvider != nil {
+			options.SysInfoProvider = &guardedSystemInfo{inner: options.SysInfoProvider, gate: b.gate}
+		}
 		options.Interceptors = append([]interceptor.WorkerInterceptor(nil), options.Interceptors...)
 		for i, item := range options.Interceptors {
 			options.Interceptors[i] = &trackedWorkerInterceptor{inner: item, gate: b.gate}

@@ -213,7 +213,7 @@ func (c *guardedConverter) ToStrings(payloads *common.Payloads) []string {
 func (c *guardedConverter) WithSerializationContext(ctx converter.SerializationContext) (result converter.DataConverter) {
 	defer func() {
 		if recover() != nil {
-			result = rejectedConverter{err: errors.New("Temporal serialization context rejected")}
+			result = rejectedConverter{err: invalidAdapterError()}
 		}
 	}()
 	inner := c.inner

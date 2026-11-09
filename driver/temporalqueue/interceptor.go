@@ -50,11 +50,8 @@ type guardedInboundWorkflow struct {
 
 // ExecuteWorkflow turns only adapter preflight rejection into a terminal input failure.
 func (i *guardedInboundWorkflow) ExecuteWorkflow(ctx workflow.Context, input *interceptor.ExecuteWorkflowInput) (any, error) {
-	if category, _ := ctx.Value(headerRejectionKey{}).(string); category != "" {
-		if category == "unavailable" {
-			return nil, unavailableAdapterError()
-		}
-		return nil, temporal.NewNonRetryableApplicationError("Temporal context adapter rejected input", "goforj.invalid.v1", nil)
+	if err := propagatedInputError(ctx); err != nil {
+		return nil, err
 	}
 	for _, argument := range input.Args {
 		if definition, ok := argument.(workflowDefinition); ok {
@@ -64,4 +61,52 @@ func (i *guardedInboundWorkflow) ExecuteWorkflow(ctx workflow.Context, input *in
 		}
 	}
 	return i.Next.ExecuteWorkflow(ctx, input)
+}
+
+// propagatedInputError preserves availability while rejecting malformed context before any native handler.
+func propagatedInputError(ctx workflow.Context) error {
+	category, _ := ctx.Value(headerRejectionKey{}).(string)
+	if category == "unavailable" {
+		return unavailableAdapterError()
+	}
+	if category != "" {
+		return temporal.NewNonRetryableApplicationError("Temporal context adapter rejected input", "goforj.invalid.v1", nil)
+	}
+	return nil
+}
+
+// HandleSignal drops malformed messages like SDK corrupt signal arguments and retries transient propagation outages.
+func (i *guardedInboundWorkflow) HandleSignal(ctx workflow.Context, input *interceptor.HandleSignalInput) error {
+	if err := propagatedInputError(ctx); err != nil {
+		if category, _ := ctx.Value(headerRejectionKey{}).(string); category == "unavailable" {
+			return err
+		}
+		workflow.GetLogger(ctx).Warn("Temporal signal context rejected")
+		return nil
+	}
+	return i.Next.HandleSignal(ctx, input)
+}
+
+// HandleQuery prevents rejected context from reaching read handlers or their application dependencies.
+func (i *guardedInboundWorkflow) HandleQuery(ctx workflow.Context, input *interceptor.HandleQueryInput) (any, error) {
+	if err := propagatedInputError(ctx); err != nil {
+		return nil, err
+	}
+	return i.Next.HandleQuery(ctx, input)
+}
+
+// ValidateUpdate rejects untrusted context before the SDK accepts an update.
+func (i *guardedInboundWorkflow) ValidateUpdate(ctx workflow.Context, input *interceptor.UpdateInput) error {
+	if err := propagatedInputError(ctx); err != nil {
+		return err
+	}
+	return i.Next.ValidateUpdate(ctx, input)
+}
+
+// ExecuteUpdate also checks replay and handlers whose update validation is omitted by the SDK.
+func (i *guardedInboundWorkflow) ExecuteUpdate(ctx workflow.Context, input *interceptor.UpdateInput) (any, error) {
+	if err := propagatedInputError(ctx); err != nil {
+		return nil, err
+	}
+	return i.Next.ExecuteUpdate(ctx, input)
 }

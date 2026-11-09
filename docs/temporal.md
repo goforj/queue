@@ -25,6 +25,8 @@ return q.Run(ctx)
 
 Construction creates a lazy client and no pollers. Register all native workflows and activities before starting workers. Registration runs once, before any role starts polling. Framework names are reserved, dynamic registrations are unsupported, and duplicate registrations reject even when SDK duplicate checks are disabled. Every worker polling the same physical role must agree on the logical resource identity, routing, catalog, code and serialization policy. `RegistrationFingerprint` becomes available after startup; it identifies catalog names, not code compatibility.
 
+The registration callback may register independent types concurrently, but must join that work before returning. The completed catalog is sealed for startup and replay.
+
 `Run` starts workers, returns worker fatal errors, and joins shutdown with a fresh bounded context. `StartWorkers` supports separately managed hosts. Such hosts must propagate worker errors and join shutdown before releasing injected dependencies. A timed-out shutdown means callbacks or SDK work can still be active. Retain dependencies and call `Shutdown` again to join actual completion.
 
 ## Portable work
@@ -46,6 +48,8 @@ id, err := queue.Continue(q.Batch(
 Named hooks are normal registered jobs. `Message.Continuation()` provides the stable invocation ID, declaration, phase and immutable safe trigger counters. Use the invocation ID as an application idempotency key. Retries preserve it. Hook payload bytes remain the original hook payload, without business payloads or private handler errors being appended.
 
 Business members continue while one serialized eligible hook head runs. Progress follows settlement order; ties already ready in one activation follow input order. Declaration order applies within each phase. The first failed batch member commits the failure aggregate and its completion hook, while already admitted members drain and update counters. `AllowFailures` waits for all members and permits successful aggregate completion. Exhausting a hook does not rewrite business state or prevent later hooks.
+
+An SDK scheduling-preflight or journal-publication failure interrupts the coordinator without rewriting committed business results. Unfulfilled hooks remain observable as interrupted, without a false scheduling timestamp. Adapter availability retains its retryable error category, but the portable coordinator has no execution-level retry policy; repairing an adapter does not automatically restart a failed coordinator.
 
 ```go
 state, err := q.FindBatch(ctx, id)
@@ -94,6 +98,8 @@ err = run.Get(ctx, &result)
 
 Native workflows can use signals, queries, validated updates, update-with-start, timers, children, version markers, continue-as-new and worker deployment routing. Persist explicit activity routing in native workflow input when deploying split roles.
 
+Propagated context is checked before query handlers, update validation and update execution. Malformed signal context is discarded before application delivery, like corrupt SDK signal arguments. A signal RPC acknowledges service acceptance, not application delivery. Temporary signal-adapter unavailability instead fails the workflow task so the original signal can replay after recovery; do not resubmit it merely because the adapter is unavailable.
+
 The default topology combines workflow and activity polling on one task queue. Set `WorkflowTaskQueue` and `ActivityTaskQueue` together to use separate role workers. Use their corresponding worker options instead of combined `WorkerOptions`. `WorkerRouting(q)` exposes resolved roles. One remote activity task queue is supported per resource. `WithWorkers` caps shared native and portable remote activity execution on that role; local activities and Nexus have separate SDK capacities. Custom tuners, sessions, plugins, dynamic registrations and poller-behavior overrides are rejected until their capacity and lifecycle contracts are supported.
 
 A borrowed `ClientBinding` supplies the authoritative namespace, converter and transport policy. Create it with `NewClientBinding`, pass `Config.Binding`, then close queues before closing the binding. Do not combine borrowed bindings with separate client options. Native callers borrowing `Client(q)` must finish before owner cleanup. Separate client-only resources can outlive Jobs workers for HTTP use.
@@ -108,11 +114,15 @@ Default diagnostics redact SDK message text, payload stringification, failure me
 
 Context propagators must declare bounded headers. Outer guards limit counts, encoded bytes, recursive failures, history pages and transport sizes before invoking adapters. TLS, credentials, interceptors, metrics and converters participate in actual callback drain. TLS key logging, unverified TLS, plaintext credentials, opaque transport overrides and unbounded external payload storage are rejected.
 
+Worker system-information providers also participate in callback drain. Provider errors and panics become sanitized unavailable samples, including during SDK startup rollback and shutdown.
+
 Queue journal deltas contain safe counters and immutable specification references, never hook payload bytes. Original business and hook input remains in execution history and needs an approved encrypted converter if sensitive. Temporal visibility Memo contains the latest safe delta. Native application Memo and search attributes remain the application's responsibility.
 
 Use `NewWorkflowReplayer(q)` with the same namespace/converter/catalog to replay retained captures. Protocol evolution also requires semantic comparison of regenerated journal deltas: SDK command matching alone does not compare Memo contents. The checked-in production fixture includes a same-command-count negative control.
 
 Deploy compatible workers before producers using the new protocol. Keep old handlers, registrations, codecs and version routing until all open executions and retained replay obligations have drained. Portable workflow names and journal schema are versioned. A worker rollback must retain support for already accepted versions; changing the queue driver does not migrate open Temporal executions. Use a new resource/queue when changing transport and leave the old owner draining. Release scripts publish optional modules separately; a root tag alone does not publish this driver.
+
+Continuation scheduling preserves Memo-first command order for existing histories. New histories use SDK change ID `goforj.queue.continuation.schedule-command`, version 1, to schedule and journal atomically after SDK preflight succeeds. Rollback workers must retain that version branch; earlier development builds with only Memo-first scheduling cannot replay those new histories.
 
 See [named continuation storage](continuations.md) for built-in store recovery and schema rollout.
 

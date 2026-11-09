@@ -3,6 +3,7 @@ package temporalqueue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -118,8 +119,17 @@ func TestContextualConverterCopiesFailClosed(t *testing.T) {
 					if _, err := copy.ToPayloads("value"); err == nil {
 						t.Fatal("failed copy encoded arguments")
 					}
-					if err := copy.FromPayloads(&common.Payloads{Payloads: []*common.Payload{payload}}, new(string)); err == nil {
+					decodeErr := copy.FromPayloads(&common.Payloads{Payloads: []*common.Payload{payload}}, new(string))
+					if decodeErr == nil {
 						t.Fatal("failed copy decoded arguments")
+					}
+					failureConverter, err := newGuardedFailureConverter(nil, converter.GetDefaultDataConverter(), newAdmission())
+					if err != nil {
+						t.Fatal(err)
+					}
+					failure := failureConverter.ErrorToFailure(fmt.Errorf("unable to decode workflow argument: %w", decodeErr))
+					if info := failure.GetApplicationFailureInfo(); info == nil || info.GetNonRetryable() != (mode != "closed") {
+						t.Fatalf("context factory rejection lost failure category: %v", failure)
 					}
 					if copy.ToString(payload) != "<redacted>" || copy.ToStrings(&common.Payloads{Payloads: []*common.Payload{payload}})[0] != "<redacted>" {
 						t.Fatal("failed-copy diagnostics exposed payload")

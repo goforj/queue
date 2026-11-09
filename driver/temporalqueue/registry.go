@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"go.temporal.io/sdk/activity"
@@ -18,6 +19,7 @@ import (
 
 // registrationRegistry protects protocol names while preserving SDK registration options.
 type registrationRegistry struct {
+	mu     sync.Mutex
 	inner  worker.Registry
 	names  map[string]bool
 	sealed bool
@@ -52,6 +54,8 @@ func (r *registrationRegistry) RegisterWorkflow(fn interface{}) {
 
 // RegisterWorkflowWithOptions records the effective SDK workflow type before registering.
 func (r *registrationRegistry) RegisterWorkflowWithOptions(fn interface{}, opts workflow.RegisterOptions) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	name := opts.Name
 	if name == "" {
 		name = functionName(fn)
@@ -75,6 +79,8 @@ func (r *registrationRegistry) RegisterActivity(fn interface{}) {
 
 // RegisterActivityWithOptions includes each exported struct method and explicit name prefix.
 func (r *registrationRegistry) RegisterActivityWithOptions(fn interface{}, opts activity.RegisterOptions) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	value := reflect.ValueOf(fn)
 	if _, ok := fn.(interface {
 		Execute(context.Context, *common.Payloads) (*common.Payloads, error)
@@ -111,6 +117,8 @@ func (r *registrationRegistry) RegisterDynamicActivity(interface{}, activity.Dyn
 
 // RegisterNexusService records the actual SDK service name without taking worker ownership.
 func (r *registrationRegistry) RegisterNexusService(service *nexus.Service) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.claim("nexus", service.Name)
 	r.inner.RegisterNexusService(service)
 }

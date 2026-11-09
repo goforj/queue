@@ -67,4 +67,6 @@ Deploy compatible workers and registrations before enabling named-hook producers
 
 `Prune` conservatively retains named parents, receipts and member records along with their ledgers, including terminal entries. There is no automatic safe ledger cleanup policy in this version. Plan retention explicitly after quiescing producers and recovery owners, ensuring no queued delivery or application idempotency obligation can refer to removed authority. Pruning ordinary legacy workflows keeps its existing behavior.
 
+Pruning captures bounded candidate identities before checking for named authority in the same transaction. Concurrent creation of the first continuation table cannot make a newly named parent eligible for deletion. Managed pruning does not create that additive table.
+
 SQL connection pools must accommodate business transactions and lease renewal. Exercise actual workload concurrency when tuning pools; the integration suite tests one-connection restart recovery and competing transitions with a larger pool.

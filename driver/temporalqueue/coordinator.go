@@ -241,6 +241,32 @@ func publishJournal(ctx workflow.Context, delta journalDelta) error {
 	return err
 }
 
+// scheduleContinuationActivity preserves old command order while rejecting SDK preflight failures before recording a new scheduling commit.
+func scheduleContinuationActivity(ctx workflow.Context, intent continuationInvocation, emit func(journalDelta) error) (workflow.Future, error) {
+	scheduled := journalDelta{Index: -1, InvocationID: intent.Outcome.Invocation.ID, Status: "scheduled"}
+	legacy := workflow.GetVersion(ctx, "goforj.queue.continuation.schedule-command", workflow.DefaultVersion, 1) == workflow.DefaultVersion
+	if legacy {
+		if err := emit(scheduled); err != nil {
+			return nil, err
+		}
+		return workflow.ExecuteActivity(ctx, deliveryActivityType, intent.Job), nil
+	}
+	future := workflow.ExecuteActivity(ctx, deliveryActivityType, intent.Job)
+	// Header or outbound-interceptor rejection creates a failed future without an activity command.
+	if future.IsReady() {
+		if err := future.Get(ctx, nil); err != nil {
+			var activityErr *temporal.ActivityError
+			if !errors.As(err, &activityErr) {
+				return nil, err
+			}
+		}
+	}
+	if err := emit(scheduled); err != nil {
+		return nil, err
+	}
+	return future, nil
+}
+
 // coordinatorWorkflow uses only replay-safe SDK commands and immutable input.
 func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 	if err := validatePortableExecution(ctx, def.ID, def.WorkflowQueue, coordinatorWorkflowType); err != nil {
@@ -296,11 +322,12 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 				return
 			}
 			if err == nil {
-				if journalErr := emit(journalDelta{Index: -1, InvocationID: intent.Outcome.Invocation.ID, Status: "scheduled"}); journalErr != nil {
-					failJournal(journalErr)
+				future, schedulingErr := scheduleContinuationActivity(activityCtx, intent, emit)
+				if schedulingErr != nil {
+					failJournal(schedulingErr)
 					return
 				}
-				err = workflow.ExecuteActivity(activityCtx, deliveryActivityType, intent.Job).Get(activityCtx, nil)
+				err = future.Get(activityCtx, nil)
 			}
 			if journalBroken {
 				return

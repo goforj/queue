@@ -84,6 +84,8 @@ func (b *backend) buildApplicationPlan() (plan *registrationPlan, err error) {
 			return nil, errors.New("Temporal application registration failed")
 		}
 	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
 	registry.sealed = true
 	b.mu.Lock()
 	b.nativeNames = nil

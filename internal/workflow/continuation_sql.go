@@ -19,13 +19,7 @@ func (s *sqlStore) continuationSchema(ctx context.Context, required bool) error 
 		return nil
 	}
 	var count int
-	query := `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='bus_continuations_v1'`
-	switch s.driverName {
-	case "mysql":
-		query = `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='bus_continuations_v1'`
-	case "postgres", "pgx":
-		query = `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='bus_continuations_v1'`
-	}
+	query := s.continuationTableQuery()
 	if err := s.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
 		return err
 	}
@@ -340,4 +334,16 @@ func (s *sqlStore) RenewContinuation(ctx context.Context, claim continuationClai
 		return err
 	}
 	return tx.Commit()
+}
+
+// continuationTableQuery lets pruning discover additive authority through its own transaction snapshot.
+func (s *sqlStore) continuationTableQuery() string {
+	switch s.driverName {
+	case "mysql":
+		return `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='bus_continuations_v1'`
+	case "postgres", "pgx":
+		return `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='bus_continuations_v1'`
+	default:
+		return `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='bus_continuations_v1'`
+	}
 }
