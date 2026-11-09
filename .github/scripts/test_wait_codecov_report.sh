@@ -54,6 +54,9 @@ fake_uploads() {
 # fake_commit distinguishes a current aggregate from its individual uploads.
 fake_commit() {
   case "$CODECOV_TEST_SCENARIO" in
+    large)
+      jq -cn --arg sha "$head_sha" '{commitid:$sha,state:"complete",totals:{files:10,lines:100,hits:80,misses:10,partials:10,coverage:80,sessions:1},files:[{name:"large-report",lines:("x" * 2000000)}]}'
+      ;;
     aggregate|stale)
       echo "{\"commitid\":\"$head_sha\",\"state\":\"complete\",\"totals\":{\"files\":10,\"lines\":100,\"hits\":90,\"misses\":5,\"partials\":5,\"coverage\":90,\"sessions\":2}}"
       ;;
@@ -155,6 +158,7 @@ require_failure() {
 }
 
 require_success single single-run "$base_sha" "project 80%, patch 80%"
+require_success large single-run "$base_sha" "project 80%, patch 80%"
 require_success aggregate current-run "$base_sha" "project 90%, patch 100%"
 require_success pagination page-two-run "$base_sha" "project 100%, patch 100%"
 require_success single single-run "" "project 80%, patch n/a%"
