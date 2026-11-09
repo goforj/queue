@@ -312,9 +312,15 @@ func (l *continuationLedger) settle(claim continuationClaim, status string, at t
 	if !l.owns(claim) {
 		return errors.New("stale workflow continuation claim")
 	}
+	if status == "redeliver" && !claim.Execution {
+		return fmt.Errorf("%w: redelivery requires execution authority", ErrContinuationProtocol)
+	}
 	head := l.head()
 	head.Receipt = continuationSettlement{Owner: claim.Owner, Generation: claim.Generation, Execution: claim.Execution, Status: status}
-	if status == "retry" {
+	if status == "retry" || status == "redeliver" {
+		if status == "redeliver" {
+			l.Attempts--
+		}
 		l.ExecutionOwner = ""
 		l.ExecutionUntil = time.Time{}
 		l.LeaseOwner = ""

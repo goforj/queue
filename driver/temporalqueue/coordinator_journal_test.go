@@ -3,6 +3,7 @@ package temporalqueue
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,98 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
+
+// memoContextFixture checks a non-yielding interceptor sees the actual publishing coroutine's activity policy.
+type memoContextFixture struct {
+	interceptor.WorkerInterceptorBase
+	publications int
+}
+
+// InterceptWorkflow retains the fixture counter without replacing production orchestration.
+func (f *memoContextFixture) InterceptWorkflow(_ workflow.Context, next interceptor.WorkflowInboundInterceptor) interceptor.WorkflowInboundInterceptor {
+	return &memoContextInbound{WorkflowInboundInterceptorBase: interceptor.WorkflowInboundInterceptorBase{Next: next}, fixture: f}
+}
+
+// memoContextInbound installs a command-preserving outbound observer.
+type memoContextInbound struct {
+	interceptor.WorkflowInboundInterceptorBase
+	fixture *memoContextFixture
+}
+
+// Init leaves SDK registration and execution unchanged around the observer.
+func (i *memoContextInbound) Init(next interceptor.WorkflowOutboundInterceptor) error {
+	return i.Next.Init(&memoContextOutbound{WorkflowOutboundInterceptorBase: interceptor.WorkflowOutboundInterceptorBase{Next: next}, fixture: i.fixture})
+}
+
+// memoContextOutbound verifies context identity without yielding or adding workflow commands.
+type memoContextOutbound struct {
+	interceptor.WorkflowOutboundInterceptorBase
+	fixture *memoContextFixture
+}
+
+// UpsertMemo rejects hook publication with another coroutine's activity context.
+func (i *memoContextOutbound) UpsertMemo(ctx workflow.Context, memo map[string]interface{}) error {
+	if value, ok := memo[journalKey].(journalValue); ok && value.Delta.InvocationID != "" {
+		if workflow.GetActivityOptions(ctx).ActivityID != value.Delta.InvocationID {
+			return invalidAdapterError()
+		}
+		i.fixture.publications++
+	}
+	return i.Next.UpsertMemo(ctx, memo)
+}
+
+// TestJournalUsesPublishingCoroutineContext keeps SDK and converter metadata attached to the actual ledger command.
+func TestJournalUsesPublishingCoroutineContext(t *testing.T) {
+	c, sdk := coordinatorAcceptanceFixture(t)
+	if _, err := c.start(t.Context(), "chain", "", "", false, []engine.Job{{Type: "business"}}, []engine.ContinuationDefinition{{Phase: "completion", Job: engine.StoredJob{Type: "hook"}}}); err != nil {
+		t.Fatal(err)
+	}
+	def := sdk.inputs[0].(workflowDefinition)
+	def.Resource = "default-test-namespace:reports"
+	fixture := &memoContextFixture{}
+	env := guardedWorkflowEnvironment(t)
+	env.SetWorkerOptions(worker.Options{Interceptors: []interceptor.WorkerInterceptor{fixture}})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: def.ID, TaskQueue: "reports"})
+	env.RegisterWorkflowWithOptions(coordinatorWorkflowFixture, workflow.RegisterOptions{Name: coordinatorWorkflowType})
+	env.RegisterActivityWithOptions(func(context.Context, delivery) error { return nil }, activity.RegisterOptions{Name: deliveryActivityType})
+	env.ExecuteWorkflow(coordinatorWorkflowType, def)
+	if err := env.GetWorkflowError(); err != nil || fixture.publications != 2 {
+		t.Fatal("journal lost publishing context", fixture.publications, err)
+	}
+}
+
+// TestDefinitionChecksPrecedeJournalReservation rejects invalid counts and identities before constructing a per-hook reservation.
+func TestDefinitionChecksPrecedeJournalReservation(t *testing.T) {
+	c, sdk := coordinatorAcceptanceFixture(t)
+	if _, err := c.start(t.Context(), "chain", "", "", false, []engine.Job{{Type: "business"}}, []engine.ContinuationDefinition{{Phase: "completion", Job: engine.StoredJob{Type: "hook"}}}); err != nil {
+		t.Fatal(err)
+	}
+	base := sdk.inputs[0].(workflowDefinition)
+	if err := base.validate(); err != nil {
+		t.Fatal("valid control rejected", err)
+	}
+	for _, mode := range []string{"hooks", "members", "dispatch identity"} {
+		t.Run(mode, func(t *testing.T) {
+			def := base
+			def.JournalBudget = 1024
+			want := "invalid Temporal workflow definition"
+			switch mode {
+			case "hooks":
+				def.Hooks = make([]hookDefinition, 33)
+				want = "too many workflow hooks"
+			case "members":
+				def.Jobs = make([]delivery, maxMembers+1)
+				def.Hooks = make([]hookDefinition, 32)
+			case "dispatch identity":
+				def.DispatchID = strings.Repeat("d", 2048)
+				want = "invalid Temporal workflow member identity"
+			}
+			if err := def.validate(); err == nil || err.Error() != want {
+				t.Fatal("reservation ran before input validation", err, want)
+			}
+		})
+	}
+}
 
 // selectedJournalFailure injects failure at a committed transition boundary without changing input conversion.
 type selectedJournalFailure struct {

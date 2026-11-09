@@ -27,6 +27,8 @@ Construction creates a lazy client and no pollers. Register all native workflows
 
 The registration callback may register independent types concurrently, but must join that work before returning. The completed catalog is sealed for startup and replay.
 
+Interceptors observing framework-owned workflows must preserve the SDK command semantics: activity scheduling returns immediately, and private journal publication must not yield, suppress, replace, reorder or add commands. Those operations commit together in one workflow task. Native application workflows retain their own interceptor behavior. As with SDK workflow code, adding waits or commands requires deliberate replay compatibility.
+
 `Run` starts workers, returns worker fatal errors, and joins shutdown with a fresh bounded context. `StartWorkers` supports separately managed hosts. Such hosts must propagate worker errors and join shutdown before releasing injected dependencies. A timed-out shutdown means callbacks or SDK work can still be active. Retain dependencies and call `Shutdown` again to join actual completion.
 
 ## Portable work

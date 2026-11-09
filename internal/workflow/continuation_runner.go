@@ -218,14 +218,22 @@ func (r *runtime) handleContinuation(ctx context.Context, job busruntime.Inbound
 	outcome := r.executeContinuationAttempt(ctx, env)
 	status := "succeeded"
 	if outcome.err != nil {
-		if busruntime.ClassifyAttempt(outcome.attempt, outcome.err) != busruntime.AttemptFailed {
+		switch busruntime.ClassifyAttempt(outcome.attempt, outcome.err) {
+		case busruntime.AttemptRedeliver:
+			status = "redeliver"
+		case busruntime.AttemptRetry:
 			status = "retry"
-		} else {
+		default:
 			status = "exhausted"
 		}
 	}
+	settledAt := r.now()
+	if status == "retry" || status == "redeliver" {
+		// Eligibility shares the publisher's wall clock; the configurable clock remains for terminal state and events.
+		settledAt = time.Now()
+	}
 	if err := retryContinuationStore(context.WithoutCancel(ctx), func(attemptCtx context.Context) error {
-		return store.SettleContinuation(attemptCtx, claim, status, r.now())
+		return store.SettleContinuation(attemptCtx, claim, status, settledAt)
 	}); err != nil {
 		return busruntime.Uncommitted(err)
 	}

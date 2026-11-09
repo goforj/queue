@@ -39,6 +39,8 @@ Shutdown first stops new claims, then joins physical work. A caller timeout does
 
 Memory storage provides process-local guarantees. SQL storage survives worker replacement and can recover obligations without any surviving original queue delivery. Custom stores lacking transactional continuation capability reject named binding before acceptance. Fake queues record definitions separately with `ContinuationRecords`; they do not pretend definitions have executed.
 
+Built-in hooks preserve `busruntime.Uncommitted` semantics: infrastructure redelivery reuses the logical attempt and does not spend an application retry. Settlement receipts prevent duplicate refunds, while each execution still receives a new fenced owner generation. Retry eligibility uses the same wall clock as publication and execution leases; `WithClock` continues to supply terminal and event timestamps.
+
 New named workflows allow at most 256 members and 32 definitions, with bounded definition bytes and a worst-case reservation of 4096 invocations and 4 MiB ledger footprint. Hooks default to a 30-second timeout. Retry is bounded to 100, timeout/backoff to one hour, delay to seven days. `UniqueFor` on a hook is rejected before acceptance. Existing ordinary and closure-based workflow limits remain unchanged.
 
 ## SQL schema rollout

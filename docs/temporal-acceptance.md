@@ -68,6 +68,9 @@ Several independent protocol, security, runtime and recovery passes found and ve
 - Worker system-information providers panicking out of SDK startup rollback or shutdown. Actual SDK rollback tests now contain panics, sanitize failures and join cancellation-resistant providers.
 - Serialization-context factory panics losing terminal classification through SDK decode wrapping, and concurrent native registration racing the catalog. Category assertions and concurrent registration tests cover the production guards.
 - Pruning missing named authority introduced after its initial schema probe. Bounded transaction-local candidate sets retain chain/batch parents, including across a full page of named entries and one-connection managed stores. A real MySQL identity-reuse control reproduced stale filtering under Repeatable Read and verified Read Committed; the production MySQL continuation suite passed with the fix.
+- Built-in hook infrastructure redelivery consuming application retries, and configured event clocks bypassing or postponing durable backoff. Shared ledger tests now cover mixed application/infrastructure outcomes, idempotent refunds and fencing, zero-retry public execution, and past/future event clocks with consistent lease eligibility.
+- Journal reservation being constructed before member, hook and correlation validation. Validation now bounds those inputs first; focused cases verify count and identity rejection precedes reservation.
+- Hook journal publication retaining the root coroutine context. Publication now receives the actual ledger activity context, verified by a command-preserving interceptor. Interceptors for framework commands must preserve their immediate, non-yielding semantics; arbitrary yielding interception is outside that atomic protocol contract.
 
 Review approval applies to the inspected code and checks. It does not replace required feature acceptance or establish an actual published module release.
 

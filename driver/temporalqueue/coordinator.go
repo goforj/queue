@@ -180,9 +180,6 @@ func (d workflowDefinition) validate() error {
 	if d.JournalBudget < 1024 || d.JournalBudget > 2<<20 || d.EncodingOverhead < 0 || d.EncodingOverhead > 4096 {
 		return errors.New("invalid Temporal journal budget")
 	}
-	if raw, err := json.Marshal(largestJournalDelta(d)); err != nil || len(raw)+d.EncodingOverhead > d.JournalBudget {
-		return errors.New("Temporal continuation transition exceeds its payload budget")
-	}
 	if d.CreatedAt.IsZero() || d.Version != 1 || (d.Kind != "chain" && d.Kind != "batch") || d.ID == "" || d.DispatchID == "" || d.Queue == "" || len(d.Jobs) == 0 || len(d.Jobs) > maxMembers || len(d.Name) > 256 {
 		return errors.New("invalid Temporal workflow definition")
 	}
@@ -228,6 +225,9 @@ func (d workflowDefinition) validate() error {
 	if total > 192<<10 {
 		return errors.New("Temporal workflow definition exceeds byte budget")
 	}
+	if raw, err := json.Marshal(largestJournalDelta(d)); err != nil || len(raw)+d.EncodingOverhead > d.JournalBudget {
+		return errors.New("Temporal continuation transition exceeds its payload budget")
+	}
 	return nil
 }
 
@@ -242,11 +242,11 @@ func publishJournal(ctx workflow.Context, delta journalDelta) error {
 }
 
 // scheduleContinuationActivity preserves old command order while rejecting SDK preflight failures before recording a new scheduling commit.
-func scheduleContinuationActivity(ctx workflow.Context, intent continuationInvocation, emit func(journalDelta) error) (workflow.Future, error) {
+func scheduleContinuationActivity(ctx workflow.Context, intent continuationInvocation, emit func(workflow.Context, journalDelta) error) (workflow.Future, error) {
 	scheduled := journalDelta{Index: -1, InvocationID: intent.Outcome.Invocation.ID, Status: "scheduled"}
 	legacy := workflow.GetVersion(ctx, "goforj.queue.continuation.schedule-command", workflow.DefaultVersion, 1) == workflow.DefaultVersion
 	if legacy {
-		if err := emit(scheduled); err != nil {
+		if err := emit(ctx, scheduled); err != nil {
 			return nil, err
 		}
 		return workflow.ExecuteActivity(ctx, deliveryActivityType, intent.Job), nil
@@ -261,7 +261,7 @@ func scheduleContinuationActivity(ctx workflow.Context, intent continuationInvoc
 			}
 		}
 	}
-	if err := emit(scheduled); err != nil {
+	if err := emit(ctx, scheduled); err != nil {
 		return nil, err
 	}
 	return future, nil
@@ -289,11 +289,11 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 		}
 		journalBroken = true
 	}
-	emit := func(delta journalDelta) error {
+	emit := func(publishCtx workflow.Context, delta journalDelta) error {
 		delta.Version = 1
 		delta.Sequence = journalSequence + 1
-		delta.At = workflow.Now(ctx)
-		if err := publishJournal(ctx, delta); err != nil {
+		delta.At = workflow.Now(publishCtx)
+		if err := publishJournal(publishCtx, delta); err != nil {
 			return err
 		}
 		journalSequence++
@@ -339,7 +339,7 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 					status = "interrupted"
 				}
 			}
-			if err := emit(journalDelta{Index: -1, InvocationID: intent.Outcome.Invocation.ID, Status: status}); err != nil {
+			if err := emit(activityCtx, journalDelta{Index: -1, InvocationID: intent.Outcome.Invocation.ID, Status: status}); err != nil {
 				failJournal(err)
 				return
 			}
@@ -378,7 +378,7 @@ func coordinatorWorkflow(ctx workflow.Context, def workflowDefinition) error {
 			triggered = triggerInvocations(ctx, def, summary, err != nil && failed == 1, becameTerminal, &invocationSequence)
 
 		}
-		if err := emit(journalDelta{Index: index, Failed: err != nil && !skipped, Skipped: skipped, Cancelled: cancelled, Terminal: becameTerminal, Intents: triggered}); err != nil {
+		if err := emit(ctx, journalDelta{Index: index, Failed: err != nil && !skipped, Skipped: skipped, Cancelled: cancelled, Terminal: becameTerminal, Intents: triggered}); err != nil {
 			failJournal(err)
 			return nil
 		}

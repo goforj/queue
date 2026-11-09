@@ -3,9 +3,47 @@ package queue
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/goforj/queue/busruntime"
 )
+
+// TestNamedContinuationRedeliversUncommittedWithoutApplicationRetries protects the public handler and publisher path at Retry(0).
+func TestNamedContinuationRedeliversUncommittedWithoutApplicationRetries(t *testing.T) {
+	q, err := NewSync(WithResourceID("uncommitted-hook"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Shutdown(context.Background()) })
+	q.Register("business", func(context.Context, Message) error { return nil })
+	var calls atomic.Int32
+	attempts := make(chan int, 2)
+	q.Register("hook", func(_ context.Context, message Message) error {
+		attempts <- message.Attempt
+		if calls.Add(1) == 1 {
+			return busruntime.Uncommitted(errors.New("temporary infrastructure failure"))
+		}
+		return nil
+	})
+	if err := q.StartWorkers(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	id, err := Continue(q.Chain(NewJob("business"))).OnCompletion(NewJob("hook").Retry(0)).Dispatch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcomes := awaitContinuations(t, q, id, 1)
+	if calls.Load() != 2 || outcomes[0].Status != "succeeded" {
+		t.Fatal("infrastructure outcome consumed application retry budget", calls.Load(), outcomes)
+	}
+	for range 2 {
+		if attempt := <-attempts; attempt != 0 {
+			t.Fatal("infrastructure redelivery advanced application attempt", attempt)
+		}
+	}
+}
 
 // TestFakeContinuationAuthorityTracksExplicitTransitions preserves fake recording without inventing hook execution.
 func TestFakeContinuationAuthorityTracksExplicitTransitions(t *testing.T) {
