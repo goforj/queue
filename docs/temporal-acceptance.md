@@ -27,8 +27,8 @@ The module inventory includes root, optional drivers, examples, integration and 
 | Continuations | Stable IDs, safe immutable snapshots, declaration order, retry exhaustion and later completion hooks |
 | Process loss | Independent producer/worker/reader processes, external effect before completion acknowledgement, and journal generation before task commit |
 | Replay | Original production history, retained fixture, SDK command replay, regenerated delta equality and content-only negative control |
-| Native workflows | Typed results, signals, queries, validated updates and update-with-start, timer, child, version marker and continue-as-new |
-| Routing and capacity | Combined and split roles, explicit remote route, local activities, shared portable/native remote capacity |
+| Native workflows | Approval timer/query/validated-update/signal state survives worker replacement; heartbeat checkpoints recover on attempt two; asynchronous completion succeeds through a replacement resource; typed results drive compensation; child cancellation and parent-close termination match service history; update-with-start, version markers and continue-as-new |
+| Routing and capacity | Actual SDK starts in combined/split roles reject foreign member/hook routes before activity or journal commands; pinned and auto-upgrade workflows plus activity workers follow A/B rollout and rollback; explicit remote routes, local activities and shared portable/native remote capacity |
 | Lifecycle | Owned/borrowed resources, actual fatal-poller propagation, concurrent shutdown joins, cancellation-resistant callbacks and typed result encoding during grace |
 | Start uncertainty | Successful service acceptance followed by lost response, original immutable input reconciliation, collision and inaccessible/expired history controls |
 | Reset and isolation | Real administrative reset rejection, actual run checks at generic activity entry, and resource-bound authorized reads |
@@ -37,6 +37,8 @@ The module inventory includes root, optional drivers, examples, integration and 
 | SQL recovery | SQLite/MySQL/PostgreSQL atomic state and intents, recovery without surviving business delivery, competing transitions, one-connection restart, managed schema and pruning retention |
 
 The AEAD test fixture uses a deliberately public synthetic key, bounded bytes and no tenant AAD. It demonstrates the adapter boundary and must never be used to protect application data.
+
+The native capability scenarios run through public managed resources in `integration/temporal/native_capabilities_integration_test.go`. Split-role deployment routing is exercised in `split_deployment_integration_test.go`, and direct SDK route validation plus the ordinary-job version bridge in `resource_routing_integration_test.go`. These are real-server acceptance tests, rather than mocked SDK capability claims.
 
 ## Independent review fixes
 
@@ -98,7 +100,7 @@ Several independent protocol, security, runtime and recovery passes found and ve
 
 - Workflow-side activity factory copies being mistaken for activity-worker conversions. Failure policies now retain workflow execution ownership across activity-context copies, so remote/local activity setup cannot replace a recorded failure during replay. The direct scope matrix distinguishes workflow activity copies from actual activity workers.
 
-Direct reserved workflow starts now use immutable resource-bound registrations. Versioned entry validation rejects foreign logical, workflow and activity routes for ordinary jobs, every chain/batch member and every named hook before application activity or journal commands. Combined/split controls and retained-history replay verify current validation and legacy command compatibility. Namespace authorization remains the deployment boundary.
+Direct reserved workflow starts now use immutable resource-bound registrations. Versioned entry validation rejects foreign logical, workflow and activity routes for ordinary jobs, every chain/batch member and every named hook before application activity or journal commands. Real-server combined/split controls cover ordinary jobs, chains and batches. Ordinary-job replay uses both a current history and a legacy-command history recorded with an explicit old-version fixture; the latter is not an old-binary capture. The separately retained original production coordinator history verifies its legacy commands. Namespace authorization remains the deployment boundary.
 
 Native cleanup ownership is resolved by the [SDK lifecycle decision](temporal-lifecycle.md): resource callbacks are joined by queue shutdown; process-wide SDK cached coroutine cleanup remains application/SDK-owned. Public configuration and shutdown documentation state that contract. A checked-in real-server test uses actual SDK tracing and isolated global cache cleanup, retaining the application tracer until deferred span finalization completes. This deliberately preserves native SDK ownership instead of introducing a process-global side effect in one queue.
 
