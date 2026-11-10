@@ -365,7 +365,7 @@ func DriverMetadata(job Job) DriverJobMetadata {
 	if metadata.SchemaVersion != DriverJobMetadataVersion {
 		return DriverJobMetadata{}
 	}
-	return metadata
+	return busruntime.CloneDeliveryMetadata(metadata)
 }
 
 // DriverWithMetadata returns a job carrying supported direct-delivery
@@ -378,7 +378,7 @@ func DriverWithMetadata(job Job, metadata DriverJobMetadata) Job {
 	if metadata.SchemaVersion != DriverJobMetadataVersion {
 		return job
 	}
-	job.options.metadata = metadata
+	job.options.metadata = busruntime.CloneDeliveryMetadata(metadata)
 	return job
 }
 

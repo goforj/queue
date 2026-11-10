@@ -165,3 +165,11 @@ Examples:
 - `SCENARIO_DURATION_LIMIT_SECONDS_SQS=60`
 - `SCENARIO_DURATION_LIMIT_SECONDS_SCENARIO_WORKER_RESTART_RECOVERY=30`
 - `SCENARIO_DURATION_LIMIT_SECONDS_SCENARIO_WORKER_RESTART_RECOVERY_SQS=45`
+
+## Temporal production contract
+
+The required `temporal` backend matrix runs `integration/temporal` against the pinned server image in `integration/testenv/temporal_image.go`. It uses public queue construction and registration, and fails server startup rather than silently skipping a selected backend. Feasibility tests remain separately named in `temporalproof`.
+
+The production suite covers original bytes and attempts, no-worker state, named-hook ordering/exhaustion, native messaging and version routing, combined/split roles, callback-resistant shutdown, sustained actual SDK fatal propagation, lost-start reconciliation, reset rejection, resource isolation, bounded fan-out and pagination, shared remote capacity, protected history and diagnostics, and killable public-driver worker recovery. Process barriers cover an external effect before acknowledgement and a generated journal command before task commit. Production semantic replay uses a checked-in retained history plus a content-only negative control because ordinary SDK replay ignores Memo values.
+
+Temporal rejects portable uniqueness and unsupported administration, so the legacy all-backend scenario list does not imply those capabilities. Its dedicated required scenario inventory is enforced by `check_integration_scenarios_contract.sh` and its module is included in race, release, coverage and dependency inventories.

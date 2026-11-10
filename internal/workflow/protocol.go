@@ -12,6 +12,8 @@ const (
 	ChainNodeDeliveryType = "bus:chain:node"
 	// BatchJobDeliveryType identifies one aggregate workflow member delivery.
 	BatchJobDeliveryType = "bus:batch:job"
+	// ContinuationDeliveryType identifies the versioned durable continuation delivery protocol.
+	ContinuationDeliveryType = "bus:continuation:v1"
 	// CallbackDeliveryType identifies one ephemeral workflow callback delivery.
 	CallbackDeliveryType = "bus:callback"
 )
@@ -41,6 +43,23 @@ func ResolveDelivery(deliveryType string, payload []byte) ResolvedDelivery {
 		return metadata
 	}
 
+	if deliveryType == ContinuationDeliveryType {
+		var claim continuationClaim
+		if err := json.Unmarshal(payload, &claim); err != nil || claim.Version != 1 || claim.Intent.Job.Type == "" {
+			return metadata
+		}
+		invocation := claim.Intent.Outcome.Invocation
+		metadata.JobType = claim.Intent.Job.Type
+		metadata.Payload = claim.Intent.Job.Payload
+		metadata.DispatchID = invocation.DispatchID
+		metadata.JobID = invocation.ID
+		if invocation.Trigger.Kind == "chain" {
+			metadata.ChainID = invocation.WorkflowID
+		} else if invocation.Trigger.Kind == "batch" {
+			metadata.BatchID = invocation.WorkflowID
+		}
+		return metadata
+	}
 	var envelope struct {
 		SchemaVersion int    `json:"schema_version"`
 		DispatchID    string `json:"dispatch_id"`
@@ -70,7 +89,7 @@ func ResolveDelivery(deliveryType string, payload []byte) ResolvedDelivery {
 // IsDeliveryType reports whether a physical job type belongs to the workflow protocol.
 func IsDeliveryType(deliveryType string) bool {
 	switch deliveryType {
-	case DirectDeliveryType, ChainNodeDeliveryType, BatchJobDeliveryType, CallbackDeliveryType:
+	case DirectDeliveryType, ChainNodeDeliveryType, BatchJobDeliveryType, CallbackDeliveryType, ContinuationDeliveryType:
 		return true
 	default:
 		return false

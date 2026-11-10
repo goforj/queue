@@ -13,6 +13,7 @@ const (
 	BackendNATS       = "nats"
 	BackendSQS        = "sqs"
 	BackendRabbitMQ   = "rabbitmq"
+	BackendTemporal   = "temporal"
 )
 
 var LocalBackends = []string{
@@ -23,6 +24,7 @@ var LocalBackends = []string{
 }
 
 var ExternalBackends = []string{
+	BackendTemporal,
 	BackendRedis,
 	BackendMySQL,
 	BackendPostgres,

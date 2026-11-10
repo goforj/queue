@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"github.com/goforj/queue/busruntime"
 	"time"
 )
 
@@ -11,6 +12,7 @@ import (
 // isolated behind PayloadBytes and Bind.
 // @group Queue
 type Message struct {
+	continuation  *Continuation
 	SchemaVersion int
 	DispatchID    string
 	JobID         string
@@ -223,4 +225,21 @@ type WorkflowOutcomeStore interface {
 	// owned remains true on same-outcome replay and false when the opposite outcome won.
 	// Ownership covers the outcome category; BatchState does not retain a per-member cause.
 	SettleBatchJob(ctx context.Context, batchID, jobID string, outcome BatchJobOutcome, cause error) (state BatchState, owned bool, err error)
+}
+
+// Continuation identifies a durable workflow hook invocation independently of its job payload.
+type Continuation = busruntime.Continuation
+
+// ContinuationSummary contains immutable safe trigger counters and member identity.
+type ContinuationSummary = busruntime.ContinuationSummary
+
+// ContinuationOutcome reports a triggered hook's durable scheduling and settlement.
+type ContinuationOutcome = busruntime.ContinuationOutcome
+
+// Continuation returns immutable invocation metadata when this message is a durable hook.
+func (m Message) Continuation() (Continuation, bool) {
+	if m.continuation == nil {
+		return Continuation{}, false
+	}
+	return *m.continuation, true
 }

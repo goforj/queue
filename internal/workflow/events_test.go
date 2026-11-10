@@ -273,9 +273,9 @@ func TestPositiveWorkflowEventsWaitForDeliverySettlement(t *testing.T) {
 	for _, kind := range positive {
 		t.Run(string(kind), func(t *testing.T) {
 			var events []Event
-			runtime := &runtime{observer: ObserverFunc(func(_ context.Context, event Event) {
+			runtime := &runtime{Jobs: &Jobs{observer: ObserverFunc(func(_ context.Context, event Event) {
 				events = append(events, event)
-			})}
+			})}}
 			ctx, settlement := busruntime.WithDeliverySettlement(context.Background())
 			runtime.emit(ctx, Event{Kind: kind})
 			if len(events) != 0 {

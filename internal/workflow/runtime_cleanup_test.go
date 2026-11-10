@@ -227,10 +227,9 @@ func TestBatchCallbackEnvelopesCompleteInReverseOrder(t *testing.T) {
 	var events []Event
 	runtime := &runtime{
 		store: store,
-		now:   time.Now,
-		observer: ObserverFunc(func(_ context.Context, event Event) {
+		Jobs: &Jobs{now: time.Now, observer: ObserverFunc(func(_ context.Context, event Event) {
 			events = append(events, event)
-		}),
+		})},
 		chainCallbacks: make(map[string]chainCallbacks),
 		batchCallbacks: map[string]batchCallbacks{
 			batchID: {
@@ -322,10 +321,9 @@ func TestConcurrentBatchProgressUsesPerDeliverySnapshot(t *testing.T) {
 	var progressCalls atomic.Int32
 	runtime := &runtime{
 		store: store,
-		now:   time.Now,
-		handlers: map[string]Handler{
+		Jobs: &Jobs{now: time.Now, handlers: map[string]Handler{
 			"batch:item": func(context.Context, Context) error { return nil },
-		},
+		}},
 		chainCallbacks: make(map[string]chainCallbacks),
 		batchCallbacks: map[string]batchCallbacks{
 			batchID: {

@@ -23,6 +23,8 @@ const (
 	DriverNATS Driver = "nats"
 	// DriverSQS selects the AWS SQS backend.
 	DriverSQS Driver = "sqs"
+	// DriverTemporal selects the optional Temporal workflow backend.
+	DriverTemporal Driver = "temporal"
 	// DriverRabbitMQ selects the RabbitMQ backend.
 	DriverRabbitMQ Driver = "rabbitmq"
 )

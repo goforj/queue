@@ -52,7 +52,7 @@ func run() error {
 		dir        string
 		importPath string
 	}
-	targets := []target{{dir: root, importPath: modPath}}
+	targets := []target{{dir: root, importPath: modPath}, {dir: filepath.Join(root, "driver", "temporalqueue"), importPath: modPath + "/driver/temporalqueue"}}
 
 	for _, target := range targets {
 		fset := token.NewFileSet()
@@ -570,6 +570,12 @@ func writeMain(base string, fd *FuncDoc, moduleImportPath, importPath string) er
 		}
 		if strings.Contains(ex.Code, "queue.") && importPath != moduleImportPath {
 			imports[moduleImportPath] = true
+		}
+		if strings.Contains(ex.Code, "queueconfig.") {
+			imports[moduleImportPath+"/queueconfig"] = true
+		}
+		if strings.Contains(ex.Code, "client.") {
+			imports["go.temporal.io/sdk/client"] = true
 		}
 		if strings.Contains(ex.Code, "redisqueue.") {
 			imports[moduleImportPath+"/driver/redisqueue"] = true

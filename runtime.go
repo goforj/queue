@@ -3,10 +3,12 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/goforj/queue/busruntime"
+	"github.com/goforj/queue/internal/runtimehook"
 	"github.com/goforj/queue/internal/workflow"
 )
 
@@ -26,8 +28,21 @@ func IsPermanent(err error) bool {
 // @group Queue
 type Option func(*runtimeOptions)
 
+// runtimeOptions retains explicit supply separately from effective values so
+// driver capability checks need not interpret opaque option functions.
 type runtimeOptions struct {
-	workflowOpts            []workflow.Option
+	resourceIDSupplied      bool
+	resourceID              string
+	store                   WorkflowStore
+	storeSupplied           bool
+	clock                   func() time.Time
+	clockSupplied           bool
+	middlewares             []Middleware
+	middlewareSupplied      bool
+	workersSupplied         bool
+	observerSupplied        bool
+	decoratorSupplied       bool
+	legacyEnvelopeSupplied  bool
 	workers                 int
 	observer                Observer
 	handlerContextDecorator func(context.Context) context.Context
@@ -58,6 +73,7 @@ func (o *runtimeOptions) apply(opts []Option) {
 //	_ = q
 func WithObserver(observer Observer) Option {
 	return func(o *runtimeOptions) {
+		o.observerSupplied = true
 		if observer == nil {
 			return
 		}
@@ -82,7 +98,10 @@ func WithObserver(observer Observer) Option {
 //	_ = q
 func WithStore(store WorkflowStore) Option {
 	return func(o *runtimeOptions) {
-		o.workflowOpts = append(o.workflowOpts, workflow.WithStore(workflowStoreFromRoot(store)))
+		o.storeSupplied = true
+		if store != nil {
+			o.store = store
+		}
 	}
 }
 
@@ -101,7 +120,10 @@ func WithStore(store WorkflowStore) Option {
 //	_ = q
 func WithClock(clock func() time.Time) Option {
 	return func(o *runtimeOptions) {
-		o.workflowOpts = append(o.workflowOpts, workflow.WithClock(clock))
+		o.clockSupplied = true
+		if clock != nil {
+			o.clock = clock
+		}
 	}
 }
 
@@ -120,7 +142,8 @@ func WithClock(clock func() time.Time) Option {
 //	_ = q
 func WithMiddleware(middlewares ...Middleware) Option {
 	return func(o *runtimeOptions) {
-		o.workflowOpts = append(o.workflowOpts, workflow.WithMiddleware(middlewaresToWorkflow(middlewares)...))
+		o.middlewareSupplied = true
+		o.middlewares = append(o.middlewares, middlewares...)
 	}
 }
 
@@ -139,6 +162,7 @@ func WithMiddleware(middlewares ...Middleware) Option {
 //	_ = q
 func WithWorkers(count int) Option {
 	return func(o *runtimeOptions) {
+		o.workersSupplied = true
 		if count <= 0 {
 			return
 		}
@@ -164,6 +188,7 @@ func WithWorkers(count int) Option {
 //	_ = q
 func WithHandlerContextDecorator(fn func(context.Context) context.Context) Option {
 	return func(o *runtimeOptions) {
+		o.decoratorSupplied = true
 		o.handlerContextDecorator = fn
 	}
 }
@@ -177,21 +202,25 @@ func WithHandlerContextDecorator(fn func(context.Context) context.Context) Optio
 // @group Queue
 func WithLegacyDirectEnvelope() Option {
 	return func(o *runtimeOptions) {
+		o.legacyEnvelopeSupplied = true
 		o.legacyDirectEnvelope = true
 	}
 }
 
 // Queue is the high-level user-facing queue API.
-// It composes the queue runtime with the internal orchestration engine.
+// It composes shared job execution with the internal workflow coordinator.
 // @group Queue
 type Queue struct {
 	q                    queueRuntime
+	jobs                 *workflow.Jobs
 	b                    workflow.Engine
+	workflowMode         runtimehook.WorkflowMode
+	lifecycle            runtimehook.DriverLifecycle
 	ctx                  context.Context
 	legacyDirectEnvelope bool
 }
 
-// newHighLevelQueue constructs the selected physical runtime before attaching the canonical workflow engine.
+// newHighLevelQueue constructs the selected physical runtime before attaching shared execution and coordination.
 func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 	q, err := newRuntime(cfg)
 	if err != nil {
@@ -200,10 +229,15 @@ func newHighLevelQueue(cfg Config, opts ...Option) (*Queue, error) {
 	return newQueueFromRuntime(q, opts...)
 }
 
-// newQueueFromRuntime applies root configuration once before registering the single internal workflow engine.
+// newQueueFromRuntime parses options once so execution and coordination share typed configuration.
 func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	var ro runtimeOptions
 	ro.apply(opts)
+	return newQueueWithDescriptor(q, ro, runtimehook.Descriptor{WorkflowMode: runtimehook.WorkflowBuiltIn})
+}
+
+// newQueueWithDescriptor selects one coordinator after shared execution is configured.
+func newQueueWithDescriptor(q queueRuntime, ro runtimeOptions, descriptor runtimehook.Descriptor) (*Queue, error) {
 	observer := attachRuntimeObserver(q, ro.observer)
 	if ro.workers > 0 && q != nil {
 		q = q.Workers(ro.workers)
@@ -211,6 +245,7 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	if ro.handlerContextDecorator != nil && q != nil {
 		q.setHandlerContextDecorator(ro.handlerContextDecorator)
 	}
+	var jobObserver workflow.Observer
 	if observer != nil {
 		driver := Driver("")
 		resolveQueueName := func(queueName string) string {
@@ -225,17 +260,57 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 				return q.physicalQueueNameOrDefault(queueName)
 			}
 		}
-		ro.workflowOpts = append(ro.workflowOpts, workflow.WithObserver(workflowObserverAdapter{
+		jobObserver = workflowObserverAdapter{
 			driver:           driver,
 			resolveQueueName: resolveQueueName,
 			observer:         observer,
-		}))
+		}
 	}
-	b, err := workflow.New(q, ro.workflowOpts...)
+	jobs, err := workflow.NewJobs(q, workflow.JobConfig{
+		TranslateError: descriptor.TranslateJobError, PanicError: descriptor.PanicJobError,
+		Clock:       ro.clock,
+		Observer:    jobObserver,
+		Middlewares: middlewaresToWorkflow(ro.middlewares),
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &Queue{q: q, b: b, legacyDirectEnvelope: ro.legacyDirectEnvelope}, nil
+	binding := runtimehook.NewWorkflowBinding(q, jobs, string(q.Driver()))
+	var lifecycle runtimehook.DriverLifecycle
+	if descriptor.NewLifecycle != nil {
+		lifecycle, err = descriptor.NewLifecycle(binding)
+		if err != nil {
+			return nil, err
+		}
+		if lifecycle == nil || lifecycle.Binding() != binding || lifecycle.Done() == nil || lifecycle.ShutdownTimeout() <= 0 {
+			return nil, fmt.Errorf("driver lifecycle has an invalid resource binding or shutdown contract")
+		}
+		if ro.workers > 0 {
+			lifecycle.SetWorkers(ro.workers)
+		}
+		if err := lifecycle.ConfigurationError(); err != nil {
+			return nil, err
+		}
+	}
+	var coordinator workflow.Engine
+	switch descriptor.WorkflowMode {
+	case runtimehook.WorkflowBuiltIn:
+		coordinator = workflow.NewCoordinator(jobs, workflow.WithStore(workflowStoreFromRoot(ro.store)), workflow.WithContinuationResource(ro.resourceID), workflow.WithContinuationQueue(q.physicalQueueNameOrDefault("")))
+	case runtimehook.WorkflowNative:
+		native, err := descriptor.NewCoordinator(binding)
+		if err != nil {
+			return nil, err
+		}
+		if native == nil || native.Binding() != binding {
+			return nil, fmt.Errorf("native workflow coordinator does not belong to the selected runtime and executor")
+		}
+		coordinator = native
+	case runtimehook.WorkflowUnsupported:
+		// No built-in routes or state may be installed for an unsupported driver.
+	default:
+		return nil, fmt.Errorf("invalid workflow mode %q", descriptor.WorkflowMode)
+	}
+	return &Queue{q: q, jobs: jobs, b: coordinator, workflowMode: descriptor.WorkflowMode, lifecycle: lifecycle, legacyDirectEnvelope: ro.legacyDirectEnvelope}, nil
 }
 
 // attachRuntimeObserver composes constructor and option observers before the workflow runtime is built so every layer shares one sink.
@@ -350,7 +425,7 @@ func (r *Queue) Register(jobType string, handler func(context.Context, Message) 
 	if r == nil || handler == nil {
 		return
 	}
-	r.b.Register(jobType, func(ctx context.Context, message workflow.Context) error {
+	r.jobs.Register(jobType, func(ctx context.Context, message workflow.Context) error {
 		return handler(ctx, messageFromWorkflow(message))
 	})
 }
@@ -386,6 +461,9 @@ func (r *Queue) Driver() Driver {
 func (r *Queue) WithWorkers(count int) *Queue {
 	if r == nil || r.q == nil {
 		return r
+	}
+	if r.lifecycle != nil {
+		r.lifecycle.SetWorkers(count)
 	}
 	r.q = r.q.Workers(count)
 	return r
@@ -432,14 +510,14 @@ func (r *Queue) Dispatch(job Job) (DispatchResult, error) {
 		if legacyErr != nil {
 			return DispatchResult{}, legacyErr
 		}
-		result, dispatchErr := r.b.Dispatch(ctx, legacy)
+		result, dispatchErr := r.jobs.Dispatch(ctx, legacy)
 		return dispatchResultFromWorkflow(result), dispatchErr
 	}
 	bj, err := toDirectWorkflowJob(job)
 	if err != nil {
 		return DispatchResult{}, err
 	}
-	result, err := r.b.DispatchDirect(ctx, bj)
+	result, err := r.jobs.DispatchDirect(ctx, bj)
 	return dispatchResultFromWorkflow(result), err
 }
 
@@ -494,6 +572,9 @@ func (r *Queue) Chain(jobs ...Job) ChainBuilder {
 	if r == nil {
 		return &chainBuilderAdapter{}
 	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return &chainBuilderAdapter{err: r.unsupportedWorkflow("chain")}
+	}
 	workflowJobs, err := toWorkflowJobs(jobs)
 	if err != nil {
 		return &chainBuilderAdapter{err: err}
@@ -523,6 +604,9 @@ func (r *Queue) Batch(jobs ...Job) BatchBuilder {
 	if r == nil {
 		return &batchBuilderAdapter{}
 	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return &batchBuilderAdapter{err: r.unsupportedWorkflow("batch")}
+	}
 	workflowJobs, err := toWorkflowJobs(jobs)
 	if err != nil {
 		return &batchBuilderAdapter{err: err}
@@ -544,7 +628,20 @@ func (r *Queue) StartWorkers(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
-	return r.b.StartWorkers(ctx)
+	if r.lifecycle != nil {
+		if err := r.lifecycle.ConfigurationError(); err != nil {
+			return err
+		}
+	}
+	if err := r.q.StartWorkers(ctx); err != nil {
+		return err
+	}
+	if coordinator, ok := r.b.(workflow.CoordinatorLifecycle); ok {
+		if err := coordinator.StartCoordinator(ctx); err != nil {
+			return errors.Join(err, r.q.Shutdown(context.Background()))
+		}
+	}
+	return nil
 }
 
 // Run starts worker processing, blocks until ctx is canceled, then gracefully shuts down.
@@ -572,11 +669,42 @@ func (r *Queue) Run(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	if err := r.StartWorkers(ctx); err != nil {
+		if r.lifecycle != nil {
+			shutdown, cancel := context.WithTimeout(context.Background(), r.lifecycle.ShutdownTimeout())
+			defer cancel()
+			return errors.Join(err, r.Shutdown(shutdown))
+		}
 		return err
 	}
-	<-ctx.Done()
-	// Use a fresh background context so cancellation triggers graceful shutdown instead of short-circuiting it.
-	return r.Shutdown(context.Background())
+	var coordinatorDone <-chan struct{}
+	var coordinator workflow.CoordinatorLifecycle
+	if value, ok := r.b.(workflow.CoordinatorLifecycle); ok {
+		coordinator = value
+		coordinatorDone = value.CoordinatorDone()
+	}
+	var driverDone <-chan struct{}
+	if r.lifecycle != nil {
+		driverDone = r.lifecycle.Done()
+	}
+	select {
+	case <-ctx.Done():
+	case <-driverDone:
+	case <-coordinatorDone:
+	}
+	shutdown := context.Background()
+	var cancel context.CancelFunc
+	if r.lifecycle != nil {
+		shutdown, cancel = context.WithTimeout(shutdown, r.lifecycle.ShutdownTimeout())
+		defer cancel()
+	}
+	var fatal error
+	if r.lifecycle != nil {
+		fatal = r.lifecycle.Err()
+	}
+	if coordinator != nil {
+		fatal = errors.Join(fatal, coordinator.CoordinatorError())
+	}
+	return errors.Join(fatal, r.Shutdown(shutdown))
 }
 
 // Shutdown drains workers and closes underlying resources.
@@ -594,7 +722,24 @@ func (r *Queue) Shutdown(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
-	return r.b.Shutdown(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if r.lifecycle != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.lifecycle.ShutdownTimeout())
+		defer cancel()
+	}
+	if coordinator, ok := r.b.(workflow.CoordinatorLifecycle); ok {
+		if err := coordinator.StopCoordinator(ctx); err != nil {
+			return err
+		}
+	}
+	err := r.q.Shutdown(ctx)
+	if r.lifecycle != nil {
+		return errors.Join(r.lifecycle.ConfigurationError(), err)
+	}
+	return err
 }
 
 // FindChain returns current chain state by ID.
@@ -615,6 +760,9 @@ func (r *Queue) Shutdown(ctx context.Context) error {
 func (r *Queue) FindChain(ctx context.Context, chainID string) (ChainState, error) {
 	if r == nil {
 		return ChainState{}, fmt.Errorf("runtime is nil")
+	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return ChainState{}, r.unsupportedWorkflow("find chain")
 	}
 	state, err := r.b.FindChain(ctx, chainID)
 	return chainStateFromWorkflow(state), err
@@ -639,6 +787,9 @@ func (r *Queue) FindBatch(ctx context.Context, batchID string) (BatchState, erro
 	if r == nil {
 		return BatchState{}, fmt.Errorf("runtime is nil")
 	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return BatchState{}, r.unsupportedWorkflow("find batch")
+	}
 	state, err := r.b.FindBatch(ctx, batchID)
 	return batchStateFromWorkflow(state), err
 }
@@ -656,6 +807,9 @@ func (r *Queue) FindBatch(ctx context.Context, batchID string) (BatchState, erro
 func (r *Queue) Prune(ctx context.Context, before time.Time) error {
 	if r == nil {
 		return fmt.Errorf("runtime is nil")
+	}
+	if r.workflowMode == runtimehook.WorkflowUnsupported {
+		return r.unsupportedWorkflow("prune")
 	}
 	return r.b.Prune(ctx, before)
 }
@@ -745,6 +899,16 @@ func (r *Queue) Stats(ctx context.Context) (StatsSnapshot, error) {
 func (r *Queue) Ready(ctx context.Context) error {
 	if r == nil || r.q == nil {
 		return fmt.Errorf("runtime is nil")
+	}
+	if coordinator, ok := r.b.(workflow.CoordinatorLifecycle); ok {
+		if err := coordinator.CoordinatorError(); err != nil {
+			return err
+		}
+	}
+	if r.lifecycle != nil {
+		if err := r.lifecycle.ConfigurationError(); err != nil {
+			return err
+		}
 	}
 	checker, ok := r.q.(interface{ Ready(context.Context) error })
 	if !ok {
@@ -980,4 +1144,28 @@ func toWorkflowJob(job Job) (workflow.Job, error) {
 		j = j.UniqueFor(job.options.uniqueTTL)
 	}
 	return j, nil
+}
+
+// driverSettings freezes typed option provenance for a driver's construction checks.
+func (o runtimeOptions) driverSettings() runtimehook.Settings {
+	return runtimehook.Settings{
+		ResourceID: o.resourceID, ResourceIDSupplied: o.resourceIDSupplied,
+		Store: workflowStoreFromRoot(o.store), StoreSupplied: o.storeSupplied,
+		Clock: o.clock, ClockSupplied: o.clockSupplied,
+		Middlewares: middlewaresToWorkflow(o.middlewares), MiddlewareSupplied: o.middlewareSupplied,
+		ObserverSupplied: o.observerSupplied, Workers: o.workers, WorkersSupplied: o.workersSupplied,
+		HandlerContextDecorator: o.handlerContextDecorator, DecoratorSupplied: o.decoratorSupplied,
+		LegacyDirectEnvelope: o.legacyDirectEnvelope, LegacyEnvelopeSupplied: o.legacyEnvelopeSupplied,
+	}
+}
+
+// unsupportedWorkflow adds resource and operation context while preserving errors.Is.
+func (r *Queue) unsupportedWorkflow(operation string) error {
+	return fmt.Errorf("%s for driver %q: %w", operation, r.Driver(), ErrWorkflowUnsupported)
+}
+
+// WithResourceID supplies the stable resource scope used by durable built-in continuation recovery.
+// Use the same value across consumers of one queue and distinct values for independent resources sharing a store.
+func WithResourceID(id string) Option {
+	return func(options *runtimeOptions) { options.resourceIDSupplied = true; options.resourceID = id }
 }

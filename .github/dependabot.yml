@@ -14,6 +14,7 @@ updates:
       - /driver/sqlitequeue
       - /driver/sqlqueuecore
       - /driver/sqsqueue
+      - /driver/temporalqueue
       - /examples
       - /integration
     schedule:

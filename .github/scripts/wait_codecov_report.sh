@@ -188,7 +188,7 @@ while (( SECONDS < deadline )); do
         --arg base "$base_sha" \
         --arg head "$sha" \
         --argjson expected "$merged_sessions" \
-        --argjson commit "$commit_json" '
+        --argjson commit "$(jq -c '{totals: (.totals | {files, lines, hits, misses, partials, coverage, sessions})}' <<<"$commit_json")" '
         def coverage_totals:
           [.files, .lines, .hits, .misses, .partials, .coverage];
         def complete_patch:

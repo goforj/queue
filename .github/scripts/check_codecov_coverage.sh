@@ -12,8 +12,8 @@ fail() {
   exit 1
 }
 
-integration_backends=(null sync workerpool redis mysql postgres sqlite nats sqs rabbitmq)
-driver_modules=(mysqlqueue natsqueue postgresqueue rabbitmqqueue redisqueue sqlitequeue sqlqueuecore sqsqueue)
+integration_backends=(null sync workerpool redis mysql postgres sqlite nats sqs rabbitmq temporal)
+driver_modules=(mysqlqueue natsqueue postgresqueue rabbitmqqueue redisqueue sqlitequeue sqlqueuecore sqsqueue temporalqueue)
 
 expected_profiles=("$ARTIFACTS_DIR/coverage-unit/coverage-unit.out")
 for backend in "${integration_backends[@]}"; do
@@ -179,6 +179,10 @@ for backend in "${integration_backends[@]}"; do
       evidence_file="driver/rabbitmqqueue/worker_rabbitmq_impl.go"
       evidence_function="processDelivery"
       ;;
+    temporal)
+ evidence_file="driver/temporalqueue/protocol.go"
+ evidence_function="executeDelivery"
+ ;;
     *) fail "coverage evidence is not defined for backend $backend" ;;
   esac
   require_covered_function "$profile" "$evidence_file" "$evidence_function" "$backend integration backend"

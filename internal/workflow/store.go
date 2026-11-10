@@ -22,11 +22,12 @@ type ChainNode struct {
 
 // ChainRecord contains the immutable data required to create a chain.
 type ChainRecord struct {
-	ChainID    string
-	DispatchID string
-	Queue      string
-	Nodes      []ChainNode
-	CreatedAt  time.Time
+	continuation *continuationPlan
+	ChainID      string
+	DispatchID   string
+	Queue        string
+	Nodes        []ChainNode
+	CreatedAt    time.Time
 }
 
 // ChainState is the persisted execution view of a chain.
@@ -45,13 +46,14 @@ type ChainState struct {
 
 // BatchRecord contains the immutable data required to create a batch.
 type BatchRecord struct {
-	BatchID     string
-	DispatchID  string
-	Name        string
-	Queue       string
-	AllowFailed bool
-	Jobs        []BatchJob
-	CreatedAt   time.Time
+	continuation *continuationPlan
+	BatchID      string
+	DispatchID   string
+	Name         string
+	Queue        string
+	AllowFailed  bool
+	Jobs         []BatchJob
+	CreatedAt    time.Time
 }
 
 // BatchJob binds a stable member identifier to its serialized job.

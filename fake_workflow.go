@@ -14,6 +14,7 @@ type fakeWorkflowRecorder struct {
 	state            *fakeQueueState
 	engine           workflow.Engine
 	store            fakeWorkflowStateStore
+	continuations    map[string][]ContinuationDefinition
 	chains           map[string]ChainRecord
 	batches          map[string]BatchRecord
 	acceptedChainIDs []string
@@ -24,6 +25,7 @@ type fakeWorkflowRecorder struct {
 // cleanup without widening the production workflow.Store contract.
 type fakeWorkflowStateStore interface {
 	workflow.Store
+	workflow.ContinuationStore
 	// FailChainNode preserves first-writer ownership for duplicate fake deliveries.
 	FailChainNode(context.Context, string, string, error) (workflow.ChainState, bool, error)
 	// SettleBatchJob preserves first-writer ownership for duplicate fake deliveries.
@@ -48,12 +50,13 @@ func newFakeWorkflowStateStore() fakeWorkflowStateStore {
 // transport and store owned by one FakeQueue state.
 func newFakeWorkflowRecorder(fake *FakeQueue) *fakeWorkflowRecorder {
 	recorder := &fakeWorkflowRecorder{
-		state:   fake.state,
-		store:   newFakeWorkflowStateStore(),
-		chains:  make(map[string]ChainRecord),
-		batches: make(map[string]BatchRecord),
+		state:         fake.state,
+		store:         newFakeWorkflowStateStore(),
+		continuations: make(map[string][]ContinuationDefinition),
+		chains:        make(map[string]ChainRecord),
+		batches:       make(map[string]BatchRecord),
 	}
-	engine, err := workflow.NewWithStore(fake, recorder, workflow.WithoutEphemeralCallbacks())
+	engine, err := workflow.NewWithStore(fake, recorder, workflow.WithoutEphemeralCallbacks(), workflow.WithContinuationResource("fake"), workflow.WithContinuationQueue("default"))
 	if err != nil {
 		panic(err)
 	}
@@ -65,6 +68,7 @@ func newFakeWorkflowRecorder(fake *FakeQueue) *fakeWorkflowRecorder {
 // prevents readers from observing a half-reset projection.
 func (r *fakeWorkflowRecorder) resetLocked() {
 	r.store = newFakeWorkflowStateStore()
+	r.continuations = make(map[string][]ContinuationDefinition)
 	r.chains = make(map[string]ChainRecord)
 	r.batches = make(map[string]BatchRecord)
 	r.acceptedChainIDs = nil
@@ -100,6 +104,7 @@ func (r *fakeWorkflowRecorder) rejectChain(chainID string) {
 	defer r.state.mu.Unlock()
 	r.store.DiscardChain(chainID)
 	delete(r.chains, chainID)
+	delete(r.continuations, chainID)
 }
 
 // rejectBatch removes state created before a failed member delivery so
@@ -109,6 +114,7 @@ func (r *fakeWorkflowRecorder) rejectBatch(batchID string) {
 	defer r.state.mu.Unlock()
 	r.store.DiscardBatch(batchID)
 	delete(r.batches, batchID)
+	delete(r.continuations, batchID)
 }
 
 // CreateChain records the exact committed engine model before the first node is
@@ -119,6 +125,7 @@ func (r *fakeWorkflowRecorder) CreateChain(ctx context.Context, record workflow.
 	if err := r.store.CreateChain(ctx, record); err != nil {
 		return err
 	}
+	r.recordContinuationDefinitions(record.ChainID, record.Continuations())
 	r.chains[record.ChainID] = chainRecordFromWorkflow(record)
 	return nil
 }
@@ -167,6 +174,7 @@ func (r *fakeWorkflowRecorder) CreateBatch(ctx context.Context, record workflow.
 	if err := r.store.CreateBatch(ctx, record); err != nil {
 		return err
 	}
+	r.recordContinuationDefinitions(record.BatchID, record.Continuations())
 	r.batches[record.BatchID] = batchRecordFromWorkflow(record)
 	return nil
 }

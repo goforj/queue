@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -29,15 +30,16 @@ type BatchBuilder interface {
 }
 
 type batchBuilder struct {
-	r           *runtime
-	jobs        []Job
-	name        string
-	queue       string
-	allowFailed bool
-	progress    func(ctx context.Context, st BatchState) error
-	then        func(ctx context.Context, st BatchState) error
-	catch       func(ctx context.Context, st BatchState, err error) error
-	finally     func(ctx context.Context, st BatchState) error
+	continuation *continuationPlan
+	r            *runtime
+	jobs         []Job
+	name         string
+	queue        string
+	allowFailed  bool
+	progress     func(ctx context.Context, st BatchState) error
+	then         func(ctx context.Context, st BatchState) error
+	catch        func(ctx context.Context, st BatchState, err error) error
+	finally      func(ctx context.Context, st BatchState) error
 }
 
 // Name retains an application-facing label alongside persisted batch state.
@@ -81,6 +83,11 @@ func (b *batchBuilder) Finally(fn func(ctx context.Context, st BatchState) error
 
 // Dispatch persists the complete batch before enqueueing its canonical jobs.
 func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
+	if b.continuation != nil && len(b.continuation.Definitions) > 0 {
+		if err := b.r.store.(ContinuationStore).PrepareContinuations(ctx); err != nil {
+			return "", err
+		}
+	}
 	if len(b.jobs) == 0 {
 		return "", errors.New("batch requires at least one job")
 	}
@@ -101,13 +108,14 @@ func (b *batchBuilder) Dispatch(ctx context.Context) (string, error) {
 		})
 	}
 	if err := b.r.store.CreateBatch(ctx, BatchRecord{
-		BatchID:     batchID,
-		DispatchID:  dispatchID,
-		Name:        b.name,
-		Queue:       b.queue,
-		AllowFailed: b.allowFailed,
-		Jobs:        jobs,
-		CreatedAt:   b.r.now(),
+		continuation: b.continuation,
+		BatchID:      batchID,
+		DispatchID:   dispatchID,
+		Name:         b.name,
+		Queue:        b.queue,
+		AllowFailed:  b.allowFailed,
+		Jobs:         jobs,
+		CreatedAt:    b.r.now(),
 	}); err != nil {
 		return "", err
 	}
@@ -754,4 +762,52 @@ func (r *runtime) handleCallbackEnvelope(ctx context.Context, env envelope) erro
 		Time:          r.now(),
 	})
 	return nil
+}
+
+// BindContinuations snapshots configured aggregate policy and named hooks.
+func (b *batchBuilder) BindContinuations(definitions []ContinuationDefinition) (any, error) {
+	if err := validateContinuationText(b.r.continuationResource, b.queue, b.name); err != nil {
+		return nil, err
+	}
+	if b.r.continuationResource == "" || len(b.r.continuationResource) > 255 {
+		return nil, errors.New("named continuations require a stable WithResourceID scope")
+	}
+	if err := validateContinuationFootprint("batch", len(b.jobs), definitions); err != nil {
+		return nil, err
+	}
+	if b.progress != nil || b.then != nil || b.catch != nil || b.finally != nil {
+		return nil, errors.New("ephemeral callbacks cannot be mixed with named continuations")
+	}
+	if err := validateDefinitions("batch", definitions); err != nil {
+		return nil, err
+	}
+	if _, ok := b.r.store.(ContinuationStore); !ok {
+		return nil, errors.New("workflow store does not support atomic durable continuations")
+	}
+	copy := *b
+	copy.jobs = append([]Job(nil), b.jobs...)
+	for i, job := range copy.jobs {
+		if err := validateContinuationText(job.Type, job.Options.Queue); err != nil {
+			return nil, err
+		}
+		stored, err := toStoredJob(job)
+		if err != nil {
+			return nil, err
+		}
+		copy.jobs[i] = Job{Type: stored.Type, Payload: json.RawMessage(append([]byte(nil), stored.Payload...)), Options: stored.Options}
+	}
+	resolved := cloneDefinitions(definitions)
+	for i := range resolved {
+		if resolved[i].Job.Options.Queue == "" {
+			resolved[i].Job.Options.Queue = b.r.continuationQueue
+		}
+	}
+	if err := validateDefinitions("batch", resolved); err != nil {
+		return nil, err
+	}
+	if err := validateContinuationFootprint("batch", len(copy.jobs), resolved); err != nil {
+		return nil, err
+	}
+	copy.continuation = &continuationPlan{Resource: b.r.continuationResource, Definitions: resolved}
+	return &copy, nil
 }

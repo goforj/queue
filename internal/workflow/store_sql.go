@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/goforj/queue/busruntime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -69,11 +71,13 @@ func newSQLStore(cfg SQLStoreConfig, autoMigrate bool) (Store, error) {
 
 // sqlStore persists workflow state and transition ownership in one database.
 type sqlStore struct {
-	db            *sql.DB
-	driverName    string
-	autoMigrate   bool
-	mysqlKeyLimit mysqlWorkflowKeyLimits
-	sqliteWriteMu sync.Mutex
+	continuationMu    sync.Mutex
+	continuationReady atomic.Bool
+	db                *sql.DB
+	driverName        string
+	autoMigrate       bool
+	mysqlKeyLimit     mysqlWorkflowKeyLimits
+	sqliteWriteMu     sync.Mutex
 
 	ensureMu    sync.Mutex
 	schemaReady bool
@@ -527,12 +531,36 @@ func (s *sqlStore) CreateChain(ctx context.Context, rec ChainRecord) error {
 		rec.CreatedAt = time.Now()
 	}
 	now := rec.CreatedAt.UnixMilli()
-	_, err = s.db.ExecContext(ctx, s.rebind(`INSERT INTO bus_chains
+	var tx *sql.Tx
+	var exec interface {
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	} = s.db
+	if rec.continuation != nil && len(rec.continuation.Definitions) > 0 {
+		if err := s.PrepareContinuations(ctx); err != nil {
+			return err
+		}
+		tx, err = s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		exec = tx
+	}
+	_, err = exec.ExecContext(ctx, s.rebind(`INSERT INTO bus_chains
 		(chain_id, dispatch_id, queue_name, nodes_json, next_index, completed, failed, failure, created_at_ms, updated_at_ms)
 		VALUES (?, ?, ?, ?, 0, 0, 0, '', ?, ?)`),
 		rec.ChainID, rec.DispatchID, rec.Queue, nodesJSON, now, now,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := s.insertLedger(ctx, tx, newLedger("chain", rec.ChainID, rec.DispatchID, rec.continuation)); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	return nil
 }
 
 // AdvanceChain claims the completed node before atomically incrementing the
@@ -545,6 +573,9 @@ func (s *sqlStore) AdvanceChain(ctx context.Context, chainID string, completedNo
 // advanceChainOutcome couples the compare-and-swap result with the state that
 // won it so a recovered delivery cannot mistake an earlier success for its own.
 func (s *sqlStore) advanceChainOutcome(ctx context.Context, chainID string, completedNode string, claim transitionClaim) (chainAdvanceResult, error) {
+	if err := s.continuationSchema(ctx, false); err != nil {
+		return chainAdvanceResult{}, err
+	}
 	state, err := s.GetChain(ctx, chainID)
 	if err != nil {
 		return chainAdvanceResult{}, err
@@ -660,6 +691,11 @@ func (s *sqlStore) advanceChainOutcome(ctx context.Context, chainID string, comp
 	if err != nil {
 		return chainAdvanceResult{}, err
 	}
+	if state.Completed {
+		if err := s.triggerSQLContinuations(ctx, tx, chainID, chainContinuationSummary(state, completedNode, false), false, true, state.UpdatedAt); err != nil {
+			return chainAdvanceResult{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return s.readCommittedChainAdvance(ctx, chainID, completedNode, claim, err)
 	}
@@ -680,6 +716,9 @@ func (s *sqlStore) FailChainNode(ctx context.Context, chainID, nodeID string, ca
 // failChainOutcome commits terminal state and immutable delivery provenance in
 // one transaction so a later settlement recovery can trust the failure owner.
 func (s *sqlStore) failChainOutcome(ctx context.Context, chainID, nodeID string, cause error, claim transitionClaim) (chainFailureResult, error) {
+	if err := s.continuationSchema(ctx, false); err != nil {
+		return chainFailureResult{}, err
+	}
 	state, err := s.GetChain(ctx, chainID)
 	if err != nil {
 		return chainFailureResult{}, err
@@ -741,6 +780,9 @@ func (s *sqlStore) failChainOutcome(ctx context.Context, chainID, nodeID string,
 		if receiptErr != nil {
 			return chainFailureResult{}, receiptErr
 		}
+		if err := s.triggerSQLContinuations(ctx, tx, chainID, chainContinuationSummary(state, nodeID, true), true, true, state.UpdatedAt); err != nil {
+			return chainFailureResult{}, err
+		}
 		if err := tx.Commit(); err != nil {
 			return s.readCommittedChainFailure(ctx, chainID, nodeID, claim, err)
 		}
@@ -783,12 +825,38 @@ func (s *sqlStore) FailChain(ctx context.Context, chainID string, cause error) e
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
 	}
-	msg := ""
-	if cause != nil {
-		msg = cause.Error()
+	if err := s.continuationSchema(ctx, false); err != nil {
+		return err
 	}
-	_, err := s.db.ExecContext(ctx, s.rebind(`UPDATE bus_chains SET failed=1, failure=?, updated_at_ms=? WHERE chain_id=? AND completed=0 AND failed=0`), msg, time.Now().UnixMilli(), chainID)
-	return err
+	message := ""
+	if cause != nil {
+		message = cause.Error()
+	}
+	defer s.lockWriteTransaction()()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	at := time.Now()
+	result, err := tx.ExecContext(ctx, s.rebind(`UPDATE bus_chains SET failed=1,failure=?,updated_at_ms=? WHERE chain_id=? AND completed=0 AND failed=0`), message, at.UnixMilli(), chainID)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed > 0 {
+		state, err := s.getChainTx(ctx, tx, chainID)
+		if err != nil {
+			return err
+		}
+		if err := s.triggerSQLContinuations(ctx, tx, chainID, chainContinuationSummary(state, "", true), true, true, at); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // GetChain decodes the stored node payload and normalizes missing rows to ErrNotFound.
@@ -833,6 +901,11 @@ func (s *sqlStore) CreateBatch(ctx context.Context, rec BatchRecord) error {
 	if err := validateBatchRecord(rec); err != nil {
 		return err
 	}
+	if rec.continuation != nil && len(rec.continuation.Definitions) > 0 {
+		if err := s.PrepareContinuations(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
 	}
@@ -871,6 +944,9 @@ func (s *sqlStore) CreateBatch(ctx context.Context, rec BatchRecord) error {
 		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO bus_batch_jobs (batch_id, job_id, started, done, failed) VALUES (?, ?, 0, 0, 0)`), rec.BatchID, job.JobID); err != nil {
 			return err
 		}
+	}
+	if err := s.insertLedger(ctx, tx, newLedger("batch", rec.BatchID, rec.DispatchID, rec.continuation)); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -940,8 +1016,34 @@ func (s *sqlStore) CancelBatch(ctx context.Context, batchID string) error {
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, s.rebind(`UPDATE bus_batches SET cancelled=1, completed=1, updated_at_ms=? WHERE batch_id=?`), time.Now().UnixMilli(), batchID)
-	return err
+	if err := s.continuationSchema(ctx, false); err != nil {
+		return err
+	}
+	defer s.lockWriteTransaction()()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	at := time.Now()
+	result, err := tx.ExecContext(ctx, s.rebind(`UPDATE bus_batches SET cancelled=1,completed=1,updated_at_ms=? WHERE batch_id=?`), at.UnixMilli(), batchID)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed > 0 {
+		st, err := s.getBatchTx(ctx, tx, batchID)
+		if err != nil {
+			return err
+		}
+		if err := s.triggerSQLContinuations(ctx, tx, batchID, busruntime.ContinuationSummary{Kind: "batch", Total: st.Total, Pending: st.Pending, Processed: st.Processed, Failed: st.Failed, Completed: true, Cancelled: true}, false, true, at); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // GetBatch reconstructs aggregate state and normalizes missing rows to ErrNotFound.
@@ -1019,43 +1121,26 @@ func (s *sqlStore) Prune(ctx context.Context, before time.Time) error {
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.continuationSchema(ctx, false); err != nil {
+		return err
+	}
 	cutoff := before.UnixMilli()
 	defer s.lockWriteTransaction()()
-	tx, err := s.db.BeginTx(ctx, nil)
+	var options *sql.TxOptions
+	if s.driverName == "mysql" || s.driverName == "postgres" || s.driverName == "pgx" {
+		// Candidate locks and later ledger checks must observe the same committed identity after identifier reuse.
+		options = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	}
+	tx, err := s.db.BeginTx(ctx, options)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM bus_workflow_transition_receipts WHERE workflow_kind=? AND workflow_id IN (
-		SELECT chain_id FROM bus_chains WHERE updated_at_ms < ? AND (completed=1 OR failed=1)
-	)`), chainTransitionKind, cutoff); err != nil {
+	if err := s.pruneWorkflowParents(ctx, tx, chainTransitionKind, cutoff); err != nil {
 		return err
 	}
-
-	// Remove chain node-idempotency rows for terminal chains before pruning chains.
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM bus_chain_completed_nodes WHERE chain_id IN (
-		SELECT chain_id FROM bus_chains WHERE updated_at_ms < ? AND (completed=1 OR failed=1)
-	)`), cutoff); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM bus_chains WHERE updated_at_ms < ? AND (completed=1 OR failed=1)`), cutoff); err != nil {
-		return err
-	}
-
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM bus_workflow_transition_receipts WHERE workflow_kind=? AND workflow_id IN (
-		SELECT batch_id FROM bus_batches WHERE updated_at_ms < ? AND completed=1
-	)`), batchTransitionKind, cutoff); err != nil {
-		return err
-	}
-
-	// Remove per-job state for terminal batches before pruning batches.
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM bus_batch_jobs WHERE batch_id IN (
-		SELECT batch_id FROM bus_batches WHERE updated_at_ms < ? AND completed=1
-	)`), cutoff); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM bus_batches WHERE updated_at_ms < ? AND completed=1`), cutoff); err != nil {
+	if err := s.pruneWorkflowParents(ctx, tx, batchTransitionKind, cutoff); err != nil {
 		return err
 	}
 
@@ -1067,9 +1152,82 @@ func (s *sqlStore) Prune(ctx context.Context, before time.Time) error {
 	return tx.Commit()
 }
 
+// pruneWorkflowParents bounds each candidate set before checking for concurrently introduced named authority.
+func (s *sqlStore) pruneWorkflowParents(ctx context.Context, tx *sql.Tx, kind string, cutoff int64) error {
+	table, column, children, terminal := "bus_chains", "chain_id", "bus_chain_completed_nodes", "(completed=1 OR failed=1)"
+	if kind == batchTransitionKind {
+		table, column, children, terminal = "bus_batches", "batch_id", "bus_batch_jobs", "completed=1"
+	}
+	cursor, haveCursor := "", false
+	for {
+		query := `SELECT ` + column + ` FROM ` + table + ` WHERE updated_at_ms < ? AND ` + terminal
+		args := []any{cutoff}
+		if haveCursor {
+			query += ` AND ` + column + ` > ?`
+			args = append(args, cursor)
+		}
+		query += ` ORDER BY ` + column + ` LIMIT 256`
+		if s.driverName == "mysql" || s.driverName == "postgres" || s.driverName == "pgx" {
+			query += ` FOR UPDATE`
+		}
+		ids, err := s.pruneCandidateIDs(ctx, tx, query, args)
+		if err != nil || len(ids) == 0 {
+			return err
+		}
+		cursor, haveCursor = ids[len(ids)-1].(string), true
+		// A visible named candidate implies its table already exists. Later parents cannot enter this captured set.
+		var named int
+		if err := tx.QueryRowContext(ctx, s.continuationTableQuery()).Scan(&named); err != nil {
+			return err
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+		if named > 0 {
+			ids, err = s.pruneCandidateIDs(ctx, tx, `SELECT `+column+` FROM `+table+` WHERE `+column+` IN (`+placeholders+`) AND `+column+` NOT IN (SELECT workflow_id FROM bus_continuations_v1)`, ids)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				continue
+			}
+			placeholders = strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+		}
+		receiptArgs := append([]any{kind}, ids...)
+		if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM bus_workflow_transition_receipts WHERE workflow_kind=? AND workflow_id IN (`+placeholders+`)`), receiptArgs...); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM `+children+` WHERE `+column+` IN (`+placeholders+`)`), ids...); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM `+table+` WHERE `+column+` IN (`+placeholders+`)`), ids...); err != nil {
+			return err
+		}
+	}
+}
+
+// pruneCandidateIDs closes each bounded cursor before transaction writes or schema probes, including one-connection pools.
+func (s *sqlStore) pruneCandidateIDs(ctx context.Context, tx *sql.Tx, query string, args []any) ([]any, error) {
+	rows, err := tx.QueryContext(ctx, s.rebind(query), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []any
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // markBatchTerminal conditionally claims one member and updates aggregate
 // counters arithmetically so concurrent settlements cannot overwrite state.
 func (s *sqlStore) markBatchTerminal(ctx context.Context, batchID, jobID string, isFailure bool, claim transitionClaim) (BatchState, bool, bool, bool, transitionReceipt, bool, error) {
+	if err := s.continuationSchema(ctx, false); err != nil {
+		return BatchState{}, false, false, false, transitionReceipt{}, false, err
+	}
 	if err := s.ensureSchema(ctx); err != nil {
 		return BatchState{}, false, false, false, transitionReceipt{}, false, err
 	}
@@ -1192,6 +1350,11 @@ func (s *sqlStore) markBatchTerminal(ctx context.Context, batchID, jobID string,
 	} else {
 		receipt, receiptKnown, err = s.getBatchTransitionReceipt(ctx, tx, batchID, jobID)
 		if err != nil {
+			return BatchState{}, false, false, false, transitionReceipt{}, false, err
+		}
+	}
+	if claimed {
+		if err := s.triggerSQLContinuations(ctx, tx, batchID, busruntime.ContinuationSummary{Kind: "batch", MemberID: jobID, Total: st.Total, Pending: st.Pending, Processed: st.Processed, Failed: st.Failed, Completed: st.Completed, Cancelled: st.Cancelled}, isFailure && st.Failed == 1, !initialState.Completed && st.Completed, st.UpdatedAt); err != nil {
 			return BatchState{}, false, false, false, transitionReceipt{}, false, err
 		}
 	}

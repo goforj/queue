@@ -311,7 +311,7 @@ func (d *localQueue) enqueueNow(ctx context.Context, job Job, parsed jobOptions)
 	d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
 		metrics.Active++
 	})
-	err := d.runWithRetry(ctx, job, parsed)
+	err := d.runWithRetry(busruntime.DeliveryExecutionContext(ctx), job, parsed)
 	d.updateQueueMetrics(queueName, func(metrics *localQueueMetrics) {
 		if metrics.Active > 0 {
 			metrics.Active--
@@ -343,7 +343,7 @@ func (d *localQueue) enqueueReservedAsync(ctx context.Context, job Job, parsed j
 	if markAcceptance && acceptance != nil {
 		ready = make(chan struct{})
 	}
-	queued := queuedJob{ctx: ctx, job: job, opts: parsed, ready: ready}
+	queued := queuedJob{ctx: busruntime.DeliveryExecutionContext(ctx), job: job, opts: parsed, ready: ready}
 	if d.continuation.Owns(ctx) {
 		select {
 		case workQueue <- queued:

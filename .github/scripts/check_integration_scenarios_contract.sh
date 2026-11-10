@@ -38,7 +38,7 @@ has_pattern() {
     rg -q -- "${pattern}" "${file}"
     return
   fi
-  grep -Eq -- "${pattern}" "${file}"
+  grep -REq -- "${pattern}" "${file}"
 }
 
 echo "Checking required integration scenarios exist in integration suite..."
@@ -100,5 +100,16 @@ if ! has_pattern "func TestObservabilityIntegration_PauseResumeSupport_AllBacken
   echo "missing TestObservabilityIntegration_PauseResumeSupport_AllBackends"
   exit 1
 fi
+
+
+# Temporal has explicit capability rejections and a public-driver server suite.
+# Keep its required evidence separate from legacy uniqueness/admin expectations.
+temporal_suite="${integration_root}/temporal"
+for scenario in PortableDispatch WorkflowStateWithoutWorker NamedContinuations OriginalHistoryReplay FailureDrainsAdmittedBatch CanceledDelayAndResourceIsolation CrashAfterExternalEffect CrashBeforeJournalCommit ReconcilesLostStartResponse ActualSDKFatalReachesRun RejectsAdministrativeReset SharedRemoteCapacity ScaleAndPaging ProtectedHistoryAndDiagnostics ContextBoundProtection ShutdownDrainsInheritedActivityInterceptor AllowedFailuresRetainBusinessSuccess; do
+  if ! has_pattern "func TestTemporalDriver${scenario}\\(" "${temporal_suite}"; then
+    echo "missing production Temporal scenario: ${scenario}"
+    exit 1
+  fi
+done
 
 echo "Scenarios contract checks passed."

@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -23,11 +24,12 @@ type ChainBuilder interface {
 }
 
 type chainBuilder struct {
-	r     *runtime
-	jobs  []Job
-	queue string
-	catch func(ctx context.Context, st ChainState, err error) error
-	done  func(ctx context.Context, st ChainState) error
+	continuation *continuationPlan
+	r            *runtime
+	jobs         []Job
+	queue        string
+	catch        func(ctx context.Context, st ChainState, err error) error
+	done         func(ctx context.Context, st ChainState) error
 }
 
 type synchronousChainResultContextKey struct{}
@@ -101,6 +103,11 @@ func (b *chainBuilder) Finally(fn func(ctx context.Context, st ChainState) error
 
 // Dispatch persists every node before enqueueing the first canonical delivery.
 func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
+	if b.continuation != nil && len(b.continuation.Definitions) > 0 {
+		if err := b.r.store.(ContinuationStore).PrepareContinuations(ctx); err != nil {
+			return "", err
+		}
+	}
 	if len(b.jobs) == 0 {
 		return "", errors.New("chain requires at least one job")
 	}
@@ -122,11 +129,12 @@ func (b *chainBuilder) Dispatch(ctx context.Context) (string, error) {
 		})
 	}
 	if err := b.r.store.CreateChain(ctx, ChainRecord{
-		ChainID:    chainID,
-		DispatchID: dispatchID,
-		Queue:      b.queue,
-		Nodes:      nodes,
-		CreatedAt:  b.r.now(),
+		continuation: b.continuation,
+		ChainID:      chainID,
+		DispatchID:   dispatchID,
+		Queue:        b.queue,
+		Nodes:        nodes,
+		CreatedAt:    b.r.now(),
 	}); err != nil {
 		return "", err
 	}
@@ -684,4 +692,52 @@ func (r *runtime) invokeChainFinallyObserved(ctx context.Context, st ChainState,
 	}
 	defer r.finishChainCallback(st.ChainID, "finally")
 	return runEphemeralCallback(func() error { return cb.finally(ctx, st) })
+}
+
+// BindContinuations snapshots configured members and named hooks without changing ChainBuilder.
+func (b *chainBuilder) BindContinuations(definitions []ContinuationDefinition) (any, error) {
+	if err := validateContinuationText(b.r.continuationResource, b.queue); err != nil {
+		return nil, err
+	}
+	if b.r.continuationResource == "" || len(b.r.continuationResource) > 255 {
+		return nil, errors.New("named continuations require a stable WithResourceID scope")
+	}
+	if err := validateContinuationFootprint("chain", len(b.jobs), definitions); err != nil {
+		return nil, err
+	}
+	if b.catch != nil || b.done != nil {
+		return nil, errors.New("ephemeral callbacks cannot be mixed with named continuations")
+	}
+	if err := validateDefinitions("chain", definitions); err != nil {
+		return nil, err
+	}
+	if _, ok := b.r.store.(ContinuationStore); !ok {
+		return nil, errors.New("workflow store does not support atomic durable continuations")
+	}
+	copy := *b
+	copy.jobs = append([]Job(nil), b.jobs...)
+	for i, job := range copy.jobs {
+		if err := validateContinuationText(job.Type, job.Options.Queue); err != nil {
+			return nil, err
+		}
+		stored, err := toStoredJob(job)
+		if err != nil {
+			return nil, err
+		}
+		copy.jobs[i] = Job{Type: stored.Type, Payload: json.RawMessage(append([]byte(nil), stored.Payload...)), Options: stored.Options}
+	}
+	resolved := cloneDefinitions(definitions)
+	for i := range resolved {
+		if resolved[i].Job.Options.Queue == "" {
+			resolved[i].Job.Options.Queue = b.r.continuationQueue
+		}
+	}
+	if err := validateDefinitions("chain", resolved); err != nil {
+		return nil, err
+	}
+	if err := validateContinuationFootprint("chain", len(copy.jobs), resolved); err != nil {
+		return nil, err
+	}
+	copy.continuation = &continuationPlan{Resource: b.r.continuationResource, Definitions: resolved}
+	return &copy, nil
 }

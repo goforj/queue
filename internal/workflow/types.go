@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"github.com/goforj/queue/busruntime"
 	"time"
 )
 
@@ -74,6 +75,7 @@ type DispatchResult struct {
 
 // Context carries workflow correlation and isolated payload data into handlers and middleware.
 type Context struct {
+	continuation  *busruntime.Continuation
 	SchemaVersion int
 	DispatchID    string
 	JobID         string
@@ -117,4 +119,18 @@ func (c Context) PayloadBytes() []byte {
 // Bind unmarshals the job payload into dst.
 func (c Context) Bind(dst any) error {
 	return json.Unmarshal(c.payload, dst)
+}
+
+// Continuation returns an isolated value describing the immutable durable invocation.
+func (c Context) Continuation() (busruntime.Continuation, bool) {
+	if c.continuation == nil {
+		return busruntime.Continuation{}, false
+	}
+	return *c.continuation, true
+}
+
+// WithContinuation preserves a durable invocation through middleware model conversion.
+func (c Context) WithContinuation(value busruntime.Continuation) Context {
+	c.continuation = &value
+	return c
 }
