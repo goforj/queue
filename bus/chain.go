@@ -143,11 +143,13 @@ func nodeID(chainID string, idx int) string {
 	return chainID + "_" + newID("n")
 }
 
+// handleInternalChainNode restores each physical delivery before processing its chain node.
 func (r *runtime) handleInternalChainNode(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
+	ctx = r.deliveryContext(ctx, env.Context)
 	err := r.executeWireJob(ctx, env)
 	if err != nil {
 		_ = r.store.FailChain(ctx, env.ChainID, err)

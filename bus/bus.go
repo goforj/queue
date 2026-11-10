@@ -183,9 +183,10 @@ func asRuntime(v any) (busruntime.Runtime, error) {
 }
 
 type runtime struct {
-	q     busruntime.Runtime
-	store Store
-	now   func() time.Time
+	propagator ContextPropagator
+	q          busruntime.Runtime
+	store      Store
+	now        func() time.Time
 
 	observer Observer
 
@@ -337,7 +338,9 @@ func (r *runtime) Prune(ctx context.Context, before time.Time) error {
 	return r.store.Prune(ctx, before)
 }
 
+// dispatchEnvelope snapshots context in an optional field while preserving the existing envelope version and job payload.
 func (r *runtime) dispatchEnvelope(ctx context.Context, jobType string, env envelope) error {
+	env.Context = r.dispatchContext(ctx)
 	payload, err := json.Marshal(env)
 	if err != nil {
 		return err
@@ -373,11 +376,13 @@ func (r *runtime) dispatchCallback(ctx context.Context, base envelope, kind stri
 	return r.dispatchEnvelope(ctx, internalJobCallback, cbEnv)
 }
 
+// handleInternalJob restores correlation before logical execution without adopting the publisher lifetime.
 func (r *runtime) handleInternalJob(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
+	ctx = r.deliveryContext(ctx, env.Context)
 	return r.executeWireJob(ctx, env)
 }
 
@@ -464,17 +469,19 @@ func toWireJob(job Job) (wireJob, error) {
 }
 
 type envelope struct {
-	SchemaVersion int     `json:"schema_version"`
-	DispatchID    string  `json:"dispatch_id"`
-	Kind          string  `json:"kind"`
-	JobID         string  `json:"job_id"`
-	ChainID       string  `json:"chain_id,omitempty"`
-	BatchID       string  `json:"batch_id,omitempty"`
-	NodeID        string  `json:"node_id,omitempty"`
-	Attempt       int     `json:"attempt"`
-	Job           wireJob `json:"job"`
-	CallbackKind  string  `json:"callback_kind,omitempty"`
-	Error         string  `json:"error,omitempty"`
+	// Context is optional carrier metadata; legacy workers ignore this field.
+	Context       json.RawMessage `json:"context,omitempty"`
+	SchemaVersion int             `json:"schema_version"`
+	DispatchID    string          `json:"dispatch_id"`
+	Kind          string          `json:"kind"`
+	JobID         string          `json:"job_id"`
+	ChainID       string          `json:"chain_id,omitempty"`
+	BatchID       string          `json:"batch_id,omitempty"`
+	NodeID        string          `json:"node_id,omitempty"`
+	Attempt       int             `json:"attempt"`
+	Job           wireJob         `json:"job"`
+	CallbackKind  string          `json:"callback_kind,omitempty"`
+	Error         string          `json:"error,omitempty"`
 }
 
 func newID(prefix string) string {
