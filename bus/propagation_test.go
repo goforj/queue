@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/goforj/queue/busruntime"
 	"strings"
 	"testing"
@@ -99,12 +100,31 @@ type isolatedPropagationRuntime struct{ *syncTestRuntime }
 
 // BusDispatch simulates a broker that delivers bytes on an independently owned worker context.
 func (r isolatedPropagationRuntime) BusDispatch(_ context.Context, name string, payload []byte, options busruntime.JobOptions) error {
-	return r.syncTestRuntime.BusDispatch(context.Background(), name, payload, options)
+	var err error
+	for attempt := 0; attempt <= options.Retry; attempt++ {
+		err = r.syncTestRuntime.BusDispatch(context.Background(), name, payload, options)
+		if err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// workflowContextPropagator requires every workflow transition to retain correlation before it can enqueue the next delivery.
+type workflowContextPropagator struct{ testContextPropagator }
+
+// Inject reads the active context so fixed fixture headers cannot conceal a missing extraction at an intermediate boundary.
+func (workflowContextPropagator) Inject(ctx context.Context) map[string]string {
+	identity, _ := ctx.Value(propagationKey("trace")).(string)
+	if identity == "" {
+		return nil
+	}
+	return map[string]string{"traceparent": identity}
 }
 
 // TestWorkflowContextPropagation covers chained jobs, batch jobs, and completion callbacks across serialized deliveries.
 func TestWorkflowContextPropagation(t *testing.T) {
-	runtime, err := New(isolatedPropagationRuntime{newSyncTestRuntime()}, WithContextPropagator(testContextPropagator{headers: map[string]string{"traceparent": "producer"}}))
+	runtime, err := New(isolatedPropagationRuntime{newSyncTestRuntime()}, WithContextPropagator(workflowContextPropagator{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +140,7 @@ func TestWorkflowContextPropagation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Shutdown(context.Background())
+	producer := context.WithValue(context.Background(), propagationKey("trace"), "producer")
 	chainDone := false
 	if _, err := runtime.Chain(NewJob("step", nil), NewJob("step", nil)).Finally(func(ctx context.Context, _ ChainState) error {
 		chainDone = true
@@ -127,7 +148,7 @@ func TestWorkflowContextPropagation(t *testing.T) {
 			t.Error("chain callback lost producer context")
 		}
 		return nil
-	}).Dispatch(context.Background()); err != nil {
+	}).Dispatch(producer); err != nil {
 		t.Fatal(err)
 	}
 	batchDone := false
@@ -137,10 +158,27 @@ func TestWorkflowContextPropagation(t *testing.T) {
 			t.Error("batch callback lost producer context")
 		}
 		return nil
-	}).Dispatch(context.Background()); err != nil {
+	}).Dispatch(producer); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 4 || !chainDone || !batchDone {
 		t.Fatalf("jobs=%d chain=%v batch=%v", calls, chainDone, batchDone)
+	}
+	attempts := 0
+	runtime.Register("retry", func(ctx context.Context, _ Context) error {
+		attempts++
+		if ctx.Value(propagationKey("trace")) != "producer" {
+			t.Error("retry lost the serialized producer identity")
+		}
+		if attempts == 1 {
+			return errors.New("transient failure")
+		}
+		return nil
+	})
+	if _, err := runtime.Dispatch(producer, NewJob("retry", nil).Retry(1)); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 {
+		t.Fatalf("retry attempts=%d want=2", attempts)
 	}
 }

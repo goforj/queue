@@ -185,6 +185,8 @@ type queueCommon struct {
 	driver                  Driver
 	ctx                     context.Context
 	handlerContextDecorator func(context.Context) context.Context
+	contextPropagator       ContextPropagator
+	handlerContextPrepared  bool
 }
 
 type nativeQueueRuntime struct {
@@ -212,6 +214,11 @@ type runtimeWorkerBackend interface {
 	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
 	Shutdown(ctx context.Context) error
+}
+
+// runtimeWorkerContextPreparerSetter optionally prepares job metadata before a worker's native observations.
+type runtimeWorkerContextPreparerSetter interface {
+	SetHandlerContextPreparer(func(context.Context, Job) context.Context) bool
 }
 
 type runtimeWorkerContextDecoratorSetter interface {
@@ -471,8 +478,16 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 			return err
 		}
 	}
-	if setter, ok := w.(runtimeWorkerContextDecoratorSetter); ok {
-		setter.SetHandlerContextDecorator(q.common.handlerContextDecorator)
+	if q.common.cfg.Driver == DriverRedis && q.common.contextPropagator != nil {
+		if setter, ok := w.(runtimeWorkerContextPreparerSetter); ok {
+			q.common.handlerContextPrepared = setter.SetHandlerContextPreparer(q.common.prepareHandlerContext)
+		}
+	}
+	// Older Redis workers cannot prepare before their decorator, so keep both operations in the fallback handler.
+	if q.common.cfg.Driver != DriverRedis || q.common.contextPropagator == nil || q.common.handlerContextPrepared {
+		if setter, ok := w.(runtimeWorkerContextDecoratorSetter); ok {
+			setter.SetHandlerContextDecorator(q.common.handlerContextDecorator)
+		}
 	}
 	for jobType, handler := range registered {
 		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
@@ -649,16 +664,35 @@ func (q *externalQueueRuntime) Ready(ctx context.Context) error {
 	return q.common.Ready(ctx)
 }
 
+// wrapRegisteredHandler restores the physical parent before decoration and process observations without duplicating Redis events.
 func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Handler {
-	if handler == nil || q.cfg.Observer == nil {
-		return handler
+	if handler == nil {
+		return nil
 	}
-	// Redis worker emits process lifecycle events natively.
-	// Skip shared handler wrapping to avoid duplicate process_* events.
 	if q.cfg.Driver == DriverRedis {
-		return handler
+		if q.handlerContextPrepared || q.contextPropagator == nil {
+			return handler
+		}
+		return func(ctx context.Context, job Job) error {
+			ctx = q.prepareHandlerContext(ctx, job)
+			if q.handlerContextDecorator != nil {
+				if decorated := q.handlerContextDecorator(ctx); decorated != nil {
+					ctx = decorated
+				}
+			}
+			return handler(ctx, job)
+		}
 	}
-	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, q.handlerContextDecorator, handler)
+	wrapped := handler
+	if q.cfg.Observer != nil || q.handlerContextDecorator != nil {
+		wrapped = wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, q.handlerContextDecorator, wrapped)
+	}
+	if q.contextPropagator == nil {
+		return wrapped
+	}
+	return func(ctx context.Context, job Job) error {
+		return wrapped(q.prepareHandlerContext(ctx, job), job)
+	}
 }
 
 func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
@@ -701,6 +735,14 @@ type driverRuntimeQueueBackendAdapter struct {
 
 type driverWorkerBackendAdapter struct {
 	driverWorkerBackend
+}
+
+// SetHandlerContextPreparer reports whether the underlying driver can prepare before native observations.
+func (a driverWorkerBackendAdapter) SetHandlerContextPreparer(fn func(context.Context, Job) context.Context) bool {
+	if setter, ok := a.driverWorkerBackend.(runtimeWorkerContextPreparerSetter); ok {
+		return setter.SetHandlerContextPreparer(fn)
+	}
+	return false
 }
 
 func (a driverWorkerBackendAdapter) SetHandlerContextDecorator(fn func(context.Context) context.Context) {
