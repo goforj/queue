@@ -84,7 +84,7 @@ Each driver is thoroughly tested against the shared test suite using [testcontai
 | <img src="https://img.shields.io/badge/nats-%23007ACC?style=flat" alt="NATS"> | Ephemeral broker | Core NATS subject routing; every plain subscription can receive a broadcast copy. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
 | <img src="https://img.shields.io/badge/sqs-%23FF9900?style=flat" alt="SQS"> | Broker target | AWS SQS transport with endpoint overrides for localstack/testing. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
 | <img src="https://img.shields.io/badge/rabbitmq-%23FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ"> | Broker target | RabbitMQ transport and worker consumption. | - | ✓ | ✓ | Instance | ✓ | ✓ | - | - |
-| Temporal | Workflow service | Optional `driver/temporalqueue`; portable jobs, chains, batches and native SDK workflows. [Configuration and limits](docs/temporal.md). | ✓ | ✓ | ✓ | Unsupported | ✓ | ✓ | - | - |
+| <img src="https://img.shields.io/badge/temporal-%23000000?logo=temporal&logoColor=white" alt="Temporal"> | Workflow service | Optional `driver/temporalqueue`; portable jobs, chains, batches and native SDK workflows. [Configuration and limits](docs/temporal.md). | ✓ | ✓ | ✓ | Unsupported | ✓ | ✓ | - | - |
 
 > SQL-backed queues (`sqlite`, `mysql`, `postgres`) are durable and convenient, but they trade throughput for operational simplicity. They default to `1` worker, and increasing concurrency may require DB tuning (indexes, connection pool, lock contention). Prefer broker-backed drivers for higher-throughput workloads.
 >
