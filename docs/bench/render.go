@@ -86,9 +86,6 @@ func runBenchmarks(root string) []benchRow {
 			"-run=^$",
 			"-bench", "BenchmarkDriverDispatch_Local",
 		},
-		env: map[string]string{
-			"GOCACHE": "/tmp/queue-gocache",
-		},
 	})
 
 	rows := parseRows(localOutput, "Local")
@@ -106,7 +103,6 @@ func runBenchmarks(root string) []benchRow {
 			},
 			env: map[string]string{
 				"INTEGRATION_BACKEND": integrationBackends,
-				"GOCACHE":             "/tmp/queue-gocache",
 			},
 		})
 		rows = append(rows, parseRows(integrationOutput, "Integration")...)

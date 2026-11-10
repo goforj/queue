@@ -60,7 +60,7 @@ func runTemporalSuite(run func() int) (code int) {
 }
 
 // requireTemporalServer refuses to count a skipped selected backend as acceptance evidence.
-func requireTemporalServer(t *testing.T) {
+func requireTemporalServer(t testing.TB) {
 	t.Helper()
 	if !testenv.BackendEnabled(os.Getenv("INTEGRATION_BACKEND"), testenv.BackendTemporal) {
 		t.Skip("Temporal backend not selected")

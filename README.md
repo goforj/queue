@@ -312,10 +312,12 @@ q.Register("emails:send", func(ctx context.Context, m queue.Message) error {
 
 ## Benchmarks
 
+These benchmarks measure serial producer dispatch acceptance, with worker startup excluded. They do not wait for handler completion; allocations cover the benchmark process, including concurrent worker work. Temporal dispatch starts a durable workflow execution, so these figures are not completed-job throughput or workflow latency.
+
 Run local + integration-backed benchmarks (requires Docker/testcontainers):
 
 ```bash
-cd docs && GOWORK=off INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test -tags=benchrender ./bench -run '^TestRenderBenchmarks$'
+cd docs && GOWORK=off INTEGRATION_BACKEND=all go test -tags=benchrender ./bench -run '^TestRenderBenchmarks$' -count=1
 ```
 
 <!-- bench:embed:start -->
@@ -340,16 +342,17 @@ cd docs && GOWORK=off INTEGRATION_BACKEND=all GOCACHE=/tmp/queue-gocache go test
 
 | Class | Driver | ns/op | ops/s | B/op | allocs/op |
 |:------|:------|-----:|-----:|-----:|---------:|
-| External | nats | 774 | 1291823 | 1258 | 13 |
-| External | redis | 95295 | 10494 | 2113 | 33 |
-| External | rabbitmq | 165780 | 6032 | 1882 | 57 |
-| External | sqlite | 202380 | 4941 | 1931 | 47 |
-| External | postgres | 1056731 | 946 | 3809 | 78 |
-| External | sqs | 1873911 | 534 | 94784 | 1082 |
-| External | mysql | 2286406 | 437 | 3303 | 62 |
-| Local | null | 37 | 26673780 | 128 | 1 |
-| Local | sync | 282 | 3539823 | 408 | 6 |
-| Local | workerpool | 650 | 1538462 | 456 | 7 |
+| External | nats | 69624 | 14363 | 1922 | 25 |
+| External | redis | 285528 | 3502 | 3682 | 54 |
+| External | sqs | 753666 | 1327 | 32002 | 360 |
+| External | sqlite | 858737 | 1165 | 3284 | 74 |
+| External | rabbitmq | 1051899 | 951 | 3308 | 85 |
+| External | temporal | 3614431 | 277 | 162376 | 1475 |
+| External | postgres | 4961687 | 202 | 6444 | 116 |
+| External | mysql | 7118433 | 140 | 4975 | 87 |
+| Local | null | 205 | 4885198 | 672 | 7 |
+| Local | sync | 750 | 1332445 | 1736 | 22 |
+| Local | workerpool | 1177 | 849618 | 2248 | 23 |
 
 <!-- bench:embed:end -->
 
