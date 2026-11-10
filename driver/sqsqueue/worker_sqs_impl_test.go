@@ -125,7 +125,7 @@ func TestSQSWorker_RepublishFailureEmitsObserverEvent(t *testing.T) {
 		handlers: map[string]queue.Handler{},
 		client:   stub,
 		queueURL: "https://example.local/queue/default",
-		observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+		observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 	}
 
 	body, err := json.Marshal(sqsMessage{
@@ -150,7 +150,7 @@ func TestSQSWorker_RepublishFailureUnwrapsBusEnvelopeJobType(t *testing.T) {
 		handlers: map[string]queue.Handler{},
 		client:   stub,
 		queueURL: "https://example.local/queue/default",
-		observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+		observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 	}
 
 	body, err := json.Marshal(sqsMessage{

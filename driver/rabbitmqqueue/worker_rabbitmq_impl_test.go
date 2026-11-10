@@ -130,7 +130,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w := &rabbitMQWorker{
 			handlers: map[string]queue.Handler{},
 			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
-			observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+			observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 		}
 		body, err := json.Marshal(rabbitMQMessage{Type: "job:future", Queue: "default", AvailableAtMS: time.Now().Add(2 * time.Second).UnixMilli()})
 		if err != nil {
@@ -151,7 +151,7 @@ func TestRabbitMQWorker_ProcessDeliveryBranches(t *testing.T) {
 		w := &rabbitMQWorker{
 			handlers: map[string]queue.Handler{},
 			cfg:      rabbitMQWorkerConfig{DefaultQueue: "default"},
-			observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+			observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 		}
 		body, err := json.Marshal(rabbitMQMessage{
 			Type:          "job:future",
