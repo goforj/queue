@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue/bus"
+	"github.com/goforj/queue/internal/contextpropagation"
 )
 
 // Message is the handler message passed to the high-level queue runtime.
@@ -261,7 +262,7 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 		propagator := ro.contextPropagator
 		if setter, ok := q.(queueContextPropagatorSetter); ok {
 			setter.setContextPropagator(propagator)
-			propagator = preparedContextPropagator{ContextPropagator: propagator}
+			propagator = contextpropagation.Prepared{Propagator: propagator}
 		}
 		ro.busOpts = append(ro.busOpts, bus.WithContextPropagator(propagator))
 	}

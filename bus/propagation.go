@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"encoding/json"
+	"github.com/goforj/queue/internal/contextpropagation"
 )
 
 // ContextPropagator transfers explicitly selected context metadata across physical job deliveries.
@@ -48,6 +49,10 @@ func (r *runtime) dispatchContext(ctx context.Context) json.RawMessage {
 // deliveryContext treats malformed correlation as absent while retaining the worker's execution lifetime.
 func (r *runtime) deliveryContext(ctx context.Context, encoded json.RawMessage) context.Context {
 	if r.propagator == nil || len(encoded) == 0 || len(encoded) > 8192 {
+		return ctx
+	}
+	// Physical queues already validated this carrier before decorators and observations.
+	if _, prepared := r.propagator.(contextpropagation.Prepared); prepared {
 		return ctx
 	}
 	var headers map[string]string

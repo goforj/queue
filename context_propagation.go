@@ -20,14 +20,6 @@ func WithContextPropagator(propagator ContextPropagator) Option {
 	}
 }
 
-// preparedContextPropagator leaves extraction to the physical worker before decorators and lifecycle observers run.
-type preparedContextPropagator struct{ ContextPropagator }
-
-// Extract retains the consumer context already derived from the transported parent by the worker boundary.
-func (preparedContextPropagator) Extract(ctx context.Context, _ map[string]string) context.Context {
-	return ctx
-}
-
 // queueContextPropagatorSetter keeps physical preparation internal while allowing other runtime implementations to use bus extraction.
 type queueContextPropagatorSetter interface {
 	setContextPropagator(ContextPropagator)
