@@ -260,6 +260,9 @@ const DeliveryMetadataVersion = 1
 // changing its application type or payload. Its JSON representation is the
 // canonical persisted and transported driver metadata record.
 type DeliveryMetadata struct {
+	// Context contains optional JSON string metadata for a configured context propagator.
+	// Its immutable string representation preserves metadata comparability and snapshots mutable carriers.
+	Context       string        `json:"context,omitempty"`
 	Continuation  *Continuation `json:"continuation,omitempty"`
 	SchemaVersion int           `json:"schema_version"`
 	DispatchID    string        `json:"dispatch_id,omitempty"`

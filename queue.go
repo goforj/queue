@@ -198,6 +198,7 @@ func (cfg Config) normalize() Config {
 }
 
 type queueCommon struct {
+	contextPropagator       ContextPropagator
 	inner                   queueBackend
 	cfg                     Config
 	driver                  Driver
@@ -405,7 +406,7 @@ func (q *queueCommon) Dispatch(job any) error {
 	}
 	dispatchJob = q.physicalJob(dispatchJob)
 	ctx, _ := newDispatchAcceptance(q.context())
-	return q.inner.Dispatch(ctx, dispatchJob)
+	return q.inner.Dispatch(ctx, q.dispatchContext(ctx, dispatchJob))
 }
 
 // physicalJob namespaces explicit targets while preserving the current
@@ -555,6 +556,7 @@ func (q *nativeQueueRuntime) BusRegister(jobType string, handler busruntime.Hand
 	}
 	scope := q.continuationScope()
 	q.Register(jobType, func(ctx context.Context, job Job) error {
+		ctx = q.common.deliveryContext(ctx, job)
 		handlerCtx, release := withBusDeliveryContext(ctx, job, scope)
 		defer release()
 		return handler(handlerCtx, job)
@@ -568,6 +570,7 @@ func (q *externalQueueRuntime) BusRegister(jobType string, handler busruntime.Ha
 	}
 	scope := q.continuationScope()
 	q.Register(jobType, func(ctx context.Context, job Job) error {
+		ctx = q.common.deliveryContext(ctx, job)
 		handlerCtx, release := withBusDeliveryContext(ctx, job, scope)
 		defer release()
 		return handler(handlerCtx, job)
@@ -1245,7 +1248,7 @@ func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payloa
 		logical := resolveLogicalJob(jobType, payload)
 		job = job.UniqueFor(opts.UniqueFor).withLogicalIdentity(logical.jobType, logical.payload)
 	}
-	err := q.inner.Dispatch(ctx, q.physicalJob(job))
+	err := q.inner.Dispatch(ctx, q.physicalJob(q.dispatchContext(ctx, job)))
 	if err == nil {
 		acceptance.markAccepted()
 		return nil
@@ -1279,7 +1282,7 @@ func (q *queueCommon) dispatchDirectJob(ctx context.Context, jobType string, pay
 		job = job.UniqueFor(opts.UniqueFor)
 	}
 	job = DriverWithMetadata(job, metadata)
-	err := q.inner.Dispatch(ctx, q.physicalJob(job))
+	err := q.inner.Dispatch(ctx, q.physicalJob(q.dispatchContext(ctx, job)))
 	if err == nil {
 		acceptance.markAccepted()
 		return nil

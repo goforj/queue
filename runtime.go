@@ -31,6 +31,7 @@ type Option func(*runtimeOptions)
 // runtimeOptions retains explicit supply separately from effective values so
 // driver capability checks need not interpret opaque option functions.
 type runtimeOptions struct {
+	contextPropagator       ContextPropagator
 	resourceIDSupplied      bool
 	resourceID              string
 	store                   WorkflowStore
@@ -238,6 +239,7 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 
 // newQueueWithDescriptor selects one coordinator after shared execution is configured.
 func newQueueWithDescriptor(q queueRuntime, ro runtimeOptions, descriptor runtimehook.Descriptor) (*Queue, error) {
+	attachContextPropagator(q, ro.contextPropagator)
 	observer := attachRuntimeObserver(q, ro.observer)
 	if ro.workers > 0 && q != nil {
 		q = q.Workers(ro.workers)
