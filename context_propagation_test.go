@@ -76,7 +76,7 @@ func TestContextPropagationRejectsInvalidCarrier(t *testing.T) {
 			t.Fatalf("invalid carrier changed delivery context: %q", carrier)
 		}
 	}
-	for _, headers := range []map[string]string{nil, {}, tooMany, {"traceparent": strings.Repeat("x", 8192)}, {"traceparent": strings.Repeat("\n", 2000)}} {
+	for _, headers := range []map[string]string{nil, {}, tooMany, {"traceparent": strings.Repeat("x", 8192)}, {"traceparent": strings.Repeat("\n", 5000)}} {
 		common.contextPropagator = testContextPropagator{headers: headers}
 		if job := common.dispatchContext(ctx, NewJob("orders.process")); DriverMetadata(job).Context != "" {
 			t.Fatal("oversized or empty carrier was persisted")
