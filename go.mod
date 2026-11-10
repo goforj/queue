@@ -2,7 +2,7 @@ module github.com/goforj/queue
 
 go 1.27.0
 
-require modernc.org/sqlite v1.61.0
+require modernc.org/sqlite v1.61.1
 
 replace github.com/goforj/queue/driver/natsqueue => ./driver/natsqueue
 
