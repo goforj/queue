@@ -24,15 +24,15 @@ replace github.com/goforj/queue/driver/temporalqueue => ../driver/temporalqueue
 
 require (
 	github.com/go-sql-driver/mysql v1.10.1
-	github.com/goforj/queue v0.0.0
-	github.com/goforj/queue/driver/mysqlqueue v0.0.0
-	github.com/goforj/queue/driver/natsqueue v0.0.0
-	github.com/goforj/queue/driver/postgresqueue v0.0.0
-	github.com/goforj/queue/driver/rabbitmqqueue v0.0.0
-	github.com/goforj/queue/driver/redisqueue v0.0.0
-	github.com/goforj/queue/driver/sqlitequeue v0.0.0
-	github.com/goforj/queue/driver/sqsqueue v0.0.0
-	github.com/goforj/queue/driver/temporalqueue v0.0.0
+	github.com/goforj/queue v0.3.0
+	github.com/goforj/queue/driver/mysqlqueue v0.3.0
+	github.com/goforj/queue/driver/natsqueue v0.3.0
+	github.com/goforj/queue/driver/postgresqueue v0.3.0
+	github.com/goforj/queue/driver/rabbitmqqueue v0.3.0
+	github.com/goforj/queue/driver/redisqueue v0.3.0
+	github.com/goforj/queue/driver/sqlitequeue v0.3.0
+	github.com/goforj/queue/driver/sqsqueue v0.3.0
+	github.com/goforj/queue/driver/temporalqueue v0.3.0
 	github.com/hibiken/asynq v0.26.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/rabbitmq/amqp091-go v1.16.0
@@ -81,7 +81,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/goforj/queue/driver/sqlqueuecore v0.0.0 // indirect
+	github.com/goforj/queue/driver/sqlqueuecore v0.3.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

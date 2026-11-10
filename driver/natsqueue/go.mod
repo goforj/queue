@@ -3,7 +3,7 @@ module github.com/goforj/queue/driver/natsqueue
 go 1.27.0
 
 require (
-	github.com/goforj/queue v0.0.0
+	github.com/goforj/queue v0.3.0
 	github.com/nats-io/nats.go v1.55.0
 )
 

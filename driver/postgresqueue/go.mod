@@ -3,8 +3,8 @@ module github.com/goforj/queue/driver/postgresqueue
 go 1.27.0
 
 require (
-	github.com/goforj/queue v0.0.0
-	github.com/goforj/queue/driver/sqlqueuecore v0.0.0
+	github.com/goforj/queue v0.3.0
+	github.com/goforj/queue/driver/sqlqueuecore v0.3.0
 	github.com/jackc/pgx/v5 v5.11.0
 )
 

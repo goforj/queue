@@ -23,16 +23,16 @@ replace github.com/goforj/queue/driver/rabbitmqqueue => ../driver/rabbitmqqueue
 replace github.com/goforj/queue/driver/temporalqueue => ../driver/temporalqueue
 
 require (
-	github.com/goforj/queue v0.0.0
-	github.com/goforj/queue/driver/mysqlqueue v0.0.0
-	github.com/goforj/queue/driver/natsqueue v0.0.0
-	github.com/goforj/queue/driver/postgresqueue v0.0.0
-	github.com/goforj/queue/driver/rabbitmqqueue v0.0.0
-	github.com/goforj/queue/driver/redisqueue v0.0.0
-	github.com/goforj/queue/driver/sqlitequeue v0.0.0
-	github.com/goforj/queue/driver/sqlqueuecore v0.0.0
-	github.com/goforj/queue/driver/sqsqueue v0.0.0
-	github.com/goforj/queue/driver/temporalqueue v0.0.0
+	github.com/goforj/queue v0.3.0
+	github.com/goforj/queue/driver/mysqlqueue v0.3.0
+	github.com/goforj/queue/driver/natsqueue v0.3.0
+	github.com/goforj/queue/driver/postgresqueue v0.3.0
+	github.com/goforj/queue/driver/rabbitmqqueue v0.3.0
+	github.com/goforj/queue/driver/redisqueue v0.3.0
+	github.com/goforj/queue/driver/sqlitequeue v0.3.0
+	github.com/goforj/queue/driver/sqlqueuecore v0.3.0
+	github.com/goforj/queue/driver/sqsqueue v0.3.0
+	github.com/goforj/queue/driver/temporalqueue v0.3.0
 )
 
 require (
