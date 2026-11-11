@@ -15,6 +15,8 @@ type ContextPropagator = bus.ContextPropagator
 // WithContextPropagator installs optional transport-neutral context propagation while preserving the application job payload.
 // Driver-owned retry-publication diagnostics on NATS, RabbitMQ, and SQS retain their
 // worker context rather than the receiving handler's restored context.
+// Redis workers must support context preparation before native process observations.
+// StartWorkers rejects older Redis adapters when propagation is enabled; publisher-only queues remain usable.
 // @group Queue
 func WithContextPropagator(propagator ContextPropagator) Option {
 	return func(options *runtimeOptions) {

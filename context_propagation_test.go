@@ -89,31 +89,9 @@ func (b *isolatedContextBackend) Dispatch(_ context.Context, job Job) error {
 	return b.registered[job.Type](b.receiver, job)
 }
 
-// legacyContextWorker retains the context-only setter used by older Redis driver versions.
-type legacyContextWorker struct {
-	*isolatedContextBackend
-	decorator   func(context.Context) context.Context
-	setterCalls int
-}
-
-// SetHandlerContextDecorator captures the older worker hook so tests detect duplicate ownership of decoration.
-func (w *legacyContextWorker) SetHandlerContextDecorator(fn func(context.Context) context.Context) {
-	w.setterCalls++
-	w.decorator = fn
-}
-
-// Dispatch applies the older worker's decorator when installed before invoking the fallback logical handler.
-func (w *legacyContextWorker) Dispatch(_ context.Context, job Job) error {
-	ctx := w.receiver
-	if w.decorator != nil {
-		ctx = w.decorator(ctx)
-	}
-	return w.registered[job.Type](ctx, job)
-}
-
 // TestContextPreparationPrecedesDecoratorAndObservers covers independent native and external receiver boundaries.
 func TestContextPreparationPrecedesDecoratorAndObservers(t *testing.T) {
-	for _, seam := range []string{"native", "external", "legacy redis"} {
+	for _, seam := range []string{"native", "external"} {
 		for _, observed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/observer=%v", seam, observed), func(t *testing.T) {
 				propagator := &readingContextPropagator{}
@@ -122,8 +100,6 @@ func TestContextPreparationPrecedesDecoratorAndObservers(t *testing.T) {
 				backend := &isolatedContextBackend{driver: DriverSync, receiver: receiver}
 				if seam == "external" {
 					backend.driver = DriverNATS
-				} else if seam == "legacy redis" {
-					backend.driver = DriverRedis
 				}
 				var processEvents []EventKind
 				cfg := Config{Driver: backend.driver}
@@ -140,12 +116,6 @@ func TestContextPreparationPrecedesDecoratorAndObservers(t *testing.T) {
 				}
 				var transport queueBackend = backend
 				var worker driverWorkerBackend = backend
-				var legacy *legacyContextWorker
-				if seam == "legacy redis" {
-					legacy = &legacyContextWorker{isolatedContextBackend: backend}
-					transport = legacy
-					worker = legacy
-				}
 				common := &queueCommon{inner: transport, driver: backend.driver, cfg: cfg}
 				var physical queueRuntime = &nativeQueueRuntime{common: common, runtime: backend}
 				if seam != "native" {
@@ -186,10 +156,7 @@ func TestContextPreparationPrecedesDecoratorAndObservers(t *testing.T) {
 				if handled != 1 || decorated != 1 || propagator.extracts != 1 {
 					t.Fatalf("handlers=%d decorators=%d extractions=%d", handled, decorated, propagator.extracts)
 				}
-				if legacy != nil && legacy.setterCalls != 0 {
-					t.Fatal("older worker and fallback both own context decoration")
-				}
-				if observed && seam != "legacy redis" && len(processEvents) != 2 {
+				if observed && len(processEvents) != 2 {
 					t.Fatalf("process events=%v", processEvents)
 				}
 			})
