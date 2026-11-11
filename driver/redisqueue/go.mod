@@ -3,7 +3,7 @@ module github.com/goforj/queue/driver/redisqueue
 go 1.24.4
 
 require (
-	github.com/goforj/queue v0.0.0
+	github.com/goforj/queue v0.2.2
 	github.com/hibiken/asynq v0.26.0
 )
 
