@@ -1634,6 +1634,8 @@ WithContext returns a derived queue handle bound to ctx.
 #### <a id="queue-withcontextpropagator"></a>WithContextPropagator
 
 WithContextPropagator installs optional transport-neutral context propagation while preserving the application job payload.
+Driver-owned retry-publication diagnostics on NATS, RabbitMQ, and SQS retain their
+worker context rather than the receiving handler's restored context.
 
 #### <a id="queue-withhandlercontextdecorator"></a>WithHandlerContextDecorator
 
