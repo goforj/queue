@@ -3,6 +3,7 @@ package redisqueue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/goforj/queue"
@@ -253,5 +254,66 @@ func TestRedisWorker_ObserverSeesDecoratedContext(t *testing.T) {
 	}
 	if len(handled) != 1 || handled[0] != want {
 		t.Fatalf("expected handler to see %q, got %#v", want, handled)
+	}
+}
+
+// redisContextKey models trace identity changes without introducing a tracing SDK into the driver module.
+type redisContextKey string
+
+// TestRedisWorkerPreparesBeforeDecoratorAndProcessEvents preserves early parent restoration with and without native observers.
+func TestRedisWorkerPreparesBeforeDecoratorAndProcessEvents(t *testing.T) {
+	for _, observed := range []bool{false, true} {
+		t.Run(fmt.Sprint(observed), func(t *testing.T) {
+			server := &serverStub{}
+			var events []queue.EventKind
+			var observer queue.Observer
+			if observed {
+				observer = queue.ObserverFunc(func(ctx context.Context, event queue.Event) {
+					events = append(events, event.Kind)
+					if ctx.Value(redisContextKey("trace")) != "consumer" {
+						t.Error("process event lost consumer identity")
+					}
+				})
+			}
+			worker := newRedisWorker(server, backend.NewServeMux(), observer)
+			prepared := 0
+			payload := []byte(`{"context":{"traceparent":"producer"},"job":{"type":"orders.process"}}`)
+			if !worker.SetHandlerContextPreparer(func(ctx context.Context, job queue.Job) context.Context {
+				prepared++
+				if job.Type != "bus:job" || string(job.PayloadBytes()) != string(payload) {
+					t.Error("preparer lost physical type or envelope bytes")
+				}
+				return context.WithValue(ctx, redisContextKey("trace"), "producer")
+			}) {
+				t.Fatal("Redis worker rejected context preparation")
+			}
+			decorated := 0
+			worker.SetHandlerContextDecorator(func(ctx context.Context) context.Context {
+				decorated++
+				if ctx.Value(redisContextKey("trace")) != "producer" {
+					t.Error("decorator ran before parent restoration")
+				}
+				return context.WithValue(ctx, redisContextKey("trace"), "consumer")
+			})
+			handled := false
+			worker.Register("bus:job", func(ctx context.Context, job queue.Job) error {
+				handled = true
+				if ctx.Value(redisContextKey("trace")) != "consumer" || ctx.Value(redisContextKey("receiver")) != true || string(job.PayloadBytes()) != string(payload) {
+					t.Error("handler lost decorator context, receiver values, or payload")
+				}
+				return nil
+			})
+			if err := worker.StartWorkers(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			defer worker.Shutdown(context.Background())
+			ctx := context.WithValue(context.Background(), redisContextKey("receiver"), true)
+			if err := server.lastStartHandler.ProcessTask(ctx, backend.NewTask("bus:job", payload)); err != nil {
+				t.Fatal(err)
+			}
+			if !handled || prepared != 1 || decorated != 1 || (observed && len(events) != 2) {
+				t.Fatalf("handled=%v preparations=%d decorators=%d events=%v", handled, prepared, decorated, events)
+			}
+		})
 	}
 }

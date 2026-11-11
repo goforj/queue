@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/goforj/queue/bus"
+	"github.com/goforj/queue/internal/contextpropagation"
 )
 
 // Message is the handler message passed to the high-level queue runtime.
@@ -99,9 +100,10 @@ var ErrWorkflowNotFound = bus.ErrNotFound
 type Option func(*runtimeOptions)
 
 type runtimeOptions struct {
-	busOpts []bus.Option
-	workers int
+	busOpts                 []bus.Option
+	workers                 int
 	handlerContextDecorator func(context.Context) context.Context
+	contextPropagator       ContextPropagator
 }
 
 func (o *runtimeOptions) apply(opts []Option) {
@@ -255,6 +257,14 @@ func newQueueFromRuntime(q queueRuntime, opts ...Option) (*Queue, error) {
 	}
 	if ro.handlerContextDecorator != nil && q != nil {
 		q.setHandlerContextDecorator(ro.handlerContextDecorator)
+	}
+	if ro.contextPropagator != nil {
+		propagator := ro.contextPropagator
+		if setter, ok := q.(queueContextPropagatorSetter); ok {
+			setter.setContextPropagator(propagator)
+			propagator = contextpropagation.Prepared{Propagator: propagator}
+		}
+		ro.busOpts = append(ro.busOpts, bus.WithContextPropagator(propagator))
 	}
 	b, err := bus.New(q, ro.busOpts...)
 	if err != nil {

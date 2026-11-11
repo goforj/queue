@@ -195,11 +195,13 @@ type batchCallbacks struct {
 	finally  func(ctx context.Context, st BatchState) error
 }
 
+// handleInternalBatchJob restores each physical delivery before processing its batch member.
 func (r *runtime) handleInternalBatchJob(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
+	ctx = r.deliveryContext(ctx, env.Context)
 	_ = r.store.MarkBatchJobStarted(ctx, env.BatchID, env.JobID)
 
 	err := r.executeWireJob(ctx, env)
@@ -303,11 +305,13 @@ func (r *runtime) callbackOnce(ctx context.Context, key string) (bool, error) {
 	return r.store.MarkCallbackInvoked(ctx, key)
 }
 
+// handleInternalCallback restores context for workflow callbacks using the same delivery contract.
 func (r *runtime) handleInternalCallback(ctx context.Context, job busruntime.InboundJob) error {
 	var env envelope
 	if err := job.Bind(&env); err != nil {
 		return err
 	}
+	ctx = r.deliveryContext(ctx, env.Context)
 	cbErr := error(nil)
 	if env.Error != "" {
 		cbErr = errors.New(env.Error)

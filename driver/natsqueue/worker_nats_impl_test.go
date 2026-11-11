@@ -105,7 +105,7 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 		w := newNATSWorkerWithConfig(natsWorkerConfig{
 			URL:      "nats://example:4222",
 			Workers:  1,
-			Observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+			Observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 		})
 		w.Register("job:fail", func(context.Context, queue.Job) error { return errors.New("boom") })
 		body, err := json.Marshal(natsMessage{Type: "job:fail", Queue: "default", Attempt: 0, MaxRetry: 2, BackoffMillis: 5})
@@ -123,7 +123,7 @@ func TestNATSWorker_ProcessMessageBranches(t *testing.T) {
 		w := newNATSWorkerWithConfig(natsWorkerConfig{
 			URL:      "nats://example:4222",
 			Workers:  1,
-			Observer: queue.ObserverFunc(func(e queue.Event) { events = append(events, e) }),
+			Observer: queue.ObserverFunc(func(_ context.Context, e queue.Event) { events = append(events, e) }),
 		})
 		w.Register("bus:job", func(context.Context, queue.Job) error { return errors.New("boom") })
 		body, err := json.Marshal(natsMessage{

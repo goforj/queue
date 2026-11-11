@@ -26,6 +26,11 @@ type workerBackend interface {
 	Shutdown(ctx context.Context) error
 }
 
+// workerContextPreparerSetter preserves the optional job-aware preparation capability across the private bridge.
+type workerContextPreparerSetter interface {
+	SetHandlerContextPreparer(func(context.Context, queue.Job) context.Context) bool
+}
+
 type workerContextDecoratorSetter interface {
 	SetHandlerContextDecorator(func(context.Context) context.Context)
 }
@@ -173,6 +178,15 @@ func (a workerBackendAdapter) StartWorkers(ctx context.Context) error {
 	return a.inner.StartWorkers(ctx)
 }
 func (a workerBackendAdapter) Shutdown(ctx context.Context) error { return a.inner.Shutdown(ctx) }
+
+// SetHandlerContextPreparer forwards worker preparation when the installed driver supports it.
+func (a workerBackendAdapter) SetHandlerContextPreparer(fn func(context.Context, queue.Job) context.Context) bool {
+	if setter, ok := a.inner.(workerContextPreparerSetter); ok {
+		return setter.SetHandlerContextPreparer(fn)
+	}
+	return false
+}
+
 func (a workerBackendAdapter) SetHandlerContextDecorator(fn func(context.Context) context.Context) {
 	if setter, ok := a.inner.(workerContextDecoratorSetter); ok {
 		setter.SetHandlerContextDecorator(fn)

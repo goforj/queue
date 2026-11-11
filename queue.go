@@ -185,6 +185,7 @@ type queueCommon struct {
 	driver                  Driver
 	ctx                     context.Context
 	handlerContextDecorator func(context.Context) context.Context
+	contextPropagator       ContextPropagator
 }
 
 type nativeQueueRuntime struct {
@@ -212,6 +213,11 @@ type runtimeWorkerBackend interface {
 	Register(jobType string, handler Handler)
 	StartWorkers(ctx context.Context) error
 	Shutdown(ctx context.Context) error
+}
+
+// runtimeWorkerContextPreparerSetter optionally prepares job metadata before a worker's native observations.
+type runtimeWorkerContextPreparerSetter interface {
+	SetHandlerContextPreparer(func(context.Context, Job) context.Context) bool
 }
 
 type runtimeWorkerContextDecoratorSetter interface {
@@ -408,7 +414,7 @@ func (q *externalQueueRuntime) Register(jobType string, handler Handler) {
 	q.mu.Unlock()
 
 	if started && w != nil {
-		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
+		w.Register(jobType, handler)
 	}
 }
 
@@ -471,11 +477,22 @@ func (q *externalQueueRuntime) StartWorkers(ctx context.Context) error {
 			return err
 		}
 	}
+	if q.common.cfg.Driver == DriverRedis && q.common.contextPropagator != nil {
+		setter, ok := w.(runtimeWorkerContextPreparerSetter)
+		if !ok || !setter.SetHandlerContextPreparer(q.common.prepareHandlerContext) {
+			err := fmt.Errorf("redis worker must support handler context preparation to use WithContextPropagator")
+			if cleanupErr := w.Shutdown(ctx); cleanupErr != nil {
+				return fmt.Errorf("%w; shutting down rejected worker: %w", err, cleanupErr)
+			}
+			return err
+		}
+	}
 	if setter, ok := w.(runtimeWorkerContextDecoratorSetter); ok {
 		setter.SetHandlerContextDecorator(q.common.handlerContextDecorator)
 	}
+	w = registeredHandlerWorkerBackend{runtimeWorkerBackend: w, common: q.common}
 	for jobType, handler := range registered {
-		w.Register(jobType, q.common.wrapRegisteredHandler(jobType, handler))
+		w.Register(jobType, handler)
 	}
 	if err := w.StartWorkers(ctx); err != nil {
 		return err
@@ -649,16 +666,24 @@ func (q *externalQueueRuntime) Ready(ctx context.Context) error {
 	return q.common.Ready(ctx)
 }
 
+// wrapRegisteredHandler restores the physical parent before decoration and process observations without duplicating Redis events.
 func (q *queueCommon) wrapRegisteredHandler(jobType string, handler Handler) Handler {
-	if handler == nil || q.cfg.Observer == nil {
-		return handler
+	if handler == nil {
+		return nil
 	}
-	// Redis worker emits process lifecycle events natively.
-	// Skip shared handler wrapping to avoid duplicate process_* events.
 	if q.cfg.Driver == DriverRedis {
 		return handler
 	}
-	return wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, q.handlerContextDecorator, handler)
+	wrapped := handler
+	if q.cfg.Observer != nil || q.handlerContextDecorator != nil {
+		wrapped = wrapObservedHandler(q.cfg.Observer, q.cfg.Driver, "", jobType, q.handlerContextDecorator, wrapped)
+	}
+	if q.contextPropagator == nil {
+		return wrapped
+	}
+	return func(ctx context.Context, job Job) error {
+		return wrapped(q.prepareHandlerContext(ctx, job), job)
+	}
 }
 
 func (q *queueCommon) dispatchBusJob(ctx context.Context, jobType string, payload []byte, opts busruntime.JobOptions) error {
@@ -701,6 +726,25 @@ type driverRuntimeQueueBackendAdapter struct {
 
 type driverWorkerBackendAdapter struct {
 	driverWorkerBackend
+}
+
+// registeredHandlerWorkerBackend keeps registration ownership with the worker whose preparation hook was negotiated.
+type registeredHandlerWorkerBackend struct {
+	runtimeWorkerBackend
+	common *queueCommon
+}
+
+// Register keeps each handler's wrapping attached to the worker receiving that registration.
+func (w registeredHandlerWorkerBackend) Register(jobType string, handler Handler) {
+	w.runtimeWorkerBackend.Register(jobType, w.common.wrapRegisteredHandler(jobType, handler))
+}
+
+// SetHandlerContextPreparer reports whether the underlying driver can prepare before native observations.
+func (a driverWorkerBackendAdapter) SetHandlerContextPreparer(fn func(context.Context, Job) context.Context) bool {
+	if setter, ok := a.driverWorkerBackend.(runtimeWorkerContextPreparerSetter); ok {
+		return setter.SetHandlerContextPreparer(fn)
+	}
+	return false
 }
 
 func (a driverWorkerBackendAdapter) SetHandlerContextDecorator(fn func(context.Context) context.Context) {

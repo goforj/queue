@@ -17,10 +17,11 @@ type server interface {
 }
 
 type redisWorker struct {
-	server server
-	mux    *backend.ServeMux
-	obs    queue.Observer
+	server       server
+	mux          *backend.ServeMux
+	obs          queue.Observer
 	ctxDecorator func(context.Context) context.Context
+	ctxPreparer  func(context.Context, queue.Job) context.Context
 
 	mu      sync.Mutex
 	started bool
@@ -28,6 +29,12 @@ type redisWorker struct {
 
 func newRedisWorker(server server, mux *backend.ServeMux, observer queue.Observer) *redisWorker {
 	return &redisWorker{server: server, mux: mux, obs: observer}
+}
+
+// SetHandlerContextPreparer accepts transport preparation before decoration and native process observations.
+func (w *redisWorker) SetHandlerContextPreparer(fn func(context.Context, queue.Job) context.Context) bool {
+	w.ctxPreparer = fn
+	return true
 }
 
 func (w *redisWorker) SetHandlerContextDecorator(fn func(context.Context) context.Context) {
@@ -40,16 +47,24 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 	}
 	if w.obs == nil {
 		w.mux.HandleFunc(jobType, func(ctx context.Context, job *backend.Task) error {
+			message := queue.NewJob(job.Type()).Payload(job.Payload())
+			if w.ctxPreparer != nil {
+				ctx = w.ctxPreparer(ctx, message)
+			}
 			if w.ctxDecorator != nil {
 				if decorated := w.ctxDecorator(ctx); decorated != nil {
 					ctx = decorated
 				}
 			}
-			return handler(ctx, queue.NewJob(job.Type()).Payload(job.Payload()))
+			return handler(ctx, message)
 		})
 		return
 	}
 	w.mux.HandleFunc(jobType, func(ctx context.Context, job *backend.Task) error {
+		message := queue.NewJob(job.Type()).Payload(job.Payload())
+		if w.ctxPreparer != nil {
+			ctx = w.ctxPreparer(ctx, message)
+		}
 		if w.ctxDecorator != nil {
 			if decorated := w.ctxDecorator(ctx); decorated != nil {
 				ctx = decorated
@@ -74,8 +89,7 @@ func (w *redisWorker) Register(jobType string, handler queue.Handler) {
 		queuecore.SafeObserve(ctx, w.obs, base)
 
 		err := handler(ctx, queuecore.DriverWithAttempt(
-			queue.NewJob(job.Type()).
-				Payload(job.Payload()).
+			message.
 				OnQueue(queueName).
 				Retry(maxRetry),
 			attempt,
