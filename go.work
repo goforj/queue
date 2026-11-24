@@ -10,8 +10,8 @@ use (
 	./driver/redisqueue
 	./driver/sqlitequeue
 	./driver/sqlqueuecore
-	./driver/temporalqueue
 	./driver/sqsqueue
+	./driver/temporalqueue
 	./examples
 	./integration
 )
