@@ -3,8 +3,8 @@ module github.com/goforj/queue/driver/sqlitequeue
 go 1.27.0
 
 require (
-	github.com/goforj/queue v0.3.0
-	github.com/goforj/queue/driver/sqlqueuecore v0.3.0
+	github.com/goforj/queue v0.3.1
+	github.com/goforj/queue/driver/sqlqueuecore v0.3.1
 	modernc.org/sqlite v1.61.1
 )
 

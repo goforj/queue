@@ -3,7 +3,7 @@ module github.com/goforj/queue/driver/temporalqueue
 go 1.27.0
 
 require (
-	github.com/goforj/queue v0.3.0
+	github.com/goforj/queue v0.3.1
 	github.com/nexus-rpc/sdk-go v0.6.0
 	github.com/stretchr/testify v1.12.1
 	go.temporal.io/api v1.62.12

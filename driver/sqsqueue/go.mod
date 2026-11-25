@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.13
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.13
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.8
-	github.com/goforj/queue v0.3.0
+	github.com/goforj/queue v0.3.1
 )
 
 require (
